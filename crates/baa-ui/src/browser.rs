@@ -6,8 +6,8 @@ use std::{collections::HashMap, time::Instant};
 use baa_model::{now, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, rgb, ClipboardItem, Context, Entity,
-    FocusHandle, KeyDownEvent, Pixels, Point, Rgba, Subscription, Window,
+    anchored, deferred, div, point, prelude::*, px, rgb, AnyElement, ClipboardItem, Context,
+    Entity, FocusHandle, KeyDownEvent, Pixels, Point, Rgba, Subscription, Window,
 };
 
 use crate::{
@@ -19,6 +19,11 @@ use crate::{
 };
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
+/// Collapsed sidebar (Arc): hot zone at the window edge, card inset, and how long
+/// the card lingers after the pointer leaves so a small overshoot does not close it.
+const PEEK_EDGE: f32 = 8.0;
+const PEEK_INSET: f32 = 8.0;
+const PEEK_LINGER: std::time::Duration = std::time::Duration::from_millis(250);
 /// Chrome's zoom ladder, as factors (`PageHandle::set_zoom` takes 1.0 = 100%).
 const ZOOM_LEVELS: [f64; 15] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
@@ -54,6 +59,11 @@ pub struct Browser<H: WebHost> {
     pub(crate) input_focus: FocusHandle,
     sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
+    /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
+    peek: Spring,
+    /// Pointer over the edge zone / over the card.
+    peek_zone: bool,
+    peek_card: bool,
     /// Space-switch slide, in sidebar widths (−1…1).
     pub(crate) slide: Spring,
     fade: Spring,
@@ -99,6 +109,9 @@ impl<H: WebHost> Browser<H> {
             input_focus: cx.focus_handle(),
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
+            peek: Spring::new(0.0),
+            peek_zone: false,
+            peek_card: false,
             slide: Spring::new(0.0),
             fade: Spring::new(1.0),
             accent_from: rgb(PALETTE[0]),
@@ -382,7 +395,12 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    pub(crate) fn open_extensions(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_extensions(
+        &mut self,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(profile) = self.active_space().map(|s| s.profile) {
             self.host.open_extensions(profile, url, cx);
         }
@@ -519,6 +537,8 @@ impl<H: WebHost> Browser<H> {
             } else {
                 0.0
             });
+            (this.peek_zone, this.peek_card) = (false, false);
+            this.peek.snap(0.0);
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
@@ -587,13 +607,93 @@ impl<H: WebHost> Browser<H> {
         Theme::from_accent(self.accent())
     }
 
+    pub(crate) fn peek_hovered(&self) -> bool {
+        self.peek_zone || self.peek_card
+    }
+
+    fn set_peek(&mut self, card: bool, hovered: bool, cx: &mut Context<Self>) {
+        *if card {
+            &mut self.peek_card
+        } else {
+            &mut self.peek_zone
+        } = hovered;
+        if self.peek_hovered() {
+            self.peek.set_target(1.0);
+            cx.notify();
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PEEK_LINGER).await;
+            this.update(cx, |this, cx| {
+                if !this.peek_hovered() {
+                    this.peek.set_target(0.0);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The collapsed sidebar: an edge hot zone, and the sidebar as a floating card
+    /// sliding in over the page (which keeps its size).
+    fn render_peek(
+        &mut self,
+        sidebar: Option<AnyElement>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> [AnyElement; 2] {
+        let right = self.side() == SidebarSide::Right;
+        let edge = |d: gpui::Div, offset: f32| {
+            if right {
+                d.right(px(offset))
+            } else {
+                d.left(px(offset))
+            }
+        };
+        let zone = edge(div().absolute().top_0().bottom_0().w(px(PEEK_EDGE)), 0.)
+            .id("peek-edge")
+            .on_hover(
+                cx.listener(|this, hovered: &bool, _, cx| this.set_peek(false, *hovered, cx)),
+            );
+        let shown = self.peek.value();
+        // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
+        let offset = PEEK_INSET + (shown - 1.0) * (SIDEBAR_WIDTH + PEEK_INSET * 2.0);
+        let card = sidebar.map(|sidebar| {
+            edge(
+                div().absolute().top(px(PEEK_INSET)).bottom(px(PEEK_INSET)),
+                offset,
+            )
+            .id("peek-card")
+            .w(px(SIDEBAR_WIDTH))
+            .rounded_lg()
+            .overflow_hidden()
+            .bg(theme.chrome)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_xl()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.set_peek(true, *hovered, cx)))
+            .child(sidebar)
+            .into_any_element()
+        });
+        [
+            zone.into_any_element(),
+            card.unwrap_or_else(|| div().into_any_element()),
+        ]
+    }
+
     fn tick_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
         let reduce = cx.reduce_motion();
         let mut moving = false;
-        for spring in [&mut self.sidebar_w, &mut self.slide, &mut self.fade] {
+        for spring in [
+            &mut self.sidebar_w,
+            &mut self.peek,
+            &mut self.slide,
+            &mut self.fade,
+        ] {
             moving |= spring.tick(dt, reduce);
         }
         if let Some(bar) = &mut self.bar {
@@ -769,6 +869,14 @@ impl<H: WebHost> Render for Browser<H> {
         let theme = self.theme();
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);
+        // One sidebar element: docked, or in the peek card while that is out.
+        let (docked, peek) = if self.sidebar_open {
+            (Some(sidebar), None)
+        } else if self.peek.value() > 0.001 || self.peek_hovered() {
+            (None, Some(self.render_peek(Some(sidebar), &theme, cx)))
+        } else {
+            (Some(sidebar), Some(self.render_peek(None, &theme, cx)))
+        };
         let bar = self.render_command_bar(&theme, cx);
         let menu = self.render_context_menu(&theme, cx);
 
@@ -787,9 +895,10 @@ impl<H: WebHost> Render for Browser<H> {
                     .h_full()
                     .w(px(self.sidebar_w.value().max(0.0)))
                     .overflow_hidden()
-                    .child(sidebar),
+                    .children(docked),
             )
             .child(page)
+            .children(peek.into_iter().flatten())
             .children(bar)
             .children(menu);
         self.register_actions(root, cx)

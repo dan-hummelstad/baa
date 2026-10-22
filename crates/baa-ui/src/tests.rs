@@ -247,3 +247,21 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
     });
     let _ = std::fs::remove_file(&path);
 }
+
+#[gpui::test]
+fn collapsed_sidebar_peeks_from_the_window_edge(cx: &mut TestAppContext) {
+    use gpui::{point, px, Modifiers};
+    let (b, cx) = browser(cx);
+    cx.dispatch_action(ToggleSidebar);
+    cx.run_until_parked();
+
+    cx.simulate_mouse_move(point(px(2.), px(300.)), None, Modifiers::none());
+    assert!(
+        b.read_with(cx, |b, _| b.peek_hovered()),
+        "edge hover opens the card"
+    );
+
+    // Leaving it closes it only after the linger delay.
+    cx.simulate_mouse_move(point(px(700.), px(300.)), None, Modifiers::none());
+    assert!(!b.read_with(cx, |b, _| b.peek_hovered()));
+}
