@@ -35,9 +35,11 @@ pub enum Command {
     DeleteSpace,
     SwapSidebarSide,
     ReopenClosedTab,
+    Extensions,
+    ExtensionStore,
 }
 
-const COMMANDS: [(Command, &str); 7] = [
+const COMMANDS: [(Command, &str); 9] = [
     (Command::NewSpace, "New Space"),
     (Command::NewIncognitoSpace, "New Incognito Space"),
     (Command::RenameSpace, "Rename Space"),
@@ -45,6 +47,8 @@ const COMMANDS: [(Command, &str); 7] = [
     (Command::DeleteSpace, "Delete Space"),
     (Command::SwapSidebarSide, "Move Sidebar to Other Side"),
     (Command::ReopenClosedTab, "Reopen Closed Tab"),
+    (Command::Extensions, "Extensions"),
+    (Command::ExtensionStore, "Chrome Web Store"),
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +215,10 @@ fn submit<H: WebHost>(
             Command::DeleteSpace => this.delete_active_space(window, cx),
             Command::SwapSidebarSide => this.swap_sidebar_side(cx),
             Command::ReopenClosedTab => this.reopen_closed(window, cx),
+            Command::Extensions => this.open_extensions("chrome://extensions/", window, cx),
+            Command::ExtensionStore => {
+                this.open_extensions("https://chromewebstore.google.com/", window, cx)
+            }
         },
     }
 }

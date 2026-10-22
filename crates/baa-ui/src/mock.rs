@@ -85,4 +85,5 @@ impl WebHost for MockHost {
     fn delete_profile(&self, profile: ProfileId) {
         self.deleted.borrow_mut().push(profile);
     }
+    fn open_extensions(&self, _: ProfileId, _: &str, _: &mut App) {}
 }

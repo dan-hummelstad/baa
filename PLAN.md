@@ -41,7 +41,7 @@ code changes required. No baa.me backend exists in v1.
 | De-Googling | **Runtime stripping** of stock CEF (§5) | Building CEF against ungoogled-chromium / Helium patches | Building Chromium is 4–8 h on a 32-core box, not viable on hosted runners per release, and the ungoogled-on-CEF path is undocumented folklore (forum thread, "not all patches apply"). CEF Alloy already has no sign-in, sync, Chrome UI, or account machinery. What is left is switchable or blockable. Keep a source build as a documented v2 option. |
 | Storage isolation | One `CefRequestContext` per Space with `cache_path = <profile>/spaces/<id>` | Chromium profiles | Context = Chromium `BrowserContext`/`StoragePartition`: cookies, localStorage, IDB, cache, SW, permissions all isolated. Exactly what Arc "profiles" do. Several Spaces may share one context (Arc allows that too). |
 | Updates | **GitHub Actions cron** bumps CEF pin from `cef-builds.spotifycdn.com/index.json` and the `cef` crate, opens a PR, CI builds, auto-merge on green, release | Sparkle/own update server | No code change needed for an engine bump. App self-update is v1.1. |
-| Ad blocking | **None in v1** (decided 2026-10-22; filter-list licensing and bundle size) | Bundled `adblock-rust` engine with uBO lists; loading the uBO extension | Note: CEF's Alloy style (the only style with OSR) does **not** support extensions at all (removed in M127, issue #3859), so an extension is not a later option either. If ad blocking returns, it is the built-in engine route (the removed code is in git history, commit a860789). |
+| Extensions | **Chrome Web Store extensions, verified 2026-10-22.** CEF runs on the Chrome bootstrap, so every Space's request context is a real Chrome profile with the extension system. MV3 content scripts, declarativeNetRequest and service workers run inside our Alloy-style OSR pages. Chrome's own extension UI (install prompt, chrome://extensions, action popups) cannot be hosted in OSR, so it opens in a native Chrome-style window on the same profile (`WebHost::open_extensions`). Ad blocking = user installs uBO Lite. | Bundled adblock engine (removed: list licensing); custom Chromium build like Arc (rejected in de-Googling row) | Arc compiles Chromium and draws extension icons and popups in its own UI. Next step toward that: read each extension's `action` from its manifest, show icons in the sidebar, and render `default_popup` in an OSR page inside a GPUI popover. |
 
 ---
 
@@ -136,7 +136,8 @@ Implementation = three mechanisms, all in `baa-privacy`:
 1. **Switches** appended in `OnBeforeCommandLineProcessing`.
 2. **Host blocklist** in `CefRequestHandler::GetResourceRequestHandler` for browser-initiated requests
    to `*.google.com`, `*.googleapis.com`, `*.gstatic.com`, `*.doubleclick.net` that are not page-initiated
-   (check `request.resource_type` + initiator). Page content is never blocked by this list.
+   (check `request.resource_type` + initiator). Page content is never blocked by this list. Exception:
+   `clients2.google.com/service/update2/crx`, the Web Store's extension download and update endpoint.
 3. **CI test**: launch headless, open `about:blank` and a local page for 60 s behind a
    logging proxy (`mitmproxy` in CI), fail if any host outside the allowlist is contacted.
    This is the only thing that proves the stripping holds across engine bumps, so it gates the auto-bump PR.
@@ -247,7 +248,7 @@ Each milestone ends with something runnable. Estimates are solo-dev, full-time.
 | 0 | **Skeleton** | Workspace builds on mac+win in CI; GPUI window with empty sidebar; CEF 154 initialised, one OSR tab renders example.com as a rounded element with a GPUI badge over it (gpui-cef demo, vendored). | 1 |
 | 1 | **Tabs + input** | Multiple tabs, switch, close, title/favicon/loading from CEF handlers; keyboard, IME, scroll, cursor, context menu, `<select>` popups, downloads, find. Sidebar today/pinned zones with drag. Session persisted to SQLite. | 3 |
 | 2 | **Spaces + isolation** | Spaces CRUD, theme tint, per-space request context, incognito space, switcher + keybinds, single-instance + open-URL. Login to two Google accounts in two Spaces proves isolation. | 2 |
-| 3 | **Privacy** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI. | 1 |
+| 3 | **Privacy + extensions** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI; Web Store installs via the Chrome-style window; extension icons + popups in the sidebar. | 2 |
 | 4 | **Arc feel** | Spring/FLIP motion, sidebar collapse + hover reveal, space swipe, page back/forward swipe, Peek, Little baa, command bar with fuzzy search over tabs/history, auto-archive. | 4 |
 | 5 | **Ship** | mac bundle signed+notarized, win signed; `release.yml`; `cef-bump.yml` live; split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
 | 6 | **Zero-copy** | IOSurface path on mac, D3D11 shared-texture path on win, GPUI BGRA patch upstreamed. | 2 |

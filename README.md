@@ -7,7 +7,10 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 - Engine: [CEF](https://bitbucket.org/chromiumembedded/cef) in off-screen rendering mode, so every
   page is an ordinary GPUI element that can be clipped, animated and layered under popovers.
 - Privacy: Chromium switches and a host blocklist strip Google services. No baa.me backend, no
-  telemetry. No ad blocker (CEF's off-screen mode cannot load extensions; see PLAN.md §2).
+  telemetry.
+- Extensions: Chrome Web Store extensions install per Space profile and run in every tab. For ad
+  blocking, install uBlock Origin Lite. Open "Chrome Web Store" or "Extensions" from the command
+  bar (⌘T); Chrome's own install and management UI opens in a separate native window.
 - Targets: macOS and Windows. The engine pin is bumped automatically by a daily GitHub Action.
 
 `PLAN.md` is the spec. `CLAUDE.md` holds the rules for agents working in this repo.

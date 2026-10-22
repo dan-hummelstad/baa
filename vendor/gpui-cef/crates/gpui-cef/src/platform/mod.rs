@@ -13,3 +13,5 @@ mod imp;
 mod imp;
 
 pub use imp::{init, Profile, Runtime, Webview};
+#[cfg(target_os = "macos")]
+pub use imp::open_chrome_window;

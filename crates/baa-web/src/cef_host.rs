@@ -200,6 +200,28 @@ impl WebHost for CefWebHost {
         ProfileId(id)
     }
 
+    #[cfg(target_os = "macos")]
+    fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App) {
+        let (profile, url) = (self.profile(profile), url.to_string());
+        // A profile created moments ago is not usable for a native browser yet.
+        cx.spawn(async move |cx| {
+            for _ in 0..20 {
+                if gpui_cef::open_chrome_window(profile.as_ref(), &url) {
+                    return;
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            }
+            log::error!("could not open the extensions window");
+        })
+        .detach();
+    }
+
+    // ponytail: Windows still runs on WebView2, which has no Chrome extension UI.
+    #[cfg(not(target_os = "macos"))]
+    fn open_extensions(&self, _profile: ProfileId, _url: &str, _cx: &mut App) {
+        log::warn!("extensions are macOS-only for now");
+    }
+
     fn delete_profile(&self, profile: ProfileId) {
         self.profiles.borrow_mut().remove(&profile);
         if is_ephemeral(profile) {

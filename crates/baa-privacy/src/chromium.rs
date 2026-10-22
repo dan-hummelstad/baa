@@ -82,10 +82,18 @@ pub fn block_browser_request(url: &str, resource_type: ResourceType, is_page_ini
     {
         return false;
     }
-    let Some(host) = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)) else {
+    let Some(parsed) = url::Url::parse(url).ok() else {
+        return false;
+    };
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
         return false;
     };
     let host = host.trim_end_matches('.');
+    // Chrome Web Store extension installs and updates. The CRX itself then comes from
+    // clients2.googleusercontent.com, which is not on the list.
+    if host == "clients2.google.com" && parsed.path() == "/service/update2/crx" {
+        return false;
+    }
     BROWSER_BLOCKED_DOMAINS
         .iter()
         .any(|d| host == *d || host.strip_suffix(d).is_some_and(|p| p.ends_with('.')))
@@ -116,6 +124,13 @@ mod tests {
         ] {
             assert!(block_browser_request(url, SubResource, false), "{url}");
         }
+    }
+
+    #[test]
+    fn allows_extension_downloads() {
+        let crx = "https://clients2.google.com/service/update2/crx?response=redirect&x=id%3Dabc";
+        assert!(!block_browser_request(crx, SubResource, false));
+        assert!(block_browser_request("https://clients2.google.com/service/update2/json", SubResource, false));
     }
 
     #[test]

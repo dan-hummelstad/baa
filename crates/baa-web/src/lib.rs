@@ -58,4 +58,7 @@ pub trait WebHost: 'static {
     fn ephemeral_profile(&self) -> ProfileId;
     /// Drop a profile's on-disk data once all its pages are closed.
     fn delete_profile(&self, profile: ProfileId);
+    /// Chrome's own extension UI for `profile` (Web Store installs, chrome://extensions,
+    /// extension popups), in a native window: off-screen pages cannot host it.
+    fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App);
 }

@@ -382,6 +382,13 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
+    pub(crate) fn open_extensions(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(profile) = self.active_space().map(|s| s.profile) {
+            self.host.open_extensions(profile, url, cx);
+        }
+        self.close_overlays(window, cx);
+    }
+
     pub(crate) fn swap_sidebar_side(&mut self, cx: &mut Context<Self>) {
         self.settings.sidebar_side = match self.settings.sidebar_side {
             SidebarSide::Left => SidebarSide::Right,

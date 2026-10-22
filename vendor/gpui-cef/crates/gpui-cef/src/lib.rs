@@ -48,6 +48,8 @@ pub use options::{
     CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
 pub use platform::{init, Profile, Runtime, Webview};
+#[cfg(target_os = "macos")]
+pub use platform::open_chrome_window;
 
 /// What a [`Webview`] reports to the application, through
 /// [`gpui::EventEmitter`].

@@ -12,6 +12,7 @@
 //! 4. CEF's message loop is driven by a `CFRunLoopTimer` installed on the main
 //!    run loop; see [`pump`] for why it cannot live on gpui's executor.
 
+mod chrome_window;
 mod handlers;
 mod ime;
 mod input;
@@ -19,6 +20,7 @@ mod nsapp;
 mod pump;
 mod shared;
 
+pub use chrome_window::open_chrome_window;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -237,7 +239,7 @@ pub fn init(options: RuntimeOptions) -> crate::Result<Runtime> {
 /// clones share storage.
 #[derive(Clone)]
 pub struct Profile {
-    context: RequestContext,
+    pub(crate) context: RequestContext,
 }
 
 impl Profile {
