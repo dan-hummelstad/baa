@@ -34,6 +34,8 @@ const PEEK_RADIUS: f32 = 12.0;
 /// revealed card lingers after the pointer leaves: about the moment it does,
 /// with a frame or two of grace for crossing from the edge onto the card.
 const REVEAL_EDGE: f32 = 8.0;
+/// How far past the revealed card the pointer may stray before it closes.
+const REVEAL_SLACK: f32 = 24.0;
 const REVEAL_LINGER: std::time::Duration = std::time::Duration::from_millis(40);
 /// Chrome's zoom ladder, as factors (`PageHandle::set_zoom` takes 1.0 = 100%).
 const ZOOM_LEVELS: [f64; 15] = [
@@ -120,8 +122,8 @@ pub struct Browser<H: WebHost> {
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
     reveal: Spring,
     /// Pointer over the edge zone / over the card.
-    reveal_zone: bool,
-    reveal_card: bool,
+    /// The pointer is where the collapsed sidebar should stay out.
+    reveal_hover: bool,
     /// Space-switch slide, in sidebar widths (−1…1).
     pub(crate) slide: Spring,
     fade: Spring,
@@ -199,8 +201,7 @@ impl<H: WebHost> Browser<H> {
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
             reveal: Spring::quick(0.0),
-            reveal_zone: false,
-            reveal_card: false,
+            reveal_hover: false,
             slide: Spring::new(0.0),
             fade: Spring::new(1.0),
             gradient_from: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
@@ -1084,7 +1085,7 @@ impl<H: WebHost> Browser<H> {
             } else {
                 0.0
             });
-            (this.reveal_zone, this.reveal_card) = (false, false);
+            this.reveal_hover = false;
             this.reveal.snap(0.0);
             cx.notify();
         }))
@@ -1161,15 +1162,34 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn reveal_hovered(&self) -> bool {
-        self.reveal_zone || self.reveal_card
+        self.reveal_hover
     }
 
-    fn set_reveal(&mut self, card: bool, hovered: bool, cx: &mut Context<Self>) {
-        *if card {
-            &mut self.reveal_card
+    /// The collapsed sidebar follows the pointer's position, not hover: the
+    /// edge zone opens it, and it stays while the pointer is anywhere between
+    /// the window edge and a little past the card (the inset gap included), or
+    /// has left the window over that edge, or a menu from it is open.
+    fn track_reveal(&mut self, at: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        if self.sidebar_open {
+            return;
+        }
+        let x = f32::from(match self.side() {
+            SidebarSide::Left => at.x,
+            SidebarSide::Right => window.viewport_size().width - at.x,
+        });
+        let reach = if self.reveal_hover {
+            INSET + SIDEBAR_WIDTH + REVEAL_SLACK
         } else {
-            &mut self.reveal_zone
-        } = hovered;
+            REVEAL_EDGE
+        };
+        let inside = x < reach || (self.reveal_hover && self.menu.is_some());
+        if inside != self.reveal_hover {
+            self.set_reveal(inside, cx);
+        }
+    }
+
+    fn set_reveal(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.reveal_hover = hovered;
         if self.reveal_hovered() {
             self.reveal.set_target(1.0);
             cx.notify();
@@ -1194,7 +1214,6 @@ impl<H: WebHost> Browser<H> {
         &mut self,
         sidebar: Option<AnyElement>,
         theme: &Theme,
-        cx: &mut Context<Self>,
     ) -> [AnyElement; 2] {
         let right = self.side() == SidebarSide::Right;
         let edge = |d: gpui::Div, offset: f32| {
@@ -1204,12 +1223,10 @@ impl<H: WebHost> Browser<H> {
                 d.left(px(offset))
             }
         };
+        // Only keeps the edge's pointer events from the page; `track_reveal` decides.
         let zone = edge(div().absolute().top_0().bottom_0().w(px(REVEAL_EDGE)), 0.)
             .id("reveal-edge")
-            .occlude()
-            .on_hover(
-                cx.listener(|this, hovered: &bool, _, cx| this.set_reveal(false, *hovered, cx)),
-            );
+            .occlude();
         let shown = self.reveal.value();
         // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
         let offset = INSET + (shown - 1.0) * (SIDEBAR_WIDTH + INSET * 2.0);
@@ -1228,9 +1245,6 @@ impl<H: WebHost> Browser<H> {
                     shadow(Hsla { a: 0.20, ..theme.ink }, 12., 32.),
                     shadow(Hsla { a: 0.10, ..theme.ink }, 2., 6.),
                 ])
-                .on_hover(
-                    cx.listener(|this, hovered: &bool, _, cx| this.set_reveal(true, *hovered, cx)),
-                )
                 .child(sidebar)
                 .into_any_element()
         });
@@ -1982,9 +1996,9 @@ impl<H: WebHost> Render for Browser<H> {
         let (docked, reveal) = if self.sidebar_open {
             (Some(sidebar), None)
         } else if self.reveal.value() > 0.001 || self.reveal_hovered() {
-            (None, Some(self.render_reveal(Some(sidebar), &theme, cx)))
+            (None, Some(self.render_reveal(Some(sidebar), &theme)))
         } else {
-            (Some(sidebar), Some(self.render_reveal(None, &theme, cx)))
+            (Some(sidebar), Some(self.render_reveal(None, &theme)))
         };
         let peek = self.render_peek(window, cx);
         if let Some(bar) = &self.bar {
@@ -2006,6 +2020,21 @@ impl<H: WebHost> Render for Browser<H> {
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
+            .child({
+                // Every move in the window, even over overlays that occlude the root.
+                let track = cx.listener(|this, e: &gpui::MouseMoveEvent, window, cx| {
+                    this.track_reveal(e.position, window, cx)
+                });
+                gpui::canvas(|_, _, _| {}, move |_, _, window, _| {
+                    window.on_mouse_event(move |e: &gpui::MouseMoveEvent, phase, window, cx| {
+                        if phase == gpui::DispatchPhase::Bubble {
+                            track(e, window, cx);
+                        }
+                    })
+                })
+                .absolute()
+                .size_0()
+            })
             .relative()
             .size_full()
             .flex()

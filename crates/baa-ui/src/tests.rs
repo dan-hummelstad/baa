@@ -262,8 +262,18 @@ fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
         "edge hover opens the card"
     );
 
+    // The inset gap at the edge and a little past the card keep it out.
+    for x in [0., 5., 280.] {
+        cx.simulate_mouse_move(point(px(x), px(300.)), None, Modifiers::none());
+        assert!(b.read_with(cx, |b, _| b.reveal_hovered()), "still out at x = {x}");
+    }
+
     // Leaving it closes it only after the linger delay.
     cx.simulate_mouse_move(point(px(700.), px(300.)), None, Modifiers::none());
+    assert!(!b.read_with(cx, |b, _| b.reveal_hovered()));
+
+    // Further out than the edge zone does not open it.
+    cx.simulate_mouse_move(point(px(40.), px(300.)), None, Modifiers::none());
     assert!(!b.read_with(cx, |b, _| b.reveal_hovered()));
 }
 
