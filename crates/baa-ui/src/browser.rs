@@ -30,10 +30,10 @@ pub(crate) const INSET: f32 = 9.0;
 pub(crate) const PAGE_RADIUS: f32 = 8.0;
 const PEEK_RADIUS: f32 = 12.0;
 /// Collapsed sidebar (Arc): hot zone at the window edge, and how long the
-/// revealed card lingers after the pointer leaves so a small overshoot does not
-/// close it.
+/// revealed card lingers after the pointer leaves: about the moment it does,
+/// with a frame or two of grace for crossing from the edge onto the card.
 const REVEAL_EDGE: f32 = 8.0;
-const REVEAL_LINGER: std::time::Duration = std::time::Duration::from_millis(250);
+const REVEAL_LINGER: std::time::Duration = std::time::Duration::from_millis(40);
 /// Chrome's zoom ladder, as factors (`PageHandle::set_zoom` takes 1.0 = 100%).
 const ZOOM_LEVELS: [f64; 15] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
