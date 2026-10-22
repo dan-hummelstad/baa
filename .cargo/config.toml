@@ -1,0 +1,7 @@
+# CEF_PATH: where cef-dll-sys finds the CEF distribution (populated once per
+# CEF major by: export-cef-dir --force ~/.local/share/cef).
+[env]
+CEF_PATH = "/Users/danielhummelstad/.local/share/cef"
+
+[alias]
+bundle = "run -p xtask -- bundle"

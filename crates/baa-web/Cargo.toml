@@ -1,0 +1,15 @@
+[package]
+name = "baa-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true
+gpui-cef.workspace = true
+baa-privacy.workspace = true
+log.workspace = true
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+cef.workspace = true
+serde.workspace = true

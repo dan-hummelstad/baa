@@ -1,0 +1,12 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+semver = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cef = { workspace = true, features = ["build-util"] }

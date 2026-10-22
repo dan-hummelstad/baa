@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/baa",
+  "crates/baa-ui",
+  "crates/baa-web",
+  "crates/baa-model",
+  "crates/baa-privacy",
+  "vendor/gpui-cef/crates/gpui-cef",
+  "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dan-hummelstad/baa"
+
+[workspace.dependencies]
+# gpui is taken from Zed's repo (crates.io lags a year). One rev for the whole
+# workspace; bump it in one place. This rev is the one vendor/gpui-cef CI'd against.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "ef075910c99ce2c8fd07da4174e7c3bb71513f35" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ef075910c99ce2c8fd07da4174e7c3bb71513f35", features = ["font-kit", "runtime_shaders"] }
+# CEF: major == Chromium major. cef-bump.yml rewrites this line.
+cef = "154"
+gpui-cef = { path = "vendor/gpui-cef/crates/gpui-cef" }
+baa-ui = { path = "crates/baa-ui" }
+baa-web = { path = "crates/baa-web" }
+baa-model = { path = "crates/baa-model" }
+baa-privacy = { path = "crates/baa-privacy" }
+log = "0.4"
+env_logger = "0.11"
+parking_lot = "0.12"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+rusqlite = { version = "0.37", features = ["bundled"] }
+adblock = "0.11"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
