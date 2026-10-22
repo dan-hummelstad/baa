@@ -12,4 +12,4 @@ baa-privacy.workspace = true
 log.workspace = true
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 cef.workspace = true
-serde.workspace = true
+baa-model.workspace = true

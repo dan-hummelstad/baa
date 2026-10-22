@@ -3,9 +3,7 @@
 
 use gpui::{AnyElement, App, Entity, EventEmitter, Window};
 
-/// Identifies a storage profile = one CEF request context (PLAN.md §6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct ProfileId(pub u64);
+pub use baa_model::ProfileId;
 
 /// What a page reports back to the shell.
 #[derive(Debug, Clone, PartialEq)]
