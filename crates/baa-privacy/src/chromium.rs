@@ -94,6 +94,10 @@ pub fn block_browser_request(url: &str, resource_type: ResourceType, is_page_ini
     if host == "clients2.google.com" && parsed.path() == "/service/update2/crx" {
         return false;
     }
+    // Search suggestions in the command bar, for a Google default search engine.
+    if host == "suggestqueries.google.com" && parsed.path() == "/complete/search" {
+        return false;
+    }
     BROWSER_BLOCKED_DOMAINS
         .iter()
         .any(|d| host == *d || host.strip_suffix(d).is_some_and(|p| p.ends_with('.')))
@@ -128,6 +132,11 @@ mod tests {
 
     #[test]
     fn allows_extension_downloads() {
+        assert!(!block_browser_request(
+            "https://suggestqueries.google.com/complete/search?client=firefox&q=a",
+            SubResource,
+            false
+        ));
         let crx = "https://clients2.google.com/service/update2/crx?response=redirect&x=id%3Dabc";
         assert!(!block_browser_request(crx, SubResource, false));
         assert!(block_browser_request("https://clients2.google.com/service/update2/json", SubResource, false));

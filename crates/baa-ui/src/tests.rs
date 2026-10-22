@@ -396,3 +396,23 @@ fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
     });
     assert_eq!(b.read_with(cx, |b, _| b.session().active_space()), Some(spaces[0]));
 }
+
+#[gpui::test]
+fn typing_fetches_suggestions_once_it_pauses(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.read_with(cx, |b, _| {
+        *b.host.suggest_body.borrow_mut() = Some(r#"["gh",["gh cli","gh pages"]]"#.into())
+    });
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("gh");
+    cx.executor().advance_clock(std::time::Duration::from_millis(200));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        // One request for the settled text, not one per keystroke.
+        assert_eq!(b.host.fetched.borrow().len(), 1);
+        assert!(b.host.fetched.borrow()[0].contains("q=gh"));
+        assert_eq!(b.bar.as_ref().unwrap().suggestions, ["gh cli", "gh pages"]);
+    });
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://www.google.com/search?q=gh+cli"]);
+}

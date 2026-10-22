@@ -9,6 +9,8 @@ use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, 
 pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
     pub deleted: RefCell<Vec<ProfileId>>,
+    pub fetched: RefCell<Vec<String>>,
+    pub suggest_body: RefCell<Option<String>>,
 }
 
 pub struct MockPage {
@@ -107,5 +109,9 @@ impl WebHost for MockHost {
     fn open_extensions(&self, _: ProfileId, _: &str, _: &mut App) {}
     fn extensions(&self, _: ProfileId) -> Vec<baa_web::Extension> {
         Vec::new()
+    }
+    fn fetch(&self, _: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
+        self.fetched.borrow_mut().push(url.into());
+        done(self.suggest_body.borrow().clone())
     }
 }

@@ -942,6 +942,11 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &Reload, _, cx| {
             this.with_page(cx, |p| if p.is_loading() { p.stop() } else { p.reload() })
         }))
+        .on_action(cx.listener(|this, _: &CopyUrl, _, cx| {
+            if let Some(tab) = this.active_tab().and_then(|id| this.session.tab(id)) {
+                cx.write_to_clipboard(ClipboardItem::new_string(tab.url.clone()));
+            }
+        }))
         .on_action(cx.listener(|this, _: &Find, window, cx| {
             if this.active_page().is_some() {
                 this.bar = None;
@@ -1548,7 +1553,7 @@ impl<H: WebHost> Render for Browser<H> {
             (Some(sidebar), Some(self.render_reveal(None, &theme, cx)))
         };
         let peek = self.render_peek(window, cx);
-        let bar = self.render_command_bar(&theme, cx);
+        let bar = self.render_command_bar(&theme, window, cx);
         let menu = self.render_context_menu(&theme, cx);
         let history = self.render_history_menu(cx);
         // The sidebar brings its own padding; collapsed, the page gets the inset.

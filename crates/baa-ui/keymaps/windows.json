@@ -93,7 +93,8 @@
         8
       ],
       "escape": "baa::ClosePeek",
-      "ctrl-o": "baa::ExpandPeek"
+      "ctrl-o": "baa::ExpandPeek",
+      "ctrl-shift-c": "baa::CopyUrl"
     }
   },
   {

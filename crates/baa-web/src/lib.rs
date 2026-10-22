@@ -80,6 +80,9 @@ pub trait WebHost: 'static {
     fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App);
     /// Extensions installed in `profile`, for the toolbar.
     fn extensions(&self, profile: ProfileId) -> Vec<Extension>;
+    /// GETs `url` through `profile`'s network stack (search suggestions);
+    /// `done` gets the body, or `None`. Called on the main thread.
+    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>);
 }
 
 /// An installed extension, as the toolbar shows it.

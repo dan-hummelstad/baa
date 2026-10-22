@@ -12,6 +12,7 @@
 //!    run loop; see [`pump`] for why it cannot live on gpui's executor.
 
 mod chrome_window;
+mod fetch;
 mod handlers;
 mod native;
 mod nsapp;
@@ -19,6 +20,7 @@ mod pump;
 mod shared;
 
 pub use chrome_window::open_chrome_window;
+pub use fetch::fetch;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

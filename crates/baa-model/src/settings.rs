@@ -90,6 +90,37 @@ impl Settings {
         let q: String = url::form_urlencoded::byte_serialize(text.as_bytes()).collect();
         self.search_engine.url.replace("%s", &q)
     }
+
+    /// The search engine's suggestion endpoint for `query` (OpenSearch JSON:
+    /// `[query, [suggestion, ...]]`), for engines that have a known one.
+    pub fn suggest_url(&self, query: &str) -> Option<String> {
+        let host = url::Url::parse(&self.search_engine.url).ok()?.host_str()?.to_string();
+        let endpoint = match host.trim_start_matches("www.") {
+            "google.com" => "https://suggestqueries.google.com/complete/search?client=firefox&q=%s",
+            "duckduckgo.com" => "https://duckduckgo.com/ac/?type=list&q=%s",
+            "search.brave.com" => "https://search.brave.com/api/suggest?q=%s",
+            "bing.com" => "https://api.bing.com/osjson.aspx?query=%s",
+            _ => return None,
+        };
+        let q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+        Some(endpoint.replace("%s", &q))
+    }
+}
+
+/// Suggestions from an OpenSearch response, at most `max`, without `query` itself.
+pub fn parse_suggestions(body: &str, query: &str, max: usize) -> Vec<String> {
+    let Ok(serde_json::Value::Array(parts)) = serde_json::from_str(body) else {
+        return Vec::new();
+    };
+    let Some(serde_json::Value::Array(list)) = parts.get(1) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.eq_ignore_ascii_case(query.trim()))
+        .take(max)
+        .map(String::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -107,6 +138,18 @@ mod tests {
         assert_eq!(s.resolve_input("rust lang"), "https://www.google.com/search?q=rust+lang");
         assert_eq!(s.resolve_input("foo"), "https://www.google.com/search?q=foo");
         assert_eq!(s.resolve_input("c++"), "https://www.google.com/search?q=c%2B%2B");
+    }
+
+    #[test]
+    fn suggestions() {
+        let s = Settings::default();
+        assert_eq!(
+            s.suggest_url("rust lang").unwrap(),
+            "https://suggestqueries.google.com/complete/search?client=firefox&q=rust+lang"
+        );
+        let body = r#"["rust",["rust","rust lang","rustup"]]"#;
+        assert_eq!(parse_suggestions(body, "rust", 4), ["rust lang", "rustup"]);
+        assert!(parse_suggestions("not json", "x", 4).is_empty());
     }
 
     #[test]

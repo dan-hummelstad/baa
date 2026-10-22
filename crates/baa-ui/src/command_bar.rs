@@ -1,12 +1,14 @@
-//! ⌘T / ⌘L command bar (PLAN.md §3): URL or search, fuzzy match over open tabs,
-//! "switch to space", and Space commands.
+//! ⌘T / ⌘L command bar (PLAN.md §3, pen.dev "Arc — Command Bar"): URL or
+//! search with the engine's suggestions as you type, fuzzy matches over open
+//! tabs, Spaces and quick commands, each with its keyboard shortcut.
 
-use baa_model::{Session, Settings, SpaceId, TabId};
+use baa_model::{parse_suggestions, Session, Settings, SpaceId, TabId};
 use baa_web::WebHost;
-use gpui::{div, prelude::*, px, relative, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
 
 use crate::{
-    browser::{shadow, tab_title, Browser},
+    actions,
+    browser::{host_of, shadow, tab_title, Browser},
     fuzzy,
     icons::icon,
     input::{Key, TextField},
@@ -14,7 +16,10 @@ use crate::{
     theme::{surface, Theme},
 };
 
-const MAX_ROWS: usize = 8;
+const MAX_ROWS: usize = 9;
+const MAX_SUGGESTIONS: usize = 4;
+/// Typing pauses this long before asking the search engine.
+const SUGGEST_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
 const WIDTH: f32 = 660.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,32 +34,74 @@ pub enum Mode {
 pub enum Command {
     NewSpace,
     NewIncognitoSpace,
+    ToggleSidebar,
+    CopyUrl,
+    Find,
+    ReopenClosedTab,
     RenameSpace,
     ChangeSpaceColor,
     DeleteSpace,
     SwapSidebarSide,
-    ReopenClosedTab,
+    DevTools,
     Extensions,
     ExtensionStore,
 }
 
-const COMMANDS: [(Command, &str); 9] = [
+/// In the order an empty bar lists them.
+const COMMANDS: [(Command, &str); 13] = [
     (Command::NewSpace, "New Space"),
+    (Command::ToggleSidebar, "Toggle Sidebar"),
+    (Command::CopyUrl, "Copy URL"),
+    (Command::Find, "Find in Page"),
+    (Command::ReopenClosedTab, "Reopen Closed Tab"),
     (Command::NewIncognitoSpace, "New Incognito Space"),
     (Command::RenameSpace, "Rename Space"),
     (Command::ChangeSpaceColor, "Change Space Color"),
-    (Command::DeleteSpace, "Delete Space"),
     (Command::SwapSidebarSide, "Move Sidebar to Other Side"),
-    (Command::ReopenClosedTab, "Reopen Closed Tab"),
+    (Command::DevTools, "Developer Tools"),
     (Command::Extensions, "Extensions"),
     (Command::ExtensionStore, "Chrome Web Store"),
+    (Command::DeleteSpace, "Delete Space"),
 ];
+/// How many an empty bar shows, after recent tabs.
+const QUICK_COMMANDS: usize = 6;
+
+impl Command {
+    /// The action it runs when it has one, for its shortcut chips.
+    fn action(self) -> Option<Box<dyn gpui::Action>> {
+        Some(match self {
+            Command::NewSpace => Box::new(actions::NewSpace),
+            Command::NewIncognitoSpace => Box::new(actions::NewIncognitoSpace),
+            Command::ToggleSidebar => Box::new(actions::ToggleSidebar),
+            Command::CopyUrl => Box::new(actions::CopyUrl),
+            Command::Find => Box::new(actions::Find),
+            Command::ReopenClosedTab => Box::new(actions::ReopenClosedTab),
+            Command::DevTools => Box::new(actions::DevTools),
+            _ => return None,
+        })
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Command::NewSpace | Command::NewIncognitoSpace => "plus",
+            Command::ToggleSidebar | Command::SwapSidebarSide => "panel-left",
+            Command::CopyUrl => "link",
+            Command::Find => "search",
+            Command::ReopenClosedTab => "rotate-cw",
+            Command::DeleteSpace => "x",
+            Command::RenameSpace | Command::ChangeSpaceColor => "house",
+            _ => "sliders-horizontal",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// Go to this URL (typed, or a search).
     Open(String),
     Tab(TabId),
-    Space(SpaceId),
+    /// A Space, with its position for the ⌃n shortcut.
+    Space(SpaceId, usize),
     Command(Command),
 }
 
@@ -63,6 +110,8 @@ pub struct Row {
     pub item: Item,
     pub label: String,
     pub detail: String,
+    /// A search engine suggestion (drawn with the search icon).
+    pub suggestion: bool,
 }
 
 pub struct Bar {
@@ -70,6 +119,10 @@ pub struct Bar {
     pub field: TextField,
     pub selected: usize,
     pub scale: Spring,
+    /// The engine's suggestions for `field`, once they arrive.
+    pub suggestions: Vec<String>,
+    /// Bumped per edit, so a late answer for older text is dropped.
+    seq: u64,
 }
 
 impl Bar {
@@ -81,85 +134,90 @@ impl Bar {
             field,
             selected: 0,
             scale,
+            suggestions: Vec::new(),
+            seq: 0,
         }
     }
 
     fn rows(&self, session: &Session, settings: &Settings) -> Vec<Row> {
-        rows(&self.field.text, session, settings)
+        rows(&self.field.text, session, settings, &self.suggestions)
     }
 }
 
-/// What the bar lists for `query`: the typed URL/search first, then the best fuzzy
-/// matches across tabs (all Spaces), Spaces and commands.
-pub fn rows(query: &str, session: &Session, settings: &Settings) -> Vec<Row> {
+fn row(item: Item, label: impl Into<String>, detail: impl Into<String>) -> Row {
+    Row {
+        item,
+        label: label.into(),
+        detail: detail.into(),
+        suggestion: false,
+    }
+}
+
+/// What the bar lists. Empty: recent tabs, then quick commands. Typed: the
+/// URL or search first, the engine's suggestions, then the best fuzzy matches
+/// across tabs (all Spaces), Spaces and commands.
+pub fn rows(query: &str, session: &Session, settings: &Settings, suggestions: &[String]) -> Vec<Row> {
     let query = query.trim();
+    let active = session.active_space();
+    let tab_row = |tab: &baa_model::Tab| {
+        let space = session.space(tab.space);
+        let host = host_of(&tab.url);
+        let detail = match space {
+            Some(s) if Some(s.id) != active => format!("{} {} · {host}", s.icon, s.name),
+            _ => host,
+        };
+        row(Item::Tab(tab.id), tab_title(tab), detail)
+    };
+    if query.is_empty() {
+        let mut tabs: Vec<&baa_model::Tab> = session.spaces().iter().flat_map(|s| session.space_tabs(s.id)).collect();
+        tabs.sort_by_key(|t| std::cmp::Reverse(t.last_active));
+        let mut out: Vec<Row> = tabs.into_iter().take(3).map(tab_row).collect();
+        out.extend(
+            COMMANDS
+                .iter()
+                .take(QUICK_COMMANDS)
+                .map(|(c, label)| row(Item::Command(*c), *label, "")),
+        );
+        return out;
+    }
+
     let mut out = Vec::new();
+    let url = settings.resolve_input(query);
+    let search_prefix = settings.search_engine.url.split("%s").next().unwrap_or_default();
+    if url.starts_with(search_prefix) {
+        out.push(row(Item::Open(url), query, format!("— Search {}", settings.search_engine.name)));
+    } else {
+        out.push(row(Item::Open(url.clone()), url, "— Open"));
+    }
+    out.extend(suggestions.iter().take(MAX_SUGGESTIONS).map(|s| Row {
+        suggestion: true,
+        ..row(Item::Open(settings.resolve_input(s)), s.clone(), "")
+    }));
+
     let mut scored: Vec<(u32, Row)> = Vec::new();
     for space in session.spaces() {
         for tab in session.space_tabs(space.id) {
-            let title = tab_title(tab);
-            let score = fuzzy::score(query, title).max(fuzzy::score(query, &tab.url));
+            let score = fuzzy::score(query, tab_title(tab)).max(fuzzy::score(query, &tab.url));
             if let Some(score) = score {
-                let detail = format!("{} {} · {}", space.icon, space.name, tab.url);
-                scored.push((
-                    score,
-                    Row {
-                        item: Item::Tab(tab.id),
-                        label: title.into(),
-                        detail,
-                    },
-                ));
+                scored.push((score, tab_row(tab)));
             }
         }
     }
-    // Typed URL, Spaces and commands only once the user typed something, so ⌘T opens on tabs.
-    if !query.is_empty() {
-        let url = settings.resolve_input(query);
-        let search_prefix = settings
-            .search_engine
-            .url
-            .split("%s")
-            .next()
-            .unwrap_or_default();
-        let label = if url.starts_with(search_prefix) {
-            format!("Search “{query}”")
-        } else {
-            url.clone()
-        };
-        out.push(Row {
-            item: Item::Open(url),
-            label,
-            detail: String::new(),
-        });
-        for space in session.spaces() {
-            let label = format!("Switch to {} {}", space.icon, space.name);
-            if let Some(score) = fuzzy::score(query, &label) {
-                scored.push((
-                    score,
-                    Row {
-                        item: Item::Space(space.id),
-                        label,
-                        detail: "Space".into(),
-                    },
-                ));
-            }
+    for (i, space) in session.spaces().iter().enumerate() {
+        let label = format!("Switch to {}", space.name);
+        if let Some(score) = fuzzy::score(query, &label) {
+            scored.push((score, row(Item::Space(space.id, i), label, "")));
         }
-        for (command, label) in COMMANDS {
-            if let Some(score) = fuzzy::score(query, label) {
-                scored.push((
-                    score,
-                    Row {
-                        item: Item::Command(command),
-                        label: label.into(),
-                        detail: "Command".into(),
-                    },
-                ));
-            }
+    }
+    for (command, label) in COMMANDS {
+        if let Some(score) = fuzzy::score(query, label) {
+            scored.push((score, row(Item::Command(command), label, "")));
         }
     }
     // Stable sort keeps sidebar order among equal scores.
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    out.extend(scored.into_iter().map(|(_, row)| row).take(MAX_ROWS));
+    let room = MAX_ROWS.saturating_sub(out.len());
+    out.extend(scored.into_iter().map(|(_, row)| row).take(room));
     out
 }
 
@@ -172,13 +230,64 @@ pub(crate) fn on_key<H: WebHost>(
     let Some(bar) = &mut this.bar else { return };
     let count = bar.rows(&this.session, &this.settings).len();
     match key {
-        Key::Edited => bar.selected = 0,
+        Key::Edited => {
+            bar.selected = 0;
+            request_suggestions(this, cx);
+        }
         Key::Up => bar.selected = bar.selected.saturating_sub(1),
         Key::Down => bar.selected = (bar.selected + 1).min(count.saturating_sub(1)),
         Key::Cancel => this.close_overlays(window, cx),
         Key::Submit => submit(this, None, window, cx),
         Key::Ignored => {}
     }
+}
+
+/// Asks the search engine for suggestions once typing pauses; answers for
+/// text that has since changed are dropped.
+fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Browser<H>>) {
+    let profile = this.active_space().map(|s| s.profile);
+    let Some(bar) = &mut this.bar else { return };
+    bar.seq += 1;
+    let seq = bar.seq;
+    let query = bar.field.text.trim().to_string();
+    let url = (!query.is_empty() && !query.contains("://"))
+        .then(|| this.settings.suggest_url(&query))
+        .flatten();
+    let (Some(url), Some(profile)) = (url, profile) else {
+        bar.suggestions.clear();
+        return;
+    };
+    cx.spawn(async move |this, cx| {
+        cx.background_executor().timer(SUGGEST_DELAY).await;
+        let async_cx = cx.clone();
+        let weak = this.clone();
+        let _ = this.update(cx, |browser, _| {
+            if browser.bar.as_ref().is_none_or(|bar| bar.seq != seq) {
+                return;
+            }
+            browser.host.fetch(
+                profile,
+                &url,
+                Box::new(move |body| {
+                    let found = body
+                        .map(|body| parse_suggestions(&body, &query, MAX_SUGGESTIONS))
+                        .unwrap_or_default();
+                    // Later, not inside whatever update called us back.
+                    async_cx
+                        .spawn(async move |cx| {
+                            let _ = weak.update(cx, |browser, cx| {
+                                if let Some(bar) = browser.bar.as_mut().filter(|bar| bar.seq == seq) {
+                                    bar.suggestions = found;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .detach();
+                }),
+            );
+        });
+    })
+    .detach();
 }
 
 /// Run the selected row (or `row`, when clicked).
@@ -198,7 +307,7 @@ fn submit<H: WebHost>(
     match row.item {
         Item::Open(url) => this.navigate(&url, mode == Mode::Address, window, cx),
         Item::Tab(id) => this.activate_tab(id, window, cx),
-        Item::Space(id) => this.activate_space(id, window, cx),
+        Item::Space(id, _) => this.activate_space(id, window, cx),
         Item::Command(c) => match c {
             Command::NewSpace => this.new_space(window, cx),
             Command::NewIncognitoSpace => this.new_incognito_space(window, cx),
@@ -211,14 +320,52 @@ fn submit<H: WebHost>(
             Command::ExtensionStore => {
                 this.open_extensions("https://chromewebstore.google.com/", window, cx)
             }
+            Command::ToggleSidebar | Command::CopyUrl | Command::Find | Command::DevTools => {
+                if let Some(action) = c.action() {
+                    window.dispatch_action(action, cx);
+                }
+            }
         },
     }
+}
+
+/// A shortcut as the mock draws it: one chip per modifier, then the key.
+fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
+    let mut out = Vec::new();
+    for stroke in binding.keystrokes() {
+        let k = stroke.inner();
+        let m = &k.modifiers;
+        let mac = cfg!(target_os = "macos");
+        for (on, mac_label, other) in [
+            (m.control, "⌃", "Ctrl"),
+            (m.alt, "⌥", "Alt"),
+            (m.shift, "⇧", "Shift"),
+            (m.platform, "⌘", "Win"),
+        ] {
+            if on {
+                out.push(if mac { mac_label } else { other }.into());
+            }
+        }
+        let key = match k.key.as_str() {
+            "enter" => "↩".to_string(),
+            "left" => "←".into(),
+            "right" => "→".into(),
+            "up" => "↑".into(),
+            "down" => "↓".into(),
+            "tab" => "⇥".into(),
+            "escape" => "esc".into(),
+            other => other.to_uppercase(),
+        };
+        out.push(key.into());
+    }
+    out
 }
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn render_command_bar(
         &self,
         theme: &Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let bar = self.bar.as_ref()?;
@@ -232,19 +379,45 @@ impl<H: WebHost> Browser<H> {
         let white = gpui::white();
         let list = rows.into_iter().enumerate().map(|(i, row)| {
             let selected = i == bar.selected;
-            let (glyph, hint) = match &row.item {
-                Item::Open(url) if row.label.starts_with("Search") => ("search", "Search"),
-                Item::Open(url) if url.is_empty() => ("search", "Open"),
-                Item::Open(_) => ("globe", "Open"),
-                Item::Tab(_) => ("globe", "Switch to Tab"),
-                Item::Space(_) => ("house", "Switch"),
-                Item::Command(Command::NewSpace | Command::NewIncognitoSpace) => ("plus", "Run"),
-                Item::Command(_) => ("sliders-horizontal", "Run"),
-            };
-            let (ink, muted) = if selected {
-                (white, gpui::Hsla { a: 0.82, ..white })
+            let (ink, muted): (Hsla, Hsla) = if selected {
+                (white, Hsla { a: 0.82, ..white })
             } else {
                 (surface::ink().into(), surface::muted().into())
+            };
+            let icon_color: Hsla = if selected { muted } else { surface::icon().into() };
+            let leading = match &row.item {
+                Item::Tab(id) => self
+                    .session
+                    .tab(*id)
+                    .and_then(|tab| tab.favicon.as_ref())
+                    .and_then(|url| self.favicons.get(url))
+                    .map(|image| gpui::img(image.clone()).size(px(18.)).rounded(px(4.)).into_any_element())
+                    .unwrap_or_else(|| icon("globe", 18., icon_color).into_any_element()),
+                Item::Space(id, _) => div()
+                    .w(px(18.))
+                    .text_size(px(14.))
+                    .child(SharedString::from(
+                        self.session.space(*id).map(|s| s.icon.clone()).unwrap_or_default(),
+                    ))
+                    .into_any_element(),
+                Item::Command(c) => icon(c.icon(), 18., icon_color).into_any_element(),
+                Item::Open(_) if row.suggestion || i == 0 && row.detail.starts_with("— Search") => {
+                    icon("search", 18., icon_color).into_any_element()
+                }
+                Item::Open(_) => icon("globe", 18., icon_color).into_any_element(),
+            };
+            let binding = match &row.item {
+                Item::Command(c) => c.action().and_then(|a| window.highest_precedence_binding_for_action(&*a)),
+                Item::Space(_, n) => window.highest_precedence_binding_for_action(&actions::GoToSpace(*n)),
+                _ => None,
+            };
+            let keys = binding.map(|b| chips(&b)).unwrap_or_default();
+            let hint = match &row.item {
+                Item::Open(_) if row.detail.starts_with("— Search") || row.suggestion => "Search",
+                Item::Open(_) => "Open",
+                Item::Tab(_) => "Switch to Tab",
+                Item::Space(..) => "Switch",
+                Item::Command(_) => "Run",
             };
             div()
                 .id(("bar-row", i))
@@ -258,7 +431,7 @@ impl<H: WebHost> Browser<H> {
                 .when(selected, |d| d.bg(accent))
                 .when(!selected, |d| d.hover(|s| s.bg(surface::key())))
                 .on_click(cx.listener(move |this, _, window, cx| submit(this, Some(i), window, cx)))
-                .child(icon(glyph, 18., if selected { muted } else { surface::icon().into() }))
+                .child(leading)
                 .child(
                     div()
                         .flex_none()
@@ -278,6 +451,22 @@ impl<H: WebHost> Browser<H> {
                         .text_color(muted)
                         .child(SharedString::from(row.detail)),
                 )
+                .when(!keys.is_empty(), |d| {
+                    d.child(div().flex().gap(px(4.)).children(keys.into_iter().map(|key| {
+                        div()
+                            .h(px(20.))
+                            .min_w(px(20.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(5.))
+                            .bg(if selected { Hsla { a: 0.2, ..white } } else { surface::key().into() })
+                            .text_size(px(11.5))
+                            .text_color(if selected { white } else { surface::icon().into() })
+                            .child(key)
+                    })))
+                })
                 .when(selected, |d| {
                     d.child(
                         div()
@@ -299,6 +488,7 @@ impl<H: WebHost> Browser<H> {
                 .inset_0()
                 .flex()
                 .justify_center()
+                .items_start()
                 .pt(relative(0.17))
                 .occlude()
                 .on_click(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
@@ -313,7 +503,7 @@ impl<H: WebHost> Browser<H> {
                         // Spring "scale-in": gpui has no transforms, so width and opacity carry it.
                         .w(px(WIDTH * (0.94 + 0.06 * t)))
                         .h_auto()
-                        .max_h(px(440.))
+                        .max_h(px(480.))
                         .opacity(t.clamp(0.0, 1.0))
                         .flex()
                         .flex_col()
@@ -339,7 +529,7 @@ impl<H: WebHost> Browser<H> {
                                     placeholder,
                                     surface::ink().into(),
                                     surface::muted().into(),
-                                    gpui::Hsla { a: 0.25, ..accent },
+                                    Hsla { a: 0.25, ..accent },
                                 )),
                         )
                         .child(div().p(px(6.)).flex().flex_col().children(list)),
@@ -355,40 +545,53 @@ mod tests {
     fn session() -> (Session, TabId, TabId) {
         let mut s = Session::first_run();
         let sp = s.active_space().unwrap();
-        let gh = s.open_tab(sp, "https://github.com", 0);
+        let gh = s.open_tab(sp, "https://github.com", 1);
         s.tab_mut(gh).unwrap().title = "GitHub".into();
-        let ls = s.open_tab(sp, "https://lightshow.example", 0);
+        let ls = s.open_tab(sp, "https://lightshow.example", 2);
         s.tab_mut(ls).unwrap().title = "lightshow".into();
         (s, gh, ls)
     }
 
     #[test]
-    fn empty_query_lists_tabs_only() {
-        let (s, ..) = session();
-        let r = rows("", &s, &Settings::default());
-        assert_eq!(r.len(), 2);
-        assert!(r.iter().all(|r| matches!(r.item, Item::Tab(_))));
-    }
-
-    #[test]
-    fn typed_text_comes_first_then_best_tab() {
-        let (s, gh, _) = session();
-        let r = rows("gh", &s, &Settings::default());
-        assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
-        assert_eq!(r[0].label, "Search “gh”");
+    fn empty_query_lists_recent_tabs_then_quick_commands() {
+        let (s, gh, ls) = session();
+        let r = rows("", &s, &Settings::default(), &[]);
+        assert_eq!(r[0].item, Item::Tab(ls), "most recent first");
         assert_eq!(r[1].item, Item::Tab(gh));
+        assert_eq!(r[2].item, Item::Command(Command::NewSpace));
+        assert_eq!(r.len(), 2 + QUICK_COMMANDS);
     }
 
     #[test]
-    fn urls_and_commands() {
+    fn typed_search_then_suggestions_then_best_tab() {
+        let (s, gh, _) = session();
+        let suggestions = ["gh cli".to_string(), "gh".to_string()];
+        let r = rows("gh", &s, &Settings::default(), &suggestions);
+        assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
+        assert_eq!((r[0].label.as_str(), r[0].detail.as_str()), ("gh", "— Search Google"));
+        assert!(r[1].suggestion);
+        assert_eq!(r[1].item, Item::Open("https://www.google.com/search?q=gh+cli".into()));
+        assert!(r.iter().any(|r| r.item == Item::Tab(gh)));
+    }
+
+    #[test]
+    fn urls_spaces_and_commands() {
         let (s, ..) = session();
-        assert_eq!(
-            rows("example.com", &s, &Settings::default())[0].label,
-            "https://example.com/"
-        );
-        let r = rows("new space", &s, &Settings::default());
+        assert_eq!(rows("example.com", &s, &Settings::default(), &[])[0].label, "https://example.com/");
+        let r = rows("new space", &s, &Settings::default(), &[]);
         assert!(r.iter().any(|r| r.item == Item::Command(Command::NewSpace)));
-        let r = rows("personal", &s, &Settings::default());
-        assert!(r.iter().any(|r| matches!(r.item, Item::Space(_))));
+        let r = rows("personal", &s, &Settings::default(), &[]);
+        assert!(r.iter().any(|r| matches!(r.item, Item::Space(_, 0))));
+    }
+
+    #[test]
+    fn shortcut_chips_split_modifiers() {
+        let binding = gpui::KeyBinding::new("ctrl-shift-=", actions::ToggleSidebar, None);
+        let expected: Vec<SharedString> = if cfg!(target_os = "macos") {
+            vec!["⌃".into(), "⇧".into(), "=".into()]
+        } else {
+            vec!["Ctrl".into(), "Shift".into(), "=".into()]
+        };
+        assert_eq!(chips(&binding), expected);
     }
 }

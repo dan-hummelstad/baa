@@ -369,3 +369,8 @@ impl IntoElement for WebviewBoundsTracker {
         self
     }
 }
+
+/// ponytail: no profile-scoped fetch on this backend yet.
+pub fn fetch(_profile: Option<&Profile>, _url: &str, done: impl FnOnce(Option<String>) + 'static) {
+    done(None)
+}

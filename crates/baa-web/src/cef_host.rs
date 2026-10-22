@@ -227,6 +227,10 @@ impl WebHost for CefWebHost {
         log::warn!("extensions are macOS-only for now");
     }
 
+    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
+        gpui_cef::fetch(self.profile(profile).as_ref(), url, done)
+    }
+
     fn extensions(&self, profile: ProfileId) -> Vec<Extension> {
         if is_ephemeral(profile) {
             return Vec::new();

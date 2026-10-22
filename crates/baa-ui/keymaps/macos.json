@@ -94,7 +94,8 @@
         8
       ],
       "escape": "baa::ClosePeek",
-      "cmd-o": "baa::ExpandPeek"
+      "cmd-o": "baa::ExpandPeek",
+      "cmd-shift-c": "baa::CopyUrl"
     }
   },
   {
