@@ -9,7 +9,7 @@ use baa_web::{CefRuntime, CefWebHost};
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
     actions, px, size, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
-    WindowBounds, WindowHandle, WindowOptions,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
 actions!(baa_app, [Quit]);
@@ -83,6 +83,9 @@ fn main() {
                 title: Some("baa".into()),
                 ..Default::default()
             }),
+            // Pages are native views under gpui's layer, seen through the hole
+            // each page element punches; that needs a transparent layer.
+            window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
         let window: WindowHandle<Browser<CefWebHost>> = cx

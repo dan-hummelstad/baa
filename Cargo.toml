@@ -41,6 +41,6 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 lto = "thin"
 codegen-units = 4
 
-# BGRA surface support for zero-copy CEF frames; see vendor/gpui_apple/Cargo.toml.
+# Punch-hole surfaces so native page views show through gpui's layer; see vendor/gpui_apple/Cargo.toml.
 [patch."https://github.com/zed-industries/zed"]
 gpui_apple = { path = "vendor/gpui_apple" }

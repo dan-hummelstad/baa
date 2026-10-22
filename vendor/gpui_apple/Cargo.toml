@@ -1,6 +1,6 @@
 # Vendored from zed-industries/zed@ef07591 crates/gpui_apple, patched in via the root
-# Cargo.toml [patch] table. Only change: BGRA CVPixelBuffer surfaces (PLAN.md §7 phase 2), so
-# CEF's IOSurface frames draw without a CPU copy. Keep the diff small; upstream it.
+# Cargo.toml [patch] table. Only change: a one-channel surface punches a
+# rounded transparent hole, so CEF's native page view under gpui's layer shows through. Keep the diff small; upstream it.
 [package]
 name = "gpui_apple"
 version = "0.1.0"

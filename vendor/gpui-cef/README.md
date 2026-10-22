@@ -6,7 +6,7 @@ Embed a real browser engine into [gpui](https://github.com/zed-industries/zed/tr
 
 | OS | Engine | How it is composited |
 |---|---|---|
-| macOS | **Chromium (CEF 151)** | Rendered off-screen and drawn as an ordinary gpui element, so it is clipped and layered like anything else |
+| macOS | **Chromium (CEF)** | baa fork: a native view under gpui's layer, seen through a hole the element punches (see `src/platform/cef/native.rs`). The off-screen notes below describe the upstream design and are historical here. |
 | Windows | **WebView2 (wry)** | A native child window kept aligned with the laid-out rect; always in front of gpui's own drawing |
 
 ## Why Chromium on macOS

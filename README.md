@@ -4,8 +4,9 @@ An Arc-like browser: vertical tabs, Spaces with isolated storage, a command bar,
 motion, on top of a stock Chromium engine that is stripped of Google services at runtime.
 
 - Shell: Rust + [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) (Zed's UI framework).
-- Engine: [CEF](https://bitbucket.org/chromiumembedded/cef) in off-screen rendering mode, so every
-  page is an ordinary GPUI element that can be clipped, animated and layered under popovers.
+- Engine: [CEF](https://bitbucket.org/chromiumembedded/cef). On macOS each page is a native Chromium
+  view under GPUI's layer, so it scrolls and animates at the display's refresh rate, while GPUI still
+  draws the chrome, popovers and command bar over it.
 - Privacy: Chromium switches and a host blocklist strip Google services. No baa.me backend, no
   telemetry.
 - Extensions: Chrome Web Store extensions install per Space profile and run in every tab. For ad
@@ -32,7 +33,8 @@ open target/bundle/baa.app
 ```
 
 Judge smoothness only on `cargo bundle --release`. A debug build lays out GPUI too slowly to
-present more than ~60 fps.
+present more than ~60 fps. macOS asks for Documents access on every rebuild launched from inside
+`~/Documents` (each build is a new ad-hoc signature); keep the checkout elsewhere to avoid it.
 
 Development loop: `cargo check -p <crate>` and `cargo test -p <crate>`. A full `cargo build -p baa`
 is slow; run it once at the end. `cargo test --workspace` and
@@ -44,8 +46,6 @@ Useful environment variables when running the bundle:
 |---|---|
 | `BAA_CEF_LOG=<file>` | CEF's own log, verbose |
 | `RUST_LOG=info` | shell log on stderr |
-| `BAA_CPU_PAINT=1` | use the CPU-copy paint path instead of GPU frames |
-| `RUST_LOG=gpui_cef=debug` | log delivered page frames per second |
 
 App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Windows): `baa.db`
 (session + settings), `profile/space-<id>/` (per-Space Chromium profile), `keymap.json`
@@ -60,7 +60,7 @@ App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Window
 | `crates/baa-web` | the `WebHost` / `PageHandle` contract and its CEF implementation |
 | `crates/baa-model` | Spaces, tabs, settings, SQLite persistence |
 | `crates/baa-privacy` | Chromium switches, host blocklist |
-| `vendor/gpui-cef` | vendored CEF-in-GPUI host (off-screen rendering, input, IME) |
+| `vendor/gpui-cef` | vendored CEF-in-GPUI host (native page views, focus, keyboard routing) |
 | `xtask` | bundle, sign, notarize, CEF bump helpers |
 
 ## Keys (macOS; Ctrl on Windows)

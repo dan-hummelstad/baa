@@ -31,26 +31,35 @@ use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
     rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use core_foundation::{
+    base::TCFType as _,
     date::CFAbsoluteTimeGetCurrent,
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext},
 };
-use core_foundation::base::TCFType as _;
-use gpui::{AsyncApp, WeakEntity};
+use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, FocusHandle, WeakEntity};
 
 use super::{shared::Shared, Webview};
 
-/// Fallback tick when no display link is available (macOS < 14), in seconds.
-const INTERVAL: f64 = 1. / 120.;
+/// The housekeeping tick, in seconds. Chromium asks for anything sooner through
+/// `on_schedule_message_pump_work`, and paints pages itself, so this only bounds
+/// how late a forgotten task or a page event can be.
+const INTERVAL: f64 = 1. / 30.;
 
 thread_local! {
     /// The one timer, created on first use and left running for the life of the
     /// process. CEF still needs pumping for its own housekeeping after the last
     /// webview goes away.
     static PUMP: RefCell<Option<Pump>> = const { RefCell::new(None) };
+    /// Chromium can spin a nested run loop inside `do_message_loop_work`; a
+    /// scheduled pass must not re-enter it.
+    static IN_WORK: Cell<bool> = const { Cell::new(false) };
 }
+
+/// One pending out-of-band pass at most, however often CEF asks.
+static WORK_PENDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct View {
@@ -58,6 +67,8 @@ struct View {
     shared: Rc<Shared>,
     webview: WeakEntity<Webview>,
     cx: AsyncApp,
+    window: AnyWindowHandle,
+    focus: FocusHandle,
 }
 
 #[derive(Default)]
@@ -68,7 +79,7 @@ struct PumpState {
 
 struct Pump {
     // The timer is never removed, but keep it so its lifetime is explicit.
-    _timer: Option<CFRunLoopTimer>,
+    _timer: CFRunLoopTimer,
     // What the timer's context points at. Has to outlive the timer.
     state: Rc<PumpState>,
 }
@@ -100,6 +111,8 @@ pub(crate) fn register(
     shared: Rc<Shared>,
     webview: WeakEntity<Webview>,
     cx: AsyncApp,
+    window: AnyWindowHandle,
+    focus: FocusHandle,
 ) -> Registration {
     PUMP.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -112,6 +125,8 @@ pub(crate) fn register(
             shared,
             webview,
             cx,
+            window,
+            focus,
         });
 
         Registration { id }
@@ -121,10 +136,6 @@ pub(crate) fn register(
 impl Pump {
     fn start() -> Self {
         let state = Rc::new(PumpState::default());
-        if display_link::start() {
-            return Self { _timer: None, state };
-        }
-
         let mut context = CFRunLoopTimerContext {
             version: 0,
             info: Rc::as_ptr(&state) as *mut c_void,
@@ -135,125 +146,13 @@ impl Pump {
 
         let now = unsafe { CFAbsoluteTimeGetCurrent() };
         let timer = CFRunLoopTimer::new(now + INTERVAL, INTERVAL, 0, 0, on_tick, &mut context);
-
         unsafe {
             CFRunLoop::get_main().add_timer(&timer, kCFRunLoopCommonModes);
         }
 
         Self {
-            _timer: Some(timer),
+            _timer: timer,
             state,
-        }
-    }
-}
-
-/// Ticks the pump once per display refresh (120 Hz on ProMotion), in phase with
-/// vsync, so wheel input and repaints land on display frames.
-pub(crate) mod display_link {
-    use std::cell::Cell;
-
-    use objc2::{
-        class,
-        encode::{Encode, Encoding},
-        msg_send,
-        runtime::{AnyObject, ClassBuilder, NSObject, Sel},
-        sel, ClassType as _,
-    };
-
-    #[repr(C)]
-    struct CAFrameRateRange {
-        minimum: f32,
-        maximum: f32,
-        preferred: f32,
-    }
-
-    unsafe impl Encode for CAFrameRateRange {
-        const ENCODING: Encoding = Encoding::Struct("CAFrameRateRange", &[f32::ENCODING; 3]);
-    }
-
-    thread_local! {
-        static LINK: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
-        static HIGH: Cell<bool> = const { Cell::new(false) };
-    }
-
-    /// ProMotion idles at 60 Hz unless asked, and the link follows the display,
-    /// so input and frames would be paced at 60 too. Ask for the full rate while
-    /// pages scroll or animate; let it drop when idle to save power.
-    pub(super) fn set_high_rate(high: bool) {
-        let link = LINK.with(Cell::get);
-        if link.is_null() || HIGH.with(|h| h.replace(high)) == high {
-            return;
-        }
-        log::debug!("display link: {} rate", if high { "full" } else { "default" });
-        let max = max_refresh_rate() as f32;
-        let range = if high {
-            CAFrameRateRange { minimum: max, maximum: max, preferred: max }
-        } else {
-            // All zero: the system default.
-            CAFrameRateRange { minimum: 0., maximum: 0., preferred: 0. }
-        };
-        unsafe {
-            let _: () = msg_send![link, setPreferredFrameRateRange: range];
-        }
-    }
-
-    extern "C-unwind" fn tick(_this: *mut AnyObject, _sel: Sel, _link: *mut AnyObject) {
-        // Clone the state out so ticking (which may register webviews) does not
-        // hold the PUMP borrow.
-        let state = super::PUMP.with(|slot| slot.try_borrow().ok()?.as_ref().map(|p| p.state.clone()));
-        if let Some(state) = state {
-            super::tick_all(&state);
-        }
-    }
-
-    /// The main screen's highest refresh rate (120 on ProMotion), 60 if unknown.
-    pub(crate) fn max_refresh_rate() -> i32 {
-        unsafe {
-            let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
-            if screen.is_null() {
-                return 60;
-            }
-            let fps: isize = msg_send![screen, maximumFramesPerSecond];
-            if fps > 0 { fps as i32 } else { 60 }
-        }
-    }
-
-    /// `[NSScreen displayLinkWithTarget:selector:]` on the main run loop. False
-    /// before macOS 14, where the caller falls back to a timer.
-    // ponytail: tied to the main screen. Ceiling: a window on a 60 Hz external
-    // display still ticks at the main screen's rate. Upgrade: NSView's display link.
-    pub(super) fn start() -> bool {
-        unsafe {
-            let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
-            if screen.is_null() {
-                return false;
-            }
-            let supported: bool =
-                msg_send![screen, respondsToSelector: sel!(displayLinkWithTarget:selector:)];
-            if !supported {
-                return false;
-            }
-            let Some(mut builder) = ClassBuilder::new(c"GpuiCefPumpTarget", NSObject::class()) else {
-                return false;
-            };
-            builder.add_method(
-                sel!(tick:),
-                tick as extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject),
-            );
-            let target_class = builder.register();
-            // Lives for the process: the run loop retains the link, the link its target.
-            let target: *mut AnyObject = msg_send![target_class, new];
-            let link: *mut AnyObject =
-                msg_send![screen, displayLinkWithTarget: target, selector: sel!(tick:)];
-            if link.is_null() {
-                return false;
-            }
-            let run_loop: *mut AnyObject = msg_send![class!(NSRunLoop), mainRunLoop];
-            // kCFRunLoopCommonModes is toll-free bridged to NSRunLoopCommonModes.
-            let mode = core_foundation::runloop::kCFRunLoopCommonModes as *const AnyObject;
-            let _: () = msg_send![link, addToRunLoop: run_loop, forMode: mode];
-            LINK.with(|l| l.set(link));
-            true
         }
     }
 }
@@ -265,34 +164,20 @@ extern "C" fn on_tick(_timer: core_foundation::runloop::CFRunLoopTimerRef, info:
     tick_all(unsafe { &*(info as *const PumpState) });
 }
 
-thread_local! {
-    /// Chromium can spin a nested run loop inside `do_message_loop_work`; a
-    /// scheduled pass must not re-enter it.
-    static IN_WORK: Cell<bool> = const { Cell::new(false) };
-}
-
-/// One pending out-of-band pass at most, however often CEF asks.
-static WORK_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn do_work() {
-    if IN_WORK.with(|flag| flag.replace(true)) {
-        return;
-    }
-    cef::do_message_loop_work();
-    IN_WORK.with(|flag| flag.set(false));
-}
-
 /// Runs `do_message_loop_work` on the main run loop after `delay_ms`, when that is
 /// sooner than the next tick would be. Callable from any thread.
 pub(crate) fn schedule_work(delay_ms: i64) {
-    use std::sync::atomic::Ordering;
     let delay = (delay_ms.max(0) as f64) / 1000.;
     if delay >= INTERVAL || WORK_PENDING.swap(true, Ordering::AcqRel) {
         return;
     }
     extern "C" fn fire(_timer: core_foundation::runloop::CFRunLoopTimerRef, _info: *mut c_void) {
-        WORK_PENDING.store(false, std::sync::atomic::Ordering::Release);
-        do_work();
+        WORK_PENDING.store(false, Ordering::Release);
+        let state = PUMP.with(|slot| slot.try_borrow().ok()?.as_ref().map(|p| p.state.clone()));
+        match state {
+            Some(state) => tick_all(&state),
+            None => do_work(),
+        }
     }
     let mut context = CFRunLoopTimerContext {
         version: 0,
@@ -311,20 +196,15 @@ pub(crate) fn schedule_work(delay_ms: i64) {
     }
 }
 
-fn tick_all(state: &PumpState) {
-    if log::log_enabled!(log::Level::Debug) {
-        thread_local!(static RATE: Cell<(f64, u32)> = const { Cell::new((0., 0)) });
-        RATE.with(|rate| {
-            let now = unsafe { CFAbsoluteTimeGetCurrent() };
-            let (since, ticks) = rate.get();
-            if now - since >= 1. {
-                log::debug!("pump: {:.0} ticks/s", ticks as f64 / (now - since));
-                rate.set((now, 0));
-            } else {
-                rate.set((since, ticks + 1));
-            }
-        });
+fn do_work() {
+    if IN_WORK.with(|flag| flag.replace(true)) {
+        return;
     }
+    cef::do_message_loop_work();
+    IN_WORK.with(|flag| flag.set(false));
+}
+
+fn tick_all(state: &PumpState) {
     // Driving CEF here, with gpui's App unborrowed, is the whole point. Calling
     // this while the App is borrowed lets gpui's paint re-enter from the run
     // loop Chromium spins, which panics with "RefCell already borrowed".
@@ -336,57 +216,31 @@ fn tick_all(state: &PumpState) {
         Ok(views) => views.clone(),
         Err(_) => return,
     };
-
-    let mut active = false;
     for view in views {
-        active |= tick_view(&view);
+        tick_view(&view);
     }
-    // Stay at the full rate for a moment after the last frame, so the gaps
-    // between scroll events or animation frames do not drop it.
-    thread_local!(static QUIET_TICKS: Cell<u32> = const { Cell::new(0) });
-    let quiet = QUIET_TICKS.with(|q| {
-        q.set(if active { 0 } else { q.get().saturating_add(1) });
-        q.get()
-    });
-    display_link::set_high_rate(quiet < 60);
 }
 
-/// Whether this view had input or a new frame this tick.
-fn tick_view(view: &View) -> bool {
-    if view.shared.take_resized() {
-        if let Some(host) = view.shared.host() {
-            use cef::ImplBrowserHost as _;
-            host.was_resized();
-        }
+/// Hands queued page events to gpui.
+fn tick_view(view: &View) {
+    if view.shared.take_focused_natively() {
+        let mut cx = view.cx.clone();
+        let focus = view.focus.clone();
+        let _ = cx.update_window(view.window, |_, window, cx| window.focus(&focus, cx));
     }
-
-    let scrolled = view.shared.take_scroll().is_some_and(|(at, dx, dy)| {
-        if let Some(host) = view.shared.host() {
-            use cef::ImplBrowserHost as _;
-            host.send_mouse_wheel_event(Some(&at), dx, dy);
-        }
-        true
-    });
-
-    let stale = view.shared.take_stale_cpu_frames();
     let events = view.shared.take_events();
     let dirty = view.shared.take_dirty();
-    if stale.is_empty() && !dirty {
-        return scrolled;
+    if events.is_empty() && !dirty {
+        return;
     }
-
     let mut cx = view.cx.clone();
-    let _ = view.webview.update(&mut cx, |_, cx| {
-        // Release the textures the CPU path is done with.
-        for frame in stale {
-            cx.drop_image(frame, None);
+    let _ = view.webview.update(&mut cx, |webview, cx| {
+        if view.shared.take_created() {
+            webview.browser_created();
         }
         for event in events {
             cx.emit(event);
         }
-        if dirty {
-            cx.notify();
-        }
+        cx.notify();
     });
-    true
 }

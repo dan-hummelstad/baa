@@ -12,6 +12,8 @@ baa-privacy.workspace = true
 gpui.workspace = true
 log.workspace = true
 parking_lot.workspace = true
+# gpui's NSView / HWND, to parent the native page view.
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 # The usage example in the crate docs starts the app the way an app does.
@@ -19,18 +21,13 @@ gpui_platform.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cef.workspace = true
-image = "0.25"
-core-video = { version = "0.5.2", features = ["metal"] }
-io-surface = "0.16"
-# Blits CEF's pooled IOSurface frames into our own (gpu_copy.rs). Both already in the graph via gpui.
-metal = "0.33"
-foreign-types = "0.5"
+# The punch-hole marker surface (native.rs).
+core-video = "0.5.2"
 objc2 = "0.6"
 core-foundation = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wry = "0.56"
-raw-window-handle = "0.6"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

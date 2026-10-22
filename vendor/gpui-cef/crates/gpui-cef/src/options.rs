@@ -37,25 +37,10 @@ pub struct WebviewOptions {
     pub url: String,
     /// Make the page background transparent, so gpui shows through.
     pub transparent: bool,
-    /// Upper bound on the off-screen frame rate. macOS (CEF) only.
-    pub frame_rate: i32,
-    /// Receive frames through a shared GPU texture (IOSurface). macOS (CEF) only.
-    ///
-    /// **Off by default, because stock gpui cannot draw these frames.**
-    /// gpui's `surface()` hard-codes NV12
-    /// (`kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`) and draws the Y and
-    /// CbCr planes through a YUV-to-RGB shader — it exists for Zed's screen
-    /// sharing. CEF hands out BGRA, so passing it straight through trips an
-    /// `assert_eq!` in `metal_renderer.rs`.
-    ///
-    /// Adding a BGRA branch to gpui closes the gap and makes this path
-    /// zero-copy; everything up to that point (CEF to IOSurface to
-    /// `CVPixelBuffer` to gpui) is verified working. Only set this to `true`
-    /// when running against a gpui that has such a branch.
-    ///
-    /// When `false`, CEF drives itself at `frame_rate` and hands over BGRA that
-    /// is copied on the CPU — roughly 3.9MB per frame at 1200x820.
-    pub accelerated: bool,
+    /// Rounds the page's corners, in logical pixels, to match the element it
+    /// sits in. macOS (CEF) only: there the page is a native view that gpui's
+    /// own clipping cannot reach.
+    pub corner_radius: f32,
     /// The storage profile (cookies, cache, local storage) to load in. `None`
     /// is the global, in-memory one.
     pub profile: Option<crate::Profile>,
@@ -66,8 +51,7 @@ impl Default for WebviewOptions {
         Self {
             url: "about:blank".into(),
             transparent: false,
-            frame_rate: 60,
-            accelerated: false,
+            corner_radius: 0.,
             profile: None,
         }
     }

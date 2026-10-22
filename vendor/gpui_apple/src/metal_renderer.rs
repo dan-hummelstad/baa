@@ -16,7 +16,7 @@ use image::RgbaImage;
 use core_foundation::base::TCFType;
 use core_video::{
     metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
-    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
+    pixel_buffer::{kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_OneComponent8},
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
@@ -126,8 +126,8 @@ pub struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
-    // baa: BGRA surfaces (CEF IOSurface frames).
-    surfaces_bgra_pipeline_state: metal::RenderPipelineState,
+    // baa: see `punch_fragment` in shaders.metal.
+    punch_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -325,14 +325,7 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        let surfaces_bgra_pipeline_state = build_pipeline_state(
-            &device,
-            &library,
-            "surfaces_bgra",
-            "surface_vertex",
-            "surface_bgra_fragment",
-            MTLPixelFormat::BGRA8Unorm,
-        );
+        let punch_pipeline_state = build_punch_pipeline_state(&device, &library);
 
         let command_queue = device.new_command_queue();
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
@@ -355,7 +348,7 @@ impl MetalRenderer {
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
-            surfaces_bgra_pipeline_state,
+            punch_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
@@ -1167,23 +1160,11 @@ impl MetalRenderer {
                 &texture_size as *const Size<DevicePixels> as *const _,
             );
 
-            // baa: single-plane BGRA, sampled as-is.
-            if surface.image_buffer.get_pixel_format() == kCVPixelFormatType_32BGRA {
-                let Ok(texture) = self.core_video_texture_cache.create_texture_from_image(
-                    surface.image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::BGRA8Unorm,
-                    surface.image_buffer.get_width(),
-                    surface.image_buffer.get_height(),
-                    0,
-                ) else {
-                    continue;
-                };
-                command_encoder.set_render_pipeline_state(&self.surfaces_bgra_pipeline_state);
-                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-                    let texture = CVMetalTextureGetTexture(texture.as_concrete_TypeRef());
-                    Some(metal::TextureRef::from_ptr(texture as *mut _))
-                });
+            // baa: a one-channel 8-bit buffer is not an image but a hole: clear the
+            // surface's rect (rounded by its width in device pixels) to transparent,
+            // so the native web view under gpui's layer shows through.
+            if surface.image_buffer.get_pixel_format() == kCVPixelFormatType_OneComponent8 {
+                command_encoder.set_render_pipeline_state(&self.punch_pipeline_state);
                 command_encoder.draw_primitives_instanced_base_instance(
                     metal::MTLPrimitiveType::Triangle,
                     0,
@@ -1335,6 +1316,36 @@ fn build_pipeline_state(
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
     color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
 
+    device
+        .new_render_pipeline_state(&descriptor)
+        .expect("could not create render pipeline state")
+}
+
+/// baa: replaces what is under it with transparency, scaled by the fragment's
+/// alpha (its coverage of the rounded rect): dst * (1 - a), colour and alpha alike.
+fn build_punch_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+) -> metal::RenderPipelineState {
+    let vertex_fn = library
+        .get_function("punch_vertex", None)
+        .expect("error locating vertex function");
+    let fragment_fn = library
+        .get_function("punch_fragment", None)
+        .expect("error locating fragment function");
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label("punch");
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+    color_attachment.set_blending_enabled(true);
+    color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::Zero);
+    color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::Zero);
+    color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
     device
         .new_render_pipeline_state(&descriptor)
         .expect("could not create render pipeline state")

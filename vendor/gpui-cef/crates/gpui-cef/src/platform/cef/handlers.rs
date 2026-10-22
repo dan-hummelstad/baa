@@ -4,14 +4,15 @@
 //! overrides of the trait's default methods". The fields have to be `Clone`, so
 //! shared state is passed around as `Rc<Shared>`.
 
+// wrap_client! generates a constructor taking every handler.
+#![allow(clippy::too_many_arguments)]
+
 use std::{path::PathBuf, rc::Rc};
 
-use cef::{rc::Rc as _, *};
-use core_foundation::base::TCFType;
-use core_video::pixel_buffer::CVPixelBuffer;
-use gpui::{px, size, Bounds, CursorStyle, RenderImage};
+use cef::*;
+use gpui::CursorStyle;
 
-use super::shared::{Frame as SharedFrame, Shared};
+use super::shared::Shared;
 use crate::{Download, DownloadState, FilterHook, WebviewEvent};
 
 /// Settings carried by `cef::App`.
@@ -37,7 +38,7 @@ wrap_app! {
                 return;
             };
 
-            // Off-screen rendering: keep CEF from creating windows of its own.
+            // Keep CEF from creating windows of its own.
             command_line.append_switch(Some(&"no-startup-window".into()));
             command_line.append_switch(Some(&"noerrdialogs".into()));
             command_line.append_switch(Some(&"hide-crash-restore-bubble".into()));
@@ -91,160 +92,12 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         /// With `external_message_pump` enabled, CEF uses this to say when it
-        /// would like `do_message_loop_work()` to be called. Waiting for the next
-        /// vsync tick instead costs a tick per browser-thread hop, and a frame
-        /// takes several: 40 fps measured instead of 120. Any thread.
+        /// would like `do_message_loop_work()` to be called. Waiting for the
+        /// pump's next tick instead puts a tick of latency on every hop between
+        /// Chromium's threads. Any thread.
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             super::pump::schedule_work(delay_ms);
         }
-    }
-}
-
-// Only stashes frames in `Shared`; gpui does the drawing.
-wrap_render_handler! {
-    pub(crate) struct GpuiCefRenderHandler {
-        shared: Rc<Shared>,
-    }
-
-    impl RenderHandler {
-        fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
-            let Some(rect) = rect else { return };
-            let size = self.shared.view_size();
-            // CEF does not accept a zero-sized view.
-            rect.x = 0;
-            rect.y = 0;
-            rect.width = (f32::from(size.width).round() as i32).max(1);
-            rect.height = (f32::from(size.height).round() as i32).max(1);
-        }
-
-        fn screen_info(
-            &self,
-            _browser: Option<&mut Browser>,
-            screen_info: Option<&mut ScreenInfo>,
-        ) -> ::std::os::raw::c_int {
-            let Some(screen_info) = screen_info else {
-                return 0;
-            };
-            screen_info.device_scale_factor = self.shared.scale_factor();
-            1
-        }
-
-        /// Where the text being composed sits on screen. macOS needs this to put
-        /// the IME candidate window next to the caret rather than in the corner.
-        fn on_ime_composition_range_changed(
-            &self,
-            _browser: Option<&mut Browser>,
-            selected_range: Option<&Range>,
-            character_bounds: Option<&[Rect]>,
-        ) {
-            super::input_trace(format_args!(
-                "CEF composition range changed selected={selected_range:?} bounds={}",
-                character_bounds.map_or(0, <[Rect]>::len)
-            ));
-            let bounds = character_bounds
-                .unwrap_or_default()
-                .iter()
-                .map(|rect| Bounds {
-                    origin: gpui::point(px(rect.x as f32), px(rect.y as f32)),
-                    size: size(px(rect.width as f32), px(rect.height as f32)),
-                })
-                .collect();
-            self.shared.set_composition_bounds(bounds);
-        }
-
-        /// Whether the popup layer — a `<select>` dropdown and the like — is on
-        /// screen. CEF draws it as a separate layer, so it has to be composited
-        /// over the page rather than ignored.
-        fn on_popup_show(&self, _browser: Option<&mut Browser>, show: ::std::os::raw::c_int) {
-            self.shared.set_popup_visible(show != 0);
-        }
-
-        /// Where the popup goes, in the webview's own coordinate space.
-        fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
-            let Some(rect) = rect else { return };
-            self.shared.set_popup_rect(Bounds {
-                origin: gpui::point(px(rect.x as f32), px(rect.y as f32)),
-                size: size(px(rect.width as f32), px(rect.height as f32)),
-            });
-        }
-
-        /// The GPU path: take the shared IOSurface CEF drew into and wrap it in a
-        /// `CVPixelBuffer`, ready for gpui's `surface()`. No pixels are copied.
-        fn on_accelerated_paint(
-            &self,
-            _browser: Option<&mut Browser>,
-            type_: PaintElementType,
-            _dirty_rects: Option<&[Rect]>,
-            info: Option<&AcceleratedPaintInfo>,
-        ) {
-            let Some(info) = info else { return };
-            if info.shared_texture_io_surface.is_null() {
-                return;
-            }
-
-            // The IOSurface CEF hands over is only guaranteed for the duration of
-            // the call, but it is refcounted, so retaining it under the get rule
-            // keeps it alive.
-            //
-            // core-video's CVPixelBuffer::from_io_surface takes the io-surface
-            // crate's type, so the deprecation warning is tolerated right here
-            // (there is no path through objc2-io-surface).
-            #[allow(deprecated)]
-            let surface = unsafe {
-                io_surface::IOSurface::wrap_under_get_rule(
-                    info.shared_texture_io_surface as io_surface::IOSurfaceRef,
-                )
-            };
-
-            match CVPixelBuffer::from_io_surface(&surface, None) {
-                Ok(buffer) => {
-                    let popup = type_ == PaintElementType::POPUP;
-                    if let Some(owned) = self.shared.copy_accelerated(popup, &buffer) {
-                        put_frame(&self.shared, type_, SharedFrame::Accelerated(owned));
-                    }
-                }
-                Err(status) => {
-                    log::error!("CVPixelBufferCreateWithIOSurface failed: {status}");
-                }
-            }
-        }
-
-        /// The CPU path, for when shared textures are unavailable. Copies BGRA
-        /// pixels every frame, so it is slower than the accelerated one.
-        fn on_paint(
-            &self,
-            _browser: Option<&mut Browser>,
-            type_: PaintElementType,
-            _dirty_rects: Option<&[Rect]>,
-            buffer: *const u8,
-            width: ::std::os::raw::c_int,
-            height: ::std::os::raw::c_int,
-        ) {
-            if buffer.is_null() || width <= 0 || height <= 0 {
-                return;
-            }
-
-            let len = width as usize * height as usize * 4;
-            let pixels = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
-
-            // gpui's textures expect BGRA, which is exactly what CEF produces.
-            let Some(image) = image::ImageBuffer::from_raw(width as u32, height as u32, pixels)
-            else {
-                return;
-            };
-            let frame = SharedFrame::Cpu(std::sync::Arc::new(RenderImage::new(vec![
-                image::Frame::new(image),
-            ])));
-            put_frame(&self.shared, type_, frame);
-        }
-    }
-}
-
-fn put_frame(shared: &Shared, kind: PaintElementType, frame: SharedFrame) {
-    if kind == PaintElementType::POPUP {
-        shared.put_popup_frame(frame);
-    } else {
-        shared.put_frame(frame);
     }
 }
 
@@ -308,8 +161,8 @@ wrap_display_handler! {
             }
         }
 
-        /// Off-screen rendering means CEF never touches the real cursor, so the
-        /// page's choice is forwarded to gpui instead.
+        /// gpui sets the cursor for whatever is under the mouse on every move, so
+        /// the page's choice goes through gpui rather than straight to AppKit.
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
@@ -484,7 +337,7 @@ wrap_request_handler! {
     }
 }
 
-// Off-screen browsers cannot show a native menu; the app draws its own.
+// The app draws its own context menu, in gpui, over the page.
 wrap_context_menu_handler! {
     pub(crate) struct GpuiCefContextMenuHandler {
         shared: Rc<Shared>,
@@ -705,18 +558,65 @@ fn resource_type(kind: ResourceType) -> baa_privacy::ResourceType {
     }
 }
 
+wrap_focus_handler! {
+    pub(crate) struct GpuiCefFocusHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl FocusHandler {
+        fn on_got_focus(&self, _browser: Option<&mut Browser>) {
+            self.shared.set_focused_natively();
+        }
+    }
+}
+
+// Chromium answers every key equivalent while its view is first responder, and
+// AppKit asks it before gpui's view; the app's shortcuts get the first look.
+wrap_keyboard_handler! {
+    pub(crate) struct GpuiCefKeyboardHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(
+            &self,
+            _browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            os_event: *mut u8,
+            _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            // cef_event_flags_t: EVENTFLAG_CONTROL_DOWN, EVENTFLAG_COMMAND_DOWN.
+            const SHORTCUT: u32 = (1 << 2) | (1 << 7);
+            let Some(event) = event else { return 0 };
+            if event.type_ != KeyEventType::RAWKEYDOWN || event.modifiers & SHORTCUT == 0 {
+                return 0;
+            }
+            super::native::offer_key_equivalent(self.shared.gpui_view(), os_event.cast()) as _
+        }
+    }
+}
+
 wrap_client! {
     pub(crate) struct GpuiCefClient {
-        render_handler: RenderHandler,
         display_handler: DisplayHandler,
         load_handler: LoadHandler,
         life_span_handler: LifeSpanHandler,
         request_handler: RequestHandler,
         context_menu_handler: ContextMenuHandler,
         download_handler: DownloadHandler,
+        keyboard_handler: KeyboardHandler,
+        focus_handler: FocusHandler,
     }
 
     impl Client {
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(self.focus_handler.clone())
+        }
+
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            Some(self.keyboard_handler.clone())
+        }
+
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(self.life_span_handler.clone())
         }
@@ -733,10 +633,6 @@ wrap_client! {
             Some(self.download_handler.clone())
         }
 
-        fn render_handler(&self) -> Option<RenderHandler> {
-            Some(self.render_handler.clone())
-        }
-
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display_handler.clone())
         }
@@ -750,13 +646,14 @@ wrap_client! {
 impl GpuiCefClient {
     pub(crate) fn build(shared: Rc<Shared>) -> Client {
         Self::new(
-            GpuiCefRenderHandler::new(shared.clone()),
             GpuiCefDisplayHandler::new(shared.clone()),
             GpuiCefLoadHandler::new(shared.clone()),
             GpuiCefLifeSpanHandler::new(shared.clone()),
             GpuiCefRequestHandler::new(shared.clone()),
             GpuiCefContextMenuHandler::new(shared.clone()),
-            GpuiCefDownloadHandler::new(shared),
+            GpuiCefDownloadHandler::new(shared.clone()),
+            GpuiCefKeyboardHandler::new(shared.clone()),
+            GpuiCefFocusHandler::new(shared),
         )
     }
 }

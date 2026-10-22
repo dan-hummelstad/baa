@@ -653,6 +653,7 @@ impl<H: WebHost> Browser<H> {
         };
         let zone = edge(div().absolute().top_0().bottom_0().w(px(PEEK_EDGE)), 0.)
             .id("peek-edge")
+            .occlude()
             .on_hover(
                 cx.listener(|this, hovered: &bool, _, cx| this.set_peek(false, *hovered, cx)),
             );
@@ -665,6 +666,7 @@ impl<H: WebHost> Browser<H> {
                 offset,
             )
             .id("peek-card")
+            .occlude()
             .w(px(SIDEBAR_WIDTH))
             .rounded_lg()
             .overflow_hidden()
@@ -729,6 +731,8 @@ impl<H: WebHost> Browser<H> {
         let find = self.find.as_ref().map(|field| {
             div()
                 .id("find")
+                // Pages are native views: only occluding gpui keeps the click.
+                .occlude()
                 .absolute()
                 .top_2()
                 .right_2()
@@ -832,7 +836,9 @@ impl<H: WebHost> Browser<H> {
                 }))
                 .child(label)
         });
-        Some(deferred(
+        // The backdrop keeps a click on the (native) page from bypassing the
+        // menu's mouse_down_out.
+        Some(deferred(div().absolute().inset_0().occlude().child(
             anchored().position(menu.at).snap_to_window().child(
                 div()
                     .id("context-menu")
@@ -851,7 +857,7 @@ impl<H: WebHost> Browser<H> {
                     )
                     .children(rows),
             ),
-        ))
+        )))
     }
 }
 

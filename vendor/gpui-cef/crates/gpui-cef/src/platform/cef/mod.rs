@@ -1,44 +1,29 @@
-//! macOS backend: render Chromium (CEF) off-screen and composite it into gpui.
+//! macOS backend: Chromium (CEF) pages as native views under gpui's.
 //!
 //! # How it fits together
 //!
 //! 1. CEF is brought up in two steps, [`init`] then [`Runtime::start`], to avoid
 //!    fighting gpui over `NSApp`. See [`Runtime`] for why.
-//! 2. [`Webview::new`] creates a windowless browser. CEF then reports every
-//!    repaint through the handlers in [`handlers`].
-//! 3. Frames arrive either as a CPU-side BGRA buffer (`OnPaint`, the default) or
-//!    as a shared IOSurface (`OnAcceleratedPaint`, opt-in). Both land in
-//!    [`shared::Shared`], and [`WebviewSurface`] draws whichever is current.
+//! 2. [`Webview::new`] creates a browser inside a container view placed below
+//!    gpui's view; [`native`] explains the layering and input routing.
+//! 3. [`PageSlot`] is the element: it moves the container to the laid-out rect,
+//!    punches a hole in gpui's layer there, and forwards mouse events.
 //! 4. CEF's message loop is driven by a `CFRunLoopTimer` installed on the main
 //!    run loop; see [`pump`] for why it cannot live on gpui's executor.
 
 mod chrome_window;
-mod gpu_copy;
 mod handlers;
-mod ime;
-mod input;
+mod native;
 mod nsapp;
 mod pump;
-mod scroll;
 mod shared;
 
 pub use chrome_window::open_chrome_window;
-
-/// The main screen's highest refresh rate, e.g. 120 on ProMotion.
-pub fn max_refresh_rate() -> i32 {
-    pump::display_link::max_refresh_rate()
-}
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::atomic::{AtomicBool, Ordering},
 };
-
-pub(crate) fn input_trace(message: impl std::fmt::Display) {
-    if std::env::var_os("GPUI_CEF_INPUT_TRACE").is_some() {
-        eprintln!("[gpui-cef-input] {message}");
-    }
-}
 
 use cef::{
     args::Args, browser_host_create_browser, execute_process, initialize,
@@ -47,18 +32,14 @@ use cef::{
     RequestContextSettings, Settings, WindowInfo,
 };
 use gpui::{
-    div, point, px, relative, surface, AnyElement, App, Bounds, Context, Element, ElementId,
-    Focusable, GlobalElementId, Hitbox, HitboxBehavior, ImageSource, InspectorElementId,
-    InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Render,
-    ScrollDelta, ScrollWheelEvent, Style, Styled, StyledImage, Window,
+    div, relative, App, AppContext as _, Bounds, Context, Element, ElementId, Focusable,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
+    LayoutId, ParentElement, Pixels, Render, Style, Styled, Window,
 };
+use objc2::runtime::AnyObject;
 
-use self::shared::{Frame, Shared};
+use self::shared::Shared;
 use crate::{Error, ProfileOptions, RuntimeOptions, WebviewOptions};
-
-/// Pixels to scroll per wheel line, used to convert gpui's `ScrollDelta::Lines`.
-const LINE_HEIGHT: f32 = 20.;
 
 /// The process-wide CEF runtime, as a cloneable handle.
 ///
@@ -110,7 +91,6 @@ impl Runtime {
 
         let args = Args::new();
         let mut settings = Settings {
-            windowless_rendering_enabled: 1,
             // gpui owns the event loop — gpui is what calls [NSApp run]. Without
             // external_message_pump, CEF builds a message pump that assumes it
             // drives NSApplication's run loop itself, and Chromium then trips a
@@ -283,10 +263,13 @@ impl std::fmt::Debug for Profile {
 pub struct Webview {
     shared: Rc<Shared>,
     focus_handle: gpui::FocusHandle,
-    /// Printable keys reach GPUI before AppKit asks the input client what text
-    /// they produce. Hold one until `insertText` or `setMarkedText` decides
-    /// whether this is ordinary text or IME composition.
-    pending_printable_key: Option<gpui::Keystroke>,
+    /// The view the page lives in, below gpui's.
+    container: Rc<native::Container>,
+    /// The page element's hitbox, for routing the mouse.
+    hitbox: Rc<RefCell<Option<Hitbox>>>,
+    /// gpui's own view, which gets keyboard focus back when the page loses it.
+    gpui_view: *mut AnyObject,
+    corner_radius: f32,
     /// The last find-in-page query, so a repeat goes to the next match.
     find_text: RefCell<String>,
     this: gpui::WeakEntity<Webview>,
@@ -297,33 +280,45 @@ pub struct Webview {
 impl Webview {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions) -> Self {
         let shared = Shared::new(options.url.clone());
-        // Provisional size until layout runs. CEF refuses to create a browser
-        // with a zero-sized view.
-        shared.set_layout(
-            Bounds {
-                origin: point(px(0.), px(0.)),
-                size: window.viewport_size(),
-            },
-            window.scale_factor(),
-        );
+        let gpui_view = native::gpui_view(window);
+        shared.set_gpui_view(gpui_view);
+        let container = Rc::new(native::Container::new(gpui_view, options.corner_radius));
+        let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
+        {
+            let hitbox = hitbox.clone();
+            let cx = cx.to_async();
+            let handle = window.window_handle();
+            // Same rule as any gpui element: the page takes the mouse where its
+            // hitbox is not occluded.
+            native::route_mouse_to_page(gpui_view, &container, move || {
+                let Some(hitbox) = hitbox.borrow().clone() else {
+                    return false;
+                };
+                cx.clone()
+                    .update_window(handle, |_, window, _| hitbox.should_handle_scroll(window))
+                    .unwrap_or(false)
+            });
+        }
 
-        let accelerated = options.accelerated;
+        // Provisional size until layout runs; the element sets the real frame.
+        let size = window.viewport_size();
         let window_info = WindowInfo {
-            windowless_rendering_enabled: 1,
-            // Receive frames through a shared texture (IOSurface).
-            shared_texture_enabled: accelerated as _,
-            // With a shared texture we also drive frame production ourselves.
-            // ponytail: CEF drives frames (at windowless_frame_rate), not us. CEF
-            // 151-156 date external BeginFrames with a fixed 16.67 ms interval and
-            // no deadline, which skips rAF ticks once the page's main thread is
-            // busy (cef#4311). Switch back to vsync-driven frames when cef#4312 or
-            // cef#4317 ships.
-            external_begin_frame_enabled: 0,
+            parent_view: container.as_ptr().cast(),
+            bounds: cef::Rect {
+                x: 0,
+                y: 0,
+                width: (f32::from(size.width) as i32).max(1),
+                height: (f32::from(size.height) as i32).max(1),
+            },
+            // A native child view is Alloy style; Chrome style needs CEF's Views.
+            runtime_style: cef::RuntimeStyle::ALLOY,
+            // Chromium tracks visibility by hide/unhide transitions of its own
+            // view, so it starts hidden and is shown only once laid out.
+            hidden: 1,
             ..Default::default()
         };
 
         let browser_settings = BrowserSettings {
-            windowless_frame_rate: options.frame_rate,
             background_color: if options.transparent {
                 0
             } else {
@@ -350,22 +345,20 @@ impl Webview {
             log::error!("cef_browser_host_create_browser() failed");
         }
 
+        // Keyboard focus follows gpui's: the page's view is first responder while
+        // the webview is focused, so typing and IME go to Chromium natively. A
+        // click in the page focuses Chromium first; gpui follows (see pump).
+        let focus_handle = cx.focus_handle();
         let pump = pump::register(
             shared.clone(),
             cx.entity().downgrade(),
             cx.to_async(),
+            window.window_handle(),
+            focus_handle.clone(),
         );
-
-        // CEF has to be told when focus moves, or a caret keeps blinking in the
-        // page after the user clicks something else in the app.
-        let focus_handle = cx.focus_handle();
         let focus_subscriptions = [
-            cx.on_focus_in(&focus_handle, window, |this, _, _| {
-                input_trace("focus in");
-                this.set_browser_focus(true)
-            }),
+            cx.on_focus_in(&focus_handle, window, |this, _, _| this.set_browser_focus(true)),
             cx.on_focus_out(&focus_handle, window, |this, _, _, _| {
-                input_trace("focus out");
                 this.set_browser_focus(false)
             }),
         ];
@@ -373,7 +366,10 @@ impl Webview {
         Self {
             shared,
             focus_handle,
-            pending_printable_key: None,
+            container,
+            hitbox,
+            gpui_view,
+            corner_radius: options.corner_radius,
             find_text: RefCell::default(),
             this: cx.weak_entity(),
             _pump: pump,
@@ -381,9 +377,19 @@ impl Webview {
         }
     }
 
+    pub(crate) fn browser_created(&self) {
+        self.container.page_created(page_view(&self.shared));
+    }
+
     fn set_browser_focus(&self, focused: bool) {
+        // Chromium makes its own view first responder; applied on creation if
+        // the browser does not exist yet.
+        self.shared.set_wants_focus(focused);
         if let Some(host) = self.host() {
             host.set_focus(focused as i32);
+        }
+        if !focused && native::has_first_responder(page_view(&self.shared)) {
+            native::make_first_responder(self.gpui_view);
         }
     }
 
@@ -484,76 +490,14 @@ impl Webview {
         }
     }
 
-    /// Hidden browsers keep their state but stop painting and throttle timers.
+    /// Hidden browsers keep their state but stop painting and throttle timers:
+    /// Chromium watches its view's visibility.
     pub fn set_visible(&self, visible: bool) {
-        if let Some(host) = self.host() {
-            host.was_hidden((!visible) as i32);
-        }
+        self.container.set_visible(visible, page_view(&self.shared));
     }
 
     fn host(&self) -> Option<BrowserHost> {
         self.shared.host()
-    }
-
-    fn send_mouse_move(&self, event: &MouseMoveEvent) {
-        let Some(host) = self.host() else { return };
-        let flags =
-            input::with_pressed_button(input::modifiers(&event.modifiers), event.pressed_button);
-        let cef_event = input::mouse_event(event.position, self.shared.bounds(), flags);
-        host.send_mouse_move_event(Some(&cef_event), 0);
-    }
-
-    fn send_mouse_down(&self, event: &MouseDownEvent) {
-        let Some(host) = self.host() else { return };
-        let Some(button) = input::mouse_button(event.button) else {
-            return;
-        };
-        let flags =
-            input::with_pressed_button(input::modifiers(&event.modifiers), Some(event.button));
-        let cef_event = input::mouse_event(event.position, self.shared.bounds(), flags);
-        host.send_mouse_click_event(Some(&cef_event), button, 0, event.click_count as i32);
-    }
-
-    fn send_mouse_up(&self, event: &MouseUpEvent) {
-        let Some(host) = self.host() else { return };
-        let Some(button) = input::mouse_button(event.button) else {
-            return;
-        };
-        let flags = input::modifiers(&event.modifiers);
-        let cef_event = input::mouse_event(event.position, self.shared.bounds(), flags);
-        host.send_mouse_click_event(Some(&cef_event), button, 1, event.click_count as i32);
-    }
-
-    fn send_scroll(&self, event: &ScrollWheelEvent) {
-        let flags = input::modifiers(&event.modifiers);
-        let cef_event = input::mouse_event(event.position, self.shared.bounds(), flags);
-        let (dx, dy, precise) = match event.delta {
-            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
-            ScrollDelta::Lines(delta) => (delta.x * LINE_HEIGHT, delta.y * LINE_HEIGHT, false),
-        };
-        // The pump sends it on the next display frame.
-        self.shared.push_scroll(cef_event, dx, dy, precise);
-    }
-
-    fn send_key_down(&mut self, event: &KeyDownEvent, _window: &Window, _cx: &mut Context<Self>) {
-        let keystroke = event.keystroke.clone();
-        input_trace(format_args!(
-            "key down key={:?} char={:?} modifiers={:?}",
-            keystroke.key, keystroke.key_char, keystroke.modifiers
-        ));
-        if input::should_wait_for_text_input(&keystroke) {
-            input_trace("printable raw key held for AppKit text decision");
-            self.pending_printable_key = Some(keystroke);
-        } else if let Some(host) = self.host() {
-            input_trace("non-printable raw key sent to CEF");
-            host.send_key_event(Some(&input::key_down_event(&keystroke)));
-        }
-    }
-
-    fn send_key_up(&self, event: &KeyUpEvent) {
-        input_trace(format_args!("key up key={:?}", event.keystroke.key));
-        let Some(host) = self.host() else { return };
-        host.send_key_event(Some(&input::key_up_event(&event.keystroke)));
     }
 }
 
@@ -574,117 +518,39 @@ impl Focusable for Webview {
 }
 
 impl Render for Webview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .track_focus(&self.focus_handle)
             .key_context("Webview")
             .size_full()
-            .overflow_hidden()
-            .on_mouse_move(
-                cx.listener(|this, event: &MouseMoveEvent, _, _| this.send_mouse_move(event)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    // Focusing raises on_focus_in, which is what tells CEF.
-                    window.focus(&this.focus_handle, cx);
-                    this.send_mouse_down(event);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseDownEvent, _, _| this.send_mouse_down(event)),
-            )
-            .on_mouse_down(
-                MouseButton::Middle,
-                cx.listener(|this, event: &MouseDownEvent, _, _| this.send_mouse_down(event)),
-            )
-            .on_mouse_up(
-                MouseButton::Middle,
-                cx.listener(|this, event: &MouseUpEvent, _, _| this.send_mouse_up(event)),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, _| this.send_mouse_up(event)),
-            )
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseUpEvent, _, _| this.send_mouse_up(event)),
-            )
-            .on_scroll_wheel(
-                cx.listener(|this, event: &ScrollWheelEvent, _, _| this.send_scroll(event)),
-            )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.send_key_down(event, window, cx)
-            }))
-            .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, _| this.send_key_up(event)))
-            .child(WebviewSurface {
+            .child(PageSlot {
                 shared: self.shared.clone(),
-                webview: cx.entity(),
-                focus_handle: self.focus_handle.clone(),
+                container: self.container.clone(),
+                hitbox: self.hitbox.clone(),
+                corner_radius: self.corner_radius,
             })
     }
 }
 
-/// Draws the most recent frame and writes the laid-out rect back to [`Shared`].
-///
-/// The rect is needed for two things:
-/// - answering CEF's `get_view_rect`, i.e. what size it should render at
-/// - translating window-space mouse positions into view space
-struct WebviewSurface {
+/// Chromium's view for this page, once the browser exists.
+fn page_view(shared: &Shared) -> *mut AnyObject {
+    shared
+        .host()
+        .map(|host| host.window_handle().cast())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Where the page goes: moves the native view to the laid-out rect and makes
+/// gpui's layer transparent over it.
+struct PageSlot {
     shared: Rc<Shared>,
-    webview: gpui::Entity<Webview>,
-    focus_handle: gpui::FocusHandle,
+    container: Rc<native::Container>,
+    hitbox: Rc<RefCell<Option<Hitbox>>>,
+    corner_radius: f32,
 }
 
-impl WebviewSurface {
-    fn build_child(&self) -> Option<AnyElement> {
-        let page = self.shared.with_frame(|frame| frame.map(frame_element))?;
-
-        // CEF paints `<select>` dropdowns and similar into a separate layer with
-        // its own rect, so they have to be composited over the page here.
-        let popup = self.shared.with_popup(|popup| {
-            popup.map(|(frame, rect)| {
-                div()
-                    .absolute()
-                    .left(rect.origin.x)
-                    .top(rect.origin.y)
-                    .w(rect.size.width)
-                    .h(rect.size.height)
-                    .child(frame_element(frame))
-                    .into_any_element()
-            })
-        });
-
-        Some(match popup {
-            Some(popup) => div()
-                .relative()
-                .size_full()
-                .child(page)
-                .child(popup)
-                .into_any_element(),
-            None => page,
-        })
-    }
-}
-
-/// Draws one CEF layer, whichever way its frame arrived.
-fn frame_element(frame: &Frame) -> AnyElement {
-    match frame {
-        Frame::Accelerated(buffer) => surface(buffer.clone())
-            .object_fit(ObjectFit::Fill)
-            .size_full()
-            .into_any_element(),
-        Frame::Cpu(image) => gpui::img(ImageSource::Render(image.clone()))
-            .object_fit(ObjectFit::Fill)
-            .size_full()
-            .into_any_element(),
-    }
-}
-
-impl Element for WebviewSurface {
-    type RequestLayoutState = Option<AnyElement>;
-    /// The hitbox the page's cursor choice is attached to.
+impl Element for PageSlot {
+    type RequestLayoutState = ();
     type PrepaintState = Hitbox;
 
     fn id(&self) -> Option<ElementId> {
@@ -701,20 +567,11 @@ impl Element for WebviewSurface {
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
+    ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = relative(1.).into();
-
-        let mut child = self.build_child();
-        let layout_id = match child.as_mut() {
-            Some(child) => {
-                let child_id = child.request_layout(window, cx);
-                window.request_layout(style, [child_id], cx)
-            }
-            None => window.request_layout(style, [], cx),
-        };
-        (layout_id, child)
+        (window.request_layout(style, [], cx), ())
     }
 
     fn prepaint(
@@ -722,15 +579,20 @@ impl Element for WebviewSurface {
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        child: &mut Self::RequestLayoutState,
+        _: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> Hitbox {
-        self.shared.set_layout(bounds, window.scale_factor());
-        if let Some(child) = child.as_mut() {
-            child.prepaint(window, cx);
+        self.shared.set_bounds(bounds);
+        let visible = bounds.intersect(&window.content_mask().bounds);
+        if visible.size.width > Pixels::ZERO && visible.size.height > Pixels::ZERO {
+            self.container.place(page_view(&self.shared), bounds, visible);
+        } else {
+            self.container.set_hidden(true);
         }
-        window.insert_hitbox(bounds, HitboxBehavior::Normal)
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        *self.hitbox.borrow_mut() = Some(hitbox.clone());
+        hitbox
     }
 
     fn paint(
@@ -738,29 +600,22 @@ impl Element for WebviewSurface {
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        child: &mut Self::RequestLayoutState,
-        hitbox: &mut Self::PrepaintState,
+        _: &mut (),
+        hitbox: &mut Hitbox,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) {
-        if let Some(child) = child.as_mut() {
-            child.paint(window, cx);
+        let radius = (self.corner_radius * window.scale_factor()).round() as usize;
+        if let Some(hole) = native::punch_buffer(radius) {
+            window.paint_surface(bounds, hole);
         }
-        // Off-screen rendering means CEF never sets the real cursor, so whatever
-        // the page asked for is applied here.
+        // gpui sets the cursor for the hitbox under the mouse, so the page's
+        // choice goes through it.
         window.set_cursor_style(self.shared.cursor(), hitbox);
-
-        // Registers the page as the window's text input target, which is what
-        // lets the OS input method compose into it. See [`ime`].
-        window.handle_input(
-            &self.focus_handle,
-            gpui::ElementInputHandler::new(bounds, self.webview.clone()),
-            cx,
-        );
     }
 }
 
-impl IntoElement for WebviewSurface {
+impl IntoElement for PageSlot {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {

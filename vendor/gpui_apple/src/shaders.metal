@@ -899,12 +899,50 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
   return ycbcrToRGBTransform * ycbcr;
 }
 
-// baa: BGRA surfaces (CEF IOSurface frames); Metal swizzles BGRA8Unorm on sample.
-fragment float4 surface_bgra_fragment(SurfaceFragmentInput input [[stage_in]],
-                                      texture2d<float> texture
-                                      [[texture(SurfaceInputIndex_YTexture)]]) {
-  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
-  return texture.sample(texture_sampler, input.texture_position);
+// baa: a hole in gpui's layer for a native view underneath. The surface's
+// texture width is the corner radius in device pixels; nothing is sampled.
+struct PunchVertexOutput {
+  float4 position [[position]];
+  float2 local;
+  float2 size;
+  float radius;
+  float clip_distance [[clip_distance]][4];
+};
+
+struct PunchFragmentInput {
+  float4 position [[position]];
+  float2 local;
+  float2 size;
+  float radius;
+};
+
+vertex PunchVertexOutput punch_vertex(
+    uint unit_vertex_id [[vertex_id]], uint surface_id [[instance_id]],
+    constant float2 *unit_vertices [[buffer(SurfaceInputIndex_Vertices)]],
+    constant SurfaceBounds *surfaces [[buffer(SurfaceInputIndex_Surfaces)]],
+    constant Size_DevicePixels *viewport_size
+    [[buffer(SurfaceInputIndex_ViewportSize)]],
+    constant Size_DevicePixels *texture_size
+    [[buffer(SurfaceInputIndex_TextureSize)]]) {
+  float2 unit_vertex = unit_vertices[unit_vertex_id];
+  SurfaceBounds surface = surfaces[surface_id];
+  float2 size = float2(surface.bounds.size.width, surface.bounds.size.height);
+  float4 clip_distance = distance_from_clip_rect(unit_vertex, surface.bounds,
+                                                 surface.content_mask.bounds);
+  return PunchVertexOutput{
+      to_device_position(unit_vertex, surface.bounds, viewport_size),
+      unit_vertex * size,
+      size,
+      float(texture_size->width),
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+}
+
+fragment float4 punch_fragment(PunchFragmentInput input [[stage_in]]) {
+  float2 half_size = input.size / 2.0;
+  float radius = min(input.radius, min(half_size.x, half_size.y));
+  float2 q = abs(input.local - half_size) - (half_size - radius);
+  float distance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+  return float4(0.0, 0.0, 0.0, saturate(0.5 - distance));
 }
 
 float4 hsla_to_rgba(Hsla hsla) {

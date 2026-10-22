@@ -4,14 +4,11 @@
 //!
 //! | OS      | Engine                        | How it is composited |
 //! |---------|-------------------------------|----------------------|
-//! | macOS   | Chromium (CEF)                | Rendered off-screen and drawn as an ordinary gpui element, so it takes part in gpui's paint order: it can be clipped, rounded, and have other elements drawn on top of it. |
+//! | macOS   | Chromium (CEF)                | A native view under gpui's layer, shown through a hole the element punches, so gpui still draws over it. Chromium renders and scrolls at the display's refresh rate. Needs the vendored `gpui_apple` (punch surfaces) and a window with `WindowBackgroundAppearance::Transparent`; gpui elements over a page must `.occlude()` to keep the mouse. |
 //! | Windows | WebView2 (wry)                | A native child window parented to the gpui window and kept in sync with the laid-out rect. Being a child HWND, it is **always in front of** everything gpui draws. |
 //!
-//! Why Chromium on macOS: `WKWebView` can only be attached as a child view, so it
-//! never becomes part of gpui's scene — no rounded clipping, nothing on top of
-//! it. CEF supports off-screen rendering, which makes the page just another
-//! texture gpui can composite. WebView2 has no public off-screen API, so the
-//! Windows backend uses the straightforward child-window approach.
+//! Why not off-screen rendering on macOS: Chromium caps an off-screen page's
+//! input-driven frames at 60 Hz (see `platform/cef/native.rs`).
 //!
 //! # Usage
 //!
@@ -49,7 +46,7 @@ pub use options::{
 };
 pub use platform::{init, Profile, Runtime, Webview};
 #[cfg(target_os = "macos")]
-pub use platform::{max_refresh_rate, open_chrome_window};
+pub use platform::open_chrome_window;
 
 /// What a [`Webview`] reports to the application, through
 /// [`gpui::EventEmitter`].

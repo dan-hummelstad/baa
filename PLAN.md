@@ -10,8 +10,10 @@ Researched 2026-10-22. Versions quoted are the ones live that day.
 ## 1. One-paragraph architecture
 
 The whole UI (sidebar, spaces, command bar, peek, animations) is a GPUI app. Every tab is a Chromium
-page hosted by CEF (Chromium Embedded Framework) in **off-screen rendering (OSR)** mode, so the page is
-just another GPUI element: clipped, rounded, animated, layered under popovers like any other `div()`.
+page hosted by CEF (Chromium Embedded Framework) as a **native child view placed under GPUI's layer**
+(macOS; decision 2026-10-22, see §2 Engine host). The page element punches a rounded transparent hole in
+GPUI's frame and moves the view to its rect, so GPUI still draws chrome, popovers and the command bar over
+it, while Chromium renders and scrolls natively at the display's refresh rate.
 Each Space owns a CEF **request context** with its own `cache_path`, which is what gives you
 per-space cookies / localStorage / IndexedDB / service workers for free. Chromium is never patched or
 compiled by us: we take Spotify's official CEF binaries and strip Google at runtime (switches, prefs,
@@ -22,8 +24,8 @@ code changes required. No baa.me backend exists in v1.
 ┌───────────────────────────── baa (GPUI, Rust) ─────────────────────────────┐
 │  sidebar · spaces · command bar · peek · little baa · animations · keymap  │
 │                                                                            │
-│   Tab = gpui element  ◄── BGRA / shared texture ──  CEF browser (OSR)       │
-│   input (mouse/keys/IME/scroll) ───────────────►   per-Space RequestContext │
+│   Tab = gpui element: rect + hole  ──►  CEF NSView below gpui's layer       │
+│   mouse/keys/IME/scroll: native to Chromium  ──►  per-Space RequestContext │
 └────────────────────────────────────────────────────────────────────────────┘
          libcef (Spotify binary, pinned in Cargo.toml)   ← GH Action auto-bumps
 ```
@@ -34,10 +36,10 @@ code changes required. No baa.me backend exists in v1.
 
 | Decision | Choice | Rejected | Why |
 |---|---|---|---|
-| Engine host | **CEF via `cef` crate (tauri-apps/cef-rs)**, Alloy runtime, OSR | wry/WKWebView/WebView2 | Only OSR gives a page that lives inside GPUI's scene. Child native views cannot be clipped, masked, animated, or overlaid; gpui-cef and gpui-kit docs both confirm this. WebView2 has no public OSR API. Also: Chromium everywhere is the brief. |
+| Engine host | **CEF via `cef` crate (tauri-apps/cef-rs)**, Alloy style, **native child view under GPUI's layer** (macOS) | OSR (used until 2026-10-22); wry/WKWebView | OSR caps input-driven frames at 60 Hz: viz's FrameIntervalDecider pins the interval during input to the begin-frame source's minimum, which for a display-less OSR compositor is the 16.67 ms default, and no stock-CEF switch changes it (external BeginFrames avoid it but hit cef#4311). A native view gets Chromium's own display link (120 Hz scroll, momentum, native IME). GPUI keeps drawing over it: the page element punches a hole (vendored `gpui_apple`), GPUI's view passes hit tests through where the page hitbox is not occluded, shortcuts are offered to GPUI first via `OnPreKeyEvent`. Overlays over a page must `.occlude()`. |
 | UI | **GPUI from the Zed git repo** (pin a rev, as gpui-cef / gpui-component do) | `gpui` 0.2.2 on crates.io (stale, Oct 2025), gpui-ce 0.3.0 | Zed paused community GPUI publishing in Feb 2026; the crates.io version lags a year. Git pin of mainline keeps Windows (Win32 + DirectX) and macOS (Metal) backends current. gpui-ce is a fallback if mainline breaks us; its API is a superset. |
 | Prior art to fork | **bokuweb/gpui-cef** (CEF 151 OSR → GPUI element, IME via `EntityInputHandler`, MIT/Apache) | start from scratch | It already solves OSR→element, resize, IME, cursor forwarding. 3 stars, one author; we vendor it into our workspace and own it. |
-| Frame path | Phase 1 CPU copy (`OnPaint` BGRA → `RenderImage`). Phase 2 zero-copy: IOSurface on mac, D3D11 shared handle on Windows | — | Copy is ~4 MB/frame at 1200×820, fine when idle, ~38% CPU on a 60 fps page. Zero-copy needs a BGRA branch in GPUI's `surface()`/Metal renderer (it hard-codes NV12). We carry that patch in our GPUI fork and upstream it. |
+| Frame path | Native: Chromium presents its own layer; nothing is copied. (OSR's CPU-copy and IOSurface paths are gone on macOS.) | — | Windows still uses WebView2 child windows. |
 | De-Googling | **Runtime stripping** of stock CEF (§5) | Building CEF against ungoogled-chromium / Helium patches | Building Chromium is 4–8 h on a 32-core box, not viable on hosted runners per release, and the ungoogled-on-CEF path is undocumented folklore (forum thread, "not all patches apply"). CEF Alloy already has no sign-in, sync, Chrome UI, or account machinery. What is left is switchable or blockable. Keep a source build as a documented v2 option. |
 | Storage isolation | One `CefRequestContext` per Space with `cache_path = <profile>/spaces/<id>` | Chromium profiles | Context = Chromium `BrowserContext`/`StoragePartition`: cookies, localStorage, IDB, cache, SW, permissions all isolated. Exactly what Arc "profiles" do. Several Spaces may share one context (Arc allows that too). |
 | Updates | **GitHub Actions cron** bumps CEF pin from `cef-builds.spotifycdn.com/index.json` and the `cef` crate, opens a PR, CI builds, auto-merge on green, release | Sparkle/own update server | No code change needed for an engine bump. App self-update is v1.1. |
@@ -234,7 +236,7 @@ fades/slides/scales. Arc's feel is **spring physics with interruptible, finger-d
   value in the model; `cx.request_animation_frame`-style re-render while any spring is moving.
 - FLIP for list reorders: capture bounds in `prepaint` of frame N, animate offset from old→new in frame N+1.
 - Theme colour crossfade: interpolate in OKLCH, not RGB.
-- Page content stays live during animations because the page is an element (this is the whole reason for OSR).
+- Page content stays live during animations: the native view moves with its element each frame. (Transforms other than move/clip, e.g. scale, need a snapshot; not done.)
 - Respect "reduce motion" OS setting → durations ×0, springs become snaps.
 
 ---
