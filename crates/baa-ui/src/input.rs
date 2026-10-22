@@ -96,8 +96,10 @@ impl TextField {
             .child(
                 div()
                     .truncate()
+                    // Tight to the glyphs, so the selection hugs the text.
+                    .line_height(gpui::relative(1.25))
                     .when(self.all_selected && !empty, |d| {
-                        d.bg(selection).rounded_sm()
+                        d.bg(selection).rounded(px(3.))
                     })
                     .text_color(if empty { dim } else { text })
                     .child(SharedString::from(if empty {

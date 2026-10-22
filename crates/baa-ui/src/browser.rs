@@ -88,6 +88,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) renaming: Option<TextField>,
     /// Set when `renaming` edits this folder's name instead of the Space's.
     pub(crate) renaming_folder: Option<FolderId>,
+    /// Folders opening or closing: 0 closed, 1 open. Absent = at rest.
+    pub(crate) folder_motion: HashMap<FolderId, Spring>,
     /// Favicons by URL, fetched by the pages themselves.
     pub(crate) favicons: HashMap<String, std::sync::Arc<gpui::Image>>,
     /// The active Space's extensions, for the toolbar.
@@ -167,6 +169,7 @@ impl<H: WebHost> Browser<H> {
             peek: None,
             renaming: None,
             renaming_folder: None,
+            folder_motion: HashMap::new(),
             favicons,
             extensions: Vec::new(),
             nav_press: None,
@@ -825,6 +828,18 @@ impl<H: WebHost> Browser<H> {
         self.renaming_folder = Some(id);
     }
 
+    pub(crate) fn set_folder_open(&mut self, id: FolderId, open: bool) {
+        let Some(folder) = self.session.folder_mut(id) else {
+            return;
+        };
+        let from = if folder.collapsed { 0.0 } else { 1.0 };
+        folder.collapsed = !open;
+        self.folder_motion
+            .entry(id)
+            .or_insert_with(|| Spring::new(from))
+            .set_target(if open { 1.0 } else { 0.0 });
+    }
+
     pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.menu = Some(ContextMenu { at, kind });
         cx.notify();
@@ -1253,6 +1268,11 @@ impl<H: WebHost> Browser<H> {
         if let Some(bar) = &mut self.bar {
             moving |= bar.scale.tick(dt, reduce);
         }
+        self.folder_motion.retain(|_, spring| {
+            let more = spring.tick(dt, reduce);
+            moving |= more;
+            more
+        });
         if moving {
             window.request_animation_frame();
         }

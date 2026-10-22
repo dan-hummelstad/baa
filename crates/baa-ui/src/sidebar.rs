@@ -443,18 +443,26 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// A folder row, then its tabs indented unless it is collapsed (its active
-    /// tab still shows, as in Arc).
+    /// tab still shows, as in Arc). Opening and closing springs the height.
     fn render_folder(&self, folder: &Folder, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let id = folder.id;
         let open = !folder.collapsed;
+        // Overshoot would grow past the rows, so the spring is clamped.
+        let t = self
+            .folder_motion
+            .get(&id)
+            .map_or(if open { 1.0 } else { 0.0 }, |s| s.value().clamp(0.0, 1.0));
+        let animating = self.folder_motion.contains_key(&id);
         let active = self.active_tab();
         let rows: Vec<_> = self
             .session
             .folder_tabs(id)
             .enumerate()
-            .filter(|(_, t)| open || active == Some(t.id))
+            .filter(|(_, t)| open || animating || active == Some(t.id))
             .map(|(i, tab)| self.render_tab_row(tab, i, active, theme, cx))
             .collect();
+        let n = rows.len() as f32;
+        let full = 6. + n * ROW_H + (n - 1.).max(0.) * 6.;
         let name = match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
             Some(field) => div()
                 .flex_1()
@@ -478,7 +486,6 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_none()
             .flex_col()
-            .gap(px(6.))
             .child(
                 div()
                     .id(("folder", id.0))
@@ -494,9 +501,8 @@ impl<H: WebHost> Browser<H> {
                     .hover(|s| s.bg(theme.hover))
                     .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                         // The first click of a double-click already toggled it.
-                        if let Some(f) = this.session.folder_mut(id) {
-                            f.collapsed = !f.collapsed;
-                        }
+                        let open = this.session.folder(id).is_some_and(|f| f.collapsed);
+                        this.set_folder_open(id, open);
                         if e.click_count() == 2 {
                             this.start_folder_rename(id, window, cx);
                         }
@@ -512,16 +518,23 @@ impl<H: WebHost> Browser<H> {
                     .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                         this.session.move_to_folder(d.id, id, usize::MAX);
-                        if let Some(f) = this.session.folder_mut(id) {
-                            f.collapsed = false;
-                        }
+                        this.set_folder_open(id, true);
                         this.sync(window, cx);
                     }))
                     .child(icon(if open { "folder-open" } else { "folder" }, 16., theme.ink))
                     .child(name),
             )
             .when(!rows.is_empty(), |d| {
-                d.child(div().pl(px(14.)).flex().flex_col().gap(px(6.)).children(rows))
+                d.child(
+                    div()
+                        .pt(px(6.))
+                        .pl(px(14.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .when(animating, |d| d.h(px(full * t)).overflow_hidden().opacity(t))
+                        .children(rows),
+                )
             })
     }
 
