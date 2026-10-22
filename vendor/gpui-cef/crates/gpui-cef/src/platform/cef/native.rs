@@ -61,6 +61,8 @@ unsafe impl Encode for CGRect {
 }
 
 const NS_WINDOW_BELOW: isize = -1;
+/// NSViewWidthSizable | NSViewHeightSizable: margins fixed, size follows.
+const FILL: usize = 2 | 16;
 
 /// gpui's NSView for `window`.
 pub(crate) fn gpui_view(window: &Window) -> *mut AnyObject {
@@ -98,6 +100,10 @@ impl Container {
             let _: () = msg_send![layer, setCornerRadius: corner_radius as f64];
             let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
             let _: () = msg_send![view, setHidden: Bool::YES];
+            // During a live resize AppKit resizes the window's views at once,
+            // while gpui only re-lays out the page on its next frame: follow
+            // the window here, gpui sets the exact frame when it draws.
+            let _: () = msg_send![view, setAutoresizingMask: FILL];
             if !gpui_view.is_null() {
                 // Behind the page holes: white, like a page, rather than the
                 // desktop through gpui's transparent layer while a tab switches.
@@ -221,6 +227,7 @@ impl Container {
                 self.placed.set(Some((clip, inner)));
                 let _: () = msg_send![self.view, setFrame: clip];
                 if !page.is_null() {
+                    let _: () = msg_send![page, setAutoresizingMask: FILL];
                     let _: () = msg_send![page, setFrame: inner];
                 }
             }
