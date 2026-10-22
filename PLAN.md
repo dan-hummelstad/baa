@@ -105,7 +105,7 @@ baa/
 └─ PLAN.md
 ```
 
-Rust edition 2024, MSRV = stable (1.99.1 on the dev box). Keep dependency count low: gpui, cef, rusqlite, serde, parking_lot,
+Rust edition 2021 (2024 once the pinned gpui rev compiles under it), MSRV = stable (1.99.1 on the dev box). Keep dependency count low: gpui, cef, rusqlite, serde, parking_lot,
 log, anyhow, url, adblock. No async runtime; CEF and GPUI both pump their own loops (CEF via
 `external_message_pump` + `do_message_loop_work` scheduled on GPUI's foreground executor, as gpui-cef does).
 
@@ -159,7 +159,7 @@ risk is a code path we didn't list. The CI network test is the control.
 ## 6. Per-Space storage isolation
 
 - `CefSettings.root_cache_path = <app data>/baa/profile`.
-- Each **storage profile** (user-visible: "Personal", "Work", …) = `CefRequestContextSettings { cache_path: root/spaces/<uuid>, persist_session_cookies: true }`.
+- Each **storage profile** (user-visible: "Personal", "Work", …) = `CefRequestContextSettings { cache_path: root/space-<id> (must be a direct child of root; Chrome rejects deeper paths), persist_session_cookies: true }`.
 - A Space references exactly one storage profile; many Spaces may share one. Default: new Space gets a new profile (true Arc behaviour is "same profile unless you choose"; make it a toggle in the Space creator).
 - Incognito Space = empty `cache_path` (in-memory context).
 - Downloads, permissions, zoom per context via `CefRequestContextHandler`.

@@ -21,13 +21,14 @@ display-name = "baa"
 [dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
-gpui-cef.workspace = true
 baa-ui.workspace = true
 baa-web.workspace = true
 baa-model.workspace = true
-baa-privacy.workspace = true
 log.workspace = true
 env_logger.workspace = true
+# Already in the graph via gpui: an unbounded channel from the open-URL thread and
+# gpui's on_open_urls (neither has an App) into the foreground.
+futures = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 cef = { workspace = true, features = ["build-util"] }

@@ -1,632 +1,181 @@
-//! A demo that embeds a real Chromium inside a gpui window.
-//!
-//! The point of it is that the webview behaves like any other gpui element:
-//!
-//! - **It is clipped by rounded corners.** Attaching a child view (wry's
-//!   `WKWebView`, for instance) only ever gives you a rectangle.
-//! - **gpui elements are drawn on top of it.** The badge in the bottom right
-//!   sits in front of the page.
-//! - **It shares the layout tree.** Toggling the side panel changes the
-//!   webview's width, and CEF's render size follows.
-//!
-//! The toolbar is drawn by gpui, and whether the history buttons are enabled and
-//! whether a load is in flight come straight from CEF's `LoadHandler`.
+//! App shell: wires baa-web's CEF host, baa-model's store and baa-ui's root view
+//! into one window, and keeps one running instance per profile (PLAN.md §6).
 
+use std::{fs::File, path::PathBuf};
+
+use baa_model::Store;
+use baa_ui::Browser;
+use baa_web::{CefRuntime, CefWebHost};
+use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    div, prelude::*, px, rgb, rgba, size, Bounds, Context, Entity, FocusHandle, Focusable,
-    FontWeight, KeyDownEvent, MouseButton, SharedString, TitlebarOptions, Window, WindowBounds,
-    WindowOptions,
+    actions, px, size, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
+    WindowBounds, WindowHandle, WindowOptions,
 };
-use gpui_cef::{RuntimeOptions, Webview, WebviewOptions};
 
-const START_URL: &str = "https://voluntas.ghost.io/gpui-webview/";
-
-/// Pages reachable from the side panel.
-const BOOKMARKS: &[(&str, &str)] = &[
-    (
-        "The gpui-webview post",
-        "https://voluntas.ghost.io/gpui-webview/",
-    ),
-    ("Zed", "https://zed.dev/"),
-    ("CEF", "https://bitbucket.org/chromiumembedded/cef/"),
-    ("Rust", "https://www.rust-lang.org/"),
-];
-
-// Colors. gpui has no theming machinery, so this demo keeps them as constants.
-const BG: u32 = 0x16161a;
-const PANEL: u32 = 0x1e1e24;
-const BORDER: u32 = 0x33333d;
-const TEXT: u32 = 0xe8e8ec;
-const TEXT_DIM: u32 = 0x8a8a96;
-const ACCENT: u32 = 0x6c9cff;
-
-struct BrowserWindow {
-    webview: Entity<Webview>,
-    /// What the address bar is being edited to. `None` means show the webview's
-    /// current URL instead.
-    editing_address: Option<String>,
-    address_focus: FocusHandle,
-    show_panel: bool,
-    inverted: bool,
-}
-
-impl BrowserWindow {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let options = WebviewOptions {
-            // GPUI_CEF_ACCELERATED=1 tries the shared IOSurface path. Stock gpui
-            // cannot draw a BGRA surface, so it will crash there.
-            accelerated: std::env::var("GPUI_CEF_ACCELERATED").is_ok(),
-            ..WebviewOptions::url(START_URL)
-        };
-        let webview = cx.new(|cx| Webview::new(window, cx, options));
-
-        // Repaint the toolbar when the title, URL, or load state changes.
-        cx.observe(&webview, |_, _, cx| cx.notify()).detach();
-
-        Self {
-            webview,
-            editing_address: None,
-            address_focus: cx.focus_handle(),
-            show_panel: true,
-            inverted: false,
-        }
-    }
-
-    /// What the address bar should show: the edit buffer while editing, the
-    /// current URL otherwise.
-    fn address_text(&self, cx: &Context<Self>) -> String {
-        self.editing_address
-            .clone()
-            .unwrap_or_else(|| self.webview.read(cx).url())
-    }
-
-    fn navigate(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(url) = normalize_url(url) else {
-            // Nothing typed; leave the page alone rather than loading about:blank.
-            return;
-        };
-        self.webview.read(cx).load_url(&url);
-        self.editing_address = None;
-        // Hand the keyboard back to the page.
-        let focus = self.webview.read(cx).focus_handle(cx);
-        window.focus(&focus, cx);
-        cx.notify();
-    }
-
-    fn on_address_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-
-        match keystroke.key.as_str() {
-            "enter" => {
-                let url = self.address_text(cx);
-                self.navigate(&url, window, cx);
-                return;
-            }
-            "escape" => {
-                self.editing_address = None;
-                let focus = self.webview.read(cx).focus_handle(cx);
-                window.focus(&focus, cx);
-                cx.notify();
-                return;
-            }
-            "backspace" => {
-                let mut text = self.address_text(cx);
-                text.pop();
-                self.editing_address = Some(text);
-                cx.notify();
-                return;
-            }
-            _ => {}
-        }
-
-        // Shortcuts such as Cmd-A are not text input.
-        if keystroke.modifiers.platform || keystroke.modifiers.control {
-            return;
-        }
-        if let Some(input) = keystroke.key_char.as_deref() {
-            let mut text = self.address_text(cx);
-            text.push_str(input);
-            self.editing_address = Some(text);
-            cx.notify();
-        }
-    }
-
-    /// A toolbar button. When `enabled` is false, clicking does nothing.
-    fn toolbar_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        enabled: bool,
-        cx: &mut Context<Self>,
-        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> gpui::AnyElement {
-        let base = div()
-            .id(id)
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(30.))
-            .rounded_md()
-            .text_color(if enabled { rgb(TEXT) } else { rgb(TEXT_DIM) })
-            .child(label);
-
-        if enabled {
-            base.cursor_pointer()
-                .hover(|style| style.bg(rgb(BORDER)))
-                .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-                .into_any_element()
-        } else {
-            base.into_any_element()
-        }
-    }
-
-    fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let webview = self.webview.read(cx);
-        let can_go_back = webview.can_go_back();
-        let can_go_forward = webview.can_go_forward();
-        let is_loading = webview.is_loading();
-        let address = self.address_text(cx);
-        let editing = self.editing_address.is_some();
-
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .h(px(48.))
-            .px_3()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(PANEL))
-            .child(
-                self.toolbar_button("back", "\u{2190}", can_go_back, cx, |this, _, cx| {
-                    this.webview.read(cx).go_back()
-                }),
-            )
-            .child(
-                self.toolbar_button("forward", "\u{2192}", can_go_forward, cx, |this, _, cx| {
-                    this.webview.read(cx).go_forward()
-                }),
-            )
-            .child(self.toolbar_button(
-                "reload",
-                if is_loading { "\u{2715}" } else { "\u{27f3}" },
-                true,
-                cx,
-                move |this, _, cx| {
-                    let webview = this.webview.read(cx);
-                    if webview.is_loading() {
-                        webview.stop();
-                    } else {
-                        webview.reload();
-                    }
-                },
-            ))
-            .child(
-                // The address bar. gpui ships no text input widget, so this is a
-                // focusable div that collects key events by hand.
-                div()
-                    .id("address")
-                    .track_focus(&self.address_focus)
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .h(px(32.))
-                    .px_3()
-                    .mx_2()
-                    .rounded_md()
-                    .bg(rgb(BG))
-                    .border_1()
-                    .border_color(if editing { rgb(ACCENT) } else { rgb(BORDER) })
-                    .text_sm()
-                    .text_color(rgb(TEXT))
-                    .cursor_text()
-                    .on_key_down(cx.listener(Self::on_address_key))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            window.focus(&this.address_focus, cx);
-                            // Start editing from whatever URL is showing.
-                            if this.editing_address.is_none() {
-                                this.editing_address = Some(this.webview.read(cx).url());
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(SharedString::from(address))
-                    // Stand-in for a caret while editing.
-                    .when(editing, |this| {
-                        this.child(div().w(px(1.)).h(px(16.)).bg(rgb(ACCENT)))
-                    }),
-            )
-            .child(
-                div()
-                    .w(px(72.))
-                    .text_xs()
-                    .text_color(rgb(TEXT_DIM))
-                    .child(if is_loading { "Loading..." } else { "" }),
-            )
-            .child(
-                self.toolbar_button("panel", "\u{25a4}", true, cx, |this, _, cx| {
-                    this.show_panel = !this.show_panel;
-                    cx.notify();
-                }),
-            )
-    }
-
-    fn render_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let webview = self.webview.read(cx);
-        let title = webview.title();
-        let url = webview.url();
-
-        div()
-            .flex()
-            .flex_col()
-            // Without flex_shrink_0 the panel gets squeezed: the webview element
-            // reports no intrinsic width, so the flex_1 sibling takes the space.
-            .flex_shrink_0()
-            .gap_4()
-            .w(px(260.))
-            .h_full()
-            .p_4()
-            .border_l_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(PANEL))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(TEXT_DIM))
-                            .child("Current page"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT))
-                            .child(SharedString::from(title)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(TEXT_DIM))
-                            .child(SharedString::from(url)),
-                    ),
-            )
-            .child(div().h(px(1.)).bg(rgb(BORDER)))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_xs().text_color(rgb(TEXT_DIM)).child("Bookmarks"))
-                    .children(BOOKMARKS.iter().map(|(label, url)| {
-                        div()
-                            .id(*label)
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_sm()
-                            .text_color(rgb(TEXT))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(BORDER)))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.navigate(url, window, cx)
-                            }))
-                            .child(*label)
-                    })),
-            )
-            .child(div().h(px(1.)).bg(rgb(BORDER)))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(TEXT_DIM))
-                            .child("Inject JavaScript into the page"),
-                    )
-                    .child(
-                        div()
-                            .id("invert")
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgb(ACCENT))
-                            .text_sm()
-                            .text_color(rgb(0x101014))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.inverted = !this.inverted;
-                                let filter = if this.inverted { "invert(1)" } else { "none" };
-                                this.webview.read(cx).eval(&format!(
-                                    "document.documentElement.style.filter = '{filter}'"
-                                ));
-                                cx.notify();
-                            }))
-                            .child(if self.inverted {
-                                "Restore colors"
-                            } else {
-                                "Invert colors"
-                            }),
-                    ),
-            )
-    }
-}
-
-impl Render for BrowserWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let toolbar = self.render_toolbar(cx);
-        let panel = if self.show_panel {
-            Some(self.render_panel(cx).into_any_element())
-        } else {
-            None
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .child(toolbar)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        div().relative().flex_1().p_3().child(
-                            // Clip the webview to rounded corners and draw a gpui
-                            // element over it. A child-view backend can do
-                            // neither.
-                            div()
-                                .relative()
-                                .size_full()
-                                .rounded_lg()
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .child(div().size_full().child(self.webview.clone()))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .right(px(12.))
-                                        .bottom(px(12.))
-                                        .px_3()
-                                        .py_1()
-                                        .rounded_md()
-                                        .bg(rgba(0x000000cc))
-                                        .text_xs()
-                                        .text_color(rgb(TEXT))
-                                        .child("A gpui element, drawn over the webview"),
-                                ),
-                        ),
-                    )
-                    .children(panel),
-            )
-    }
-}
-
-/// Turns what someone typed into a URL to load.
-///
-/// Returns `None` for input that should not navigate at all, so an accidental
-/// Enter on an empty address bar does not blank the page.
-fn normalize_url(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // Already a URL, including file:// and about:blank.
-    if trimmed.contains("://") || trimmed.starts_with("about:") {
-        return Some(trimmed.to_string());
-    }
-
-    if looks_like_a_host(trimmed) {
-        // Local development servers almost never speak https.
-        let scheme = if is_loopback(trimmed) {
-            "http"
-        } else {
-            "https"
-        };
-        return Some(format!("{scheme}://{trimmed}"));
-    }
-
-    Some(format!("https://duckduckgo.com/?q={}", urlencode(trimmed)))
-}
-
-/// Whether this looks like somewhere to connect to rather than something to
-/// search for.
-fn looks_like_a_host(input: &str) -> bool {
-    if input.contains(char::is_whitespace) {
-        return false;
-    }
-
-    let host = input
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit('@')
-        .next()
-        .unwrap_or_default();
-    let host = host.split(':').next().unwrap_or_default();
-
-    if host.is_empty() {
-        return false;
-    }
-    // "localhost" and "localhost:3000" have no dot but are still hosts.
-    if is_loopback(input) {
-        return true;
-    }
-    // Otherwise require a dotted name with a non-empty last label, so "3.5" is a
-    // host but "hello." and "1." are searches.
-    match host.rsplit_once('.') {
-        Some((before, tld)) => !before.is_empty() && !tld.is_empty(),
-        None => false,
-    }
-}
-
-/// Whether the input points at this machine.
-fn is_loopback(input: &str) -> bool {
-    let host = input
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .split(':')
-        .next()
-        .unwrap_or_default();
-    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "[::1]"
-}
-
-/// Just enough percent-encoding to put a search term in a query string.
-fn urlencode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*byte as char)
-            }
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
+actions!(baa_app, [Quit]);
 
 fn main() {
     env_logger::init();
+    let dir = data_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        fail("creating the data directory", e);
+    }
+    // CEF switches (e.g. the CI test's --proxy-server) start with '-'; the rest are URLs.
+    let urls: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
 
-    // 1. At the top of main: load CEF into the process. The real initialization
-    //    happens inside run().
-    let runtime = match gpui_cef::init(RuntimeOptions {
-        remote_debugging_port: Some(9229),
-        log_file: std::env::var("GPUI_CEF_LOG").ok().map(Into::into),
-        ..Default::default()
-    }) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            eprintln!("failed to start the browser runtime: {err}");
-            std::process::exit(1);
-        }
-    };
+    // CEF allows one browser process per root_cache_path, so a second launch hands
+    // its URLs to the first and exits. Held until the process exits.
+    let lock = File::create(dir.join("instance.lock")).unwrap_or_else(|e| fail("lock file", e));
+    if lock.try_lock().is_err() {
+        forward(&dir, &urls);
+        return;
+    }
 
-    // Hand the closure a clone. Moving the value in would run cef_shutdown() the
-    // moment the closure returns, taking the process with it.
-    let cef = runtime.clone();
-    gpui_platform::application().run(move |cx| {
-        // 2. gpui has created NSApp by now, so initialize CEF here. The other
-        //    order lets CEF claim the NSApplication singleton and gpui crashes.
-        if let Err(err) = cef.start(cx) {
-            eprintln!("failed to initialize the browser runtime: {err}");
-            std::process::exit(1);
+    let cef = CefRuntime::init(dir.join("profile")).unwrap_or_else(|e| fail("loading CEF", e));
+    let store = Store::open(dir.join("baa.db")).unwrap_or_else(|e| fail("opening baa.db", e));
+    let settings = store.load_settings().unwrap_or_default();
+
+    let (tx, mut rx) = mpsc::unbounded::<String>();
+    for url in urls {
+        tx.unbounded_send(url).ok();
+    }
+    listen(&dir, tx.clone());
+
+    let app = gpui_platform::application();
+    app.on_open_urls(move |urls| {
+        for url in urls {
+            tx.unbounded_send(url).ok();
         }
+    });
+    let runtime = cef.clone();
+    app.run(move |cx| {
+        // gpui has created NSApp by now; CEF must initialise after it or it
+        // claims the NSApplication singleton and gpui crashes.
+        let host = runtime
+            .start(cx)
+            .unwrap_or_else(|e| fail("starting CEF", e));
+
+        baa_ui::init(cx);
+        if let Ok(json) = std::fs::read_to_string(dir.join("keymap.json")) {
+            if let Err(e) = baa_ui::actions::bind_keymap(&json, cx) {
+                log::error!("{e:#}");
+            }
+        }
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus([Menu::new("baa").items([MenuItem::action("Quit baa", Quit)])]);
+        // ponytail: gpui does not read the OS reduce-motion flag and we do not
+        // either yet; Settings.reduce_motion is the only switch.
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         let bounds = Bounds::centered(None, size(px(1280.), px(860.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("gpui-cef".into()),
-                    ..Default::default()
-                }),
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("baa".into()),
                 ..Default::default()
-            },
-            |window, cx| cx.new(|cx| BrowserWindow::new(window, cx)),
-        )
-        .unwrap();
+            }),
+            ..Default::default()
+        };
+        let window: WindowHandle<Browser<CefWebHost>> = cx
+            .open_window(options, |window, cx| {
+                cx.new(|cx| Browser::new(host, store, window, cx))
+            })
+            .unwrap_or_else(|e| fail("opening the window", e));
         cx.activate(true);
+
+        cx.spawn(async move |cx| {
+            while let Some(input) = rx.next().await {
+                // ponytail: search engine as of launch; a later settings change
+                // applies to forwarded URLs from the next launch.
+                let url = settings.resolve_input(&input);
+                let opened = window.update(cx, |browser, window, cx| {
+                    browser.open_url(&url, window, cx);
+                    window.activate_window();
+                });
+                if opened.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     });
 
-    // 3. run() returned, so the message loop is done: shut CEF down.
-    runtime.shutdown();
+    cef.shutdown();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn fail(what: &str, err: impl std::fmt::Display) -> ! {
+    eprintln!("baa: {what}: {err}");
+    std::process::exit(1);
+}
 
-    #[test]
-    fn an_empty_address_bar_does_not_navigate() {
-        assert_eq!(normalize_url(""), None);
-        assert_eq!(normalize_url("   "), None);
-    }
+/// `<app data>/baa`: profile, session database, keymap.json and the instance lock.
+fn data_dir() -> PathBuf {
+    let var = |name| std::env::var_os(name).map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        var("HOME").map(|h| h.join("Library/Application Support"))
+    } else if cfg!(windows) {
+        var("APPDATA")
+    } else {
+        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))
+    };
+    base.unwrap_or_else(std::env::temp_dir).join("baa")
+}
 
-    #[test]
-    fn existing_schemes_are_left_alone() {
-        assert_eq!(
-            normalize_url("https://example.com/a?b=c"),
-            Some("https://example.com/a?b=c".into())
-        );
-        assert_eq!(
-            normalize_url("file:///tmp/page.html"),
-            Some("file:///tmp/page.html".into())
-        );
-        assert_eq!(normalize_url("about:blank"), Some("about:blank".into()));
-    }
-
-    #[test]
-    fn bare_hosts_get_https() {
-        assert_eq!(
-            normalize_url("example.com"),
-            Some("https://example.com".into())
-        );
-        assert_eq!(
-            normalize_url("example.com:8080/path"),
-            Some("https://example.com:8080/path".into())
-        );
-        assert_eq!(
-            normalize_url("192.168.0.1"),
-            Some("https://192.168.0.1".into())
-        );
-    }
-
-    #[test]
-    fn local_development_servers_get_http() {
-        // A dev server on localhost almost never has a certificate.
-        assert_eq!(
-            normalize_url("localhost:3000"),
-            Some("http://localhost:3000".into())
-        );
-        assert_eq!(normalize_url("localhost"), Some("http://localhost".into()));
-        assert_eq!(
-            normalize_url("127.0.0.1:8080/health"),
-            Some("http://127.0.0.1:8080/health".into())
-        );
-    }
-
-    #[test]
-    fn everything_else_is_a_search() {
-        assert_eq!(
-            normalize_url("hello world"),
-            Some("https://duckduckgo.com/?q=hello+world".into())
-        );
-        // A trailing dot is a typo, not a host.
-        assert_eq!(
-            normalize_url("hello."),
-            Some("https://duckduckgo.com/?q=hello.".into())
-        );
-        assert_eq!(
-            normalize_url("rust"),
-            Some("https://duckduckgo.com/?q=rust".into())
-        );
-    }
-
-    #[test]
-    fn search_terms_are_percent_encoded() {
-        assert_eq!(urlencode("a b&c"), "a+b%26c");
-        // Multi-byte input has to be encoded per UTF-8 byte.
-        assert_eq!(urlencode("あ"), "%E3%81%82");
+// Open-URL IPC: one URL per line over a socket next to the lock. On macOS,
+// LaunchServices (`open`, default-browser clicks) goes through on_open_urls
+// instead; this covers launching the binary directly.
+#[cfg(unix)]
+fn forward(dir: &std::path::Path, urls: &[String]) {
+    use std::io::Write as _;
+    match std::os::unix::net::UnixStream::connect(dir.join("ipc.sock")) {
+        Ok(mut stream) => {
+            for url in urls {
+                let _ = writeln!(stream, "{url}");
+            }
+        }
+        Err(e) => eprintln!("baa is already running but did not answer: {e}"),
     }
 }
+
+#[cfg(unix)]
+fn listen(dir: &std::path::Path, tx: mpsc::UnboundedSender<String>) {
+    use std::io::BufRead as _;
+    let path = dir.join("ipc.sock");
+    // A crashed run leaves the socket file behind; the lock proves nobody owns it.
+    let _ = std::fs::remove_file(&path);
+    let listener = match std::os::unix::net::UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(e) => return log::error!("open-URL socket: {e}"),
+    };
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            for line in std::io::BufReader::new(stream)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if !line.trim().is_empty() {
+                    tx.unbounded_send(line).ok();
+                }
+            }
+        }
+    });
+}
+
+// ponytail: no named pipe on Windows yet (not buildable here, and gpui-cef's
+// Windows backend is still WebView2). A second launch only explains and exits.
+#[cfg(not(unix))]
+fn forward(_: &std::path::Path, _: &[String]) {
+    eprintln!("baa is already running");
+}
+
+#[cfg(not(unix))]
+fn listen(_: &std::path::Path, _: mpsc::UnboundedSender<String>) {}
