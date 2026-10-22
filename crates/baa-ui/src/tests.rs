@@ -470,3 +470,23 @@ fn rows_grow_in_and_collapse_out(cx: &mut TestAppContext) {
         assert_eq!((ghost.list.1, ghost.index), (Zone::Today, 0));
     });
 }
+
+#[gpui::test]
+fn copying_the_url_flashes_a_check(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    cx.dispatch_action(CopyUrl);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("https://a.example/")
+    );
+    let copied = |cx: &mut VisualTestContext| {
+        b.read_with(cx, |b, _| b.motion.springs_target(("copied", 0), crate::motion::Feel::Glide))
+    };
+    assert_eq!(copied(cx), Some(1.0));
+    cx.executor().advance_clock(std::time::Duration::from_millis(1300));
+    cx.run_until_parked();
+    assert_eq!(copied(cx), Some(0.0), "the check goes away on its own");
+}

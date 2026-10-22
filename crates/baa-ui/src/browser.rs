@@ -8,7 +8,7 @@ use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
     relative, rgb, AnyElement, AnyWindowHandle, BoxShadow, ClipboardItem, Context, Entity,
-    Animation, AnimationExt, Div, ElementId, FocusHandle, Hsla, KeyDownEvent, MouseButton, Pixels, Point, Rgba,
+    Animation, AnimationExt, Div, ElementId, Transformation, FocusHandle, Hsla, KeyDownEvent, MouseButton, Pixels, Point, Rgba,
     SharedString, Stateful, Subscription, Window,
 };
 
@@ -98,6 +98,8 @@ pub struct Browser<H: WebHost> {
     /// Rows that just left a list, collapsing where they were.
     pub(crate) ghosts: Vec<Ghost>,
     shown_tab: Option<TabId>,
+    /// Copies of the URL so far, so only the latest one's check goes away.
+    copies: u64,
     /// The command bar on its way out.
     pub(crate) closing_bar: Option<Bar>,
     /// Favicons by URL, fetched by the pages themselves.
@@ -185,6 +187,7 @@ impl<H: WebHost> Browser<H> {
             ghosts: Vec::new(),
             shown_tab: None,
             closing_bar: None,
+            copies: 0,
             favicons,
             extensions: Vec::new(),
             nav_press: None,
@@ -916,6 +919,29 @@ impl<H: WebHost> Browser<H> {
         self.renaming_folder = Some(id);
     }
 
+    /// Copies the tab's URL; the header's link icon turns into a check for a moment.
+    pub(crate) fn copy_url(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab().and_then(|id| self.session.tab(id)) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(tab.url.clone()));
+        self.copies += 1;
+        let copy = self.copies;
+        self.motion.from(("copied", 0), Feel::Glide, 0.0, 1.0);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                // A later copy restarts the moment instead.
+                if this.copies == copy {
+                    this.motion.to(("copied", 0), Feel::Glide, 0.0);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn set_folder_open(&mut self, id: FolderId, open: bool) {
         let Some(folder) = self.session.folder_mut(id) else {
             return;
@@ -1100,11 +1126,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &Reload, _, cx| {
             this.with_page(cx, |p| if p.is_loading() { p.stop() } else { p.reload() })
         }))
-        .on_action(cx.listener(|this, _: &CopyUrl, _, cx| {
-            if let Some(tab) = this.active_tab().and_then(|id| this.session.tab(id)) {
-                cx.write_to_clipboard(ClipboardItem::new_string(tab.url.clone()));
-            }
-        }))
+        .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(cx)))
         .on_action(cx.listener(|this, _: &Find, window, cx| {
             if this.active_page().is_some() {
                 this.bar = None;
@@ -1477,6 +1499,46 @@ impl<H: WebHost> Browser<H> {
         }).collect();
         let key = ("address", 0);
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        // The link icon copies the URL; on a copy it flips to a check that pops in.
+        let copied = self.motion.get(("copied", 0), Feel::Glide);
+        let c = copied.clamp(0.0, 1.0);
+        let link_key = ("link", 0);
+        let (lh, lp) = (self.motion.get(link_key, Feel::Hover), self.motion.get(link_key, Feel::Press));
+        let ink = mix(theme.ink_muted, theme.ink, h.max(lh));
+        let squash = 1. - 0.2 * lp;
+        let link_icon = feel(
+            div()
+                .id("copy-link")
+                .relative()
+                .size(px(18.))
+                .ml(px(-3.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .bg(fade(theme.hover, lh))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.copy_url(cx);
+                }))
+                .child(icon("link", 13., ink).with_transformation(
+                    Transformation::scale(gpui::size(squash * (1. - 0.5 * c), squash * (1. - 0.5 * c)))
+                        .with_rotation(gpui::radians(-0.6 * c)),
+                ).opacity(1. - c))
+                .child(
+                    div().absolute().inset_0().flex().items_center().justify_center().child(
+                        // Overshoot in the spring is the pop.
+                        icon("check", 13., theme.accent)
+                            .with_transformation(Transformation::scale(gpui::size(
+                                squash * copied.max(0.),
+                                squash * copied.max(0.),
+                            )))
+                            .opacity(c),
+                    ),
+                ),
+            link_key,
+            cx,
+        );
         let label: SharedString = if host.is_empty() {
             "Search or enter address".into()
         } else {
@@ -1488,7 +1550,7 @@ impl<H: WebHost> Browser<H> {
             .items_center()
             .gap(px(6.))
             .min_w_0()
-            .when(!host.is_empty(), |d| d.child(icon("link", 13., mix(theme.ink_muted, theme.ink, h))))
+            .when(!host.is_empty(), |d| d.child(link_icon))
             .child(div().truncate().child(label.clone()))
             .with_animation(
                 ElementId::Name(label),
@@ -1864,6 +1926,9 @@ pub(crate) struct HistoryMenu {
     /// (offset from the current entry, title).
     pub entries: Vec<(i32, String)>,
 }
+
+/// How long the header shows the check after copying the URL.
+const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
 
 /// Back/forward pressed this long shows history instead.
 const HOLD: std::time::Duration = std::time::Duration::from_millis(400);

@@ -137,6 +137,11 @@ impl Motion {
         self.springs.insert((key, feel), spring);
     }
 
+    #[cfg(test)]
+    pub fn springs_target(&self, key: Key, feel: Feel) -> Option<f32> {
+        self.springs.get(&(key, feel)).map(Spring::target)
+    }
+
     /// Drops every spring whose key has this name (a closed menu's rows).
     pub fn forget(&mut self, name: &str) {
         self.springs.retain(|((n, _), _), _| *n != name);
