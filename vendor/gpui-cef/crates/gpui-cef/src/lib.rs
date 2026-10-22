@@ -51,7 +51,7 @@ pub struct HistoryEntry {
 pub use options::{
     CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
-pub use platform::{fetch, init, Profile, Runtime, Webview};
+pub use platform::{cancel_download, fetch, init, Profile, Runtime, Webview};
 #[cfg(target_os = "macos")]
 pub use platform::open_chrome_window;
 
@@ -97,6 +97,55 @@ pub enum WebviewEvent {
     Download(Download),
     /// The browser closed itself (`window.close()`).
     Closed,
+    /// A site asks for capabilities only the user can grant. Answer with
+    /// [`Webview::answer_permission`]; until then the site waits.
+    PermissionRequested {
+        id: u64,
+        origin: String,
+        kinds: Vec<Permission>,
+    },
+    /// The request went away unanswered (the page navigated or closed).
+    PermissionDismissed(u64),
+    /// `alert`/`confirm`/`prompt` or a "leave site?" check; the page is paused
+    /// until [`Webview::answer_dialog`].
+    Dialog {
+        kind: DialogKind,
+        message: String,
+        default_text: String,
+    },
+    /// The open dialog was cancelled by the page going away.
+    DialogClosed,
+    /// The page started or stopped playing sound (its own `<video>`/`<audio>`).
+    AudibleChanged(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Permission {
+    Camera,
+    Microphone,
+    ScreenShare,
+    Location,
+    Notifications,
+    Clipboard,
+    Midi,
+    /// Anything rarer (storage access, window management, ...).
+    Other,
+}
+
+/// What a profile remembers about a site's permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionState {
+    Ask,
+    Allow,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+    BeforeUnload { is_reload: bool },
 }
 
 /// A snapshot of one download.
@@ -123,6 +172,9 @@ pub enum DownloadState {
 /// What a console line starts with when it is a message for the application.
 /// The page never needs to spell it out: [`post_message_script`] does.
 pub const MESSAGE_PREFIX: &str = "gpui-cef:message:";
+
+/// Console lines the page-side audio watcher reports with.
+pub(crate) const AUDIBLE_PREFIX: &str = "gpui-cef:audible:";
 
 /// JavaScript that evaluates `expression`, turns it into a string, and posts
 /// it to the application as a [`WebviewEvent::Message`]. Pass it to

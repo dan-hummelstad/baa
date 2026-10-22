@@ -8,9 +8,12 @@ mod icons;
 mod input;
 mod lil_baa;
 mod motion;
+mod prefs;
+mod prompts;
 mod sidebar;
 mod start;
 mod theme;
+mod tools;
 
 #[cfg(test)]
 mod mock;

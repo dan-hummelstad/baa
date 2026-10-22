@@ -19,6 +19,9 @@ pub(crate) struct Shared {
     dirty: Cell<bool>,
     title: RefCell<String>,
     url: RefCell<String>,
+    /// No address has been reported yet: the first one is news even when it
+    /// is the URL the webview was created with.
+    no_address: Cell<bool>,
     /// Whether a page is loading, as reported by CEF's `LoadHandler`.
     is_loading: Cell<bool>,
     can_go_back: Cell<bool>,
@@ -40,6 +43,24 @@ pub(crate) struct Shared {
     focused_natively: Cell<bool>,
     /// The page's native view, kept until CEF has closed the browser.
     closing: RefCell<Option<std::rc::Rc<dyn std::any::Any>>>,
+    /// The JavaScript dialog waiting for the user; Chromium allows one at a time.
+    dialog: RefCell<Option<cef::JsdialogCallback>>,
+    /// Permission requests waiting for the user, by request id.
+    permissions: RefCell<Vec<(u64, PendingPermission)>>,
+    audible: Cell<bool>,
+}
+
+pub(crate) enum PendingPermission {
+    /// Camera/microphone/screen: granted per request, and remembered for the
+    /// site in the profile's content settings.
+    Media {
+        callback: cef::MediaAccessCallback,
+        requested: u32,
+        origin: String,
+    },
+    /// Everything else goes through Chrome's permission manager, which
+    /// remembers the answer itself.
+    Prompt(cef::PermissionPromptCallback),
 }
 
 impl Shared {
@@ -49,6 +70,7 @@ impl Shared {
             dirty: Cell::new(false),
             title: RefCell::new(String::new()),
             url: RefCell::new(url),
+            no_address: Cell::new(true),
             is_loading: Cell::new(false),
             can_go_back: Cell::new(false),
             can_go_forward: Cell::new(false),
@@ -60,6 +82,9 @@ impl Shared {
             created: Cell::new(false),
             focused_natively: Cell::new(false),
             closing: RefCell::new(None),
+            dialog: RefCell::new(None),
+            permissions: RefCell::new(Vec::new()),
+            audible: Cell::new(false),
         })
     }
 
@@ -150,7 +175,7 @@ impl Shared {
     }
 
     pub(crate) fn set_url(&self, url: String) {
-        if *self.url.borrow() != url {
+        if self.no_address.replace(false) || *self.url.borrow() != url {
             *self.url.borrow_mut() = url.clone();
             self.push_event(crate::WebviewEvent::UrlChanged(url));
         }
@@ -191,6 +216,30 @@ impl Shared {
 
     pub(crate) fn cursor(&self) -> CursorStyle {
         self.cursor.get()
+    }
+
+    pub(crate) fn set_dialog(&self, callback: Option<cef::JsdialogCallback>) {
+        *self.dialog.borrow_mut() = callback;
+    }
+
+    pub(crate) fn take_dialog(&self) -> Option<cef::JsdialogCallback> {
+        self.dialog.borrow_mut().take()
+    }
+
+    pub(crate) fn add_permission(&self, id: u64, pending: PendingPermission) {
+        self.permissions.borrow_mut().push((id, pending));
+    }
+
+    pub(crate) fn take_permission(&self, id: u64) -> Option<PendingPermission> {
+        let mut list = self.permissions.borrow_mut();
+        let index = list.iter().position(|(i, _)| *i == id)?;
+        Some(list.remove(index).1)
+    }
+
+    pub(crate) fn set_audible(&self, audible: bool) {
+        if self.audible.replace(audible) != audible {
+            self.push_event(crate::WebviewEvent::AudibleChanged(audible));
+        }
     }
 
     pub(crate) fn title(&self) -> String {
@@ -251,6 +300,7 @@ mod tests {
         use crate::WebviewEvent::*;
         let shared = Shared::new("about:blank".into());
         shared.set_url("about:blank".into());
+        shared.set_url("about:blank".into());
         shared.set_title("A".into());
         shared.set_title("A".into());
         shared.set_load_state(true, false, false);
@@ -259,6 +309,8 @@ mod tests {
         assert_eq!(
             shared.take_events(),
             vec![
+                // The first address is reported even when it is where the page started.
+                UrlChanged("about:blank".into()),
                 TitleChanged("A".into()),
                 LoadingChanged(true),
                 LoadingChanged(false),

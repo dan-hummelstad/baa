@@ -4,11 +4,12 @@
 //! [`Settings`] to SQLite. Times are unix seconds passed in by the caller so the
 //! archive policy is testable.
 
+pub mod import;
 mod settings;
 mod store;
 
 pub use settings::{parse_suggestions, SearchEngine, Settings, SidebarSide, SEARCH_ENGINES};
-pub use store::Store;
+pub use store::{HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};
 
@@ -306,6 +307,54 @@ impl Session {
         id
     }
 
+    /// Each Arc Space becomes a new Space with its own profile, holding Arc's pinned tabs
+    /// and folders; Arc favourites not already here become favourites of the first one.
+    /// Returns how many tabs were added.
+    pub fn import_arc(&mut self, arc: &import::ArcSidebar) -> usize {
+        let before = self.tabs.len();
+        let mut first = None;
+        for sp in &arc.spaces {
+            let space = self.add_space(&sp.name, sp.emoji.as_deref().unwrap_or("🐑"), None);
+            first.get_or_insert(space);
+            for item in &sp.pinned {
+                match item {
+                    import::ArcItem::Tab(t) => self.push_tab(space, Zone::Pinned, None, t),
+                    import::ArcItem::Folder { name, tabs } => {
+                        let folder = self.add_folder(space, name);
+                        for t in tabs {
+                            self.push_tab(space, Zone::Pinned, Some(folder), t);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(space) = first.or(self.active_space) {
+            for t in &arc.favorites {
+                if !self.tabs(space, Zone::Favorite).any(|f| f.url == t.url) {
+                    self.push_tab(space, Zone::Favorite, None, t);
+                }
+            }
+        }
+        self.tabs.len() - before
+    }
+
+    /// Appends an inactive tab to the end of its list.
+    fn push_tab(&mut self, space: SpaceId, zone: Zone, folder: Option<FolderId>, t: &import::ArcTab) {
+        let id = TabId(self.alloc());
+        let tab = Tab {
+            id,
+            space,
+            zone,
+            folder,
+            url: t.url.clone(),
+            title: t.title.clone(),
+            favicon: None,
+            last_active: now(),
+            archived_at: None,
+        };
+        self.insert(tab, usize::MAX);
+    }
+
     /// Inserts at `index` within the tab's list, clamped to its end.
     fn insert(&mut self, tab: Tab, index: usize) {
         let same: Vec<usize> = (0..self.tabs.len()).filter(|&i| same_list(&self.tabs[i], &tab)).collect();
@@ -577,6 +626,42 @@ mod tests {
         assert!(s.tab(active).is_some() && s.tab(pinned).is_some() && s.tab(fresh).is_some());
         assert_eq!(s.restore_archived(old, 20 * 3600), Some(old));
         assert_eq!(s.tabs(sp, Zone::Today).next().unwrap().id, old);
+    }
+
+    #[test]
+    fn import_arc_adds_spaces_folders_and_new_favorites() {
+        use import::{ArcItem, ArcSidebar, ArcSpace, ArcTab};
+        let t = |u: &str| ArcTab { url: u.into(), title: u.to_uppercase() };
+        let mut s = Session::first_run();
+        let home = s.active_space().unwrap();
+        let fav = s.open_tab(home, "https://fav", 0);
+        s.move_tab(fav, home, Zone::Favorite, 0);
+        let arc = ArcSidebar {
+            spaces: vec![
+                ArcSpace {
+                    name: "Work".into(),
+                    emoji: Some("🐦".into()),
+                    pinned: vec![
+                        ArcItem::Tab(t("https://a")),
+                        ArcItem::Folder { name: "Docs".into(), tabs: vec![t("https://b"), t("https://c")] },
+                    ],
+                },
+                ArcSpace { name: "Dev".into(), emoji: None, pinned: vec![] },
+            ],
+            favorites: vec![t("https://fav"), t("https://new")],
+        };
+        assert_eq!(s.import_arc(&arc), 4);
+        let work = s.spaces()[1].clone();
+        assert_eq!((work.name.as_str(), work.icon.as_str()), ("Work", "🐦"));
+        assert_eq!(s.spaces().len(), 3);
+        assert_eq!(s.profiles().len(), 3, "each imported Space gets its own profile");
+        assert_eq!(urls(&s, work.id, Zone::Pinned), ["https://a"]);
+        assert_eq!(s.tabs(work.id, Zone::Pinned).next().unwrap().title, "HTTPS://A");
+        let folder = s.folders(work.id).next().unwrap();
+        assert_eq!(folder.name, "Docs");
+        assert_eq!(s.folder_tabs(folder.id).map(|t| t.url.as_str()).collect::<Vec<_>>(), ["https://b", "https://c"]);
+        assert_eq!(urls(&s, home, Zone::Favorite), ["https://fav", "https://new"]);
+        assert_eq!(s.active_space(), Some(home), "importing does not switch Space");
     }
 
     #[test]

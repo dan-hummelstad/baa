@@ -6,8 +6,8 @@ mod cef_host;
 use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
-pub use cef_host::{CefPage, CefRuntime, CefWebHost, Downloads};
-pub use gpui_cef::{Download, DownloadState, Error};
+pub use cef_host::{CefPage, CefRuntime, CefWebHost};
+pub use gpui_cef::{DialogKind, Download, DownloadState, Error, Permission, PermissionState};
 
 /// What a page reports back to the shell.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,30 @@ pub enum PageEvent {
     /// Page requested a context menu at window-local coordinates.
     ContextMenu { x: f32, y: f32, link_url: Option<String>, selection: Option<String> },
     Closed,
+    /// The site waits until [`PageHandle::answer_permission`].
+    PermissionRequested { id: u64, origin: String, kinds: Vec<Permission> },
+    PermissionDismissed(u64),
+    /// The page is paused until [`PageHandle::answer_dialog`].
+    Dialog { kind: DialogKind, message: String, default_text: String },
+    DialogClosed,
+    AudibleChanged(bool),
+    /// This page started a download (it lands in the host's [`Downloads`]).
+    DownloadStarted,
+}
+
+/// Every download any page started this session, oldest first.
+#[derive(Default)]
+pub struct Downloads {
+    pub items: Vec<Download>,
+}
+
+impl Downloads {
+    pub fn upsert(&mut self, download: Download) {
+        match self.items.iter_mut().find(|item| item.id == download.id) {
+            Some(item) => *item = download,
+            None => self.items.push(download),
+        }
+    }
 }
 
 /// One live page. Implemented by the CEF backend (and later WKWebView/Android).
@@ -49,6 +73,15 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     /// Repeating the same `text` moves to the next match; empty `text` ends the search.
     fn find(&self, text: &str, forward: bool);
     fn open_devtools(&self);
+    fn answer_permission(&self, id: u64, allow: bool);
+    /// OK (with the prompt's text) or Cancel; for "leave site?", OK leaves.
+    fn answer_dialog(&self, ok: bool, text: &str);
+    fn print(&self);
+    fn set_muted(&self, muted: bool);
+    /// Arrived over valid TLS.
+    fn is_secure(&self) -> bool;
+    /// Runs `script` as if the user had just clicked (Picture in Picture needs that).
+    fn eval_with_gesture(&self, script: &str);
     /// Hidden pages keep state but stop painting (background tabs).
     fn set_visible(&self, visible: bool);
     /// Focus this to send keyboard input to the page (after closing the command bar, say).
@@ -83,6 +116,12 @@ pub trait WebHost: 'static {
     /// GETs `url` through `profile`'s network stack (search suggestions);
     /// `done` gets the body, or `None`. Called on the main thread.
     fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>);
+    /// The download tray's data; observe it for updates.
+    fn downloads(&self) -> Entity<Downloads>;
+    fn cancel_download(&self, id: u32);
+    /// What `profile` remembers about `kind` for `url`'s site.
+    fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState;
+    fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState);
 }
 
 /// An installed extension, as the toolbar shows it.

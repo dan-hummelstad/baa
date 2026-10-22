@@ -442,6 +442,7 @@ impl<H: WebHost> Browser<H> {
                 theme,
             ))
             .child(div().flex_1().min_w_0().truncate().child(title))
+            .children(self.render_speaker(id, theme, cx))
             .child(feel(
                 div()
                     .id(("close", id.0))
@@ -464,6 +465,37 @@ impl<H: WebHost> Browser<H> {
                 cx,
             ));
         feel(row, key, cx)
+    }
+
+    /// A playing or muted tab's speaker; clicking it mutes or unmutes.
+    fn render_speaker(&self, id: TabId, theme: &Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let muted = self.muted.contains(&id);
+        if !muted && !self.audible.contains(&id) {
+            return None;
+        }
+        let key = ("speaker", id.0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        // Overshoots past 1 on a toggle: the icon pops.
+        let pop = self.motion.get(("mute-pop", id.0), Feel::Glide);
+        let pop = if pop == 0.0 { 1.0 } else { pop };
+        let scale = pop * (1. - 0.2 * p);
+        let el = div()
+            .id(("speaker", id.0))
+            .size(px(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .bg(fade(theme.glass_strong, h))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_mute(id, cx);
+            }))
+            .child(
+                icon(if muted { "volume-x" } else { "volume-2" }, 14., mix(theme.ink_muted, theme.ink, h))
+                    .with_transformation(Transformation::scale(gpui::size(scale, scale))),
+            );
+        Some(feel(el, key, cx))
     }
 
     /// Favourites: the same tiles in every Space. With none yet, a thin strip

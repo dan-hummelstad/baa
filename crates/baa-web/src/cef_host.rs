@@ -8,9 +8,9 @@ use std::{
 };
 
 use gpui::{div, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, IntoElement, Window};
-use gpui_cef::{Download, ProfileOptions, WebviewEvent, WebviewOptions};
+use gpui_cef::{ProfileOptions, WebviewEvent, WebviewOptions};
 
-use crate::{Extension, PageEvent, PageHandle, ProfileId, WebHost};
+use crate::{Downloads, Extension, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
 
 /// A page. gpui-cef's webview implements [`PageHandle`] directly, so the UI
 /// holds the same entity CEF paints into.
@@ -31,6 +31,7 @@ impl CefRuntime {
     /// When this process is a CEF child process, it exits in here.
     pub fn init(root: PathBuf) -> Result<Self, gpui_cef::Error> {
         purge_deleted_profiles(&root);
+        share_native_messaging_hosts(&root);
         let mut switches: Vec<(String, Option<String>)> = baa_privacy::SWITCHES
             .iter()
             .map(|s| match s.split_once('=') {
@@ -63,21 +64,6 @@ impl CefRuntime {
     }
 }
 
-/// Every download any page started this session, oldest first.
-#[derive(Default)]
-pub struct Downloads {
-    pub items: Vec<Download>,
-}
-
-impl Downloads {
-    fn upsert(&mut self, download: Download) {
-        match self.items.iter_mut().find(|item| item.id == download.id) {
-            Some(item) => *item = download,
-            None => self.items.push(download),
-        }
-    }
-}
-
 pub struct CefWebHost {
     root: PathBuf,
     profiles: RefCell<HashMap<ProfileId, gpui_cef::Profile>>,
@@ -93,11 +79,6 @@ impl CefWebHost {
             next_ephemeral: Cell::new(u64::MAX),
             downloads: cx.new(|_| Downloads::default()),
         }
-    }
-
-    /// The download tray's data; observe it for updates.
-    pub fn downloads(&self) -> Entity<Downloads> {
-        self.downloads.clone()
     }
 
     fn profile(&self, id: ProfileId) -> Option<gpui_cef::Profile> {
@@ -185,12 +166,26 @@ impl WebHost for CefWebHost {
                 },
                 WebviewEvent::Closed => PageEvent::Closed,
                 WebviewEvent::Download(download) => {
-                    downloads.update(cx, |list, cx| {
+                    let new = downloads.update(cx, |list, cx| {
+                        let new = list.items.iter().all(|d| d.id != download.id);
                         list.upsert(download);
                         cx.notify();
+                        new
                     });
-                    return;
+                    if !new {
+                        return;
+                    }
+                    PageEvent::DownloadStarted
                 }
+                WebviewEvent::PermissionRequested { id, origin, kinds } => {
+                    PageEvent::PermissionRequested { id, origin, kinds }
+                }
+                WebviewEvent::PermissionDismissed(id) => PageEvent::PermissionDismissed(id),
+                WebviewEvent::Dialog { kind, message, default_text } => {
+                    PageEvent::Dialog { kind, message, default_text }
+                }
+                WebviewEvent::DialogClosed => PageEvent::DialogClosed,
+                WebviewEvent::AudibleChanged(on) => PageEvent::AudibleChanged(on),
                 WebviewEvent::Message(_) => return,
             };
             page.update(cx, |_, cx| cx.emit(event));
@@ -229,6 +224,26 @@ impl WebHost for CefWebHost {
 
     fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
         gpui_cef::fetch(self.profile(profile).as_ref(), url, done)
+    }
+
+    fn downloads(&self) -> Entity<Downloads> {
+        self.downloads.clone()
+    }
+
+    fn cancel_download(&self, id: u32) {
+        gpui_cef::cancel_download(id)
+    }
+
+    fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
+        self.profile(profile)
+            .map(|p| p.permission(url, kind))
+            .unwrap_or(PermissionState::Ask)
+    }
+
+    fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState) {
+        if let Some(p) = self.profile(profile) {
+            p.set_permission(url, kind, state)
+        }
     }
 
     fn extensions(&self, profile: ProfileId) -> Vec<Extension> {
@@ -302,6 +317,24 @@ impl PageHandle for CefPage {
     }
     fn open_devtools(&self) {
         self.show_dev_tools()
+    }
+    fn answer_permission(&self, id: u64, allow: bool) {
+        CefPage::answer_permission(self, id, allow)
+    }
+    fn answer_dialog(&self, ok: bool, text: &str) {
+        CefPage::answer_dialog(self, ok, text)
+    }
+    fn print(&self) {
+        CefPage::print(self)
+    }
+    fn set_muted(&self, muted: bool) {
+        CefPage::set_muted(self, muted)
+    }
+    fn is_secure(&self) -> bool {
+        CefPage::is_secure(self)
+    }
+    fn eval_with_gesture(&self, script: &str) {
+        CefPage::eval_with_gesture(self, script)
     }
     fn set_visible(&self, visible: bool) {
         CefPage::set_visible(self, visible)
@@ -403,6 +436,53 @@ fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
     root.join(format!("space-{}", id.0))
 }
 
+/// Password managers (1Password, Bitwarden, ...) talk to their browser
+/// extensions through a native messaging host they register with Chrome and
+/// its relatives. Chromium reads `<user data>/NativeMessagingHosts`, so those
+/// registrations are copied there and the extensions work as in Chrome.
+/// (Apple's iCloud Passwords host cannot: macOS only lets Chrome and Edge
+/// start it.)
+fn share_native_messaging_hosts(root: &Path) {
+    #[cfg(target_os = "macos")]
+    let sources: Vec<PathBuf> = {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let support = home.join("Library/Application Support");
+        [
+            "Google/Chrome",
+            "Chromium",
+            "Microsoft Edge",
+            "BraveSoftware/Brave-Browser",
+            "Vivaldi",
+        ]
+        .iter()
+        .map(|b| support.join(b).join("NativeMessagingHosts"))
+        .chain(
+            [
+                "/Library/Google/Chrome/NativeMessagingHosts",
+                "/Library/Application Support/Chromium/NativeMessagingHosts",
+                "/Library/Microsoft/Edge/NativeMessagingHosts",
+            ]
+            .map(PathBuf::from),
+        )
+        .collect()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let sources: Vec<PathBuf> = Vec::new();
+    let dest = root.join("NativeMessagingHosts");
+    // Refreshed every launch (an update can move a host); the first browser listing one wins.
+    let mut copied = std::collections::HashSet::new();
+    for source in sources {
+        let Ok(entries) = std::fs::read_dir(source) else { continue };
+        let _ = std::fs::create_dir_all(&dest);
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if entry.path().extension().is_some_and(|e| e == "json") && copied.insert(name.clone()) {
+                let _ = std::fs::copy(entry.path(), dest.join(name));
+            }
+        }
+    }
+}
+
 const PENDING_DELETES: &str = "pending-deletes";
 
 fn queue_delete(root: &Path, id: ProfileId) {
@@ -493,6 +573,7 @@ mod tests {
         )
         .unwrap();
         purge_deleted_profiles(&root);
+        share_native_messaging_hosts(&root);
 
         assert!(keep.exists());
         assert!(!gone.exists());
@@ -502,7 +583,7 @@ mod tests {
 
     #[test]
     fn downloads_update_in_place() {
-        let download = |id, received| Download {
+        let download = |id, received| crate::Download {
             id,
             url: "https://example.com/a.zip".into(),
             path: String::new(),

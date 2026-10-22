@@ -96,6 +96,18 @@ impl<H: WebHost> LilBaa<H> {
                 }
             }
             PageEvent::Closed => window.remove_window(),
+            // ponytail: the small window has no room for prompts, and an
+            // unanswered one would freeze the page; "Open in" gets them.
+            PageEvent::Dialog { .. } => {
+                if let Some(page) = &self.page {
+                    page.read(cx).answer_dialog(false, "");
+                }
+            }
+            PageEvent::PermissionRequested { id, .. } => {
+                if let Some(page) = &self.page {
+                    page.read(cx).answer_permission(*id, false);
+                }
+            }
             _ => {}
         }
         cx.notify();

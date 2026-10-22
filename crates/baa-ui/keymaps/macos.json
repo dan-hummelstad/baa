@@ -95,7 +95,13 @@
       ],
       "escape": "baa::ClosePeek",
       "cmd-o": "baa::ExpandPeek",
-      "cmd-shift-c": "baa::CopyUrl"
+      "cmd-shift-c": "baa::CopyUrl",
+      "cmd-p": "baa::Print",
+      "cmd-alt-u": "baa::ViewSource",
+      "cmd-shift-r": "baa::ReaderMode",
+      "cmd-shift-j": "baa::ShowDownloads",
+      "cmd-y": "baa::ShowHistory",
+      "cmd-,": "baa::OpenSettings"
     }
   },
   {

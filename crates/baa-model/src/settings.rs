@@ -37,7 +37,8 @@ impl Default for SearchEngine {
 #[serde(default)]
 pub struct Settings {
     pub search_engine: SearchEngine,
-    /// Search-as-you-type requests to the engine; off so typing contacts nobody (PLAN.md §5).
+    /// Search-as-you-type requests to the engine (Arc does this); turning it
+    /// off means typing contacts nobody (PLAN.md §5).
     pub search_suggest: bool,
     pub sidebar_side: SidebarSide,
     /// Forces reduced motion; the UI also honours the OS setting.
@@ -50,7 +51,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             search_engine: SearchEngine::default(),
-            search_suggest: false,
+            search_suggest: true,
             sidebar_side: SidebarSide::Left,
             reduce_motion: false,
             archive_after_hours: 12,

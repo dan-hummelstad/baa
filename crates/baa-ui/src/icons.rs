@@ -14,8 +14,11 @@ macro_rules! icons {
 }
 
 icons!(
-    "archive", "arrow-left", "arrow-right", "check", "chevron-down", "folder", "folder-open", "globe", "house", "link",
-    "maximize-2", "panel-left", "plus", "rotate-cw", "search", "sliders-horizontal", "x",
+    "archive", "arrow-down-to-line", "arrow-left", "arrow-right", "bell", "book-open", "camera",
+    "check", "chevron-down", "clipboard", "code-xml", "file", "folder", "folder-open", "globe",
+    "history", "house", "import", "key-round", "languages", "link", "lock", "map-pin", "maximize-2",
+    "mic", "panel-left", "picture-in-picture-2", "plus", "printer", "rotate-cw", "search",
+    "settings", "sliders-horizontal", "trash-2", "triangle-alert", "volume-2", "volume-x", "x",
 );
 
 pub struct Assets;

@@ -12,6 +12,6 @@ mod imp;
 #[path = "unsupported.rs"]
 mod imp;
 
-pub use imp::{fetch, init, Profile, Runtime, Webview};
+pub use imp::{cancel_download, fetch, init, Profile, Runtime, Webview};
 #[cfg(target_os = "macos")]
 pub use imp::open_chrome_window;

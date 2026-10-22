@@ -21,6 +21,7 @@ mod shared;
 
 pub use chrome_window::open_chrome_window;
 pub use fetch::fetch;
+pub use handlers::cancel_download;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -250,6 +251,72 @@ impl Profile {
             .ok_or_else(|| Error::Backend("cef_request_context_create_context() failed".into()))?;
         Ok(Self { context })
     }
+}
+
+impl Profile {
+    /// What this profile remembers about `kind` for `url`'s site.
+    pub fn permission(&self, url: &str, kind: crate::Permission) -> crate::PermissionState {
+        site_permission(&self.context, url, kind)
+    }
+
+    /// Remembers an answer for `url`'s site; `Ask` forgets it.
+    pub fn set_permission(&self, url: &str, kind: crate::Permission, state: crate::PermissionState) {
+        set_site_permission(&self.context, url, kind, state)
+    }
+}
+
+fn content_type(kind: crate::Permission) -> Option<cef::ContentSettingTypes> {
+    use crate::Permission::*;
+    use cef::ContentSettingTypes as T;
+    Some(match kind {
+        Camera => T::MEDIASTREAM_CAMERA,
+        Microphone => T::MEDIASTREAM_MIC,
+        Location => T::GEOLOCATION,
+        Notifications => T::NOTIFICATIONS,
+        Clipboard => T::CLIPBOARD_READ_WRITE,
+        Midi => T::MIDI_SYSEX,
+        ScreenShare | Other => return None,
+    })
+}
+
+pub(crate) fn site_permission(
+    context: &RequestContext,
+    url: &str,
+    kind: crate::Permission,
+) -> crate::PermissionState {
+    use cef::{ContentSettingValues as V, ImplRequestContext as _};
+    let Some(kind) = content_type(kind) else {
+        return crate::PermissionState::Ask;
+    };
+    let url = CefString::from(url);
+    match context.content_setting(Some(&url), Some(&url), kind) {
+        v if v == V::ALLOW => crate::PermissionState::Allow,
+        v if v == V::BLOCK => crate::PermissionState::Block,
+        _ => crate::PermissionState::Ask,
+    }
+}
+
+pub(crate) fn set_site_permission(
+    context: &RequestContext,
+    url: &str,
+    kind: crate::Permission,
+    state: crate::PermissionState,
+) {
+    use cef::{ContentSettingValues as V, ImplRequestContext as _};
+    let Some(kind) = content_type(kind) else { return };
+    let value = match state {
+        crate::PermissionState::Allow => V::ALLOW,
+        crate::PermissionState::Block => V::BLOCK,
+        crate::PermissionState::Ask => V::DEFAULT,
+    };
+    let url = CefString::from(url);
+    context.set_content_setting(Some(&url), Some(&url), kind, value);
+}
+
+/// Calls a DevTools protocol method on the page; the reply is not read.
+pub(crate) fn dev_tools_call(host: &BrowserHost, method: &str, params_json: &str) {
+    let message = format!(r#"{{"id":1,"method":"{method}","params":{params_json}}}"#);
+    host.send_dev_tools_message(Some(message.as_bytes()));
 }
 
 impl std::fmt::Debug for Profile {
@@ -499,6 +566,81 @@ impl Webview {
                 Some(&BrowserSettings::default()),
                 None,
             );
+        }
+    }
+
+    /// Answers a [`crate::WebviewEvent::PermissionRequested`].
+    pub fn answer_permission(&self, id: u64, allow: bool) {
+        use cef::{ImplMediaAccessCallback as _, ImplPermissionPromptCallback as _};
+        match self.shared.take_permission(id) {
+            Some(shared::PendingPermission::Media { callback, requested, origin }) => {
+                if allow {
+                    callback.cont(requested);
+                } else {
+                    callback.cancel();
+                }
+                // Camera and microphone are remembered for the site, as Chrome does.
+                let state = if allow { crate::PermissionState::Allow } else { crate::PermissionState::Block };
+                if let Some(context) = self.host().and_then(|h| h.request_context()) {
+                    for (bit, kind) in [
+                        (handlers::MEDIA_CAMERA, crate::Permission::Camera),
+                        (handlers::MEDIA_MIC, crate::Permission::Microphone),
+                    ] {
+                        if requested & bit != 0 {
+                            set_site_permission(&context, &origin, kind, state);
+                        }
+                    }
+                }
+            }
+            Some(shared::PendingPermission::Prompt(callback)) => callback.cont(if allow {
+                cef::PermissionRequestResult::ACCEPT
+            } else {
+                cef::PermissionRequestResult::DENY
+            }),
+            None => {}
+        }
+    }
+
+    /// Answers a [`crate::WebviewEvent::Dialog`]: OK (with the prompt's text)
+    /// or Cancel. For "leave site?", OK leaves.
+    pub fn answer_dialog(&self, ok: bool, text: &str) {
+        use cef::ImplJsdialogCallback as _;
+        if let Some(callback) = self.shared.take_dialog() {
+            callback.cont(ok as i32, Some(&text.into()));
+        }
+    }
+
+    /// The system print dialog for this page.
+    pub fn print(&self) {
+        if let Some(host) = self.host() {
+            host.print();
+        }
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        if let Some(host) = self.host() {
+            host.set_audio_muted(muted as i32);
+        }
+    }
+
+    /// Whether the page arrived over a valid TLS connection.
+    pub fn is_secure(&self) -> bool {
+        use cef::{ImplNavigationEntry as _, ImplSslstatus as _};
+        self.host()
+            .and_then(|h| h.visible_navigation_entry())
+            .and_then(|e| e.sslstatus())
+            .is_some_and(|s| s.is_secure_connection() != 0)
+    }
+
+    /// Runs `script` as if the user had just clicked: APIs like
+    /// `requestPictureInPicture` or `requestFullscreen` need that.
+    pub fn eval_with_gesture(&self, script: &str) {
+        if let Some(host) = self.host() {
+            let params = format!(
+                r#"{{"expression":{},"userGesture":true}}"#,
+                handlers::json_string(script)
+            );
+            dev_tools_call(&host, "Runtime.evaluate", &params);
         }
     }
 

@@ -74,7 +74,19 @@ fn platform_bundle(out: &Path, bins: &Path) -> Result<PathBuf> {
         fs::remove_dir_all(&app)?;
     }
     let info = BundleInfo::new("baa", "me.baa.browser", "baa", "en", app_version()?);
-    bundle(out, bins, "baa", "baa_helper", None, info).map_err(|e| anyhow::anyhow!("bundle failed: {e:?}"))
+    let app = bundle(out, bins, "baa", "baa_helper", None, info).map_err(|e| anyhow::anyhow!("bundle failed: {e:?}"))?;
+    // macOS shows these when a site first asks; cef-rs fills in "baa" and has
+    // no location key, without which geolocation is refused outright.
+    let plist = app.join("Contents/Info.plist");
+    for (key, text) in [
+        ("NSCameraUsageDescription", "Websites you allow can use the camera."),
+        ("NSMicrophoneUsageDescription", "Websites you allow can use the microphone."),
+        ("NSLocationUsageDescription", "Websites you allow can see your location."),
+        ("NSLocationWhenInUseUsageDescription", "Websites you allow can see your location."),
+    ] {
+        run(Command::new("plutil").args(["-replace", key, "-string", text]).arg(&plist))?;
+    }
+    Ok(app)
 }
 
 /// cef-rs's own Windows bundler expects the sandbox's dll + bootstrap.exe layout; baa is a plain

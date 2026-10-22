@@ -1,7 +1,10 @@
 //! Root window view. Owns the `Session` (baa-model is the source of truth for
 //! spaces/tabs), the live pages, and every §8 action handler.
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use baa_model::{now, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
@@ -108,6 +111,21 @@ pub struct Browser<H: WebHost> {
     pub(crate) favicons: HashMap<String, std::sync::Arc<gpui::Image>>,
     /// The active Space's extensions, for the toolbar.
     pub(crate) extensions: Vec<baa_web::Extension>,
+    /// What each tab's page is waiting on the user for.
+    pub(crate) asks: HashMap<TabId, crate::prompts::Asks>,
+    /// Tabs playing sound, and tabs the user muted.
+    pub(crate) audible: HashSet<TabId>,
+    pub(crate) muted: HashSet<TabId>,
+    /// Header popovers: the download list, the site's settings.
+    pub(crate) popover: Option<crate::prompts::Popover>,
+    /// Downloads the user cleared from the list.
+    pub(crate) cleared_downloads: HashSet<u32>,
+    pub(crate) downloads_seen: usize,
+    pub(crate) settings_open: bool,
+    /// A short confirmation at the bottom of the window, and how many so far.
+    pub(crate) toast: Option<SharedString>,
+    pub(crate) toasts: u64,
+    _downloads: Subscription,
     /// Back/forward pressed and held: which way, and when.
     pub(crate) nav_press: Option<(bool, Instant)>,
     pub(crate) history_menu: Option<HistoryMenu>,
@@ -169,6 +187,9 @@ impl<H: WebHost> Browser<H> {
             .collect();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let downloads = cx.observe(&host.downloads(), |this: &mut Self, list, cx| {
+            this.downloads_changed(list.read(cx).items.len(), cx)
+        });
         let mut this = Self {
             host,
             store,
@@ -192,6 +213,16 @@ impl<H: WebHost> Browser<H> {
             copies: 0,
             favicons,
             extensions: Vec::new(),
+            asks: HashMap::new(),
+            audible: HashSet::new(),
+            muted: HashSet::new(),
+            popover: None,
+            cleared_downloads: HashSet::new(),
+            downloads_seen: 0,
+            settings_open: false,
+            toast: None,
+            toasts: 0,
+            _downloads: downloads,
             nav_press: None,
             history_menu: None,
             swipe: None,
@@ -226,11 +257,11 @@ impl<H: WebHost> Browser<H> {
         self.active_space()?.active_tab
     }
 
-    fn active_page(&self) -> Option<&Entity<H::Page>> {
+    pub(crate) fn active_page(&self) -> Option<&Entity<H::Page>> {
         self.pages.get(&self.active_tab()?).map(|(p, _)| p)
     }
 
-    fn with_page(&self, cx: &mut Context<Self>, f: impl FnOnce(&H::Page)) {
+    pub(crate) fn with_page(&self, cx: &mut Context<Self>, f: impl FnOnce(&H::Page)) {
         if let Some(page) = self.active_page() {
             f(page.read(cx));
         }
@@ -242,7 +273,19 @@ impl<H: WebHost> Browser<H> {
             .unwrap_or(self.settings.sidebar_side)
     }
 
-    fn save(&mut self) {
+    pub(crate) fn store(&self) -> Option<&Store> {
+        self.store.as_ref()
+    }
+
+    pub(crate) fn save_settings(&mut self, cx: &mut Context<Self>) {
+        if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_settings(&self.settings)) {
+            log::error!("saving settings: {e}");
+        }
+        cx.set_reduce_motion(self.settings.reduce_motion);
+        cx.notify();
+    }
+
+    pub(crate) fn save(&mut self) {
         if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_session(&self.session)) {
             log::error!("saving session: {e}");
         }
@@ -284,6 +327,10 @@ impl<H: WebHost> Browser<H> {
 
         let session = &self.session;
         self.pages.retain(|id, _| session.tab(*id).is_some());
+        let pages = &self.pages;
+        self.asks.retain(|id, _| pages.contains_key(id));
+        self.audible.retain(|id| pages.contains_key(id));
+        self.muted.retain(|id| pages.contains_key(id));
         let active = self.active_tab();
         if active != self.shown_tab {
             for (id, on) in [(self.shown_tab, 0.0), (active, 1.0)] {
@@ -301,7 +348,10 @@ impl<H: WebHost> Browser<H> {
             page.read(cx).set_visible(Some(*id) == active);
         }
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() {
-            self.focus_page(window, cx);
+            match self.active_dialog() {
+                Some(_) => window.focus(&self.input_focus, cx),
+                None => self.focus_page(window, cx),
+            }
         }
         // ponytail: re-read on every session change; an install shows up at
         // the next tab or Space switch.
@@ -400,9 +450,29 @@ impl<H: WebHost> Browser<H> {
         let Some(tab) = self.session.tab_mut(id) else {
             return;
         };
+        let (space, url) = (tab.space, tab.url.clone());
+        let private = self.session.space(space).is_some_and(|s| s.ephemeral);
+        let tab = self.session.tab_mut(id).expect("looked up above");
         match event {
-            PageEvent::UrlChanged(url) => tab.url = url.clone(),
-            PageEvent::TitleChanged(title) => tab.title = title.clone(),
+            // Chromium reports a source view by the page's own address.
+            PageEvent::UrlChanged(new) if url.strip_prefix("view-source:") == Some(new.as_str()) => return,
+            PageEvent::UrlChanged(new) => {
+                tab.url = new.clone();
+                if !private {
+                    // The title arrives after the address; this one is the old page's.
+                    if let Some(Err(e)) = self.store.as_ref().map(|s| s.record_visit(new, "", now() as i64)) {
+                        log::error!("recording history: {e}");
+                    }
+                }
+            }
+            PageEvent::TitleChanged(new) => {
+                tab.title = new.clone();
+                if !private && !url.starts_with("view-source:") {
+                    if let Some(Err(e)) = self.store.as_ref().map(|s| s.set_history_title(&url, new)) {
+                        log::error!("recording history: {e}");
+                    }
+                }
+            }
             PageEvent::FaviconChanged(favicon) => tab.favicon = favicon.clone(),
             PageEvent::FaviconImage { url, png } => {
                 if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_favicon(url, png)) {
@@ -443,6 +513,20 @@ impl<H: WebHost> Browser<H> {
                 return cx.notify();
             }
             PageEvent::Closed => self.session.close_tab(id, now()),
+            PageEvent::PermissionRequested { .. }
+            | PageEvent::PermissionDismissed(_)
+            | PageEvent::Dialog { .. }
+            | PageEvent::DialogClosed
+            | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
+            // A tab opened only to fetch a file has nothing to show: it goes.
+            PageEvent::DownloadStarted => {
+                let blank = tab.title.is_empty()
+                    && self.pages.get(&id).is_some_and(|(p, _)| !p.read(cx).can_go_back());
+                if !blank {
+                    return;
+                }
+                self.session.close_tab(id, now());
+            }
         }
         self.sync(window, cx);
     }
@@ -514,6 +598,10 @@ impl<H: WebHost> Browser<H> {
                 peek.page.read(cx).load_url(url);
             }
             PageEvent::Closed => return self.close_peek(window, cx),
+            // ponytail: Peek has no room for prompts and an unanswered one
+            // freezes the page; opening it as a tab gets them.
+            PageEvent::Dialog { .. } => peek.page.read(cx).answer_dialog(false, ""),
+            PageEvent::PermissionRequested { id, .. } => peek.page.read(cx).answer_permission(*id, false),
             _ => {}
         }
         cx.notify();
@@ -875,9 +963,10 @@ impl<H: WebHost> Browser<H> {
                     .map(|t| t.url.clone())
                     .unwrap_or_default(),
             ),
-            Mode::NewTab => TextField::default(),
+            Mode::NewTab | Mode::History => TextField::default(),
         };
         self.bar = Some(Bar::new(mode, field));
+        command_bar::refresh_history(self);
         self.closing_bar = None;
         self.find = None;
         window.focus(&self.input_focus, cx);
@@ -972,12 +1061,15 @@ impl<H: WebHost> Browser<H> {
             self.closing_bar = Some(bar);
         }
         self.menu = None;
+        self.popover = None;
+        self.settings_open = false;
         self.motion.forget("menu");
         self.motion.forget("bar-row");
         self.motion.forget("bar-sel");
-        match &self.peek {
-            Some(peek) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
-            None => self.focus_page(window, cx),
+        match (&self.peek, self.active_dialog()) {
+            (Some(peek), _) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
+            (None, Some(_)) => window.focus(&self.input_focus, cx),
+            (None, None) => self.focus_page(window, cx),
         }
         cx.notify();
     }
@@ -989,7 +1081,9 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) {
         let shift = event.keystroke.modifiers.shift;
-        if let Some(field) = &mut self.renaming {
+        if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() && self.active_dialog().is_some() {
+            self.on_dialog_key(event, window, cx);
+        } else if let Some(field) = &mut self.renaming {
             match field.handle(&event.keystroke, cx) {
                 Key::Submit => {
                     let text = field.text.trim().to_string();
@@ -1143,6 +1237,24 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
         .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.zoom_by(0, cx)))
         .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
+        .on_action(cx.listener(|this, _: &Print, _, cx| this.with_page(cx, |p| p.print())))
+        .on_action(cx.listener(|this, _: &ViewSource, window, cx| this.view_source(window, cx)))
+        .on_action(cx.listener(|this, _: &ReaderMode, _, cx| {
+            this.with_page(cx, |p| p.eval(crate::tools::READER_SCRIPT))
+        }))
+        .on_action(cx.listener(|this, _: &PictureInPicture, _, cx| {
+            this.with_page(cx, |p| p.eval_with_gesture(crate::tools::PIP_SCRIPT))
+        }))
+        .on_action(cx.listener(|this, _: &MuteTab, _, cx| {
+            if let Some(id) = this.active_tab() {
+                this.toggle_mute(id, cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &ShowDownloads, window, cx| {
+            this.toggle_popover(crate::prompts::Popover::Downloads, window, cx)
+        }))
+        .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
+        .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
         .on_action(cx.listener(|this, _: &NewIncognitoSpace, window, cx| {
             this.new_incognito_space(window, cx)
         }))
@@ -1429,6 +1541,7 @@ impl<H: WebHost> Browser<H> {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
             None => crate::start::render(theme).into_any_element(),
         };
+        let asks = self.render_asks(theme, cx);
         let find = self.find.as_ref().map(|field| {
             drop_in(div()
                 .id("find")
@@ -1475,6 +1588,7 @@ impl<H: WebHost> Browser<H> {
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
                     .child(content),
             )
+            .children(asks)
             .children(find)
     }
 
@@ -1566,6 +1680,7 @@ impl<H: WebHost> Browser<H> {
             .min_w_0()
             .when(!host.is_empty(), |d| d.child(link_icon))
             .child(div().truncate().child(label.clone()))
+            .children(self.render_site_button(theme, ink, cx))
             .with_animation(
                 ElementId::Name(label),
                 Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui::ease_out_quint()),
@@ -1633,6 +1748,7 @@ impl<H: WebHost> Browser<H> {
                     .items_center()
                     .justify_end()
                     .gap(px(4.))
+                    .children(self.render_download_button(theme, cx))
                     .children(extensions),
             )
     }
@@ -2010,6 +2126,7 @@ impl<H: WebHost> Render for Browser<H> {
             _ => None,
         };
         let menu = self.render_context_menu(&theme, cx);
+        let popover = self.render_popover(&theme, cx);
         let history = self.render_history_menu(cx);
         // The sidebar brings its own padding; collapsed, the page gets the inset.
         let docked_w = self.sidebar_w.value().max(0.0);
@@ -2065,6 +2182,9 @@ impl<H: WebHost> Render for Browser<H> {
             .children(reveal.into_iter().flatten())
             .children(peek)
             .children(bar)
+            .children(self.render_toast())
+            .children(self.render_settings(&theme, cx))
+            .children(popover)
             .children(menu)
             .children(history);
         let root = self.register_actions(root, cx);
@@ -2075,6 +2195,9 @@ impl<H: WebHost> Render for Browser<H> {
                 }
             }))
             .on_action(cx.listener(|this, _: &ExpandPeek, window, cx| this.expand_peek(window, cx)))
+        } else if self.popover.is_some() || self.settings_open {
+            // Escape; bound only while there is something to close, so pages keep it otherwise.
+            root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| this.close_overlays(window, cx)))
         } else {
             root
         }

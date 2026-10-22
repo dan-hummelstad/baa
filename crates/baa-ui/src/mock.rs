@@ -2,12 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 
-use baa_web::{PageEvent, PageHandle, ProfileId, WebHost};
+use baa_web::{Downloads, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
 use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
 
-#[derive(Default)]
 pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
+    pub downloads: Entity<Downloads>,
+    pub permissions: RefCell<Vec<(String, Permission, PermissionState)>>,
     pub deleted: RefCell<Vec<ProfileId>>,
     pub fetched: RefCell<Vec<String>>,
     pub suggest_body: RefCell<Option<String>>,
@@ -20,6 +21,9 @@ pub struct MockPage {
     pub radius: Cell<f32>,
     pub moved: Cell<u32>,
     pub floating: Cell<bool>,
+    pub muted: Cell<bool>,
+    /// What the UI answered the page, in order.
+    pub answers: RefCell<Vec<String>>,
     pub focus: FocusHandle,
 }
 
@@ -58,6 +62,22 @@ impl PageHandle for MockPage {
     }
     fn find(&self, _: &str, _: bool) {}
     fn open_devtools(&self) {}
+    fn answer_permission(&self, id: u64, allow: bool) {
+        self.answers.borrow_mut().push(format!("permission {id} {allow}"));
+    }
+    fn answer_dialog(&self, ok: bool, text: &str) {
+        self.answers.borrow_mut().push(format!("dialog {ok} {text}"));
+    }
+    fn print(&self) {}
+    fn set_muted(&self, muted: bool) {
+        self.muted.set(muted);
+    }
+    fn is_secure(&self) -> bool {
+        self.url.borrow().starts_with("https:")
+    }
+    fn eval_with_gesture(&self, script: &str) {
+        self.answers.borrow_mut().push(format!("gesture {}", script.len()));
+    }
     fn set_visible(&self, visible: bool) {
         self.visible.set(visible);
     }
@@ -80,6 +100,19 @@ impl PageHandle for MockPage {
     }
 }
 
+impl MockHost {
+    pub fn new(cx: &mut App) -> Self {
+        Self {
+            created: RefCell::default(),
+            downloads: cx.new(|_| Downloads::default()),
+            permissions: RefCell::default(),
+            deleted: RefCell::default(),
+            fetched: RefCell::default(),
+            suggest_body: RefCell::default(),
+        }
+    }
+}
+
 impl WebHost for MockHost {
     type Page = MockPage;
     fn create_page(
@@ -97,6 +130,8 @@ impl WebHost for MockHost {
             radius: Cell::new(8.0),
             moved: Cell::new(0),
             floating: Cell::new(false),
+            muted: Cell::new(false),
+            answers: RefCell::default(),
             focus: cx.focus_handle(),
         })
     }
@@ -113,5 +148,20 @@ impl WebHost for MockHost {
     fn fetch(&self, _: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
         self.fetched.borrow_mut().push(url.into());
         done(self.suggest_body.borrow().clone())
+    }
+    fn downloads(&self) -> Entity<Downloads> {
+        self.downloads.clone()
+    }
+    fn cancel_download(&self, _: u32) {}
+    fn site_permission(&self, _: ProfileId, url: &str, kind: Permission) -> PermissionState {
+        self.permissions
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(u, k, _)| u == url && *k == kind)
+            .map_or(PermissionState::Ask, |(_, _, s)| *s)
+    }
+    fn set_site_permission(&self, _: ProfileId, url: &str, kind: Permission, state: PermissionState) {
+        self.permissions.borrow_mut().push((url.into(), kind, state));
     }
 }

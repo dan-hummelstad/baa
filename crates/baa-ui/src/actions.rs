@@ -36,6 +36,14 @@ gpui::actions!(
         ExpandPeek,
         OpenInBrowser,
         CopyUrl,
+        Print,
+        ViewSource,
+        ReaderMode,
+        PictureInPicture,
+        MuteTab,
+        ShowDownloads,
+        ShowHistory,
+        OpenSettings,
     ]
 );
 // ponytail: split view and the archive view (§8) are milestone 5; their actions

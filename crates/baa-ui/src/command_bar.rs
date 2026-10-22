@@ -2,7 +2,7 @@
 //! search with the engine's suggestions as you type, fuzzy matches over open
 //! tabs, Spaces and quick commands, each with its keyboard shortcut.
 
-use baa_model::{parse_suggestions, Session, Settings, SpaceId, TabId};
+use baa_model::{parse_suggestions, HistoryItem, Session, Settings, SpaceId, TabId};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
 
@@ -18,6 +18,8 @@ use crate::{
 
 const MAX_ROWS: usize = 9;
 const MAX_SUGGESTIONS: usize = 4;
+/// Visited pages listed under a typed query.
+const MAX_HISTORY: usize = 3;
 /// Typing pauses this long before asking the search engine.
 const SUGGEST_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
 const WIDTH: f32 = 660.0;
@@ -28,6 +30,8 @@ pub enum Mode {
     NewTab,
     /// ⌘L: prefilled with the current URL; Enter navigates the current tab.
     Address,
+    /// ⌘Y: searches pages visited before; Enter opens one in a new tab.
+    History,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,10 +50,23 @@ pub enum Command {
     DevTools,
     Extensions,
     ExtensionStore,
+    Print,
+    ViewSource,
+    ReaderMode,
+    PictureInPicture,
+    TranslatePage,
+    MuteTab,
+    SiteSettings,
+    Downloads,
+    History,
+    ClearHistory,
+    Settings,
+    ImportFromArc,
+    SetUpPasswords,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 14] = [
+const COMMANDS: [(Command, &str); 27] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -64,6 +81,19 @@ const COMMANDS: [(Command, &str); 14] = [
     (Command::Extensions, "Extensions"),
     (Command::ExtensionStore, "Chrome Web Store"),
     (Command::DeleteSpace, "Delete Space"),
+    (Command::Print, "Print…"),
+    (Command::ViewSource, "View Page Source"),
+    (Command::ReaderMode, "Reader Mode"),
+    (Command::PictureInPicture, "Picture in Picture"),
+    (Command::TranslatePage, "Translate Page"),
+    (Command::MuteTab, "Mute or Unmute Tab"),
+    (Command::SiteSettings, "Site Settings"),
+    (Command::Downloads, "Downloads"),
+    (Command::History, "History"),
+    (Command::ClearHistory, "Clear Browsing History"),
+    (Command::Settings, "Settings"),
+    (Command::ImportFromArc, "Import Spaces from Arc"),
+    (Command::SetUpPasswords, "Password Manager Extensions"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -79,6 +109,14 @@ impl Command {
             Command::Find => Box::new(actions::Find),
             Command::ReopenClosedTab => Box::new(actions::ReopenClosedTab),
             Command::DevTools => Box::new(actions::DevTools),
+            Command::Print => Box::new(actions::Print),
+            Command::ViewSource => Box::new(actions::ViewSource),
+            Command::ReaderMode => Box::new(actions::ReaderMode),
+            Command::PictureInPicture => Box::new(actions::PictureInPicture),
+            Command::MuteTab => Box::new(actions::MuteTab),
+            Command::Downloads => Box::new(actions::ShowDownloads),
+            Command::History => Box::new(actions::ShowHistory),
+            Command::Settings => Box::new(actions::OpenSettings),
             _ => return None,
         })
     }
@@ -93,6 +131,19 @@ impl Command {
             Command::NewFolder => "folder",
             Command::DeleteSpace => "x",
             Command::RenameSpace | Command::ChangeSpaceColor => "house",
+            Command::Print => "printer",
+            Command::ViewSource | Command::DevTools => "code-xml",
+            Command::ReaderMode => "book-open",
+            Command::PictureInPicture => "picture-in-picture-2",
+            Command::TranslatePage => "languages",
+            Command::MuteTab => "volume-2",
+            Command::SiteSettings => "lock",
+            Command::Downloads => "arrow-down-to-line",
+            Command::History => "history",
+            Command::ClearHistory => "trash-2",
+            Command::Settings => "settings",
+            Command::ImportFromArc => "import",
+            Command::SetUpPasswords => "key-round",
             _ => "sliders-horizontal",
         }
     }
@@ -115,6 +166,8 @@ pub struct Row {
     pub detail: String,
     /// A search engine suggestion (drawn with the search icon).
     pub suggestion: bool,
+    /// A page from history (drawn with the clock).
+    pub history: bool,
 }
 
 pub struct Bar {
@@ -124,6 +177,8 @@ pub struct Bar {
     pub scale: Spring,
     /// The engine's suggestions for `field`, once they arrive.
     pub suggestions: Vec<String>,
+    /// Visited pages matching `field`.
+    pub history: Vec<HistoryItem>,
     /// Bumped per edit, so a late answer for older text is dropped.
     seq: u64,
 }
@@ -138,12 +193,24 @@ impl Bar {
             selected: 0,
             scale,
             suggestions: Vec::new(),
+            history: Vec::new(),
             seq: 0,
         }
     }
 
     fn rows(&self, session: &Session, settings: &Settings) -> Vec<Row> {
-        rows(&self.field.text, session, settings, &self.suggestions)
+        if self.mode == Mode::History {
+            return self.history.iter().take(MAX_ROWS).map(history_row).collect();
+        }
+        rows(&self.field.text, session, settings, &self.suggestions, &self.history)
+    }
+}
+
+fn history_row(item: &HistoryItem) -> Row {
+    let label = if item.title.is_empty() { &item.url } else { &item.title };
+    Row {
+        history: true,
+        ..row(Item::Open(item.url.clone()), label.clone(), host_of(&item.url))
     }
 }
 
@@ -153,13 +220,20 @@ fn row(item: Item, label: impl Into<String>, detail: impl Into<String>) -> Row {
         label: label.into(),
         detail: detail.into(),
         suggestion: false,
+        history: false,
     }
 }
 
 /// What the bar lists. Empty: recent tabs, then quick commands. Typed: the
 /// URL or search first, the engine's suggestions, then the best fuzzy matches
 /// across tabs (all Spaces), Spaces and commands.
-pub fn rows(query: &str, session: &Session, settings: &Settings, suggestions: &[String]) -> Vec<Row> {
+pub fn rows(
+    query: &str,
+    session: &Session,
+    settings: &Settings,
+    suggestions: &[String],
+    history: &[HistoryItem],
+) -> Vec<Row> {
     let query = query.trim();
     let active = session.active_space();
     let tab_row = |tab: &baa_model::Tab| {
@@ -196,7 +270,6 @@ pub fn rows(query: &str, session: &Session, settings: &Settings, suggestions: &[
         suggestion: true,
         ..row(Item::Open(settings.resolve_input(s)), s.clone(), "")
     }));
-
     let mut scored: Vec<(u32, Row)> = Vec::new();
     for space in session.spaces() {
         for tab in session.space_tabs(space.id) {
@@ -219,8 +292,25 @@ pub fn rows(query: &str, session: &Session, settings: &Settings, suggestions: &[
     }
     // Stable sort keeps sidebar order among equal scores.
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    let room = MAX_ROWS.saturating_sub(out.len());
+    // Visited pages come after open tabs and commands: those are one step away.
+    let room = MAX_ROWS.saturating_sub(out.len() + MAX_HISTORY.min(history.len()));
     out.extend(scored.into_iter().map(|(_, row)| row).take(room));
+    // Visited pages, unless already open as a tab (listed above) or typed.
+    let open: Vec<&str> = session
+        .spaces()
+        .iter()
+        .flat_map(|s| session.space_tabs(s.id))
+        .map(|t| t.url.as_str())
+        .collect();
+    let typed = out[0].item.clone();
+    out.extend(
+        history
+            .iter()
+            .filter(|h| !open.contains(&h.url.as_str()) && Item::Open(h.url.clone()) != typed)
+            .take(MAX_HISTORY)
+            .map(history_row),
+    );
+    out.truncate(MAX_ROWS);
     out
 }
 
@@ -235,13 +325,34 @@ pub(crate) fn on_key<H: WebHost>(
     match key {
         Key::Edited => {
             bar.selected = 0;
-            request_suggestions(this, cx);
+            refresh_history(this);
+            if this.bar.as_ref().is_some_and(|b| b.mode != Mode::History) {
+                request_suggestions(this, cx);
+            }
         }
         Key::Up => bar.selected = bar.selected.saturating_sub(1),
         Key::Down => bar.selected = (bar.selected + 1).min(count.saturating_sub(1)),
         Key::Cancel => this.close_overlays(window, cx),
         Key::Submit => submit(this, None, window, cx),
         Key::Ignored => {}
+    }
+}
+
+/// History for what is typed (or, in History mode, the latest visits).
+pub(crate) fn refresh_history<H: WebHost>(this: &mut Browser<H>) {
+    let Some(bar) = &this.bar else { return };
+    let query = bar.field.text.trim().to_string();
+    let found = match (this.store(), bar.mode) {
+        (Some(store), Mode::History) if query.is_empty() => store.recent_history(MAX_ROWS),
+        (Some(store), Mode::History) => store.search_history(&query, MAX_ROWS),
+        (Some(store), _) if !query.is_empty() => store.search_history(&query, MAX_HISTORY + 4),
+        _ => Ok(Vec::new()),
+    };
+    if let Some(bar) = &mut this.bar {
+        bar.history = found.unwrap_or_else(|e| {
+            log::error!("reading history: {e}");
+            Vec::new()
+        });
     }
 }
 
@@ -253,7 +364,7 @@ fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Brows
     bar.seq += 1;
     let seq = bar.seq;
     let query = bar.field.text.trim().to_string();
-    let url = (!query.is_empty() && !query.contains("://"))
+    let url = (this.settings.search_suggest && !query.is_empty() && !query.contains("://"))
         .then(|| this.settings.suggest_url(&query))
         .flatten();
     let (Some(url), Some(profile)) = (url, profile) else {
@@ -309,27 +420,33 @@ fn submit<H: WebHost>(
     this.close_overlays(window, cx);
     match row.item {
         Item::Open(url) => this.navigate(&url, mode == Mode::Address, window, cx),
+        Item::Command(c) => this.run_command(c, window, cx),
         Item::Tab(id) => this.activate_tab(id, window, cx),
         Item::Space(id, _) => this.activate_space(id, window, cx),
-        Item::Command(c) => match c {
-            Command::NewSpace => this.new_space(window, cx),
-            Command::NewIncognitoSpace => this.new_incognito_space(window, cx),
-            Command::NewFolder => this.new_folder(None, window, cx),
-            Command::RenameSpace => this.start_rename(window, cx),
-            Command::ChangeSpaceColor => this.cycle_space_color(window, cx),
-            Command::DeleteSpace => this.delete_active_space(window, cx),
-            Command::SwapSidebarSide => this.swap_sidebar_side(cx),
-            Command::ReopenClosedTab => this.reopen_closed(window, cx),
-            Command::Extensions => this.open_extensions("chrome://extensions/", window, cx),
-            Command::ExtensionStore => {
-                this.open_extensions("https://chromewebstore.google.com/", window, cx)
-            }
-            Command::ToggleSidebar | Command::CopyUrl | Command::Find | Command::DevTools => {
-                if let Some(action) = c.action() {
-                    window.dispatch_action(action, cx);
-                }
-            }
-        },
+    }
+}
+
+impl<H: WebHost> Browser<H> {
+    pub(crate) fn run_command(&mut self, c: Command, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(action) = c.action() {
+            return window.dispatch_action(action, cx);
+        }
+        match c {
+            Command::NewFolder => self.new_folder(None, window, cx),
+            Command::RenameSpace => self.start_rename(window, cx),
+            Command::ChangeSpaceColor => self.cycle_space_color(window, cx),
+            Command::DeleteSpace => self.delete_active_space(window, cx),
+            Command::SwapSidebarSide => self.swap_sidebar_side(cx),
+            Command::Extensions => self.open_extensions("chrome://extensions/", window, cx),
+            Command::ExtensionStore => self.open_extensions("https://chromewebstore.google.com/", window, cx),
+            Command::TranslatePage => self.translate_page(window, cx),
+            Command::SiteSettings => self.toggle_popover(crate::prompts::Popover::Site, window, cx),
+            Command::ClearHistory => self.clear_history(cx),
+            Command::ImportFromArc => self.import_arc(window, cx),
+            Command::SetUpPasswords => self.set_up_passwords(window, cx),
+            // The rest have actions, dispatched above.
+            _ => {}
+        }
     }
 }
 
@@ -386,6 +503,7 @@ impl<H: WebHost> Browser<H> {
         let placeholder = match bar.mode {
             Mode::NewTab => "Search or enter address…",
             Mode::Address => "Enter address…",
+            Mode::History => "Search history…",
         };
         let accent = theme.accent;
         let white = gpui::white();
@@ -412,6 +530,7 @@ impl<H: WebHost> Browser<H> {
                     ))
                     .into_any_element(),
                 Item::Command(c) => icon(c.icon(), 18., icon_color).into_any_element(),
+                Item::Open(_) if row.history => icon("history", 18., icon_color).into_any_element(),
                 Item::Open(_) if row.suggestion || i == 0 && row.detail.starts_with("— Search") => {
                     icon("search", 18., icon_color).into_any_element()
                 }
@@ -591,7 +710,7 @@ mod tests {
     #[test]
     fn empty_query_lists_recent_tabs_then_quick_commands() {
         let (s, gh, ls) = session();
-        let r = rows("", &s, &Settings::default(), &[]);
+        let r = rows("", &s, &Settings::default(), &[], &[]);
         assert_eq!(r[0].item, Item::Tab(ls), "most recent first");
         assert_eq!(r[1].item, Item::Tab(gh));
         assert_eq!(r[2].item, Item::Command(Command::NewSpace));
@@ -602,7 +721,7 @@ mod tests {
     fn typed_search_then_suggestions_then_best_tab() {
         let (s, gh, _) = session();
         let suggestions = ["gh cli".to_string(), "gh".to_string()];
-        let r = rows("gh", &s, &Settings::default(), &suggestions);
+        let r = rows("gh", &s, &Settings::default(), &suggestions, &[]);
         assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
         assert_eq!((r[0].label.as_str(), r[0].detail.as_str()), ("gh", "— Search Google"));
         assert!(r[1].suggestion);
@@ -613,11 +732,21 @@ mod tests {
     #[test]
     fn urls_spaces_and_commands() {
         let (s, ..) = session();
-        assert_eq!(rows("example.com", &s, &Settings::default(), &[])[0].label, "https://example.com/");
-        let r = rows("new space", &s, &Settings::default(), &[]);
+        assert_eq!(rows("example.com", &s, &Settings::default(), &[], &[])[0].label, "https://example.com/");
+        let r = rows("new space", &s, &Settings::default(), &[], &[]);
         assert!(r.iter().any(|r| r.item == Item::Command(Command::NewSpace)));
-        let r = rows("personal", &s, &Settings::default(), &[]);
+        let r = rows("personal", &s, &Settings::default(), &[], &[]);
         assert!(r.iter().any(|r| matches!(r.item, Item::Space(_, 0))));
+    }
+
+    #[test]
+    fn history_lists_visited_pages_that_are_not_open() {
+        let (s, ..) = session();
+        let visit = |url: &str, title: &str| HistoryItem { url: url.into(), title: title.into(), visits: 1, last_visit: 0 };
+        let history = [visit("https://github.com", "GitHub"), visit("https://docs.rs/gpui", "gpui docs")];
+        let r = rows("g", &s, &Settings::default(), &[], &history);
+        let from_history: Vec<&str> = r.iter().filter(|r| r.history).map(|r| r.label.as_str()).collect();
+        assert_eq!(from_history, ["gpui docs"], "GitHub is open as a tab already");
     }
 
     #[test]

@@ -72,6 +72,17 @@ impl Webview {
         self.options.url.clone()
     }
     /// This webview's own entity, for code that only holds `&Webview`.
+    pub fn answer_permission(&self, _id: u64, _allow: bool) {}
+    pub fn answer_dialog(&self, _ok: bool, _text: &str) {}
+    pub fn print(&self) {}
+    pub fn set_muted(&self, _muted: bool) {}
+    pub fn is_secure(&self) -> bool {
+        self.url().starts_with("https:")
+    }
+    pub fn eval_with_gesture(&self, script: &str) {
+        self.eval(script)
+    }
+
     pub fn weak_entity(&self) -> gpui::WeakEntity<Self> {
         self.this.clone()
     }
@@ -127,4 +138,14 @@ impl Render for Webview {
 /// ponytail: no profile-scoped fetch on this backend yet.
 pub fn fetch(_profile: Option<&Profile>, _url: &str, done: impl FnOnce(Option<String>) + 'static) {
     done(None)
+}
+
+// ponytail: downloads are not tracked on this backend.
+pub fn cancel_download(_id: u32) {}
+
+impl Profile {
+    pub fn permission(&self, _url: &str, _kind: crate::Permission) -> crate::PermissionState {
+        crate::PermissionState::Ask
+    }
+    pub fn set_permission(&self, _url: &str, _kind: crate::Permission, _state: crate::PermissionState) {}
 }

@@ -12,7 +12,7 @@ use std::{path::PathBuf, rc::Rc};
 use cef::*;
 use gpui::CursorStyle;
 
-use super::shared::Shared;
+use super::shared::{PendingPermission, Shared};
 use crate::{Download, DownloadState, FilterHook, WebviewEvent};
 
 /// Settings carried by `cef::App`.
@@ -156,6 +156,10 @@ wrap_display_handler! {
             let Some(message) = message.map(|message| message.to_string()) else {
                 return 0;
             };
+            if let Some(state) = message.strip_prefix(crate::AUDIBLE_PREFIX) {
+                self.shared.set_audible(state == "1");
+                return 1;
+            }
             match crate::message_payload(&message) {
                 Some(payload) => {
                     self.shared.push_event(WebviewEvent::Message(payload.to_string()));
@@ -296,6 +300,17 @@ wrap_load_handler! {
             );
         }
 
+        fn on_load_end(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut cef::Frame>,
+            _http_status_code: ::std::os::raw::c_int,
+        ) {
+            if let Some(frame) = frame.filter(|f| f.is_main() != 0) {
+                frame.execute_java_script(Some(&AUDIO_WATCHER.into()), None, 0);
+            }
+        }
+
         fn on_load_error(
             &self,
             _browser: Option<&mut Browser>,
@@ -365,6 +380,42 @@ wrap_life_span_handler! {
             self.shared.release_closed();
         }
     }
+}
+
+// CEF has no "this tab is playing sound" signal (its audio handler diverts the
+// sound instead), so the page reports its media elements' state itself.
+// ponytail: top frame's <video>/<audio> only; Web Audio and cross-origin
+// iframes (embedded players) stay silent. Ceiling: Chromium's
+// WebContents::IsCurrentlyAudible, which CEF does not expose.
+const AUDIO_WATCHER: &str = r#"(() => {
+  if (window.__baaAudio) return;
+  window.__baaAudio = true;
+  let last = false;
+  const check = () => {
+    const on = [...document.querySelectorAll('video,audio')]
+      .some(m => !m.paused && !m.muted && m.volume > 0 && !m.ended);
+    if (on !== last) { last = on; console.debug('gpui-cef:audible:' + (on ? 1 : 0)); }
+  };
+  for (const e of ['play', 'playing', 'pause', 'ended', 'volumechange', 'emptied'])
+    document.addEventListener(e, () => setTimeout(check), true);
+  addEventListener('pagehide', () => { if (last) console.debug('gpui-cef:audible:0'); });
+  check();
+})()"#;
+
+/// `text` as a JSON string literal.
+pub(crate) fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // Always 1: the engine never opens the window itself.
@@ -473,7 +524,7 @@ wrap_download_handler! {
             &self,
             _browser: Option<&mut Browser>,
             item: Option<&mut DownloadItem>,
-            _callback: Option<&mut DownloadItemCallback>,
+            callback: Option<&mut DownloadItemCallback>,
         ) {
             let Some(item) = item else { return };
             let state = if item.is_complete() != 0 {
@@ -483,6 +534,14 @@ wrap_download_handler! {
             } else {
                 DownloadState::InProgress
             };
+            DOWNLOADS.with_borrow_mut(|map| match (state, callback) {
+                (DownloadState::InProgress, Some(callback)) => {
+                    map.insert(item.id(), callback.clone());
+                }
+                _ => {
+                    map.remove(&item.id());
+                }
+            });
             self.shared.push_event(WebviewEvent::Download(Download {
                 id: item.id(),
                 url: CefString::from(&item.url()).to_string(),
@@ -492,6 +551,19 @@ wrap_download_handler! {
                 state,
             }));
         }
+    }
+}
+
+thread_local! {
+    /// In-progress downloads' controls, by download id (unique per process).
+    static DOWNLOADS: std::cell::RefCell<std::collections::HashMap<u32, DownloadItemCallback>> =
+        Default::default();
+}
+
+/// Stops a download that is still running; finished ones are left alone.
+pub fn cancel_download(id: u32) {
+    if let Some(callback) = DOWNLOADS.with_borrow_mut(|map| map.remove(&id)) {
+        callback.cancel();
     }
 }
 
@@ -640,6 +712,199 @@ wrap_focus_handler! {
     }
 }
 
+// The app draws dialogs itself, over the page, instead of app-modal NSAlerts.
+wrap_jsdialog_handler! {
+    pub(crate) struct GpuiCefJsDialogHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl JsdialogHandler {
+        fn on_jsdialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            _origin_url: Option<&CefString>,
+            dialog_type: JsdialogType,
+            message_text: Option<&CefString>,
+            default_prompt_text: Option<&CefString>,
+            callback: Option<&mut JsdialogCallback>,
+            _suppress_message: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0 };
+            let kind = if dialog_type == JsdialogType::CONFIRM {
+                crate::DialogKind::Confirm
+            } else if dialog_type == JsdialogType::PROMPT {
+                crate::DialogKind::Prompt
+            } else {
+                crate::DialogKind::Alert
+            };
+            self.open(kind, message_text, default_prompt_text, callback)
+        }
+
+        fn on_before_unload_dialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            message_text: Option<&CefString>,
+            is_reload: ::std::os::raw::c_int,
+            callback: Option<&mut JsdialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0 };
+            let kind = crate::DialogKind::BeforeUnload { is_reload: is_reload != 0 };
+            self.open(kind, message_text, None, callback)
+        }
+
+        fn on_reset_dialog_state(&self, _browser: Option<&mut Browser>) {
+            if self.shared.take_dialog().is_some() {
+                self.shared.push_event(WebviewEvent::DialogClosed);
+            }
+        }
+    }
+}
+
+impl GpuiCefJsDialogHandler {
+    fn open(
+        &self,
+        kind: crate::DialogKind,
+        message: Option<&CefString>,
+        default_text: Option<&CefString>,
+        callback: &mut JsdialogCallback,
+    ) -> ::std::os::raw::c_int {
+        // A page that asks again before the first is answered gets "cancel".
+        if let Some(previous) = self.shared.take_dialog() {
+            previous.cont(0, None);
+        }
+        self.shared.set_dialog(Some(callback.clone()));
+        self.shared.push_event(WebviewEvent::Dialog {
+            kind,
+            message: message.map(|m| m.to_string()).unwrap_or_default(),
+            default_text: default_text.map(|t| t.to_string()).unwrap_or_default(),
+        });
+        1
+    }
+}
+
+// cef_media_access_permission_types_t.
+pub(crate) const MEDIA_MIC: u32 = 1 << 0;
+pub(crate) const MEDIA_CAMERA: u32 = 1 << 1;
+const MEDIA_SCREEN: u32 = (1 << 2) | (1 << 3);
+
+/// Ids for media requests, which CEF does not number; prompt ids count up from
+/// small numbers, so these start at the top half.
+static NEXT_MEDIA_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 63);
+
+wrap_permission_handler! {
+    pub(crate) struct GpuiCefPermissionHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl PermissionHandler {
+        fn on_request_media_access_permission(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut MediaAccessCallback>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0 };
+            let origin = requesting_origin.map(|o| o.to_string()).unwrap_or_default();
+            let mut kinds = Vec::new();
+            if requested_permissions & MEDIA_CAMERA != 0 {
+                kinds.push(crate::Permission::Camera);
+            }
+            if requested_permissions & MEDIA_MIC != 0 {
+                kinds.push(crate::Permission::Microphone);
+            }
+            if requested_permissions & MEDIA_SCREEN != 0 {
+                kinds.push(crate::Permission::ScreenShare);
+            }
+            // A site the user already answered for gets the same answer.
+            let context = browser.and_then(|b| b.host()).and_then(|h| h.request_context());
+            let remembered: Vec<_> = kinds
+                .iter()
+                .map(|kind| {
+                    context
+                        .as_ref()
+                        .map(|c| super::site_permission(c, &origin, *kind))
+                        .unwrap_or(crate::PermissionState::Ask)
+                })
+                .collect();
+            if remembered.contains(&crate::PermissionState::Block) {
+                callback.cancel();
+                return 1;
+            }
+            // Screen capture is asked every time, as in Chrome.
+            if requested_permissions & MEDIA_SCREEN == 0
+                && remembered.iter().all(|s| *s == crate::PermissionState::Allow)
+            {
+                callback.cont(requested_permissions);
+                return 1;
+            }
+            let id = NEXT_MEDIA_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.shared.add_permission(
+                id,
+                PendingPermission::Media {
+                    callback: callback.clone(),
+                    requested: requested_permissions,
+                    origin: origin.clone(),
+                },
+            );
+            self.shared.push_event(WebviewEvent::PermissionRequested { id, origin, kinds });
+            1
+        }
+
+        fn on_show_permission_prompt(
+            &self,
+            _browser: Option<&mut Browser>,
+            prompt_id: u64,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut PermissionPromptCallback>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0 };
+            self.shared
+                .add_permission(prompt_id, PendingPermission::Prompt(callback.clone()));
+            self.shared.push_event(WebviewEvent::PermissionRequested {
+                id: prompt_id,
+                origin: requesting_origin.map(|o| o.to_string()).unwrap_or_default(),
+                kinds: prompt_kinds(requested_permissions),
+            });
+            1
+        }
+
+        fn on_dismiss_permission_prompt(
+            &self,
+            _browser: Option<&mut Browser>,
+            prompt_id: u64,
+            _result: PermissionRequestResult,
+        ) {
+            if self.shared.take_permission(prompt_id).is_some() {
+                self.shared.push_event(WebviewEvent::PermissionDismissed(prompt_id));
+            }
+        }
+    }
+}
+
+/// cef_permission_request_types_t bits, as the app names them.
+fn prompt_kinds(bits: u32) -> Vec<crate::Permission> {
+    use crate::Permission::*;
+    let mut kinds: Vec<crate::Permission> = [
+        (1 << 2, Camera),
+        (1 << 12, Microphone),
+        (1 << 8, Location),
+        (1 << 15, Notifications),
+        (1 << 4, Clipboard),
+        (1 << 13, Midi),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| bits & bit != 0)
+    .map(|(_, kind)| kind)
+    .collect();
+    if kinds.is_empty() {
+        kinds.push(Other);
+    }
+    kinds
+}
+
 // Chromium answers every key equivalent while its view is first responder, and
 // AppKit asks it before gpui's view; the app's shortcuts get the first look.
 wrap_keyboard_handler! {
@@ -680,9 +945,19 @@ wrap_client! {
         download_handler: DownloadHandler,
         keyboard_handler: KeyboardHandler,
         focus_handler: FocusHandler,
+        jsdialog_handler: JsdialogHandler,
+        permission_handler: PermissionHandler,
     }
 
     impl Client {
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            Some(self.jsdialog_handler.clone())
+        }
+
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(self.permission_handler.clone())
+        }
+
         fn focus_handler(&self) -> Option<FocusHandler> {
             Some(self.focus_handler.clone())
         }
@@ -727,7 +1002,9 @@ impl GpuiCefClient {
             GpuiCefContextMenuHandler::new(shared.clone()),
             GpuiCefDownloadHandler::new(shared.clone()),
             GpuiCefKeyboardHandler::new(shared.clone()),
-            GpuiCefFocusHandler::new(shared),
+            GpuiCefFocusHandler::new(shared.clone()),
+            GpuiCefJsDialogHandler::new(shared.clone()),
+            GpuiCefPermissionHandler::new(shared),
         )
     }
 }
@@ -761,6 +1038,14 @@ mod tests {
             cursor_style(CursorType::NORTHRESIZE),
             cursor_style(CursorType::SOUTHRESIZE)
         );
+    }
+
+    #[test]
+    fn permission_bits_name_what_the_site_wants() {
+        use crate::Permission::*;
+        assert_eq!(prompt_kinds((1 << 8) | (1 << 15)), [Location, Notifications]);
+        // Something the app has no name for still gets asked about.
+        assert_eq!(prompt_kinds(1 << 23), [Other]);
     }
 
     #[test]

@@ -10,7 +10,7 @@ fn browser(cx: &mut TestAppContext) -> (Entity<Browser<MockHost>>, &mut VisualTe
     cx.update(crate::init);
     cx.add_window_view(|window, cx| {
         Browser::new(
-            MockHost::default(),
+            MockHost::new(cx),
             Store::open(":memory:").unwrap(),
             window,
             cx,
@@ -216,7 +216,7 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
     let open = |cx: &mut TestAppContext| {
         let path = path.clone();
         cx.add_window_view(move |window, cx| {
-            Browser::new(MockHost::default(), Store::open(path).unwrap(), window, cx)
+            Browser::new(MockHost::new(cx), Store::open(path).unwrap(), window, cx)
         })
         .0
     };
@@ -499,4 +499,115 @@ fn copying_the_url_flashes_a_check(cx: &mut TestAppContext) {
     cx.executor().advance_clock(std::time::Duration::from_millis(1300));
     cx.run_until_parked();
     assert_eq!(copied(cx), Some(0.0), "the check goes away on its own");
+}
+
+fn open_page(b: &Entity<Browser<MockHost>>, url: &str, cx: &mut VisualTestContext) -> Entity<crate::mock::MockPage> {
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input(url);
+    cx.simulate_keystrokes("enter");
+    b.read_with(cx, |b, _| b.pages.get(&b.active_tab().unwrap()).unwrap().0.clone())
+}
+
+#[gpui::test]
+fn page_dialogs_take_the_keyboard_and_answer_the_page(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::Dialog {
+            kind: baa_web::DialogKind::Prompt,
+            message: "Name?".into(),
+            default_text: "old".into(),
+        })
+    });
+    cx.run_until_parked();
+    // The default text is selected, so typing replaces it.
+    cx.simulate_input("sam");
+    cx.simulate_keystrokes("enter");
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::Dialog {
+            kind: baa_web::DialogKind::Confirm,
+            message: "Sure?".into(),
+            default_text: String::new(),
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    page.read_with(cx, |p, _| assert_eq!(*p.answers.borrow(), ["dialog true sam", "dialog false "]));
+    b.read_with(cx, |b, _| assert!(b.active_dialog().is_none()));
+}
+
+#[gpui::test]
+fn permission_requests_wait_for_an_answer(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    page.update(cx, |_, cx| {
+        for id in [7, 8] {
+            cx.emit(PageEvent::PermissionRequested {
+                id,
+                origin: "https://a.example".into(),
+                kinds: vec![baa_web::Permission::Camera],
+            })
+        }
+        cx.emit(PageEvent::PermissionDismissed(8));
+    });
+    cx.run_until_parked();
+    b.update(cx, |b, cx| b.answer_permission(true, cx));
+    page.read_with(cx, |p, _| assert_eq!(*p.answers.borrow(), ["permission 7 true"]));
+    b.read_with(cx, |b, _| assert!(b.asks.values().all(|a| a.permissions.is_empty())));
+}
+
+#[gpui::test]
+fn playing_tabs_can_be_muted(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    page.update(cx, |_, cx| cx.emit(PageEvent::AudibleChanged(true)));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert_eq!(b.audible.len(), 1));
+    cx.dispatch_action(MuteTab);
+    page.read_with(cx, |p, _| assert!(p.muted.get()));
+    cx.dispatch_action(MuteTab);
+    page.read_with(cx, |p, _| assert!(!p.muted.get()));
+}
+
+#[gpui::test]
+fn visits_are_remembered_and_searchable(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::UrlChanged("https://a.example/".into()));
+        cx.emit(PageEvent::TitleChanged("Alpha".into()));
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(ShowHistory);
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        let bar = b.bar.as_ref().unwrap();
+        assert_eq!(bar.mode, crate::command_bar::Mode::History);
+        assert_eq!(bar.history[0].title, "Alpha");
+    });
+    cx.simulate_input("zzz");
+    b.read_with(cx, |b, _| assert!(b.bar.as_ref().unwrap().history.is_empty()));
+}
+
+#[gpui::test]
+fn downloads_show_in_the_header_and_settings_open(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let list = b.read_with(cx, |b, _| b.host.downloads());
+    list.update(cx, |list, cx| {
+        list.upsert(baa_web::Download {
+            id: 1,
+            url: "https://a.example/f.zip".into(),
+            path: "/tmp/f.zip".into(),
+            received_bytes: 5,
+            total_bytes: 10,
+            state: baa_web::DownloadState::InProgress,
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert_eq!(b.downloads_seen, 1));
+    cx.dispatch_action(ShowDownloads);
+    b.read_with(cx, |b, _| assert_eq!(b.popover, Some(crate::prompts::Popover::Downloads)));
+    cx.dispatch_action(OpenSettings);
+    b.read_with(cx, |b, _| assert!(b.settings_open && b.popover.is_none()));
 }
