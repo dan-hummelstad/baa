@@ -1,0 +1,97 @@
+[
+  {
+    "context": "Browser",
+    "bindings": {
+      "ctrl-t": "baa::CommandBar",
+      "ctrl-l": "baa::FocusAddress",
+      "ctrl-s": "baa::ToggleSidebar",
+      "ctrl-w": "baa::CloseTab",
+      "ctrl-shift-t": "baa::ReopenClosedTab",
+      "ctrl-tab": "baa::NextTab",
+      "ctrl-shift-tab": "baa::PrevTab",
+      "ctrl-9": "baa::LastTab",
+      "ctrl-alt-right": "baa::NextSpace",
+      "ctrl-alt-left": "baa::PrevSpace",
+      "ctrl-d": "baa::TogglePin",
+      "ctrl-f": "baa::Find",
+      "ctrl-r": "baa::Reload",
+      "ctrl-=": "baa::ZoomIn",
+      "ctrl-+": "baa::ZoomIn",
+      "ctrl--": "baa::ZoomOut",
+      "ctrl-0": "baa::ZoomReset",
+      "ctrl-shift-n": "baa::NewIncognitoSpace",
+      "ctrl-1": [
+        "baa::GoToTab",
+        0
+      ],
+      "ctrl-2": [
+        "baa::GoToTab",
+        1
+      ],
+      "ctrl-3": [
+        "baa::GoToTab",
+        2
+      ],
+      "ctrl-4": [
+        "baa::GoToTab",
+        3
+      ],
+      "ctrl-5": [
+        "baa::GoToTab",
+        4
+      ],
+      "ctrl-6": [
+        "baa::GoToTab",
+        5
+      ],
+      "ctrl-7": [
+        "baa::GoToTab",
+        6
+      ],
+      "ctrl-8": [
+        "baa::GoToTab",
+        7
+      ],
+      "alt-left": "baa::Back",
+      "alt-right": "baa::Forward",
+      "f12": "baa::DevTools",
+      "f5": "baa::Reload",
+      "ctrl-alt-1": [
+        "baa::GoToSpace",
+        0
+      ],
+      "ctrl-alt-2": [
+        "baa::GoToSpace",
+        1
+      ],
+      "ctrl-alt-3": [
+        "baa::GoToSpace",
+        2
+      ],
+      "ctrl-alt-4": [
+        "baa::GoToSpace",
+        3
+      ],
+      "ctrl-alt-5": [
+        "baa::GoToSpace",
+        4
+      ],
+      "ctrl-alt-6": [
+        "baa::GoToSpace",
+        5
+      ],
+      "ctrl-alt-7": [
+        "baa::GoToSpace",
+        6
+      ],
+      "ctrl-alt-8": [
+        "baa::GoToSpace",
+        7
+      ],
+      "ctrl-alt-9": [
+        "baa::GoToSpace",
+        8
+      ]
+    }
+  }
+]

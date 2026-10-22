@@ -8,3 +8,11 @@ publish = false
 [dependencies]
 gpui.workspace = true
 baa-model.workspace = true
+baa-web.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
