@@ -4,9 +4,13 @@ pub struct RuntimeOptions {
     /// `--remote-debugging-port`. When set, Chrome DevTools can attach at
     /// `http://127.0.0.1:<port>`. macOS (CEF) only.
     pub remote_debugging_port: Option<u16>,
-    /// Where CEF keeps its cache. `None` means in-memory / throwaway.
-    pub cache_path: Option<std::path::PathBuf>,
-    /// Log to stderr.
+    /// `CefSettings.root_cache_path`: every [`crate::Profile`]'s `cache_path`
+    /// must sit below it. The global context itself stays in memory. `None`
+    /// keeps everything in memory.
+    pub root_cache_path: Option<std::path::PathBuf>,
+    /// Extra Chromium switches, `(name, value)`, appended to the browser
+    /// process command line. macOS (CEF) only.
+    pub switches: Vec<(String, Option<String>)>,
     pub log_to_stderr: bool,
     /// Where CEF writes its log file. Chromium CHECK failures land here, which
     /// makes this the first place to look when the process dies without a
@@ -18,7 +22,8 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             remote_debugging_port: None,
-            cache_path: None,
+            root_cache_path: None,
+            switches: Vec::new(),
             log_to_stderr: cfg!(debug_assertions),
             log_file: None,
         }
@@ -51,6 +56,9 @@ pub struct WebviewOptions {
     /// When `false`, CEF drives itself at `frame_rate` and hands over BGRA that
     /// is copied on the CPU — roughly 3.9MB per frame at 1200x820.
     pub accelerated: bool,
+    /// The storage profile (cookies, cache, local storage) to load in. `None`
+    /// is the global, in-memory one.
+    pub profile: Option<crate::Profile>,
 }
 
 impl Default for WebviewOptions {
@@ -60,12 +68,12 @@ impl Default for WebviewOptions {
             transparent: false,
             frame_rate: 60,
             accelerated: false,
+            profile: None,
         }
     }
 }
 
 impl WebviewOptions {
-    /// Just a URL, everything else left at its default.
     pub fn url(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
@@ -101,4 +109,34 @@ pub enum SameSite {
     None,
     Lax,
     Strict,
+}
+
+/// One network request, as [`ProfileOptions::filter`] sees it.
+#[derive(Debug, Clone, Copy)]
+pub struct Request<'a> {
+    pub url: &'a str,
+    /// The requesting frame's URL; the URL itself for a main-frame load. Empty
+    /// when no page is involved.
+    pub source_url: &'a str,
+    pub resource_type: baa_privacy::ResourceType,
+    /// A frame or an initiator origin asked for it, rather than the browser.
+    pub page_initiated: bool,
+}
+
+/// Decides what happens to a request. Called on CEF's IO thread.
+pub type FilterHook = std::sync::Arc<dyn Fn(&Request) -> baa_privacy::Decision + Send + Sync>;
+/// Given a frame's URL as it starts loading, returns script to run in it.
+pub type ScriptHook = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// Settings for one storage profile, see [`crate::Profile::new`].
+#[derive(Clone)]
+pub struct ProfileOptions {
+    /// Below [`RuntimeOptions::root_cache_path`]. `None` keeps the profile in
+    /// memory (incognito).
+    pub cache_path: Option<std::path::PathBuf>,
+    pub filter: FilterHook,
+    pub load_start_script: ScriptHook,
+    /// Boolean Chromium prefs set to false once the context is up. One this
+    /// build does not register is logged and skipped.
+    pub prefs_off: &'static [&'static str],
 }

@@ -1,9 +1,13 @@
 //! CEF host. The UI codes against [`WebHost`]/[`PageHandle`] only (PLAN.md §12);
 //! CEF types never cross this crate's boundary.
 
-use gpui::{AnyElement, App, Entity, EventEmitter, Window};
+mod cef_host;
+
+use gpui::{AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
+pub use cef_host::{CefPage, CefRuntime, CefWebHost, Downloads};
+pub use gpui_cef::{Download, DownloadState, Error};
 
 /// What a page reports back to the shell.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,11 +37,15 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn can_go_back(&self) -> bool;
     fn can_go_forward(&self) -> bool;
     fn eval(&self, script: &str);
+    /// `level` is a factor: 1.0 is 100%.
     fn set_zoom(&self, level: f64);
+    /// Repeating the same `text` moves to the next match; empty `text` ends the search.
     fn find(&self, text: &str, forward: bool);
     fn open_devtools(&self);
     /// Hidden pages keep state but stop painting (background tabs).
     fn set_visible(&self, visible: bool);
+    /// Focus this to send keyboard input to the page (after closing the command bar, say).
+    fn focus_handle(&self, cx: &App) -> FocusHandle;
     /// Render the page for this frame at the element's laid-out bounds.
     fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement;
 }

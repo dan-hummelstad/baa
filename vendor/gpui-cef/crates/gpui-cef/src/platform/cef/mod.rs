@@ -32,9 +32,10 @@ pub(crate) fn input_trace(message: impl std::fmt::Display) {
 }
 
 use cef::{
-    args::Args, browser_host_create_browser_sync, execute_process, initialize,
-    library_loader::LibraryLoader, Browser, BrowserHost, BrowserSettings, CefString, ImplBrowser,
-    ImplBrowserHost, ImplFrame, Settings, WindowInfo,
+    args::Args, browser_host_create_browser, execute_process, initialize,
+    library_loader::LibraryLoader, request_context_create_context, BrowserHost,
+    BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame, RequestContext,
+    RequestContextSettings, Settings, WindowInfo,
 };
 use gpui::{
     div, point, px, relative, surface, AnyElement, App, Bounds, Context, Element, ElementId,
@@ -45,7 +46,7 @@ use gpui::{
 };
 
 use self::shared::{Frame, Shared};
-use crate::{Error, RuntimeOptions, WebviewOptions};
+use crate::{Error, ProfileOptions, RuntimeOptions, ScriptHook, WebviewOptions};
 
 /// Pixels to scroll per wheel line, used to convert gpui's `ScrollDelta::Lines`.
 const LINE_HEIGHT: f32 = 20.;
@@ -113,9 +114,10 @@ impl Runtime {
             settings.log_file = log_file.to_string_lossy().as_ref().into();
             settings.log_severity = cef::LogSeverity::VERBOSE;
         }
-        if let Some(cache) = &self.0.options.cache_path {
-            settings.root_cache_path = cache.to_string_lossy().as_ref().into();
-            settings.cache_path = cache.to_string_lossy().as_ref().into();
+        // The global context's cache_path stays empty (in memory): every page
+        // gets a Profile, and anything left on the global one should not persist.
+        if let Some(root) = &self.0.options.root_cache_path {
+            settings.root_cache_path = root.to_string_lossy().as_ref().into();
         }
 
         let mut app = self.0.app.borrow_mut();
@@ -132,9 +134,8 @@ impl Runtime {
         Ok(())
     }
 
-    /// Puts cookies in the browser's store — the one every [`Webview`] shares,
-    /// kept under [`RuntimeOptions::cache_path`] when that is set — and says
-    /// how many it accepted. Call it after [`Runtime::start`].
+    /// Puts cookies in the global, in-memory store — the one every [`Webview`]
+    /// without a [`Profile`] shares — and says how many it accepted. Call it after [`Runtime::start`].
     ///
     /// The store may turn a cookie down (a domain that does not match its URL,
     /// say); that one is skipped rather than failing the rest.
@@ -208,6 +209,7 @@ pub fn init(options: RuntimeOptions) -> crate::Result<Runtime> {
     let mut app = handlers::GpuiCefApp::new(handlers::AppConfig {
         remote_debugging_port: options.remote_debugging_port,
         log_to_stderr: options.log_to_stderr,
+        switches: options.switches.clone(),
     });
 
     // Returns -1 in the browser process, which is what this one is. Child
@@ -230,6 +232,44 @@ pub fn init(options: RuntimeOptions) -> crate::Result<Runtime> {
     })))
 }
 
+/// A storage profile: one CEF request context, so its own cookies, cache,
+/// local storage and service workers. Cheap to clone; webviews created with
+/// clones share storage.
+#[derive(Clone)]
+pub struct Profile {
+    context: RequestContext,
+    load_start_script: ScriptHook,
+}
+
+impl Profile {
+    /// Call after [`Runtime::start`].
+    pub fn new(options: ProfileOptions) -> crate::Result<Self> {
+        let cache_path = options
+            .cache_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let settings = RequestContextSettings {
+            cache_path: cache_path.as_str().into(),
+            persist_session_cookies: 1,
+            ..Default::default()
+        };
+        let mut handler = handlers::ProfileContextHandler::new(options.filter, options.prefs_off);
+        let context = request_context_create_context(Some(&settings), Some(&mut handler))
+            .ok_or_else(|| Error::Backend("cef_request_context_create_context() failed".into()))?;
+        Ok(Self {
+            context,
+            load_start_script: options.load_start_script,
+        })
+    }
+}
+
+impl std::fmt::Debug for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Profile")
+    }
+}
+
 /// A webview, as a gpui entity.
 ///
 /// Build it with
@@ -237,18 +277,19 @@ pub fn init(options: RuntimeOptions) -> crate::Result<Runtime> {
 /// and place it like any other element.
 pub struct Webview {
     shared: Rc<Shared>,
-    browser: Option<Browser>,
     focus_handle: gpui::FocusHandle,
     /// Printable keys reach GPUI before AppKit asks the input client what text
     /// they produce. Hold one until `insertText` or `setMarkedText` decides
     /// whether this is ordinary text or IME composition.
     pending_printable_key: Option<gpui::Keystroke>,
+    /// The last find-in-page query, so a repeat goes to the next match.
+    find_text: RefCell<String>,
+    this: gpui::WeakEntity<Webview>,
     _pump: pump::Registration,
     _focus_subscriptions: [gpui::Subscription; 2],
 }
 
 impl Webview {
-    /// Creates the webview and starts loading the first page.
     pub fn new(window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions) -> Self {
         let shared = Shared::new(options.url.clone());
         // Provisional size until layout runs. CEF refuses to create a browser
@@ -281,19 +322,25 @@ impl Webview {
             ..Default::default()
         };
 
-        let mut client = handlers::GpuiCefClient::build(shared.clone());
-        let browser = browser_host_create_browser_sync(
+        let profile = options.profile.clone();
+        let mut client = handlers::GpuiCefClient::build(
+            shared.clone(),
+            profile.as_ref().map(|p| p.load_start_script.clone()),
+        );
+        let mut context = profile.map(|p| p.context);
+        // Async on purpose: with the Chrome bootstrap, CreateBrowserSync returns
+        // null until the profile's request context has initialised, which a
+        // fresh on-disk profile has not. The handle arrives in on_after_created.
+        let created = browser_host_create_browser(
             Some(&window_info),
             Some(&mut client),
             Some(&options.url.as_str().into()),
             Some(&browser_settings),
             None,
-            None,
+            context.as_mut(),
         );
-
-        match browser.clone() {
-            Some(browser) => shared.set_browser(browser),
-            None => log::error!("cef_browser_host_create_browser_sync() returned null"),
+        if created == 0 {
+            log::error!("cef_browser_host_create_browser() failed");
         }
 
         let pump = pump::register(
@@ -319,9 +366,10 @@ impl Webview {
 
         Self {
             shared,
-            browser,
             focus_handle,
             pending_printable_key: None,
+            find_text: RefCell::default(),
+            this: cx.weak_entity(),
             _pump: pump,
             _focus_subscriptions: focus_subscriptions,
         }
@@ -333,75 +381,112 @@ impl Webview {
         }
     }
 
-    /// Navigates to another URL.
     pub fn load_url(&self, url: &str) {
-        if let Some(frame) = self.browser.as_ref().and_then(|b| b.main_frame()) {
+        if let Some(frame) = self.shared.browser().and_then(|b| b.main_frame()) {
             frame.load_url(Some(&url.into()));
         }
     }
 
-    /// Reloads the current page.
     pub fn reload(&self) {
-        if let Some(browser) = &self.browser {
+        if let Some(browser) = self.shared.browser() {
             browser.reload();
         }
     }
 
-    /// Goes back in history.
     pub fn go_back(&self) {
-        if let Some(browser) = &self.browser {
+        if let Some(browser) = self.shared.browser() {
             browser.go_back();
         }
     }
 
-    /// Goes forward in history.
     pub fn go_forward(&self) {
-        if let Some(browser) = &self.browser {
+        if let Some(browser) = self.shared.browser() {
             browser.go_forward();
         }
     }
 
-    /// The current page title.
     pub fn title(&self) -> String {
         self.shared.title()
     }
 
-    /// The current URL.
     pub fn url(&self) -> String {
         self.shared.url()
     }
 
-    /// Whether a page is currently loading.
     pub fn is_loading(&self) -> bool {
         self.shared.is_loading()
     }
 
-    /// Whether there is history to go back to.
     pub fn can_go_back(&self) -> bool {
         self.shared.can_go_back()
     }
 
-    /// Whether there is history to go forward to.
     pub fn can_go_forward(&self) -> bool {
         self.shared.can_go_forward()
     }
 
-    /// Runs JavaScript in the page.
     pub fn eval(&self, script: &str) {
-        if let Some(frame) = self.browser.as_ref().and_then(|b| b.main_frame()) {
+        if let Some(frame) = self.shared.browser().and_then(|b| b.main_frame()) {
             frame.execute_java_script(Some(&script.into()), None, 0);
         }
     }
 
-    /// Stops the current load.
     pub fn stop(&self) {
-        if let Some(browser) = &self.browser {
+        if let Some(browser) = self.shared.browser() {
             browser.stop_load();
         }
     }
 
+    /// This webview's own entity, for code that only holds `&Webview`.
+    pub fn weak_entity(&self) -> gpui::WeakEntity<Self> {
+        self.this.clone()
+    }
+
+    /// Page zoom as a factor: 1.0 is 100%.
+    pub fn set_zoom(&self, factor: f64) {
+        if let Some(host) = self.host() {
+            // Chromium's zoom level is log base 1.2 of the factor.
+            host.set_zoom_level(factor.max(0.01).ln() / 1.2f64.ln());
+        }
+    }
+
+    /// Highlights matches of `text` and moves to the next (or previous) one.
+    /// An empty `text` ends the search.
+    pub fn find(&self, text: &str, forward: bool) {
+        let Some(host) = self.host() else { return };
+        if text.is_empty() {
+            host.stop_finding(1);
+            self.find_text.borrow_mut().clear();
+            return;
+        }
+        let find_next = *self.find_text.borrow() == text;
+        if !find_next {
+            *self.find_text.borrow_mut() = text.to_string();
+        }
+        host.find(Some(&text.into()), forward as i32, 0, find_next as i32);
+    }
+
+    /// Opens Chrome DevTools for this page in a separate native window.
+    pub fn show_dev_tools(&self) {
+        if let Some(host) = self.host() {
+            host.show_dev_tools(
+                Some(&WindowInfo::default()),
+                None,
+                Some(&BrowserSettings::default()),
+                None,
+            );
+        }
+    }
+
+    /// Hidden browsers keep their state but stop painting and throttle timers.
+    pub fn set_visible(&self, visible: bool) {
+        if let Some(host) = self.host() {
+            host.was_hidden((!visible) as i32);
+        }
+    }
+
     fn host(&self) -> Option<BrowserHost> {
-        self.browser.as_ref().and_then(|b| b.host())
+        self.shared.host()
     }
 
     fn send_mouse_move(&self, event: &MouseMoveEvent) {
@@ -503,6 +588,14 @@ impl Render for Webview {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, _| this.send_mouse_down(event)),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseDownEvent, _, _| this.send_mouse_down(event)),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, _, _| this.send_mouse_up(event)),
             )
             .on_mouse_up(
                 MouseButton::Left,

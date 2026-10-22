@@ -4,7 +4,7 @@
 //! overrides of the trait's default methods". The fields have to be `Clone`, so
 //! shared state is passed around as `Rc<Shared>`.
 
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
 
 use cef::{rc::Rc as _, *};
 use core_foundation::base::TCFType;
@@ -12,12 +12,14 @@ use core_video::pixel_buffer::CVPixelBuffer;
 use gpui::{px, size, Bounds, CursorStyle, RenderImage};
 
 use super::shared::{Frame as SharedFrame, Shared};
+use crate::{Download, DownloadState, FilterHook, ScriptHook, WebviewEvent};
 
 /// Settings carried by `cef::App`.
 #[derive(Clone)]
 pub(crate) struct AppConfig {
     pub(crate) remote_debugging_port: Option<u16>,
     pub(crate) log_to_stderr: bool,
+    pub(crate) switches: Vec<(String, Option<String>)>,
 }
 
 wrap_app! {
@@ -59,6 +61,23 @@ wrap_app! {
                     Some(&port.to_string().as_str().into()),
                 );
             }
+
+            for (name, value) in &self.config.switches {
+                let key = CefString::from(name.as_str());
+                match value {
+                    Some(value) => {
+                        // Appending replaces; feature lists have to be merged.
+                        let existing = CefString::from(&command_line.switch_value(Some(&key))).to_string();
+                        let value = if name.ends_with("-features") && !existing.is_empty() {
+                            format!("{existing},{value}")
+                        } else {
+                            value.clone()
+                        };
+                        command_line.append_switch_with_value(Some(&key), Some(&value.as_str().into()));
+                    }
+                    None => command_line.append_switch(Some(&key)),
+                }
+            }
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -81,22 +100,16 @@ wrap_browser_process_handler! {
     }
 }
 
-/// The render handler proper. It only stashes frames in `Shared`; gpui does the
-/// actual drawing.
-#[derive(Clone)]
-pub(crate) struct RenderState {
-    pub(crate) shared: Rc<Shared>,
-}
-
+// Only stashes frames in `Shared`; gpui does the drawing.
 wrap_render_handler! {
     pub(crate) struct GpuiCefRenderHandler {
-        state: RenderState,
+        shared: Rc<Shared>,
     }
 
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             let Some(rect) = rect else { return };
-            let size = self.state.shared.view_size();
+            let size = self.shared.view_size();
             // CEF does not accept a zero-sized view.
             rect.x = 0;
             rect.y = 0;
@@ -112,7 +125,7 @@ wrap_render_handler! {
             let Some(screen_info) = screen_info else {
                 return 0;
             };
-            screen_info.device_scale_factor = self.state.shared.scale_factor();
+            screen_info.device_scale_factor = self.shared.scale_factor();
             1
         }
 
@@ -136,20 +149,20 @@ wrap_render_handler! {
                     size: size(px(rect.width as f32), px(rect.height as f32)),
                 })
                 .collect();
-            self.state.shared.set_composition_bounds(bounds);
+            self.shared.set_composition_bounds(bounds);
         }
 
         /// Whether the popup layer — a `<select>` dropdown and the like — is on
         /// screen. CEF draws it as a separate layer, so it has to be composited
         /// over the page rather than ignored.
         fn on_popup_show(&self, _browser: Option<&mut Browser>, show: ::std::os::raw::c_int) {
-            self.state.shared.set_popup_visible(show != 0);
+            self.shared.set_popup_visible(show != 0);
         }
 
         /// Where the popup goes, in the webview's own coordinate space.
         fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
             let Some(rect) = rect else { return };
-            self.state.shared.set_popup_rect(Bounds {
+            self.shared.set_popup_rect(Bounds {
                 origin: gpui::point(px(rect.x as f32), px(rect.y as f32)),
                 size: size(px(rect.width as f32), px(rect.height as f32)),
             });
@@ -184,14 +197,7 @@ wrap_render_handler! {
             };
 
             match CVPixelBuffer::from_io_surface(&surface, None) {
-                Ok(buffer) => {
-                    let frame = SharedFrame::Accelerated(buffer);
-                    if type_ == PaintElementType::POPUP {
-                        self.state.shared.put_popup_frame(frame);
-                    } else {
-                        self.state.shared.put_frame(frame);
-                    }
-                }
+                Ok(buffer) => put_frame(&self.shared, type_, SharedFrame::Accelerated(buffer)),
                 Err(status) => {
                     log::error!("CVPixelBufferCreateWithIOSurface failed: {status}");
                 }
@@ -224,42 +230,55 @@ wrap_render_handler! {
             let frame = SharedFrame::Cpu(std::sync::Arc::new(RenderImage::new(vec![
                 image::Frame::new(image),
             ])));
-            if type_ == PaintElementType::POPUP {
-                self.state.shared.put_popup_frame(frame);
-            } else {
-                self.state.shared.put_frame(frame);
-            }
+            put_frame(&self.shared, type_, frame);
         }
     }
 }
 
-/// Picks up title and URL changes.
-#[derive(Clone)]
-pub(crate) struct DisplayState {
-    pub(crate) shared: Rc<Shared>,
+fn put_frame(shared: &Shared, kind: PaintElementType, frame: SharedFrame) {
+    if kind == PaintElementType::POPUP {
+        shared.put_popup_frame(frame);
+    } else {
+        shared.put_frame(frame);
+    }
 }
 
 wrap_display_handler! {
     pub(crate) struct GpuiCefDisplayHandler {
-        state: DisplayState,
+        shared: Rc<Shared>,
     }
 
     impl DisplayHandler {
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             if let Some(title) = title {
-                self.state.shared.set_title(title.to_string());
+                self.shared.set_title(title.to_string());
             }
         }
 
         fn on_address_change(
             &self,
             _browser: Option<&mut Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             url: Option<&CefString>,
         ) {
-            if let Some(url) = url {
-                self.state.shared.set_url(url.to_string());
+            // Subframes report their own addresses too; the page's is the main one.
+            if frame.is_some_and(|frame| frame.is_main() == 0) {
+                return;
             }
+            if let Some(url) = url {
+                self.shared.set_url(url.to_string());
+            }
+        }
+
+        fn on_favicon_urlchange(
+            &self,
+            _browser: Option<&mut Browser>,
+            icon_urls: Option<&mut CefStringList>,
+        ) {
+            // Taking the list moves CEF's borrowed one out; the empty one left
+            // behind is ours to free.
+            let first = icon_urls.and_then(|urls| std::mem::take(urls).into_iter().next());
+            self.shared.push_event(WebviewEvent::FaviconChanged(first));
         }
 
         /// A console line carrying [`crate::MESSAGE_PREFIX`] is a message for
@@ -277,7 +296,7 @@ wrap_display_handler! {
             };
             match crate::message_payload(&message) {
                 Some(payload) => {
-                    self.state.shared.push_message(payload.to_string());
+                    self.shared.push_event(WebviewEvent::Message(payload.to_string()));
                     1
                 }
                 None => 0,
@@ -293,7 +312,7 @@ wrap_display_handler! {
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> ::std::os::raw::c_int {
-            self.state.shared.set_cursor(cursor_style(type_));
+            self.shared.set_cursor(cursor_style(type_));
             // Returning 1 tells CEF the cursor has been dealt with.
             1
         }
@@ -338,6 +357,451 @@ fn cursor_style(cursor: CursorType) -> CursorStyle {
     }
 }
 
+wrap_load_handler! {
+    pub(crate) struct GpuiCefLoadHandler {
+        shared: Rc<Shared>,
+        load_start_script: Option<ScriptHook>,
+    }
+
+    impl LoadHandler {
+        /// Runs the profile's per-frame script (cosmetic filters) as early as
+        /// the new document exists.
+        fn on_load_start(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut cef::Frame>,
+            _transition_type: TransitionType,
+        ) {
+            let (Some(hook), Some(frame)) = (&self.load_start_script, frame) else {
+                return;
+            };
+            let url = CefString::from(&frame.url()).to_string();
+            if let Some(script) = hook(&url) {
+                frame.execute_java_script(Some(&script.as_str().into()), Some(&url.as_str().into()), 0);
+            }
+        }
+
+        fn on_loading_state_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            is_loading: ::std::os::raw::c_int,
+            can_go_back: ::std::os::raw::c_int,
+            can_go_forward: ::std::os::raw::c_int,
+        ) {
+            self.shared.set_load_state(
+                is_loading != 0,
+                can_go_back != 0,
+                can_go_forward != 0,
+            );
+        }
+
+        fn on_load_error(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            error_code: Errorcode,
+            error_text: Option<&CefString>,
+            failed_url: Option<&CefString>,
+        ) {
+            // ERR_ABORTED just means another navigation replaced this one.
+            if error_code == Errorcode::from(cef::sys::cef_errorcode_t::ERR_ABORTED) {
+                return;
+            }
+            log::warn!(
+                "failed to load {}: {} ({:?})",
+                failed_url.map(|url| url.to_string()).unwrap_or_default(),
+                error_text.map(|text| text.to_string()).unwrap_or_default(),
+                error_code,
+            );
+        }
+    }
+}
+
+// Window-opening requests become [`WebviewEvent::OpenRequested`]; the app
+// decides where they go.
+wrap_life_span_handler! {
+    pub(crate) struct GpuiCefLifeSpanHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl LifeSpanHandler {
+        // ponytail: the popup is cancelled, so `window.opener` is null in the new
+        // tab and opener-based OAuth flows break. Ceiling: needs a way to hand a
+        // CEF-created popup browser to the app as a page.
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _popup_id: ::std::os::raw::c_int,
+            target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            user_gesture: ::std::os::raw::c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            request_open(&self.shared, target_url, user_gesture)
+        }
+
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser {
+                self.shared.set_browser(browser.clone());
+            }
+        }
+
+        fn on_before_close(&self, _browser: Option<&mut Browser>) {
+            self.shared.push_event(WebviewEvent::Closed);
+        }
+    }
+}
+
+// Always 1: the engine never opens the window itself.
+fn request_open(
+    shared: &Shared,
+    url: Option<&CefString>,
+    user_gesture: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    if let Some(url) = url {
+        shared.push_event(WebviewEvent::OpenRequested {
+            url: url.to_string(),
+            from_user_gesture: user_gesture != 0,
+        });
+    }
+    1
+}
+
+wrap_request_handler! {
+    pub(crate) struct GpuiCefRequestHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl RequestHandler {
+        /// Cmd/Ctrl/middle-click on a link.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if target_disposition == WindowOpenDisposition::CURRENT_TAB {
+                return 0;
+            }
+            request_open(&self.shared, target_url, user_gesture)
+        }
+    }
+}
+
+// Off-screen browsers cannot show a native menu; the app draws its own.
+wrap_context_menu_handler! {
+    pub(crate) struct GpuiCefContextMenuHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl ContextMenuHandler {
+        fn on_before_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+        ) {
+            if let Some(model) = model {
+                model.clear();
+            }
+            let Some(params) = params else { return };
+            let non_empty = |s: CefStringUserfree| {
+                Some(CefString::from(&s).to_string()).filter(|s| !s.is_empty())
+            };
+            let origin = self.shared.bounds().origin;
+            self.shared.push_event(WebviewEvent::ContextMenu {
+                x: f32::from(origin.x) + params.xcoord() as f32,
+                y: f32::from(origin.y) + params.ycoord() as f32,
+                link_url: non_empty(params.link_url()),
+                selection: non_empty(params.selection_text()),
+            });
+        }
+    }
+}
+
+wrap_download_handler! {
+    pub(crate) struct GpuiCefDownloadHandler {
+        shared: Rc<Shared>,
+    }
+
+    impl DownloadHandler {
+        // cef-rs defaults every hook to 0, which here would cancel all downloads.
+        fn can_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> ::std::os::raw::c_int {
+            1
+        }
+
+        fn on_before_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _download_item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> ::std::os::raw::c_int {
+            let Some(callback) = callback else { return 0 };
+            let name = suggested_name.map(|name| name.to_string()).unwrap_or_default();
+            let path = unique_path(&downloads_dir(), &name);
+            callback.cont(Some(&path.to_string_lossy().as_ref().into()), 0);
+            1
+        }
+
+        fn on_download_updated(
+            &self,
+            _browser: Option<&mut Browser>,
+            item: Option<&mut DownloadItem>,
+            _callback: Option<&mut DownloadItemCallback>,
+        ) {
+            let Some(item) = item else { return };
+            let state = if item.is_complete() != 0 {
+                DownloadState::Complete
+            } else if item.is_canceled() != 0 || item.is_interrupted() != 0 {
+                DownloadState::Canceled
+            } else {
+                DownloadState::InProgress
+            };
+            self.shared.push_event(WebviewEvent::Download(Download {
+                id: item.id(),
+                url: CefString::from(&item.url()).to_string(),
+                path: CefString::from(&item.full_path()).to_string(),
+                received_bytes: item.received_bytes(),
+                total_bytes: item.total_bytes(),
+                state,
+            }));
+        }
+    }
+}
+
+// ponytail: $HOME/Downloads, no user setting. Ceiling: a download-folder pref.
+fn downloads_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    home.map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Downloads")
+}
+
+/// `dir/name`, or `dir/name (n).ext` for the first `n` that is free. Only the
+/// last component of `name` is used, so a page cannot pick another directory.
+fn unique_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    let name = std::path::Path::new(name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("download");
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (0..)
+        .map(|n| match n {
+            0 => dir.join(name),
+            n => dir.join(format!("{stem} ({n}){ext}")),
+        })
+        .find(|path| !path.exists())
+        .expect("unbounded range")
+}
+
+// The per-profile network filter. Lives on the request context, so it also
+// sees requests no browser made (service workers). IO thread.
+wrap_request_context_handler! {
+    pub(crate) struct ProfileContextHandler {
+        filter: FilterHook,
+        prefs_off: &'static [&'static str],
+    }
+
+    impl RequestContextHandler {
+        // UI thread; prefs cannot be set before this.
+        fn on_request_context_initialized(&self, request_context: Option<&mut RequestContext>) {
+            let Some(context) = request_context else { return };
+            for name in self.prefs_off {
+                let Some(mut value) = value_create() else { continue };
+                value.set_bool(0);
+                let mut error = CefString::default();
+                if context.set_preference(Some(&(*name).into()), Some(&mut value), Some(&mut error)) == 0 {
+                    log::info!("pref {name} not set: {error}");
+                }
+            }
+        }
+
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            _is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            let request = request?;
+            let url = CefString::from(&request.url()).to_string();
+            let kind = resource_type(request.resource_type());
+            let initiator = request_initiator.map(|i| i.to_string()).unwrap_or_default();
+            let page_initiated = frame.is_some() || !initiator.is_empty();
+            let source_url = match kind {
+                baa_privacy::ResourceType::MainFrame => url.clone(),
+                // A subframe's own URL is not loaded yet; its parent is asking.
+                baa_privacy::ResourceType::SubFrame => frame
+                    .and_then(|f| f.parent())
+                    .map(|p| CefString::from(&p.url()).to_string())
+                    .unwrap_or(initiator),
+                _ => frame
+                    .map(|f| CefString::from(&f.url()).to_string())
+                    .filter(|u| !u.is_empty())
+                    .unwrap_or(initiator),
+            };
+            let decision = (self.filter)(&crate::Request {
+                url: &url,
+                source_url: &source_url,
+                resource_type: kind,
+                page_initiated,
+            });
+            // None means CEF's default handling, so allowed requests cost nothing.
+            (decision != baa_privacy::Decision::Allow).then(|| DecisionHandler::new(decision))
+        }
+    }
+}
+
+wrap_resource_request_handler! {
+    pub(crate) struct DecisionHandler {
+        decision: baa_privacy::Decision,
+    }
+
+    impl ResourceRequestHandler {
+        // cef-rs's default here is RV_CANCEL, so always answer.
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            match (&self.decision, request) {
+                (baa_privacy::Decision::Block, _) => ReturnValue::CANCEL,
+                (baa_privacy::Decision::Rewrite(url), Some(request)) => {
+                    request.set_url(Some(&url.as_str().into()));
+                    ReturnValue::CONTINUE
+                }
+                _ => ReturnValue::CONTINUE,
+            }
+        }
+
+        /// `$redirect=`: answer with the neutered resource instead of the network.
+        fn resource_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut cef::Request>,
+        ) -> Option<ResourceHandler> {
+            let baa_privacy::Decision::Redirect { mime, body } = &self.decision else {
+                return None;
+            };
+            // CEF copies the bytes into the reader.
+            let mut body = body.clone();
+            let stream = stream_reader_create_for_data(body.as_mut_ptr().cast(), body.len())?;
+            Some(wrapper::stream_resource_handler::StreamResourceHandler::new_with_stream(
+                mime.clone(),
+                stream,
+            ))
+        }
+    }
+}
+
+fn resource_type(kind: ResourceType) -> baa_privacy::ResourceType {
+    use baa_privacy::ResourceType as R;
+    match kind {
+        ResourceType::MAIN_FRAME => R::MainFrame,
+        ResourceType::SUB_FRAME => R::SubFrame,
+        ResourceType::STYLESHEET => R::Stylesheet,
+        ResourceType::SCRIPT => R::Script,
+        ResourceType::IMAGE => R::Image,
+        ResourceType::FONT_RESOURCE => R::Font,
+        ResourceType::OBJECT => R::Object,
+        ResourceType::MEDIA => R::Media,
+        ResourceType::WORKER => R::Worker,
+        ResourceType::SHARED_WORKER => R::SharedWorker,
+        ResourceType::PREFETCH => R::Prefetch,
+        ResourceType::FAVICON => R::Favicon,
+        ResourceType::XHR => R::Xhr,
+        ResourceType::PING => R::Ping,
+        ResourceType::SERVICE_WORKER => R::ServiceWorker,
+        ResourceType::CSP_REPORT => R::CspReport,
+        ResourceType::PLUGIN_RESOURCE => R::PluginResource,
+        ResourceType::NAVIGATION_PRELOAD_MAIN_FRAME => R::NavigationPreloadMainFrame,
+        ResourceType::NAVIGATION_PRELOAD_SUB_FRAME => R::NavigationPreloadSubFrame,
+        _ => R::SubResource,
+    }
+}
+
+wrap_client! {
+    pub(crate) struct GpuiCefClient {
+        render_handler: RenderHandler,
+        display_handler: DisplayHandler,
+        load_handler: LoadHandler,
+        life_span_handler: LifeSpanHandler,
+        request_handler: RequestHandler,
+        context_menu_handler: ContextMenuHandler,
+        download_handler: DownloadHandler,
+    }
+
+    impl Client {
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span_handler.clone())
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request_handler.clone())
+        }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.context_menu_handler.clone())
+        }
+
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(self.download_handler.clone())
+        }
+
+        fn render_handler(&self) -> Option<RenderHandler> {
+            Some(self.render_handler.clone())
+        }
+
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(self.display_handler.clone())
+        }
+
+        fn load_handler(&self) -> Option<LoadHandler> {
+            Some(self.load_handler.clone())
+        }
+    }
+}
+
+impl GpuiCefClient {
+    pub(crate) fn build(shared: Rc<Shared>, load_start_script: Option<ScriptHook>) -> Client {
+        Self::new(
+            GpuiCefRenderHandler::new(shared.clone()),
+            GpuiCefDisplayHandler::new(shared.clone()),
+            GpuiCefLoadHandler::new(shared.clone(), load_start_script),
+            GpuiCefLifeSpanHandler::new(shared.clone()),
+            GpuiCefRequestHandler::new(shared.clone()),
+            GpuiCefContextMenuHandler::new(shared.clone()),
+            GpuiCefDownloadHandler::new(shared),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,88 +832,18 @@ mod tests {
             cursor_style(CursorType::SOUTHRESIZE)
         );
     }
-}
 
-/// Picks up load progress and whether history navigation is possible.
-#[derive(Clone)]
-pub(crate) struct LoadState {
-    pub(crate) shared: Rc<Shared>,
-}
+    #[test]
+    fn download_names_never_escape_or_overwrite() {
+        let dir = std::env::temp_dir().join(format!("gpui-cef-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_path(&dir, "../../evil.sh"), dir.join("evil.sh"));
+        assert_eq!(unique_path(&dir, ""), dir.join("download"));
 
-wrap_load_handler! {
-    pub(crate) struct GpuiCefLoadHandler {
-        state: LoadState,
-    }
-
-    impl LoadHandler {
-        fn on_loading_state_change(
-            &self,
-            _browser: Option<&mut Browser>,
-            is_loading: ::std::os::raw::c_int,
-            can_go_back: ::std::os::raw::c_int,
-            can_go_forward: ::std::os::raw::c_int,
-        ) {
-            self.state.shared.set_load_state(
-                is_loading != 0,
-                can_go_back != 0,
-                can_go_forward != 0,
-            );
-        }
-
-        fn on_load_error(
-            &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut cef::Frame>,
-            error_code: Errorcode,
-            error_text: Option<&CefString>,
-            failed_url: Option<&CefString>,
-        ) {
-            // ERR_ABORTED just means another navigation replaced this one.
-            if error_code == Errorcode::from(cef::sys::cef_errorcode_t::ERR_ABORTED) {
-                return;
-            }
-            log::warn!(
-                "failed to load {}: {} ({:?})",
-                failed_url.map(|url| url.to_string()).unwrap_or_default(),
-                error_text.map(|text| text.to_string()).unwrap_or_default(),
-                error_code,
-            );
-        }
-    }
-}
-
-wrap_client! {
-    pub(crate) struct GpuiCefClient {
-        render_handler: RenderHandler,
-        display_handler: DisplayHandler,
-        load_handler: LoadHandler,
-    }
-
-    impl Client {
-        fn render_handler(&self) -> Option<RenderHandler> {
-            Some(self.render_handler.clone())
-        }
-
-        fn display_handler(&self) -> Option<DisplayHandler> {
-            Some(self.display_handler.clone())
-        }
-
-        fn load_handler(&self) -> Option<LoadHandler> {
-            Some(self.load_handler.clone())
-        }
-    }
-}
-
-impl GpuiCefClient {
-    pub(crate) fn build(shared: Rc<Shared>) -> Client {
-        Self::new(
-            GpuiCefRenderHandler::new(RenderState {
-                shared: shared.clone(),
-            }),
-            GpuiCefDisplayHandler::new(DisplayState {
-                shared: shared.clone(),
-            }),
-            GpuiCefLoadHandler::new(LoadState { shared }),
-        )
+        std::fs::write(dir.join("a.tar.gz"), b"").unwrap();
+        assert_eq!(unique_path(&dir, "a.tar.gz"), dir.join("a.tar (1).gz"));
+        std::fs::write(dir.join("README"), b"").unwrap();
+        assert_eq!(unique_path(&dir, "README"), dir.join("README (1)"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

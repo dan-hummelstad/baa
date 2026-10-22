@@ -13,7 +13,6 @@ use crate::{RuntimeOptions, WebviewOptions};
 pub struct Runtime;
 
 impl Runtime {
-    /// Does nothing.
     pub fn start(&self, _cx: &mut App) -> crate::Result<()> {
         Ok(())
     }
@@ -23,11 +22,20 @@ impl Runtime {
         Err(crate::Error::Unsupported("cookies"))
     }
 
-    /// Does nothing.
     pub fn shutdown(self) {}
 }
 
-/// Does nothing.
+/// Storage profiles are not wired up on this backend; every webview shares one.
+#[derive(Clone, Debug)]
+pub struct Profile;
+
+impl Profile {
+    // ponytail: options ignored. Ceiling: no per-Space isolation on this backend.
+    pub fn new(_options: crate::ProfileOptions) -> crate::Result<Self> {
+        Ok(Profile)
+    }
+}
+
 pub fn init(_options: RuntimeOptions) -> crate::Result<Runtime> {
     Ok(Runtime)
 }
@@ -38,37 +46,40 @@ impl gpui::EventEmitter<crate::WebviewEvent> for Webview {}
 pub struct Webview {
     options: WebviewOptions,
     focus_handle: FocusHandle,
+    this: gpui::WeakEntity<Webview>,
 }
 
 impl Webview {
-    /// Creates it (and does nothing else).
     pub fn new(_window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions) -> Self {
         Self {
             options,
             focus_handle: cx.focus_handle(),
+            this: cx.weak_entity(),
         }
     }
 
-    /// Navigates to another URL (no-op).
     pub fn load_url(&self, _url: &str) {}
-    /// Reloads the current page (no-op).
     pub fn reload(&self) {}
-    /// Goes back in history (no-op).
     pub fn go_back(&self) {}
-    /// Goes forward in history (no-op).
     pub fn go_forward(&self) {}
-    /// Stops the current load (no-op).
     pub fn stop(&self) {}
-    /// Runs JavaScript in the page (no-op).
     pub fn eval(&self, _script: &str) {}
     /// The current page title. Always empty.
     pub fn title(&self) -> String {
         String::new()
     }
-    /// The current URL.
     pub fn url(&self) -> String {
         self.options.url.clone()
     }
+    /// This webview's own entity, for code that only holds `&Webview`.
+    pub fn weak_entity(&self) -> gpui::WeakEntity<Self> {
+        self.this.clone()
+    }
+
+    pub fn set_zoom(&self, _factor: f64) {}
+    pub fn find(&self, _text: &str, _forward: bool) {}
+    pub fn show_dev_tools(&self) {}
+    pub fn set_visible(&self, _visible: bool) {}
     /// Whether a page is loading. Always false.
     pub fn is_loading(&self) -> bool {
         false

@@ -44,12 +44,15 @@
 mod options;
 mod platform;
 
-pub use options::{CookieSpec, RuntimeOptions, SameSite, WebviewOptions};
-pub use platform::{init, Runtime, Webview};
+pub use options::{
+    CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, ScriptHook,
+    WebviewOptions,
+};
+pub use platform::{init, Profile, Runtime, Webview};
 
 /// What a [`Webview`] reports to the application, through
 /// [`gpui::EventEmitter`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WebviewEvent {
     /// A message the page posted with the script [`post_message_script`]
     /// returns.
@@ -57,6 +60,54 @@ pub enum WebviewEvent {
     /// Untrusted: any script running in the page can post one, so treat it as
     /// input from the page, not from the application.
     Message(String),
+    UrlChanged(String),
+    TitleChanged(String),
+    /// The page's first favicon URL; `None` when it declares none.
+    FaviconChanged(Option<String>),
+    LoadingChanged(bool),
+    HistoryChanged {
+        can_go_back: bool,
+        can_go_forward: bool,
+    },
+    /// `window.open`, `target=_blank`, or a modified/middle click on a link.
+    /// The engine does not open anything itself.
+    OpenRequested {
+        url: String,
+        from_user_gesture: bool,
+    },
+    /// Right click, at window coordinates. The engine shows no menu of its own.
+    ContextMenu {
+        x: f32,
+        y: f32,
+        link_url: Option<String>,
+        selection: Option<String>,
+    },
+    /// A download started or progressed. Files go straight to the Downloads
+    /// folder, without a dialog.
+    Download(Download),
+    /// The browser closed itself (`window.close()`).
+    Closed,
+}
+
+/// A snapshot of one download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    /// Stable across updates of the same download for the life of the process.
+    pub id: u32,
+    pub url: String,
+    /// Empty until the destination is chosen.
+    pub path: String,
+    pub received_bytes: i64,
+    /// `-1` while unknown.
+    pub total_bytes: i64,
+    pub state: DownloadState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadState {
+    InProgress,
+    Complete,
+    Canceled,
 }
 
 /// What a console line starts with when it is a message for the application.
@@ -109,7 +160,6 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The result type used throughout this crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]

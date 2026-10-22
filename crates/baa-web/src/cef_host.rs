@@ -1,0 +1,492 @@
+//! [`WebHost`] on CEF, through the vendored gpui-cef (PLAN.md §6, §7).
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
+};
+
+use baa_privacy::{Adblock, Decision};
+use gpui::{div, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, IntoElement, Window};
+use gpui_cef::{Download, ProfileOptions, WebviewEvent, WebviewOptions};
+
+use crate::{PageEvent, PageHandle, ProfileId, WebHost};
+
+/// A page. gpui-cef's webview implements [`PageHandle`] directly, so the UI
+/// holds the same entity CEF paints into.
+pub use gpui_cef::Webview as CefPage;
+
+/// Process-wide CEF. [`CefRuntime::init`] at the top of `main`,
+/// [`CefRuntime::start`] inside `Application::run`, [`CefRuntime::shutdown`]
+/// after it returns. Clone it into the run closure; CEF shuts down when the
+/// last clone drops.
+#[derive(Clone)]
+pub struct CefRuntime {
+    runtime: gpui_cef::Runtime,
+    root: PathBuf,
+}
+
+impl CefRuntime {
+    /// `root` is CEF's `root_cache_path`; profiles live in `root/space-<id>`.
+    /// When this process is a CEF child process, it exits in here.
+    pub fn init(root: PathBuf) -> Result<Self, gpui_cef::Error> {
+        purge_deleted_profiles(&root);
+        let mut switches: Vec<(String, Option<String>)> = baa_privacy::SWITCHES
+            .iter()
+            .map(|s| match s.split_once('=') {
+                Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                None => (s.to_string(), None),
+            })
+            .collect();
+        // gpui-cef merges this with any value already on the command line.
+        switches.push((
+            "disable-features".into(),
+            Some(baa_privacy::merge_disabled_features("")),
+        ));
+        let runtime = gpui_cef::init(gpui_cef::RuntimeOptions {
+            root_cache_path: Some(root.clone()),
+            switches,
+            log_file: std::env::var_os("BAA_CEF_LOG").map(Into::into),
+            ..Default::default()
+        })?;
+        Ok(Self { runtime, root })
+    }
+
+    /// Initialises CEF. Call once, before the first page.
+    pub fn start(&self, cx: &mut App) -> Result<CefWebHost, gpui_cef::Error> {
+        self.runtime.start(cx)?;
+        Ok(CefWebHost::new(self.root.clone(), cx))
+    }
+
+    pub fn shutdown(self) {
+        self.runtime.shutdown();
+    }
+}
+
+/// Every download any page started this session, oldest first.
+#[derive(Default)]
+pub struct Downloads {
+    pub items: Vec<Download>,
+}
+
+impl Downloads {
+    fn upsert(&mut self, download: Download) {
+        match self.items.iter_mut().find(|item| item.id == download.id) {
+            Some(item) => *item = download,
+            None => self.items.push(download),
+        }
+    }
+}
+
+pub struct CefWebHost {
+    root: PathBuf,
+    profiles: RefCell<HashMap<ProfileId, gpui_cef::Profile>>,
+    adblock_on: RefCell<HashMap<ProfileId, Arc<AtomicBool>>>,
+    next_ephemeral: Cell<u64>,
+    /// Empty until the lists are parsed on a background thread (about a second).
+    adblock: Arc<OnceLock<Adblock>>,
+    downloads: Entity<Downloads>,
+}
+
+impl CefWebHost {
+    fn new(root: PathBuf, cx: &mut App) -> Self {
+        let adblock = Arc::new(OnceLock::new());
+        let dir = root.join("adblock");
+        let cell = adblock.clone();
+        std::thread::spawn(move || {
+            let _ = cell.set(Adblock::load(&dir));
+        });
+        Self {
+            root,
+            profiles: RefCell::default(),
+            adblock_on: RefCell::default(),
+            next_ephemeral: Cell::new(u64::MAX),
+            adblock,
+            downloads: cx.new(|_| Downloads::default()),
+        }
+    }
+
+    /// The download tray's data; observe it for updates.
+    pub fn downloads(&self) -> Entity<Downloads> {
+        self.downloads.clone()
+    }
+
+    /// Per-site toggles, "my filters" and list refresh. `None` while loading.
+    pub fn adblock(&self) -> Option<&Adblock> {
+        self.adblock.get()
+    }
+
+    // ponytail: the toggle is per storage profile, not per Space, because
+    // create_page only knows the profile. Ceiling: Spaces sharing a profile
+    // share the switch.
+    /// uBO on/off for every page in `profile`, effective from the next request.
+    pub fn set_adblock(&self, profile: ProfileId, on: bool) {
+        self.adblock_switch(profile).store(on, Ordering::Relaxed);
+    }
+
+    fn adblock_switch(&self, profile: ProfileId) -> Arc<AtomicBool> {
+        self.adblock_on
+            .borrow_mut()
+            .entry(profile)
+            .or_insert_with(|| Arc::new(AtomicBool::new(true)))
+            .clone()
+    }
+
+    fn profile(&self, id: ProfileId) -> Option<gpui_cef::Profile> {
+        if let Some(profile) = self.profiles.borrow().get(&id) {
+            return Some(profile.clone());
+        }
+        let (adblock, on) = (self.adblock.clone(), self.adblock_switch(id));
+        let filter: gpui_cef::FilterHook = Arc::new(move |request| {
+            if baa_privacy::block_browser_request(
+                request.url,
+                request.resource_type,
+                request.page_initiated,
+            ) {
+                return Decision::Block;
+            }
+            match adblock.get() {
+                Some(adblock) if request.page_initiated && on.load(Ordering::Relaxed) => {
+                    adblock.should_block(request.url, request.source_url, request.resource_type)
+                }
+                _ => Decision::Allow,
+            }
+        });
+        let (adblock, on) = (self.adblock.clone(), self.adblock_switch(id));
+        let observer = generic_cosmetics_observer();
+        let load_start_script: gpui_cef::ScriptHook = Arc::new(move |url| {
+            if !url.starts_with("http") || !on.load(Ordering::Relaxed) {
+                return None;
+            }
+            Some(adblock.get()?.cosmetics_for(url) + &observer)
+        });
+        let options = ProfileOptions {
+            cache_path: (!is_ephemeral(id)).then(|| profile_dir(&self.root, id)),
+            filter,
+            load_start_script,
+            prefs_off: baa_privacy::PREFS_OFF,
+        };
+        match gpui_cef::Profile::new(options) {
+            Ok(profile) => {
+                self.profiles.borrow_mut().insert(id, profile.clone());
+                Some(profile)
+            }
+            Err(err) => {
+                // Falls back to the global in-memory context: the page still
+                // loads, nothing of it persists.
+                log::error!("profile {id:?}: {err}");
+                None
+            }
+        }
+    }
+}
+
+impl WebHost for CefWebHost {
+    type Page = CefPage;
+
+    fn create_page(
+        &self,
+        profile: ProfileId,
+        url: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<CefPage> {
+        let options = WebviewOptions {
+            profile: self.profile(profile),
+            ..WebviewOptions::url(url)
+        };
+        let page = cx.new(|cx| CefPage::new(window, cx, options));
+        let downloads = self.downloads.clone();
+        let adblock = self.adblock.clone();
+        let adblock_on = self.adblock_switch(profile);
+        cx.subscribe(&page, move |page, event: &WebviewEvent, cx| {
+            let event = match event.clone() {
+                WebviewEvent::UrlChanged(url) => PageEvent::UrlChanged(url),
+                WebviewEvent::TitleChanged(title) => PageEvent::TitleChanged(title),
+                WebviewEvent::FaviconChanged(url) => PageEvent::FaviconChanged(url),
+                WebviewEvent::LoadingChanged(loading) => PageEvent::LoadingChanged(loading),
+                WebviewEvent::HistoryChanged {
+                    can_go_back,
+                    can_go_forward,
+                } => PageEvent::HistoryChanged {
+                    can_go_back,
+                    can_go_forward,
+                },
+                WebviewEvent::OpenRequested {
+                    url,
+                    from_user_gesture,
+                } => PageEvent::OpenRequested {
+                    url,
+                    from_user_gesture,
+                },
+                WebviewEvent::ContextMenu {
+                    x,
+                    y,
+                    link_url,
+                    selection,
+                } => PageEvent::ContextMenu {
+                    x,
+                    y,
+                    link_url,
+                    selection,
+                },
+                WebviewEvent::Closed => PageEvent::Closed,
+                WebviewEvent::Download(download) => {
+                    downloads.update(cx, |list, cx| {
+                        list.upsert(download);
+                        cx.notify();
+                    });
+                    return;
+                }
+                WebviewEvent::Message(message) => {
+                    let Some(adblock) =
+                        adblock.get().filter(|_| adblock_on.load(Ordering::Relaxed))
+                    else {
+                        return;
+                    };
+                    let page = page.read(cx);
+                    if let Some(script) = generic_cosmetics_reply(adblock, &page.url(), &message) {
+                        page.eval(&script);
+                    }
+                    return;
+                }
+            };
+            page.update(cx, |_, cx| cx.emit(event));
+        })
+        .detach();
+        page
+    }
+
+    fn ephemeral_profile(&self) -> ProfileId {
+        let id = self.next_ephemeral.get();
+        self.next_ephemeral.set(id - 1);
+        ProfileId(id)
+    }
+
+    fn delete_profile(&self, profile: ProfileId) {
+        self.profiles.borrow_mut().remove(&profile);
+        self.adblock_on.borrow_mut().remove(&profile);
+        if is_ephemeral(profile) {
+            return;
+        }
+        // CEF keeps files open until the profile's last browser has closed, and
+        // closing is asynchronous: removal can fail (Windows) or race a late
+        // write, so it is also queued for the next launch.
+        queue_delete(&self.root, profile);
+        let _ = std::fs::remove_dir_all(profile_dir(&self.root, profile));
+    }
+}
+
+impl EventEmitter<PageEvent> for CefPage {}
+
+impl PageHandle for CefPage {
+    fn load_url(&self, url: &str) {
+        CefPage::load_url(self, url)
+    }
+    fn reload(&self) {
+        CefPage::reload(self)
+    }
+    fn stop(&self) {
+        CefPage::stop(self)
+    }
+    fn go_back(&self) {
+        CefPage::go_back(self)
+    }
+    fn go_forward(&self) {
+        CefPage::go_forward(self)
+    }
+    fn url(&self) -> String {
+        CefPage::url(self)
+    }
+    fn title(&self) -> String {
+        CefPage::title(self)
+    }
+    fn is_loading(&self) -> bool {
+        CefPage::is_loading(self)
+    }
+    fn can_go_back(&self) -> bool {
+        CefPage::can_go_back(self)
+    }
+    fn can_go_forward(&self) -> bool {
+        CefPage::can_go_forward(self)
+    }
+    fn eval(&self, script: &str) {
+        CefPage::eval(self, script)
+    }
+    fn set_zoom(&self, level: f64) {
+        CefPage::set_zoom(self, level)
+    }
+    fn find(&self, text: &str, forward: bool) {
+        CefPage::find(self, text, forward)
+    }
+    fn open_devtools(&self) {
+        self.show_dev_tools()
+    }
+    fn set_visible(&self, visible: bool) {
+        CefPage::set_visible(self, visible)
+    }
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        gpui::Focusable::focus_handle(self, cx)
+    }
+    fn render(&self, _window: &mut Window, _cx: &mut App) -> AnyElement {
+        match self.weak_entity().upgrade() {
+            Some(page) => page.into_any_element(),
+            None => div().into_any_element(),
+        }
+    }
+}
+
+// Ids count down from u64::MAX; baa-model's count up from 1.
+fn is_ephemeral(id: ProfileId) -> bool {
+    id.0 > u64::MAX / 2
+}
+
+fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
+    // Chrome rejects nested profile paths ("Cannot create profile"), so no spaces/ subdir.
+    root.join(format!("space-{}", id.0))
+}
+
+const PENDING_DELETES: &str = "pending-deletes";
+
+fn queue_delete(root: &Path, id: ProfileId) {
+    use std::io::Write as _;
+    let line = format!("{}\n", id.0);
+    let written = std::fs::create_dir_all(root).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join(PENDING_DELETES))?
+            .write_all(line.as_bytes())
+    });
+    if let Err(err) = written {
+        log::warn!("could not queue profile {id:?} for deletion: {err}");
+    }
+}
+
+/// Runs before CEF opens anything in `root`, so nothing holds the files.
+fn purge_deleted_profiles(root: &Path) {
+    let list = root.join(PENDING_DELETES);
+    let Ok(text) = std::fs::read_to_string(&list) else {
+        return;
+    };
+    // Parsing as a number keeps a tampered file from naming another path.
+    for id in text.lines().filter_map(|line| line.trim().parse().ok()) {
+        let dir = profile_dir(root, ProfileId(id));
+        if let Err(err) = std::fs::remove_dir_all(&dir) {
+            if dir.exists() {
+                log::warn!("could not delete {}: {err}", dir.display());
+            }
+        }
+    }
+    let _ = std::fs::remove_file(list);
+}
+
+const COSMETIC_TAG: &str = "baa-cosmetic:";
+
+/// Main-frame script that reports the classes and ids it sees, so generic
+/// `##.ad` rules can be answered with CSS (PLAN.md §5b).
+fn generic_cosmetics_observer() -> String {
+    let prefix = format!("{}{COSMETIC_TAG}", gpui_cef::MESSAGE_PREFIX);
+    format!(
+        r#"(()=>{{if(window!==top)return;const seen=new Set();let c=[],i=[],t=0;
+const add=e=>{{if(e.id&&!seen.has('#'+e.id)){{seen.add('#'+e.id);i.push(e.id)}}for(const n of e.classList||[])if(!seen.has('.'+n)){{seen.add('.'+n);c.push(n)}}}};
+const flush=()=>{{t=0;if(c.length||i.length)console.debug({prefix:?}+JSON.stringify({{c,i}}));c=[];i=[]}};
+const scan=n=>{{if(n.nodeType!==1)return;add(n);for(const e of n.querySelectorAll('[id],[class]'))add(e);if(!t)t=setTimeout(flush,100)}};
+new MutationObserver(ms=>{{for(const m of ms)for(const n of m.addedNodes)scan(n)}}).observe(document,{{childList:true,subtree:true}});}})();
+"#
+    )
+}
+
+/// The script answering one observer report, if any rule matched. The report
+/// comes from the page, so it is only ever used to hide things on that page.
+fn generic_cosmetics_reply(adblock: &Adblock, page_url: &str, message: &str) -> Option<String> {
+    let report: serde_json::Value =
+        serde_json::from_str(message.strip_prefix(COSMETIC_TAG)?).ok()?;
+    let strings = |key: &str| -> Vec<String> {
+        report[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let css = adblock.generic_css_for(page_url, &strings("c"), &strings("i"));
+    if css.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "(()=>{{const s=new CSSStyleSheet();s.replaceSync({});document.adoptedStyleSheets=[...document.adoptedStyleSheets,s];}})();",
+        serde_json::Value::String(css)
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ephemeral_ids_never_meet_model_ids() {
+        assert!(is_ephemeral(ProfileId(u64::MAX)));
+        assert!(!is_ephemeral(ProfileId(1)));
+        assert!(!is_ephemeral(ProfileId(1 << 40)));
+    }
+
+    #[test]
+    fn queued_deletes_run_at_next_launch() {
+        let root = std::env::temp_dir().join(format!("baa-web-purge-{}", std::process::id()));
+        let keep = profile_dir(&root, ProfileId(1));
+        let gone = profile_dir(&root, ProfileId(2));
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::create_dir_all(gone.join("Cache")).unwrap();
+
+        queue_delete(&root, ProfileId(2));
+        std::fs::write(
+            root.join(PENDING_DELETES),
+            std::fs::read_to_string(root.join(PENDING_DELETES)).unwrap() + "../../etc\n",
+        )
+        .unwrap();
+        purge_deleted_profiles(&root);
+
+        assert!(keep.exists());
+        assert!(!gone.exists());
+        assert!(!root.join(PENDING_DELETES).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn downloads_update_in_place() {
+        let download = |id, received| Download {
+            id,
+            url: "https://example.com/a.zip".into(),
+            path: String::new(),
+            received_bytes: received,
+            total_bytes: 10,
+            state: crate::DownloadState::InProgress,
+        };
+        let mut list = Downloads::default();
+        list.upsert(download(1, 0));
+        list.upsert(download(2, 0));
+        list.upsert(download(1, 5));
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].received_bytes, 5);
+    }
+
+    #[test]
+    fn malformed_cosmetic_reports_are_ignored() {
+        let adblock = Adblock::load(&std::env::temp_dir().join("baa-web-no-lists"));
+        assert_eq!(
+            generic_cosmetics_reply(&adblock, "https://a.test/", "not ours"),
+            None
+        );
+        assert_eq!(
+            generic_cosmetics_reply(&adblock, "https://a.test/", "baa-cosmetic:{"),
+            None
+        );
+    }
+}

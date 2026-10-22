@@ -71,12 +71,10 @@ pub(crate) struct Shared {
     /// Set when `view_size` changed; the pump picks this up and calls
     /// `was_resized()`.
     resized: Cell<bool>,
-    /// Page title and URL.
     title: RefCell<String>,
     url: RefCell<String>,
     /// Whether a page is loading, as reported by CEF's `LoadHandler`.
     is_loading: Cell<bool>,
-    /// Whether history navigation is possible.
     can_go_back: Cell<bool>,
     can_go_forward: Cell<bool>,
     /// The cursor the page wants, as reported by CEF's `OnCursorChange`.
@@ -93,8 +91,8 @@ pub(crate) struct Shared {
     /// The browser, kept here so the message pump can reach `BrowserHost`
     /// without borrowing gpui's `App`.
     browser: RefCell<Option<Browser>>,
-    /// Messages the page posted, waiting for the pump to emit them.
-    messages: RefCell<Vec<String>>,
+    /// Events waiting for the pump to emit them.
+    events: RefCell<Vec<crate::WebviewEvent>>,
 }
 
 impl Shared {
@@ -120,19 +118,18 @@ impl Shared {
             composition_bounds: RefCell::new(Vec::new()),
             received_frame: Cell::new(false),
             browser: RefCell::new(None),
-            messages: RefCell::new(Vec::new()),
+            events: RefCell::new(Vec::new()),
         })
     }
 
-    /// Queue a message the page posted; the pump emits it on its next pass.
-    pub(crate) fn push_message(&self, message: String) {
-        self.messages.borrow_mut().push(message);
+    /// Queues an event; the pump emits it on its next pass.
+    pub(crate) fn push_event(&self, event: crate::WebviewEvent) {
+        self.events.borrow_mut().push(event);
         self.dirty.set(true);
     }
 
-    /// The messages posted since the last call.
-    pub(crate) fn take_messages(&self) -> Vec<String> {
-        std::mem::take(&mut *self.messages.borrow_mut())
+    pub(crate) fn take_events(&self) -> Vec<crate::WebviewEvent> {
+        std::mem::take(&mut *self.events.borrow_mut())
     }
 
     /// Called from gpui's prepaint. Raises `resized` when the size changed.
@@ -157,6 +154,10 @@ impl Shared {
 
     pub(crate) fn set_browser(&self, browser: Browser) {
         *self.browser.borrow_mut() = Some(browser);
+    }
+
+    pub(crate) fn browser(&self) -> Option<Browser> {
+        self.browser.borrow().clone()
     }
 
     pub(crate) fn host(&self) -> Option<BrowserHost> {
@@ -261,20 +262,31 @@ impl Shared {
     }
 
     pub(crate) fn set_title(&self, title: String) {
-        *self.title.borrow_mut() = title;
-        self.dirty.set(true);
+        if *self.title.borrow() != title {
+            *self.title.borrow_mut() = title.clone();
+            self.push_event(crate::WebviewEvent::TitleChanged(title));
+        }
     }
 
     pub(crate) fn set_url(&self, url: String) {
-        *self.url.borrow_mut() = url;
-        self.dirty.set(true);
+        if *self.url.borrow() != url {
+            *self.url.borrow_mut() = url.clone();
+            self.push_event(crate::WebviewEvent::UrlChanged(url));
+        }
     }
 
     pub(crate) fn set_load_state(&self, is_loading: bool, can_go_back: bool, can_go_forward: bool) {
-        self.is_loading.set(is_loading);
-        self.can_go_back.set(can_go_back);
-        self.can_go_forward.set(can_go_forward);
-        self.dirty.set(true);
+        if self.is_loading.replace(is_loading) != is_loading {
+            self.push_event(crate::WebviewEvent::LoadingChanged(is_loading));
+        }
+        let back = self.can_go_back.replace(can_go_back) != can_go_back;
+        let forward = self.can_go_forward.replace(can_go_forward) != can_go_forward;
+        if back || forward {
+            self.push_event(crate::WebviewEvent::HistoryChanged {
+                can_go_back,
+                can_go_forward,
+            });
+        }
     }
 
     pub(crate) fn is_loading(&self) -> bool {
@@ -450,6 +462,31 @@ mod tests {
         assert!(shared.can_go_back());
         assert!(!shared.can_go_forward());
         assert!(shared.take_dirty());
+    }
+
+    #[test]
+    fn state_changes_are_queued_once() {
+        use crate::WebviewEvent::*;
+        let shared = Shared::new("about:blank".into());
+        shared.set_url("about:blank".into());
+        shared.set_title("A".into());
+        shared.set_title("A".into());
+        shared.set_load_state(true, false, false);
+        shared.set_load_state(false, true, false);
+        shared.set_load_state(false, true, false);
+        assert_eq!(
+            shared.take_events(),
+            vec![
+                TitleChanged("A".into()),
+                LoadingChanged(true),
+                LoadingChanged(false),
+                HistoryChanged {
+                    can_go_back: true,
+                    can_go_forward: false
+                },
+            ]
+        );
+        assert!(shared.take_events().is_empty());
     }
 
     #[test]

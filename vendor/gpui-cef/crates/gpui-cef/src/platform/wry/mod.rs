@@ -52,6 +52,17 @@ impl Runtime {
     pub fn shutdown(self) {}
 }
 
+/// Storage profiles are not wired up on this backend; every webview shares one.
+#[derive(Clone, Debug)]
+pub struct Profile;
+
+impl Profile {
+    // ponytail: options ignored. Ceiling: no per-Space isolation on this backend.
+    pub fn new(_options: crate::ProfileOptions) -> crate::Result<Self> {
+        Ok(Profile)
+    }
+}
+
 /// Does nothing. Present so the same call sequence works on both platforms.
 pub fn init(_options: RuntimeOptions) -> crate::Result<Runtime> {
     Ok(Runtime)
@@ -69,10 +80,10 @@ pub struct Webview {
     is_loading: Rc<Cell<bool>>,
     /// Messages that arrived while gpui was busy, emitted on the next render.
     inbox: Rc<RefCell<Vec<String>>>,
+    this: gpui::WeakEntity<Webview>,
 }
 
 impl Webview {
-    /// Creates the webview and starts loading the first page.
     pub fn new(window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions) -> Self {
         let is_loading = Rc::new(Cell::new(true));
         let inbox: Rc<RefCell<Vec<String>>> = Rc::default();
@@ -131,10 +142,19 @@ impl Webview {
             url: options.url,
             is_loading,
             inbox,
+            this: cx.weak_entity(),
         }
     }
 
-    /// Navigates to another URL.
+    /// This webview's own entity, for code that only holds `&Webview`.
+    pub fn weak_entity(&self) -> gpui::WeakEntity<Self> {
+        self.this.clone()
+    }
+
+    pub fn set_zoom(&self, _factor: f64) {}
+    pub fn find(&self, _text: &str, _forward: bool) {}
+    pub fn show_dev_tools(&self) {}
+
     pub fn load_url(&self, url: &str) {
         if let Some(webview) = &self.webview {
             if let Err(err) = webview.load_url(url) {
@@ -149,17 +169,14 @@ impl Webview {
         self.eval("location.reload()");
     }
 
-    /// Goes back in history.
     pub fn go_back(&self) {
         self.eval("history.back()");
     }
 
-    /// Goes forward in history.
     pub fn go_forward(&self) {
         self.eval("history.forward()");
     }
 
-    /// Runs JavaScript in the page.
     pub fn eval(&self, script: &str) {
         if let Some(webview) = &self.webview {
             if let Err(err) = webview.evaluate_script(script) {
@@ -168,12 +185,10 @@ impl Webview {
         }
     }
 
-    /// Stops the current load.
     pub fn stop(&self) {
         self.eval("window.stop()");
     }
 
-    /// Whether a page is currently loading.
     pub fn is_loading(&self) -> bool {
         self.is_loading.get()
     }
@@ -202,7 +217,6 @@ impl Webview {
         String::new()
     }
 
-    /// The current URL.
     pub fn url(&self) -> String {
         self.webview
             .as_ref()
