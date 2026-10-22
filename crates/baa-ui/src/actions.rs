@@ -32,10 +32,13 @@ gpui::actions!(
         ZoomReset,
         NewSpace,
         NewIncognitoSpace,
+        ClosePeek,
+        ExpandPeek,
+        OpenInBrowser,
     ]
 );
-// ponytail: Peek, Little baa, split view and archive view (§8) are milestone 4/5; their
-// actions are added with their views so the keymap never binds a key to nothing.
+// ponytail: split view and the archive view (§8) are milestone 5; their actions
+// are added with their views so the keymap never binds a key to nothing.
 
 /// 0-based index into the active Space's tabs (pinned first, then Today).
 #[derive(

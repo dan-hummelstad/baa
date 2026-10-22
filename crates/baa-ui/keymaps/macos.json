@@ -92,7 +92,15 @@
       "ctrl-9": [
         "baa::GoToSpace",
         8
-      ]
+      ],
+      "escape": "baa::ClosePeek",
+      "cmd-o": "baa::ExpandPeek"
+    }
+  },
+  {
+    "context": "LilBaa",
+    "bindings": {
+      "cmd-o": "baa::OpenInBrowser"
     }
   }
 ]

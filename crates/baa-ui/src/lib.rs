@@ -4,9 +4,12 @@ pub mod actions;
 mod browser;
 mod command_bar;
 mod fuzzy;
+mod icons;
 mod input;
+mod lil_baa;
 mod motion;
 mod sidebar;
+mod start;
 mod theme;
 
 #[cfg(test)]
@@ -15,6 +18,7 @@ mod mock;
 mod tests;
 
 pub use browser::Browser;
+pub use icons::Assets;
 
 /// Registers the platform default keymap (§8). Call once at startup, then
 /// `actions::bind_keymap` with the user's `keymap.json` so it overrides.

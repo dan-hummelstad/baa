@@ -9,6 +9,7 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
   draws the chrome, popovers and command bar over it.
 - Privacy: Chromium switches and a host blocklist strip Google services. No baa.me backend, no
   telemetry.
+- Icons: [Lucide](https://lucide.dev) (ISC), embedded from `crates/baa-ui/assets/icons`.
 - Extensions: Chrome Web Store extensions install per Space profile and run in every tab. For ad
   blocking, install uBlock Origin Lite. Open "Chrome Web Store" or "Extensions" from the command
   bar (⌘T); Chrome's own install and management UI opens in a separate native window.
@@ -19,8 +20,9 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 ## Status
 
 Early. Milestones 0–3 of `PLAN.md` are implemented: tabs, Spaces, per-Space storage, keymap,
-command bar, de-Googling. Milestone 4 (the Arc feel: gestures, Peek, Little baa)
-is next. Windows currently runs on WebView2 through the vendored gpui-cef fallback, not CEF.
+command bar, de-Googling, plus Peek (links that open a tab, or shift-click, preview in a card) and
+lil-baa (links from other apps open in a small window you can move into the browser). The UI follows
+the pen.dev mocks. Still to come from milestone 4: gestures, favorites, folders, split view. Windows currently runs on WebView2 through the vendored gpui-cef fallback, not CEF.
 
 ## Build
 

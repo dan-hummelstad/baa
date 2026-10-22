@@ -275,7 +275,7 @@ wrap_life_span_handler! {
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
+            target_disposition: WindowOpenDisposition,
             user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
@@ -284,7 +284,7 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            request_open(&self.shared, target_url, user_gesture)
+            request_open(&self.shared, target_url, user_gesture, target_disposition)
         }
 
         fn on_after_created(&self, browser: Option<&mut Browser>) {
@@ -304,11 +304,13 @@ fn request_open(
     shared: &Shared,
     url: Option<&CefString>,
     user_gesture: ::std::os::raw::c_int,
+    disposition: WindowOpenDisposition,
 ) -> ::std::os::raw::c_int {
     if let Some(url) = url {
         shared.push_event(WebviewEvent::OpenRequested {
             url: url.to_string(),
             from_user_gesture: user_gesture != 0,
+            background: disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB,
         });
     }
     1
@@ -332,7 +334,7 @@ wrap_request_handler! {
             if target_disposition == WindowOpenDisposition::CURRENT_TAB {
                 return 0;
             }
-            request_open(&self.shared, target_url, user_gesture)
+            request_open(&self.shared, target_url, user_gesture, target_disposition)
         }
     }
 }
@@ -587,8 +589,12 @@ wrap_keyboard_handler! {
         ) -> ::std::os::raw::c_int {
             // cef_event_flags_t: EVENTFLAG_CONTROL_DOWN, EVENTFLAG_COMMAND_DOWN.
             const SHORTCUT: u32 = (1 << 2) | (1 << 7);
+            const ESCAPE: i32 = 0x1B;
             let Some(event) = event else { return 0 };
-            if event.type_ != KeyEventType::RAWKEYDOWN || event.modifiers & SHORTCUT == 0 {
+            // Escape too, so an overlay over the page (Peek) can close; gpui
+            // only claims it when something handles it.
+            let offered = event.modifiers & SHORTCUT != 0 || event.windows_key_code == ESCAPE;
+            if event.type_ != KeyEventType::RAWKEYDOWN || !offered {
                 return 0;
             }
             super::native::offer_key_equivalent(self.shared.gpui_view(), os_event.cast()) as _

@@ -77,6 +77,10 @@ pub(crate) struct Container {
     placed: std::cell::Cell<Option<(CGRect, CGRect)>>,
     /// What the app asked for; layout never shows a page the app hid.
     visible: std::cell::Cell<bool>,
+    /// Kept above the other pages' views (an overlay like Peek). Native views
+    /// stack in insertion order, not in gpui's paint order.
+    floating: std::cell::Cell<bool>,
+    gpui_view: std::cell::Cell<*mut AnyObject>,
 }
 
 impl Container {
@@ -103,7 +107,69 @@ impl Container {
                     relativeTo: gpui_view
                 ];
             }
-            Self { view, placed: Default::default(), visible: std::cell::Cell::new(true) }
+            Self {
+                view,
+                placed: Default::default(),
+                visible: std::cell::Cell::new(true),
+                floating: std::cell::Cell::new(false),
+                gpui_view: std::cell::Cell::new(gpui_view),
+            }
+        }
+    }
+
+    pub(crate) fn set_corner_radius(&self, radius: f32) {
+        unsafe {
+            let layer: *mut AnyObject = msg_send![self.view, layer];
+            let _: () = msg_send![layer, setCornerRadius: radius as f64];
+        }
+    }
+
+    /// Re-parents the container (and the page in it) under another window's
+    /// gpui view.
+    pub(crate) fn move_below(&self, gpui_view: *mut AnyObject) {
+        if gpui_view.is_null() {
+            return;
+        }
+        unsafe {
+            let content: *mut AnyObject = msg_send![gpui_view, superview];
+            let _: () = msg_send![self.view, removeFromSuperview];
+            let _: () = msg_send![
+                content,
+                addSubview: self.view,
+                positioned: NS_WINDOW_BELOW,
+                relativeTo: gpui_view
+            ];
+        }
+        self.placed.set(None);
+        self.gpui_view.set(gpui_view);
+    }
+
+    pub(crate) fn set_floating(&self, floating: bool) {
+        self.floating.set(floating);
+    }
+
+    /// Directly below gpui's view, i.e. above every other page.
+    fn raise(&self) {
+        let gpui_view = self.gpui_view.get();
+        if gpui_view.is_null() {
+            return;
+        }
+        unsafe {
+            let content: *mut AnyObject = msg_send![gpui_view, superview];
+            let subviews: *mut AnyObject = msg_send![content, subviews];
+            let count: usize = msg_send![subviews, count];
+            let top: *mut AnyObject = match count {
+                0 | 1 => return,
+                n => msg_send![subviews, objectAtIndex: n - 2],
+            };
+            if top != self.view {
+                let _: () = msg_send![
+                    content,
+                    addSubview: self.view,
+                    positioned: NS_WINDOW_BELOW,
+                    relativeTo: gpui_view
+                ];
+            }
         }
     }
 
@@ -142,6 +208,9 @@ impl Container {
                     height: f32::from(bounds.size.height) as f64,
                 },
             };
+            if self.floating.get() {
+                self.raise();
+            }
             let hidden: Bool = msg_send![self.view, isHidden];
             if self.placed.get() != Some((clip, inner)) || page_frame(page) != Some(inner) {
                 self.placed.set(Some((clip, inner)));

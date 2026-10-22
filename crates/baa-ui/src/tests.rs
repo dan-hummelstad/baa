@@ -189,6 +189,7 @@ fn page_events_update_the_session(cx: &mut TestAppContext) {
         cx.emit(PageEvent::OpenRequested {
             url: "https://popup.example".into(),
             from_user_gesture: true,
+            background: true,
         });
     });
     cx.run_until_parked();
@@ -249,7 +250,7 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn collapsed_sidebar_peeks_from_the_window_edge(cx: &mut TestAppContext) {
+fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
     use gpui::{point, px, Modifiers};
     let (b, cx) = browser(cx);
     cx.dispatch_action(ToggleSidebar);
@@ -257,11 +258,104 @@ fn collapsed_sidebar_peeks_from_the_window_edge(cx: &mut TestAppContext) {
 
     cx.simulate_mouse_move(point(px(2.), px(300.)), None, Modifiers::none());
     assert!(
-        b.read_with(cx, |b, _| b.peek_hovered()),
+        b.read_with(cx, |b, _| b.reveal_hovered()),
         "edge hover opens the card"
     );
 
     // Leaving it closes it only after the linger delay.
     cx.simulate_mouse_move(point(px(700.), px(300.)), None, Modifiers::none());
-    assert!(!b.read_with(cx, |b, _| b.peek_hovered()));
+    assert!(!b.read_with(cx, |b, _| b.reveal_hovered()));
+}
+
+#[gpui::test]
+fn links_that_open_a_tab_peek_and_expand_into_one(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let page = b.read_with(cx, |b, _| b.pages.values().next().unwrap().0.clone());
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::OpenRequested {
+            url: "https://peek.example".into(),
+            from_user_gesture: true,
+            background: false,
+        })
+    });
+    cx.run_until_parked();
+    // A preview, not a tab.
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://a.example/"]);
+    let peek = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+    assert_eq!(peek.read_with(cx, |p, _| p.radius.get()), 12.0);
+    assert!(peek.read_with(cx, |p, _| p.floating.get()), "over the page's native view");
+
+    cx.dispatch_action(ExpandPeek);
+    cx.run_until_parked();
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://peek.example", "https://a.example/"]);
+    b.read_with(cx, |b, cx| {
+        assert!(b.peek.is_none());
+        // The same live page, now a tab, with the page card's corners.
+        let tab = b.active_tab().unwrap();
+        assert_eq!(b.pages[&tab].0, peek);
+        assert_eq!(peek.read(cx).radius.get(), 8.0);
+        assert_eq!(peek.read(cx).moved.get(), 1);
+        assert!(!peek.read(cx).floating.get());
+    });
+}
+
+#[gpui::test]
+fn escape_closes_a_peek_and_background_links_stay_behind(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let page = b.read_with(cx, |b, _| b.pages.values().next().unwrap().0.clone());
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::OpenRequested {
+            url: "https://later.example".into(),
+            from_user_gesture: true,
+            background: true,
+        });
+        cx.emit(PageEvent::OpenRequested {
+            url: "https://peek.example".into(),
+            from_user_gesture: true,
+            background: false,
+        });
+    });
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        assert_eq!(
+            s.tab(b.active_tab().unwrap()).unwrap().url,
+            "https://a.example/",
+            "a background tab does not take over"
+        );
+        assert!(b.peek.is_some());
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| b.peek.is_none()));
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://later.example", "https://a.example/"]);
+}
+
+#[gpui::test]
+fn external_links_open_in_lil_baa_and_move_into_the_browser(cx: &mut TestAppContext) {
+    use crate::lil_baa::LilBaa;
+    let (b, vcx) = browser(cx);
+    b.update(vcx, |b, cx| b.open_external("https://elsewhere.example", cx));
+    vcx.run_until_parked();
+    assert!(urls(&b, Zone::Today, vcx).is_empty(), "not a tab yet");
+    let lil = cx
+        .windows()
+        .into_iter()
+        .find_map(|w| w.downcast::<LilBaa<MockHost>>())
+        .expect("a lil-baa window");
+    lil.update(cx, |lil, window, cx| lil.open_in_browser(window, cx)).unwrap();
+    cx.run_until_parked();
+    assert!(lil.update(cx, |_, _, _| ()).is_err(), "the small window closed");
+    let vcx = &mut VisualTestContext::from_window(b.read_with(cx, |b, _| b.window_handle()), cx);
+    assert_eq!(urls(&b, Zone::Today, vcx), ["https://elsewhere.example"]);
+    b.read_with(vcx, |b, cx| {
+        let page = &b.pages[&b.active_tab().unwrap()].0;
+        assert_eq!(page.read(cx).moved.get(), 1, "the live page moved windows");
+    });
 }

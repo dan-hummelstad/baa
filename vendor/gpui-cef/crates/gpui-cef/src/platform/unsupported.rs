@@ -79,6 +79,12 @@ impl Webview {
     pub fn set_zoom(&self, _factor: f64) {}
     pub fn find(&self, _text: &str, _forward: bool) {}
     pub fn show_dev_tools(&self) {}
+    /// No-op: a native child window has square corners.
+    pub fn set_corner_radius(&self, _radius: f32) {}
+
+    /// No-op: child windows stack by creation.
+    pub fn set_floating(&self, _floating: bool) {}
+
     pub fn set_visible(&self, _visible: bool) {}
     /// Whether a page is loading. Always false.
     pub fn is_loading(&self) -> bool {

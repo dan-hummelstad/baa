@@ -225,6 +225,12 @@ impl Webview {
     }
 
     /// Shows or hides the child window, e.g. when switching tabs.
+    /// No-op: a native child window has square corners.
+    pub fn set_corner_radius(&self, _radius: f32) {}
+
+    /// No-op: child windows stack by creation.
+    pub fn set_floating(&self, _floating: bool) {}
+
     pub fn set_visible(&self, visible: bool) {
         if let Some(webview) = &self.webview {
             let _ = webview.set_visible(visible);

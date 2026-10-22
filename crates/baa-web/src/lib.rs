@@ -3,7 +3,7 @@
 
 mod cef_host;
 
-use gpui::{AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
+use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
 pub use cef_host::{CefPage, CefRuntime, CefWebHost, Downloads};
@@ -17,8 +17,9 @@ pub enum PageEvent {
     FaviconChanged(Option<String>),
     LoadingChanged(bool),
     HistoryChanged { can_go_back: bool, can_go_forward: bool },
-    /// Page asked to open a new window/tab (window.open, target=_blank, middle click).
-    OpenRequested { url: String, from_user_gesture: bool },
+    /// Page asked to open a new window/tab (window.open, target=_blank, shift- or
+    /// middle-click). `background`: cmd- or middle-click, a tab for later.
+    OpenRequested { url: String, from_user_gesture: bool, background: bool },
     /// Page requested a context menu at window-local coordinates.
     ContextMenu { x: f32, y: f32, link_url: Option<String>, selection: Option<String> },
     Closed,
@@ -48,6 +49,16 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn focus_handle(&self, cx: &App) -> FocusHandle;
     /// Render the page for this frame at the element's laid-out bounds.
     fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement;
+    /// Match the rounded card the page sits in, in logical pixels.
+    fn set_corner_radius(&self, radius: f32);
+    /// Drawn over other pages (Peek). Pages are native views, which stack by
+    /// creation rather than by the UI's paint order.
+    fn set_floating(&self, floating: bool);
+    /// Move the live page (state, scroll, session) into another window, e.g.
+    /// from Peek or lil-baa into the browser.
+    fn move_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>)
+    where
+        Self: Sized;
 }
 
 /// Creates pages inside isolated storage profiles.
@@ -59,6 +70,6 @@ pub trait WebHost: 'static {
     /// Drop a profile's on-disk data once all its pages are closed.
     fn delete_profile(&self, profile: ProfileId);
     /// Chrome's own extension UI for `profile` (Web Store installs, chrome://extensions,
-    /// extension popups), in a native window: off-screen pages cannot host it.
+    /// extension popups), in a native Chrome-style window.
     fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App);
 }

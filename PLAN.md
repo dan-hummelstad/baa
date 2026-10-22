@@ -67,8 +67,8 @@ Must-haves (in the brief) are bold.
 
 **Navigation / command**
 - Command bar (⌘T / ⌘L): URL, search, open tabs, history, bookmarks, commands, "switch to space".
-- Peek: links from pinned/favorite tabs open in a floating modal over the current page; ESC or swipe to dismiss, button to promote to tab.
-- Little baa (Little Arc): tiny standalone window for external links (⌘⌥N), "open in space" button.
+- Peek (built 2026-10-22): any link that would open a tab (target=_blank, window.open) and any shift-click opens in a floating card over a scrim; Esc, the scrim or ✕ dismiss, ⤢ or ⌘O promote it to a tab keeping the live page. Cmd/middle-click still opens a background tab.
+- lil-baa (Little Arc, built 2026-10-22): links from other apps (default browser, `open`, second launch) open in a small window; "Open in <Space>" (or ⌘O) moves the live page into the browser, the chevron picks another Space (which reloads it in that Space's storage). ⌘⌥N for an empty one is not built.
 - Split view (⌃⇧+ or drag tab onto page), 2–4 panes.
 - Back/forward by **two-finger swipe** on the page (standard macOS, must feel native), ⌘[ ⌘].
 

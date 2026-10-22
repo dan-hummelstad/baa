@@ -72,6 +72,8 @@ pub enum WebviewEvent {
     OpenRequested {
         url: String,
         from_user_gesture: bool,
+        /// Cmd- or middle-click: the user asked for a tab they will look at later.
+        background: bool,
     },
     /// Right click, at window coordinates. The engine shows no menu of its own.
     ContextMenu {

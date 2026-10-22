@@ -6,33 +6,49 @@ use std::{collections::HashMap, time::Instant};
 use baa_model::{now, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, rgb, AnyElement, ClipboardItem, Context,
-    Entity, FocusHandle, KeyDownEvent, Pixels, Point, Rgba, Subscription, Window,
+    anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
+    relative, rgb, AnyElement, AnyWindowHandle, BoxShadow, ClipboardItem, Context, Entity,
+    FocusHandle, Hsla, KeyDownEvent, Pixels, Point, Rgba, SharedString, Subscription, Window,
 };
 
 use crate::{
     actions::*,
     command_bar::{self, Bar, Mode},
+    icons::icon,
     input::{Key, TextField},
+    lil_baa::LilBaa,
     motion::Spring,
-    theme::{lerp_oklch, Theme},
+    theme::{lerp_oklch, space_gradient, surface, Theme},
 };
 
-pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
-/// Collapsed sidebar (Arc): hot zone at the window edge, card inset, and how long
-/// the card lingers after the pointer leaves so a small overshoot does not close it.
-const PEEK_EDGE: f32 = 8.0;
-const PEEK_INSET: f32 = 8.0;
-const PEEK_LINGER: std::time::Duration = std::time::Duration::from_millis(250);
+pub(crate) const SIDEBAR_WIDTH: f32 = 258.0;
+/// Gap between the window edge and the page card (and the floating sidebar).
+pub(crate) const INSET: f32 = 9.0;
+/// The page card's corner radius; the native page view is rounded to match.
+pub(crate) const PAGE_RADIUS: f32 = 8.0;
+const PEEK_RADIUS: f32 = 12.0;
+/// Collapsed sidebar (Arc): hot zone at the window edge, and how long the
+/// revealed card lingers after the pointer leaves so a small overshoot does not
+/// close it.
+const REVEAL_EDGE: f32 = 8.0;
+const REVEAL_LINGER: std::time::Duration = std::time::Duration::from_millis(250);
 /// Chrome's zoom ladder, as factors (`PageHandle::set_zoom` takes 1.0 = 100%).
 const ZOOM_LEVELS: [f64; 15] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
 ];
-const PALETTE: [u32; 7] = [
-    0x6c9cff, 0xff8a65, 0x81c784, 0xba68c8, 0xffd54f, 0x4dd0e1, 0xf06292,
+/// Space gradients (top, bottom): Personal, Work, Studio, Night from the mocks,
+/// then a few more in the same key.
+pub(crate) const PALETTE: [(u32, u32); 7] = [
+    (0xDCCFFB, 0xA592EC),
+    (0xF3D07F, 0xE8808E),
+    (0xC9F0E0, 0x8FD8A7),
+    (0x34304A, 0x16151E),
+    (0xCFE3FB, 0x8FB4EC),
+    (0xFBE0CF, 0xECA88F),
+    (0xF6D1E8, 0xD98FC2),
 ];
 const ICONS: [&str; 7] = ["🐑", "🌿", "🔥", "🌊", "⭐", "🍋", "🪐"];
-const INCOGNITO_ACCENT: u32 = 0x8a8a96;
+const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 
 type MenuAction<H> = Box<dyn Fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>)>;
 
@@ -54,21 +70,24 @@ pub struct Browser<H: WebHost> {
     pub(crate) bar: Option<Bar>,
     pub(crate) find: Option<TextField>,
     pub(crate) menu: Option<ContextMenu>,
+    /// A link previewed over the page (Peek).
+    pub(crate) peek: Option<PeekPage<H::Page>>,
+    window: AnyWindowHandle,
     focus: FocusHandle,
     /// Shared by the command bar and find bar; only one is open at a time.
     pub(crate) input_focus: FocusHandle,
     sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
-    peek: Spring,
+    reveal: Spring,
     /// Pointer over the edge zone / over the card.
-    peek_zone: bool,
-    peek_card: bool,
+    reveal_zone: bool,
+    reveal_card: bool,
     /// Space-switch slide, in sidebar widths (−1…1).
     pub(crate) slide: Spring,
     fade: Spring,
-    accent_from: Rgba,
-    accent_to: Rgba,
+    gradient_from: (Rgba, Rgba),
+    gradient_to: (Rgba, Rgba),
     shown_space: Option<SpaceId>,
     last_frame: Instant,
 }
@@ -88,6 +107,14 @@ impl<H: WebHost> Browser<H> {
         };
         // ponytail: auto-archive runs at launch and on Space switch only; a timer comes with milestone 4.
         session.archive_expired(now(), settings.archive_after_hours);
+        // Spaces from before gradient themes get the palette, in order.
+        let ids: Vec<SpaceId> = session.spaces().iter().map(|s| s.id).collect();
+        for (i, id) in ids.into_iter().enumerate() {
+            if let Some(space) = session.space_mut(id).filter(|s| s.accent_to.is_none()) {
+                let (top, bottom) = PALETTE[i % PALETTE.len()];
+                (space.accent, space.accent_to) = (top, Some(bottom));
+            }
+        }
         // gpui's flag also drives `with_animation`; the app shell sets it from the OS.
         if settings.reduce_motion {
             cx.set_reduce_motion(true);
@@ -105,17 +132,19 @@ impl<H: WebHost> Browser<H> {
             bar: None,
             find: None,
             menu: None,
+            peek: None,
+            window: window.window_handle(),
             focus,
             input_focus: cx.focus_handle(),
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
-            peek: Spring::new(0.0),
-            peek_zone: false,
-            peek_card: false,
+            reveal: Spring::new(0.0),
+            reveal_zone: false,
+            reveal_card: false,
             slide: Spring::new(0.0),
             fade: Spring::new(1.0),
-            accent_from: rgb(PALETTE[0]),
-            accent_to: rgb(PALETTE[0]),
+            gradient_from: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
+            gradient_to: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
             last_frame: Instant::now(),
         };
         this.sync(window, cx);
@@ -172,13 +201,12 @@ impl<H: WebHost> Browser<H> {
             self.session
                 .archive_expired(now(), self.settings.archive_after_hours);
         }
-        // ponytail: `accent_to` gradients render as the first stop until the gradient theme lands.
-        let accent = self
+        let gradient = self
             .active_space()
-            .map_or(self.accent_to, |s| rgb(s.accent));
-        if accent != self.accent_to {
-            self.accent_from = self.accent(); // mid-flight colour, so rapid switches never jump
-            self.accent_to = accent;
+            .map_or(self.gradient_to, |s| space_gradient(s.accent, s.accent_to));
+        if gradient != self.gradient_to {
+            self.gradient_from = self.gradient(); // mid-flight colours, so rapid switches never jump
+            self.gradient_to = gradient;
             self.fade.snap(0.0);
             self.fade.set_target(1.0);
         }
@@ -192,7 +220,7 @@ impl<H: WebHost> Browser<H> {
         for (id, (page, _)) in &self.pages {
             page.read(cx).set_visible(Some(*id) == active);
         }
-        if self.bar.is_none() && self.find.is_none() {
+        if self.bar.is_none() && self.find.is_none() && self.peek.is_none() {
             self.focus_page(window, cx);
         }
         self.save();
@@ -238,10 +266,18 @@ impl<H: WebHost> Browser<H> {
             PageEvent::TitleChanged(title) => tab.title = title.clone(),
             PageEvent::FaviconChanged(favicon) => tab.favicon = favicon.clone(),
             PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => return cx.notify(),
-            PageEvent::OpenRequested { url, .. } => {
-                // ponytail: links from pinned tabs should open in Peek (§3); milestone 4.
+            PageEvent::OpenRequested {
+                url, background, ..
+            } => {
                 let space = tab.space;
-                self.session.open_tab(space, url, now());
+                if *background {
+                    self.open_background_tab(space, url);
+                } else {
+                    // Arc's Peek: a link that would open a tab (or a shift-click)
+                    // previews over the page instead.
+                    let url = url.clone();
+                    return self.open_peek(space, &url, window, cx);
+                }
             }
             PageEvent::ContextMenu {
                 x,
@@ -260,6 +296,142 @@ impl<H: WebHost> Browser<H> {
             PageEvent::Closed => self.session.close_tab(id, now()),
         }
         self.sync(window, cx);
+    }
+
+    /// A cmd- or middle-clicked link: a tab for later, the current one stays.
+    fn open_background_tab(&mut self, space: SpaceId, url: &str) {
+        let current = self.session.space(space).and_then(|s| s.active_tab);
+        self.session.open_tab(space, url, now());
+        if let Some(current) = current {
+            self.session.activate_tab(current, now());
+        }
+    }
+
+    pub(crate) fn open_peek(
+        &mut self,
+        space: SpaceId,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.session.space(space).map(|s| s.profile) else {
+            return;
+        };
+        self.close_peek(window, cx);
+        let page = self.host.create_page(profile, url, window, cx);
+        page.read(cx).set_corner_radius(PEEK_RADIUS);
+        page.read(cx).set_floating(true);
+        let sub = cx.subscribe_in(&page, window, |this, _, event, window, cx| {
+            this.on_peek_event(event, window, cx)
+        });
+        let mut open = Spring::new(0.0);
+        open.set_target(1.0);
+        window.focus(&page.read(cx).focus_handle(cx), cx);
+        self.peek = Some(PeekPage {
+            page,
+            _sub: sub,
+            space,
+            url: url.into(),
+            open,
+        });
+        cx.notify();
+    }
+
+    fn on_peek_event(&mut self, event: &PageEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(peek) = &mut self.peek else { return };
+        match event {
+            PageEvent::UrlChanged(url) => peek.url = url.clone(),
+            PageEvent::OpenRequested {
+                url, background, ..
+            } => {
+                if *background {
+                    let space = peek.space;
+                    self.open_background_tab(space, url);
+                    return self.sync(window, cx);
+                }
+                peek.page.read(cx).load_url(url);
+            }
+            PageEvent::Closed => return self.close_peek(window, cx),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(peek) = self.peek.take() {
+            peek.page.read(cx).set_visible(false);
+            self.focus_page(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// Peek → a real tab, keeping the live page.
+    pub(crate) fn expand_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(peek) = self.peek.take() else { return };
+        self.adopt_page(peek.page, peek.space, &peek.url, window, cx);
+    }
+
+    /// Makes `page` (from Peek or lil-baa) a tab in `space` of this window.
+    pub(crate) fn adopt_page(
+        &mut self,
+        page: Entity<H::Page>,
+        space: SpaceId,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        page.update(cx, |page, cx| page.move_to_window(window, cx));
+        page.read(cx).set_corner_radius(PAGE_RADIUS);
+        page.read(cx).set_floating(false);
+        self.session.set_active_space(space);
+        let id = self.session.open_tab(space, url, now());
+        let title = page.read(cx).title();
+        if let Some(tab) = self.session.tab_mut(id) {
+            tab.title = title;
+        }
+        let sub = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
+            this.on_page_event(id, event, window, cx)
+        });
+        self.pages.insert(id, (page, sub));
+        self.sync(window, cx);
+    }
+
+    /// A link from another app: a lil-baa window, which can be expanded into
+    /// the browser (Arc's Little Arc).
+    pub fn open_external(&mut self, url: &str, cx: &mut Context<Self>) {
+        let Some(space) = self.session.active_space() else {
+            return;
+        };
+        let Some(profile) = self.session.space(space).map(|s| s.profile) else {
+            return;
+        };
+        let browser = cx.entity().downgrade();
+        let host = &self.host;
+        let url = url.to_string();
+        let spaces: Vec<crate::lil_baa::SpaceChoice> = self
+            .session
+            .spaces()
+            .iter()
+            .filter(|s| !s.ephemeral)
+            .map(|s| crate::lil_baa::SpaceChoice {
+                id: s.id,
+                label: format!("{} {}", s.icon, s.name),
+                name: s.name.clone(),
+                gradient: (s.accent, s.accent_to),
+            })
+            .collect();
+        let options = crate::lil_baa::window_options(cx);
+        let opened = cx.open_window(options, |window, cx| {
+            let page = host.create_page(profile, &url, window, cx);
+            cx.new(|cx| LilBaa::new(browser, page, (space, profile), url.clone(), spaces, window, cx))
+        });
+        if let Err(e) = opened {
+            log::error!("opening lil-baa: {e}");
+        }
+    }
+
+    pub(crate) fn window_handle(&self) -> AnyWindowHandle {
+        self.window
     }
 
     pub(crate) fn activate_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
@@ -291,6 +463,17 @@ impl<H: WebHost> Browser<H> {
         let Some(space) = self.session.active_space() else {
             return;
         };
+        self.open_url_in(space, url, window, cx);
+    }
+
+    pub(crate) fn open_url_in(
+        &mut self,
+        space: SpaceId,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.session.set_active_space(space);
         self.session.open_tab(space, url, now());
         self.sync(window, cx);
     }
@@ -321,7 +504,8 @@ impl<H: WebHost> Browser<H> {
             .session
             .add_space(&format!("Space {}", n + 1), ICONS[n % ICONS.len()], None);
         if let Some(space) = self.session.space_mut(id) {
-            space.accent = PALETTE[n % PALETTE.len()];
+            let (top, bottom) = PALETTE[n % PALETTE.len()];
+            (space.accent, space.accent_to) = (top, Some(bottom));
         }
         self.activate_space(id, window, cx);
         self.open_bar(Mode::RenameSpace, window, cx);
@@ -332,7 +516,7 @@ impl<H: WebHost> Browser<H> {
             .session
             .add_ephemeral_space("Incognito", self.host.ephemeral_profile());
         if let Some(space) = self.session.space_mut(id) {
-            space.accent = INCOGNITO_ACCENT;
+            (space.accent, space.accent_to) = (INCOGNITO.0, Some(INCOGNITO.1));
         }
         self.activate_space(id, window, cx);
         self.open_bar(Mode::NewTab, window, cx);
@@ -388,10 +572,11 @@ impl<H: WebHost> Browser<H> {
         };
         let next = PALETTE
             .iter()
-            .position(|c| *c == space.accent)
+            .position(|(top, _)| *top == space.accent)
             .map_or(0, |i| i + 1)
             % PALETTE.len();
-        space.accent = PALETTE[next];
+        let (top, bottom) = PALETTE[next];
+        (space.accent, space.accent_to) = (top, Some(bottom));
         self.sync(window, cx);
     }
 
@@ -445,7 +630,10 @@ impl<H: WebHost> Browser<H> {
         }
         self.bar = None;
         self.menu = None;
-        self.focus_page(window, cx);
+        match &self.peek {
+            Some(peek) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
+            None => self.focus_page(window, cx),
+        }
         cx.notify();
     }
 
@@ -537,8 +725,8 @@ impl<H: WebHost> Browser<H> {
             } else {
                 0.0
             });
-            (this.peek_zone, this.peek_card) = (false, false);
-            this.peek.snap(0.0);
+            (this.reveal_zone, this.reveal_card) = (false, false);
+            this.reveal.snap(0.0);
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
@@ -599,34 +787,39 @@ impl<H: WebHost> Browser<H> {
         }))
     }
 
-    fn accent(&self) -> Rgba {
-        lerp_oklch(self.accent_from, self.accent_to, self.fade.value())
+    fn gradient(&self) -> (Rgba, Rgba) {
+        let t = self.fade.value();
+        (
+            lerp_oklch(self.gradient_from.0, self.gradient_to.0, t),
+            lerp_oklch(self.gradient_from.1, self.gradient_to.1, t),
+        )
     }
 
     pub(crate) fn theme(&self) -> Theme {
-        Theme::from_accent(self.accent())
+        let (top, bottom) = self.gradient();
+        Theme::from_gradient(top, bottom)
     }
 
-    pub(crate) fn peek_hovered(&self) -> bool {
-        self.peek_zone || self.peek_card
+    pub(crate) fn reveal_hovered(&self) -> bool {
+        self.reveal_zone || self.reveal_card
     }
 
-    fn set_peek(&mut self, card: bool, hovered: bool, cx: &mut Context<Self>) {
+    fn set_reveal(&mut self, card: bool, hovered: bool, cx: &mut Context<Self>) {
         *if card {
-            &mut self.peek_card
+            &mut self.reveal_card
         } else {
-            &mut self.peek_zone
+            &mut self.reveal_zone
         } = hovered;
-        if self.peek_hovered() {
-            self.peek.set_target(1.0);
+        if self.reveal_hovered() {
+            self.reveal.set_target(1.0);
             cx.notify();
             return;
         }
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(PEEK_LINGER).await;
+            cx.background_executor().timer(REVEAL_LINGER).await;
             this.update(cx, |this, cx| {
-                if !this.peek_hovered() {
-                    this.peek.set_target(0.0);
+                if !this.reveal_hovered() {
+                    this.reveal.set_target(0.0);
                     cx.notify();
                 }
             })
@@ -637,7 +830,7 @@ impl<H: WebHost> Browser<H> {
 
     /// The collapsed sidebar: an edge hot zone, and the sidebar as a floating card
     /// sliding in over the page (which keeps its size).
-    fn render_peek(
+    fn render_reveal(
         &mut self,
         sidebar: Option<AnyElement>,
         theme: &Theme,
@@ -651,37 +844,129 @@ impl<H: WebHost> Browser<H> {
                 d.left(px(offset))
             }
         };
-        let zone = edge(div().absolute().top_0().bottom_0().w(px(PEEK_EDGE)), 0.)
-            .id("peek-edge")
+        let zone = edge(div().absolute().top_0().bottom_0().w(px(REVEAL_EDGE)), 0.)
+            .id("reveal-edge")
             .occlude()
             .on_hover(
-                cx.listener(|this, hovered: &bool, _, cx| this.set_peek(false, *hovered, cx)),
+                cx.listener(|this, hovered: &bool, _, cx| this.set_reveal(false, *hovered, cx)),
             );
-        let shown = self.peek.value();
+        let shown = self.reveal.value();
         // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
-        let offset = PEEK_INSET + (shown - 1.0) * (SIDEBAR_WIDTH + PEEK_INSET * 2.0);
+        let offset = INSET + (shown - 1.0) * (SIDEBAR_WIDTH + INSET * 2.0);
         let card = sidebar.map(|sidebar| {
-            edge(
-                div().absolute().top(px(PEEK_INSET)).bottom(px(PEEK_INSET)),
-                offset,
-            )
-            .id("peek-card")
-            .occlude()
-            .w(px(SIDEBAR_WIDTH))
-            .rounded_lg()
-            .overflow_hidden()
-            .bg(theme.chrome)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_xl()
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.set_peek(true, *hovered, cx)))
-            .child(sidebar)
-            .into_any_element()
+            edge(div().absolute().top(px(INSET)).bottom(px(INSET)), offset)
+                .id("reveal-card")
+                .occlude()
+                .w(px(SIDEBAR_WIDTH))
+                .rounded(px(10.))
+                .overflow_hidden()
+                .bg(gradient_fill(theme))
+                .border_1()
+                .border_color(Hsla { a: 0.10, ..theme.ink })
+                .shadow(vec![
+                    shadow(Hsla { a: 0.20, ..theme.ink }, 12., 32.),
+                    shadow(Hsla { a: 0.10, ..theme.ink }, 2., 6.),
+                ])
+                .on_hover(
+                    cx.listener(|this, hovered: &bool, _, cx| this.set_reveal(true, *hovered, cx)),
+                )
+                .child(sidebar)
+                .into_any_element()
         });
         [
             zone.into_any_element(),
             card.unwrap_or_else(|| div().into_any_element()),
         ]
+    }
+
+    /// Peek: a scrim over the browser and the link's page in a card, with
+    /// close / open-as-tab controls above it.
+    fn render_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let peek = self.peek.as_ref()?;
+        let t = peek.open.value();
+        let host = SharedString::from(host_of(&peek.url));
+        let content = peek.page.update(cx, |p, cx| p.render(window, cx));
+        let control = |id: &'static str, name: &'static str| {
+            div()
+                .id(id)
+                .size(px(30.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(9.))
+                .bg(gpui::rgba(0xFFFFFFEB))
+                .shadow(vec![shadow(gpui::rgba(0x0000002E).into(), 2., 8.)])
+                .hover(|s| s.bg(gpui::white()))
+                .child(icon(name, 15., rgb(0x3A3644).into()))
+        };
+        let controls = div()
+            .absolute()
+            .top(px(-40.))
+            .left_0()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .occlude()
+            .child(control("peek-close", "x").on_click(
+                cx.listener(|this, _, window, cx| this.close_peek(window, cx)),
+            ))
+            .child(control("peek-expand", "maximize-2").on_click(
+                cx.listener(|this, _, window, cx| this.expand_peek(window, cx)),
+            ))
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(5.))
+                    .rounded(px(8.))
+                    .bg(gpui::rgba(0x14101E66))
+                    .text_size(px(12.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(gpui::white())
+                    .child(host),
+            );
+        // Rises a little as it fades in; gpui has no transforms, so offset and opacity carry it.
+        let rise = (1.0 - t) * 24.0;
+        let card = div()
+            .absolute()
+            .left(relative(0.139))
+            .right(relative(0.139))
+            .top(relative(0.093))
+            .bottom(relative(0.084))
+            .mt(px(rise))
+            .mb(px(-rise))
+            .opacity(t.clamp(0.0, 1.0))
+            .child(controls)
+            .child(
+                div()
+                    .size_full()
+                    .rounded(px(PEEK_RADIUS))
+                    .overflow_hidden()
+                    .bg(rgb(0xFBFAF7))
+                    .border_1()
+                    .border_color(gpui::rgba(0x0000001F))
+                    .shadow(vec![
+                        shadow(gpui::rgba(0x0A081461).into(), 40., 100.),
+                        shadow(gpui::rgba(0x0A08142E).into(), 8., 24.),
+                    ])
+                    .child(content),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    div()
+                        .id("peek-scrim")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .bg(surface::scrim())
+                        .opacity(t.clamp(0.0, 1.0))
+                        .on_click(cx.listener(|this, _, window, cx| this.close_peek(window, cx))),
+                )
+                .child(card)
+                .into_any_element(),
+        )
     }
 
     fn tick_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -692,11 +977,14 @@ impl<H: WebHost> Browser<H> {
         let mut moving = false;
         for spring in [
             &mut self.sidebar_w,
-            &mut self.peek,
+            &mut self.reveal,
             &mut self.slide,
             &mut self.fade,
         ] {
             moving |= spring.tick(dt, reduce);
+        }
+        if let Some(peek) = &mut self.peek {
+            moving |= peek.open.tick(dt, reduce);
         }
         if let Some(bar) = &mut self.bar {
             moving |= bar.scale.tick(dt, reduce);
@@ -715,18 +1003,7 @@ impl<H: WebHost> Browser<H> {
         let page = self.active_page().cloned();
         let content = match page {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
-            None => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme.text_dim)
-                .child(if cfg!(target_os = "macos") {
-                    "⌘T to open a tab"
-                } else {
-                    "Ctrl+T to open a tab"
-                })
-                .into_any_element(),
+            None => crate::start::render(theme).into_any_element(),
         };
         let find = self.find.as_ref().map(|field| {
             div()
@@ -734,24 +1011,26 @@ impl<H: WebHost> Browser<H> {
                 // Pages are native views: only occluding gpui keeps the click.
                 .occlude()
                 .absolute()
-                .top_2()
-                .right_2()
-                .w(px(260.))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .bg(theme.chrome_active)
+                .top(px(12.))
+                .right(px(12.))
+                .w(px(280.))
+                .h(px(40.))
+                .px(px(14.))
+                .flex()
+                .items_center()
+                .rounded(px(10.))
+                .bg(surface::bg())
                 .border_1()
-                .border_color(theme.border)
-                .shadow_md()
-                .text_sm()
+                .border_color(surface::border())
+                .shadow(vec![shadow(gpui::rgba(0x18122C29).into(), 8., 24.)])
+                .text_size(px(14.))
                 .track_focus(&self.input_focus)
                 .on_key_down(cx.listener(Self::on_input_key))
                 .child(field.render(
                     "Find in page",
-                    theme.text,
-                    theme.text_dim,
-                    theme.chrome_hover,
+                    surface::ink().into(),
+                    surface::muted().into(),
+                    Hsla { a: 0.25, ..theme.accent },
                 ))
         });
         div()
@@ -759,14 +1038,13 @@ impl<H: WebHost> Browser<H> {
             .flex_1()
             .min_w_0()
             .h_full()
-            .p_2()
             .child(
                 div()
                     .size_full()
-                    .rounded_lg()
+                    .rounded(px(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
-                    .shadow_md()
+                    .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
                     .child(content),
             )
             .children(find)
@@ -826,10 +1104,12 @@ impl<H: WebHost> Browser<H> {
         let rows = items.into_iter().enumerate().map(|(i, (label, run))| {
             div()
                 .id(("menu", i))
-                .px_3()
-                .py_1()
-                .rounded_sm()
-                .hover(|s| s.bg(theme.chrome_hover))
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .rounded(px(7.))
+                .hover(|s| s.bg(theme.accent).text_color(gpui::white()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     run(this, window, cx);
                     this.close_overlays(window, cx);
@@ -843,15 +1123,15 @@ impl<H: WebHost> Browser<H> {
                 div()
                     .id("context-menu")
                     .occlude()
-                    .min_w(px(180.))
-                    .p_1()
-                    .rounded_md()
-                    .bg(theme.chrome_active)
+                    .min_w(px(200.))
+                    .p(px(5.))
+                    .rounded(px(10.))
+                    .bg(surface::bg())
                     .border_1()
-                    .border_color(theme.border)
-                    .shadow_lg()
-                    .text_sm()
-                    .text_color(theme.text)
+                    .border_color(surface::border())
+                    .shadow(vec![shadow(gpui::rgba(0x18122C29).into(), 8., 24.)])
+                    .text_size(px(13.))
+                    .text_color(surface::ink())
                     .on_mouse_down_out(
                         cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
                     )
@@ -859,6 +1139,46 @@ impl<H: WebHost> Browser<H> {
             ),
         )))
     }
+}
+
+/// A link previewed over the page.
+pub(crate) struct PeekPage<P> {
+    pub(crate) page: Entity<P>,
+    _sub: Subscription,
+    pub(crate) space: SpaceId,
+    pub(crate) url: String,
+    open: Spring,
+}
+
+/// The window's Space gradient, top to bottom.
+pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(theme.bg_top, 0.),
+        linear_color_stop(theme.bg_bottom, 1.),
+    )
+}
+
+pub(crate) fn shadow(color: Hsla, y: f32, blur: f32) -> BoxShadow {
+    BoxShadow {
+        color,
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(0.),
+        inset: false,
+    }
+}
+
+/// "https://www.example.com/a" → "example.com".
+pub(crate) fn host_of(url: &str) -> String {
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
 pub(crate) fn tab_title(tab: &Tab) -> &str {
@@ -875,16 +1195,21 @@ impl<H: WebHost> Render for Browser<H> {
         let theme = self.theme();
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);
-        // One sidebar element: docked, or in the peek card while that is out.
-        let (docked, peek) = if self.sidebar_open {
+        // One sidebar element: docked, or in the reveal card while that is out.
+        let (docked, reveal) = if self.sidebar_open {
             (Some(sidebar), None)
-        } else if self.peek.value() > 0.001 || self.peek_hovered() {
-            (None, Some(self.render_peek(Some(sidebar), &theme, cx)))
+        } else if self.reveal.value() > 0.001 || self.reveal_hovered() {
+            (None, Some(self.render_reveal(Some(sidebar), &theme, cx)))
         } else {
-            (Some(sidebar), Some(self.render_peek(None, &theme, cx)))
+            (Some(sidebar), Some(self.render_reveal(None, &theme, cx)))
         };
+        let peek = self.render_peek(window, cx);
         let bar = self.render_command_bar(&theme, cx);
         let menu = self.render_context_menu(&theme, cx);
+        // The sidebar brings its own padding; collapsed, the page gets the inset.
+        let docked_w = self.sidebar_w.value().max(0.0);
+        let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
+        let right = self.side() == SidebarSide::Right;
 
         let root = div()
             .key_context("Browser")
@@ -892,22 +1217,37 @@ impl<H: WebHost> Render for Browser<H> {
             .relative()
             .size_full()
             .flex()
-            .when(self.side() == SidebarSide::Right, |d| d.flex_row_reverse())
-            .bg(theme.chrome)
-            .text_color(theme.text)
+            .when(right, |d| d.flex_row_reverse())
+            .py(px(INSET))
+            .when(right, |d| d.pl(px(INSET)).pr(px(edge)))
+            .when(!right, |d| d.pr(px(INSET)).pl(px(edge)))
+            .bg(gradient_fill(&theme))
+            .text_color(theme.ink)
+            .text_size(px(13.))
             .child(
                 div()
                     .flex_shrink_0()
                     .h_full()
-                    .w(px(self.sidebar_w.value().max(0.0)))
+                    .w(px(docked_w))
                     .overflow_hidden()
                     .children(docked),
             )
             .child(page)
-            .children(peek.into_iter().flatten())
+            .children(reveal.into_iter().flatten())
+            .children(peek)
             .children(bar)
             .children(menu);
-        self.register_actions(root, cx)
+        let root = self.register_actions(root, cx);
+        if self.peek.is_some() {
+            root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {
+                if this.bar.is_none() {
+                    this.close_peek(window, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ExpandPeek, window, cx| this.expand_peek(window, cx)))
+        } else {
+            root
+        }
     }
 }
 

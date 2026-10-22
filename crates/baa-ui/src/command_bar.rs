@@ -6,15 +6,16 @@ use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, Context, SharedString, Window};
 
 use crate::{
-    browser::{tab_title, Browser},
+    browser::{shadow, tab_title, Browser},
     fuzzy,
+    icons::icon,
     input::{Key, TextField},
     motion::Spring,
-    theme::Theme,
+    theme::{surface, Theme},
 };
 
 const MAX_ROWS: usize = 8;
-const WIDTH: f32 = 600.0;
+const WIDTH: f32 = 660.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
@@ -237,25 +238,66 @@ impl<H: WebHost> Browser<H> {
             Mode::Address => "Enter address…",
             Mode::RenameSpace => "Space name (start with an emoji to change the icon)",
         };
+        let accent = theme.accent;
+        let white = gpui::white();
         let list = rows.into_iter().enumerate().map(|(i, row)| {
+            let selected = i == bar.selected;
+            let (glyph, hint) = match &row.item {
+                Item::Open(url) if row.label.starts_with("Search") => ("search", "Search"),
+                Item::Open(url) if url.is_empty() => ("search", "Open"),
+                Item::Open(_) => ("globe", "Open"),
+                Item::Tab(_) => ("globe", "Switch to Tab"),
+                Item::Space(_) => ("house", "Switch"),
+                Item::Command(Command::NewSpace | Command::NewIncognitoSpace) => ("plus", "Run"),
+                Item::Command(_) => ("sliders-horizontal", "Run"),
+            };
+            let (ink, muted) = if selected {
+                (white, gpui::Hsla { a: 0.82, ..white })
+            } else {
+                (surface::ink().into(), surface::muted().into())
+            };
             div()
                 .id(("bar-row", i))
+                .h(px(42.))
+                .px(px(12.))
                 .flex()
-                .flex_col()
-                .px_3()
-                .py_1p5()
-                .rounded_md()
-                .when(i == bar.selected, |d| d.bg(theme.chrome_hover))
-                .hover(|s| s.bg(theme.chrome_hover))
+                .flex_none()
+                .items_center()
+                .gap(px(12.))
+                .rounded(px(9.))
+                .when(selected, |d| d.bg(accent))
+                .when(!selected, |d| d.hover(|s| s.bg(surface::key())))
                 .on_click(cx.listener(move |this, _, window, cx| submit(this, Some(i), window, cx)))
-                .child(div().truncate().child(SharedString::from(row.label)))
-                .when(!row.detail.is_empty(), |d| {
+                .child(icon(glyph, 18., if selected { muted } else { surface::icon().into() }))
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(360.))
+                        .truncate()
+                        .text_size(px(14.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(ink)
+                        .child(SharedString::from(row.label)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(14.))
+                        .text_color(muted)
+                        .child(SharedString::from(row.detail)),
+                )
+                .when(selected, |d| {
                     d.child(
                         div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.text_dim)
-                            .child(SharedString::from(row.detail)),
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .text_size(px(12.5))
+                            .text_color(muted)
+                            .child(hint)
+                            .child(icon("arrow-right", 13., muted)),
                     )
                 })
         });
@@ -267,7 +309,7 @@ impl<H: WebHost> Browser<H> {
                 .inset_0()
                 .flex()
                 .justify_center()
-                .pt(relative(0.15))
+                .pt(relative(0.17))
                 .occlude()
                 .on_click(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
                 .child(
@@ -281,25 +323,39 @@ impl<H: WebHost> Browser<H> {
                         // Spring "scale-in": gpui has no transforms, so width and opacity carry it.
                         .w(px(WIDTH * (0.94 + 0.06 * t)))
                         .h_auto()
-                        .max_h(px(420.))
+                        .max_h(px(440.))
                         .opacity(t.clamp(0.0, 1.0))
                         .flex()
                         .flex_col()
-                        .p_2()
-                        .gap_1()
-                        .rounded_xl()
-                        .bg(theme.chrome_active)
+                        .rounded(px(14.))
+                        .bg(surface::bg())
                         .border_1()
-                        .border_color(theme.border)
-                        .shadow_lg()
-                        .text_color(theme.text)
-                        .child(div().px_3().py_2().text_lg().child(bar.field.render(
-                            placeholder,
-                            theme.text,
-                            theme.text_dim,
-                            theme.chrome_hover,
-                        )))
-                        .children(list),
+                        .border_color(surface::border())
+                        .shadow(vec![
+                            shadow(gpui::rgba(0x18122C52).into(), 30., 80.),
+                            shadow(gpui::rgba(0x18122C1F).into(), 8., 24.),
+                        ])
+                        .text_color(surface::ink())
+                        .child(
+                            div()
+                                .h(px(58.))
+                                .px(px(20.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(19.))
+                                .when(bar.mode != Mode::RenameSpace, |d| {
+                                    d.border_b_1().border_color(surface::line())
+                                })
+                                .child(bar.field.render(
+                                    placeholder,
+                                    surface::ink().into(),
+                                    surface::muted().into(),
+                                    gpui::Hsla { a: 0.25, ..accent },
+                                )),
+                        )
+                        .when(bar.mode != Mode::RenameSpace, |d| {
+                            d.child(div().p(px(6.)).flex().flex_col().children(list))
+                        }),
                 ),
         )
     }

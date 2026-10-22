@@ -269,7 +269,7 @@ pub struct Webview {
     hitbox: Rc<RefCell<Option<Hitbox>>>,
     /// gpui's own view, which gets keyboard focus back when the page loses it.
     gpui_view: *mut AnyObject,
-    corner_radius: f32,
+    corner_radius: Rc<Cell<f32>>,
     /// The last find-in-page query, so a repeat goes to the next match.
     find_text: RefCell<String>,
     this: gpui::WeakEntity<Webview>,
@@ -284,21 +284,7 @@ impl Webview {
         shared.set_gpui_view(gpui_view);
         let container = Rc::new(native::Container::new(gpui_view, options.corner_radius));
         let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
-        {
-            let hitbox = hitbox.clone();
-            let cx = cx.to_async();
-            let handle = window.window_handle();
-            // Same rule as any gpui element: the page takes the mouse where its
-            // hitbox is not occluded.
-            native::route_mouse_to_page(gpui_view, &container, move || {
-                let Some(hitbox) = hitbox.borrow().clone() else {
-                    return false;
-                };
-                cx.clone()
-                    .update_window(handle, |_, window, _| hitbox.should_handle_scroll(window))
-                    .unwrap_or(false)
-            });
-        }
+        route_mouse(gpui_view, &container, &hitbox, window, cx);
 
         // Provisional size until layout runs; the element sets the real frame.
         let size = window.viewport_size();
@@ -345,23 +331,8 @@ impl Webview {
             log::error!("cef_browser_host_create_browser() failed");
         }
 
-        // Keyboard focus follows gpui's: the page's view is first responder while
-        // the webview is focused, so typing and IME go to Chromium natively. A
-        // click in the page focuses Chromium first; gpui follows (see pump).
         let focus_handle = cx.focus_handle();
-        let pump = pump::register(
-            shared.clone(),
-            cx.entity().downgrade(),
-            cx.to_async(),
-            window.window_handle(),
-            focus_handle.clone(),
-        );
-        let focus_subscriptions = [
-            cx.on_focus_in(&focus_handle, window, |this, _, _| this.set_browser_focus(true)),
-            cx.on_focus_out(&focus_handle, window, |this, _, _, _| {
-                this.set_browser_focus(false)
-            }),
-        ];
+        let (pump, focus_subscriptions) = attach(&shared, &focus_handle, window, cx);
 
         Self {
             shared,
@@ -369,12 +340,35 @@ impl Webview {
             container,
             hitbox,
             gpui_view,
-            corner_radius: options.corner_radius,
+            corner_radius: Rc::new(Cell::new(options.corner_radius)),
             find_text: RefCell::default(),
             this: cx.weak_entity(),
             _pump: pump,
             _focus_subscriptions: focus_subscriptions,
         }
+    }
+
+    /// Rounds the page's corners, in logical pixels.
+    pub fn set_corner_radius(&self, radius: f32) {
+        self.corner_radius.set(radius);
+        self.container.set_corner_radius(radius);
+    }
+
+    /// Keeps this page's view above other pages' (an overlay like Peek): native
+    /// views stack in creation order, whatever order gpui paints them in.
+    pub fn set_floating(&self, floating: bool) {
+        self.container.set_floating(floating);
+    }
+
+    /// Moves the live page, state and all, into another gpui window.
+    pub fn move_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let gpui_view = native::gpui_view(window);
+        self.shared.set_gpui_view(gpui_view);
+        self.gpui_view = gpui_view;
+        self.container.move_below(gpui_view);
+        route_mouse(gpui_view, &self.container, &self.hitbox, window, cx);
+        (self._pump, self._focus_subscriptions) = attach(&self.shared, &self.focus_handle, window, cx);
+        cx.notify();
     }
 
     pub(crate) fn browser_created(&self) {
@@ -527,9 +521,54 @@ impl Render for Webview {
                 shared: self.shared.clone(),
                 container: self.container.clone(),
                 hitbox: self.hitbox.clone(),
-                corner_radius: self.corner_radius,
+                corner_radius: self.corner_radius.get(),
             })
     }
+}
+
+/// Same rule as any gpui element: the page takes the mouse where its hitbox is
+/// not occluded.
+fn route_mouse(
+    gpui_view: *mut AnyObject,
+    container: &native::Container,
+    hitbox: &Rc<RefCell<Option<Hitbox>>>,
+    window: &Window,
+    cx: &Context<Webview>,
+) {
+    let hitbox = hitbox.clone();
+    let cx = cx.to_async();
+    let handle = window.window_handle();
+    native::route_mouse_to_page(gpui_view, container, move || {
+        let Some(hitbox) = hitbox.borrow().clone() else {
+            return false;
+        };
+        cx.clone()
+            .update_window(handle, |_, window, _| hitbox.should_handle_scroll(window))
+            .unwrap_or(false)
+    });
+}
+
+/// Keyboard focus follows gpui's: the page's view is first responder while the
+/// webview is focused, so typing and IME go to Chromium natively. A click in
+/// the page focuses Chromium first; gpui follows (see pump).
+fn attach(
+    shared: &Rc<Shared>,
+    focus_handle: &gpui::FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<Webview>,
+) -> (pump::Registration, [gpui::Subscription; 2]) {
+    let pump = pump::register(
+        shared.clone(),
+        cx.entity().downgrade(),
+        cx.to_async(),
+        window.window_handle(),
+        focus_handle.clone(),
+    );
+    let subscriptions = [
+        cx.on_focus_in(focus_handle, window, |this, _, _| this.set_browser_focus(true)),
+        cx.on_focus_out(focus_handle, window, |this, _, _, _| this.set_browser_focus(false)),
+    ];
+    (pump, subscriptions)
 }
 
 /// Chromium's view for this page, once the browser exists.

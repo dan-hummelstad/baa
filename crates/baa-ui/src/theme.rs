@@ -1,35 +1,89 @@
-//! Space tint (PLAN.md §3 "theme tints the whole window chrome") and the
-//! OKLCH crossfade used when switching Spaces (§10).
+//! Space theme (PLAN.md §3 "theme tints the whole window chrome"): a two-stop
+//! gradient per Space, and every chrome colour derived from it, so a Space
+//! switch crossfades two colours (§10). Values follow the pen.dev mocks.
 
-use gpui::{Hsla, Rgba};
+use gpui::{hsla, Hsla, Rgba};
 
-/// Every chrome colour is derived from the Space accent, so a crossfade only
-/// has to interpolate one value.
 #[derive(Clone, Copy)]
 pub struct Theme {
-    pub accent: Rgba,
-    /// Window background behind the sidebar and around the page.
-    pub chrome: Hsla,
-    pub chrome_hover: Hsla,
-    pub chrome_active: Hsla,
-    pub text: Hsla,
-    pub text_dim: Hsla,
-    pub border: Hsla,
+    /// Window gradient, top and bottom.
+    pub bg_top: Rgba,
+    pub bg_bottom: Rgba,
+    /// Text and icons on the gradient, and its muted and faint variants.
+    pub ink: Hsla,
+    pub ink_muted: Hsla,
+    pub ink_faint: Hsla,
+    /// Translucent white fills: resting (URL bar, hover) and selected (active tab).
+    pub glass: Hsla,
+    pub glass_strong: Hsla,
+    pub divider: Hsla,
+    /// Saturated Space colour: command bar selection, focus rings.
+    pub accent: Hsla,
+}
+
+/// Light surfaces that sit on any Space: command bar, peek, menus.
+pub mod surface {
+    use gpui::{rgb, rgba, Rgba};
+    pub fn bg() -> Rgba {
+        rgba(0xFFFFFFF7)
+    }
+    pub fn ink() -> Rgba {
+        rgb(0x17151D)
+    }
+    pub fn muted() -> Rgba {
+        rgb(0x8A8796)
+    }
+    pub fn icon() -> Rgba {
+        rgb(0x6E6A7A)
+    }
+    pub fn line() -> Rgba {
+        rgb(0xEFEDF3)
+    }
+    pub fn border() -> Rgba {
+        rgba(0x18122C29)
+    }
+    pub fn key() -> Rgba {
+        rgb(0xF3F2F6)
+    }
+    pub fn scrim() -> Rgba {
+        rgba(0x1814243D)
+    }
 }
 
 impl Theme {
-    pub fn from_accent(accent: Rgba) -> Self {
-        let [_, c, h] = to_oklch(accent);
-        // Pastel tint like Arc: keep the hue, clamp chroma, light background.
-        let tint = |l: f32, c_max: f32| Hsla::from(from_oklch([l, c.min(c_max), h]));
+    pub fn from_gradient(top: Rgba, bottom: Rgba) -> Self {
+        let [l, c, h] = to_oklch(bottom);
+        let dark = l < 0.45;
+        let with_alpha = |c: Hsla, a: f32| Hsla { a, ..c };
+        let ink = if dark {
+            Hsla::from(from_oklch([0.96, 0.01, h]))
+        } else {
+            Hsla::from(from_oklch([0.22, c.min(0.04), h]))
+        };
+        let white = hsla(0., 0., 1., 1.);
         Self {
-            accent,
-            chrome: tint(0.90, 0.06),
-            chrome_hover: tint(0.85, 0.07),
-            chrome_active: tint(0.97, 0.03),
-            text: tint(0.25, 0.03),
-            text_dim: tint(0.50, 0.03),
-            border: tint(0.80, 0.05),
+            bg_top: top,
+            bg_bottom: bottom,
+            ink,
+            ink_muted: with_alpha(ink, 0.56),
+            ink_faint: with_alpha(ink, 0.30),
+            glass: with_alpha(white, if dark { 0.08 } else { 0.24 }),
+            glass_strong: with_alpha(white, if dark { 0.15 } else { 0.91 }),
+            divider: with_alpha(if dark { white } else { ink }, 0.12),
+            accent: Hsla::from(from_oklch([if dark { 0.65 } else { 0.52 }, c.clamp(0.12, 0.2), h])),
+        }
+    }
+}
+
+/// A Space's gradient: stored stops, or for a single colour, a light-to-mid
+/// ramp of its hue.
+pub fn space_gradient(accent: u32, accent_to: Option<u32>) -> (Rgba, Rgba) {
+    let from = gpui::rgb(accent);
+    match accent_to {
+        Some(to) => (from, gpui::rgb(to)),
+        None => {
+            let [_, c, h] = to_oklch(from);
+            (from_oklch([0.88, (c * 0.5).min(0.06), h]), from_oklch([0.72, c.min(0.13), h]))
         }
     }
 }
@@ -131,6 +185,14 @@ mod tests {
             (mid - expect).abs() < 0.02,
             "perceptual midpoint, not RGB mud"
         );
+    }
+
+    #[test]
+    fn light_spaces_get_dark_ink_and_dark_spaces_light_ink() {
+        let light = Theme::from_gradient(rgb(0xDCCFFB), rgb(0xA592EC));
+        assert!(light.ink.l < 0.3);
+        let night = Theme::from_gradient(rgb(0x34304A), rgb(0x16151E));
+        assert!(night.ink.l > 0.9);
     }
 
     #[test]

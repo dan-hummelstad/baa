@@ -8,8 +8,8 @@ use baa_ui::Browser;
 use baa_web::{CefRuntime, CefWebHost};
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    actions, px, size, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
+    actions, point, px, size, AppContext as _, Bounds, KeyBinding, Menu, MenuItem,
+    TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
 actions!(baa_app, [Quit]);
@@ -44,7 +44,7 @@ fn main() {
     }
     listen(&dir, tx.clone());
 
-    let app = gpui_platform::application();
+    let app = gpui_platform::application().with_assets(baa_ui::Assets);
     app.on_open_urls(move |urls| {
         for url in urls {
             tx.unbounded_send(url).ok();
@@ -79,9 +79,11 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(1280.), px(860.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // The sidebar draws the toolbar; the traffic lights sit in it.
             titlebar: Some(TitlebarOptions {
                 title: Some("baa".into()),
-                ..Default::default()
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(16.), px(23.))),
             }),
             // Pages are native views under gpui's layer, seen through the hole
             // each page element punches; that needs a transparent layer.
@@ -95,15 +97,13 @@ fn main() {
             .unwrap_or_else(|e| fail("opening the window", e));
         cx.activate(true);
 
+        // Links from other apps open in lil-baa, not the browser (Arc's Little Arc).
         cx.spawn(async move |cx| {
             while let Some(input) = rx.next().await {
                 // ponytail: search engine as of launch; a later settings change
                 // applies to forwarded URLs from the next launch.
                 let url = settings.resolve_input(&input);
-                let opened = window.update(cx, |browser, window, cx| {
-                    browser.open_url(&url, window, cx);
-                    window.activate_window();
-                });
+                let opened = window.update(cx, |browser, _, cx| browser.open_external(&url, cx));
                 if opened.is_err() {
                     break;
                 }

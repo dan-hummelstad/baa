@@ -15,6 +15,9 @@ pub struct MockPage {
     pub url: RefCell<String>,
     pub visible: Cell<bool>,
     pub zoom: Cell<f64>,
+    pub radius: Cell<f32>,
+    pub moved: Cell<u32>,
+    pub floating: Cell<bool>,
     pub focus: FocusHandle,
 }
 
@@ -60,6 +63,15 @@ impl PageHandle for MockPage {
         // focus still bubble up to Browser.
         div().track_focus(&self.focus).into_any_element()
     }
+    fn set_corner_radius(&self, radius: f32) {
+        self.radius.set(radius);
+    }
+    fn set_floating(&self, floating: bool) {
+        self.floating.set(floating);
+    }
+    fn move_to_window(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) {
+        self.moved.set(self.moved.get() + 1);
+    }
 }
 
 impl WebHost for MockHost {
@@ -76,6 +88,9 @@ impl WebHost for MockHost {
             url: RefCell::new(url.into()),
             visible: Cell::new(true),
             zoom: Cell::new(1.0),
+            radius: Cell::new(8.0),
+            moved: Cell::new(0),
+            floating: Cell::new(false),
             focus: cx.focus_handle(),
         })
     }

@@ -143,7 +143,7 @@ impl WebHost for CefWebHost {
     ) -> Entity<CefPage> {
         let options = WebviewOptions {
             profile: self.profile(profile),
-            // Matches the page card's rounded_lg in baa-ui's browser.rs.
+            // The page card's radius in baa-ui; Peek sets its own.
             corner_radius: 8.,
             ..WebviewOptions::url(url)
         };
@@ -165,9 +165,11 @@ impl WebHost for CefWebHost {
                 WebviewEvent::OpenRequested {
                     url,
                     from_user_gesture,
+                    background,
                 } => PageEvent::OpenRequested {
                     url,
                     from_user_gesture,
+                    background,
                 },
                 WebviewEvent::ContextMenu {
                     x,
@@ -294,6 +296,19 @@ impl PageHandle for CefPage {
             None => div().into_any_element(),
         }
     }
+    fn set_corner_radius(&self, radius: f32) {
+        CefPage::set_corner_radius(self, radius)
+    }
+    fn set_floating(&self, floating: bool) {
+        CefPage::set_floating(self, floating)
+    }
+    #[cfg(target_os = "macos")]
+    fn move_to_window(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        CefPage::move_to_window(self, window, cx)
+    }
+    // ponytail: WebView2 children cannot change windows; the page stays put.
+    #[cfg(not(target_os = "macos"))]
+    fn move_to_window(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {}
 }
 
 // Ids count down from u64::MAX; baa-model's count up from 1.
