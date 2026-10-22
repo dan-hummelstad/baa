@@ -449,3 +449,24 @@ fn folders_are_named_in_place_and_favorites_follow_every_space(cx: &mut TestAppC
         assert_eq!(b.active_tab(), Some(tab));
     });
 }
+
+#[gpui::test]
+fn rows_grow_in_and_collapse_out(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("b.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| {
+        let tab = b.active_tab().unwrap();
+        assert!(b.motion.get(("tab-in", tab.0), crate::motion::Feel::Glide) > 0.9, "a new row starts hidden");
+        tab
+    });
+    cx.simulate_keystrokes("secondary-w");
+    b.read_with(cx, |b, _| {
+        let ghost = b.ghosts.iter().find(|g| g.id == tab).expect("the closed row lingers");
+        assert_eq!((ghost.list.1, ghost.index), (Zone::Today, 0));
+    });
+}

@@ -160,9 +160,49 @@ pub fn from_oklch([ok_l, c, h]: [f32; 3]) -> Rgba {
     }
 }
 
+/// `c` with its alpha scaled by `t` (fading a hover tint in).
+pub fn fade(c: Hsla, t: f32) -> Hsla {
+    Hsla {
+        a: c.a * t.clamp(0.0, 1.0),
+        ..c
+    }
+}
+
+/// Straight blend in RGB; a transparent end takes the other's colour so the
+/// blend never passes through black.
+pub fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    let t = t.clamp(0.0, 1.0);
+    let (mut x, mut y) = (a.to_rgb(), b.to_rgb());
+    if x.a == 0.0 {
+        x = Rgba { a: 0.0, ..y };
+    }
+    if y.a == 0.0 {
+        y = Rgba { a: 0.0, ..x };
+    }
+    let l = |p: f32, q: f32| p + (q - p) * t;
+    Rgba {
+        r: l(x.r, y.r),
+        g: l(x.g, y.g),
+        b: l(x.b, y.b),
+        a: l(x.a, y.a),
+    }
+    .into()
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixing_with_transparent_keeps_the_colour() {
+        let white: Hsla = gpui::white();
+        let m = mix(gpui::black(), white, 0.5).to_rgb();
+        assert!((m.r - 0.5).abs() < 1e-3);
+        let m = mix(gpui::transparent_black(), white, 0.5).to_rgb();
+        assert!((m.r - 1.0).abs() < 1e-3, "transparent end takes the other's colour");
+        assert_eq!(fade(white, 0.5).a, 0.5);
+    }
     use gpui::rgb;
 
     fn close(a: Rgba, b: Rgba) -> bool {

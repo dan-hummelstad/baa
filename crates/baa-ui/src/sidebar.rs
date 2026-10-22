@@ -8,14 +8,15 @@ use baa_model::{Folder, SpaceId, Tab, TabId, Zone};
 use baa_web::{PageHandle, WebHost};
 use gpui::{
     div, img, prelude::*, pulsating_between, px, Animation, AnimationExt, AnyElement, Context,
-    Hsla, MouseButton, SharedString, StyledImage, Window,
+    Hsla, MouseButton, SharedString, Stateful, StyledImage, Transformation, Window, Div,
 };
 
 use crate::{
-    browser::{shadow, tab_title, Browser, MenuKind, SIDEBAR_WIDTH},
+    browser::{feel, shadow, tab_title, Browser, Ghost, List, MenuKind, SIDEBAR_WIDTH, SPACE_DOT},
     command_bar::Mode,
     icons::icon,
-    theme::Theme,
+    motion::Feel,
+    theme::{fade, mix, Theme},
 };
 
 const ROW_H: f32 = 38.;
@@ -43,9 +44,15 @@ impl Render for DraggedTab {
             .text_color(self.theme.ink)
             .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .shadow(vec![shadow(Hsla { a: 0.2, ..self.theme.ink }, 4., 12.)])
-            .opacity(0.95)
             .child(div().truncate().child(self.title.clone()))
+            // Lifts off the list: the shadow deepens as it lands under the pointer.
+            .with_animation("lift", fade_in(), {
+                let ink = self.theme.ink;
+                move |d, t| {
+                    d.opacity(0.7 + 0.25 * t)
+                        .shadow(vec![shadow(Hsla { a: 0.22 * t, ..ink }, 2. + 6. * t, 6. + 14. * t)])
+                }
+            })
     }
 }
 
@@ -107,6 +114,7 @@ impl<H: WebHost> Browser<H> {
                                 theme.ink_muted,
                                 Hsla { a: 0.3, ..theme.accent },
                             ))
+                            .with_animation("rename-in", fade_in(), |d, t| d.opacity(t))
                             .into_any_element(),
                         None => div()
                             .id("space-name")
@@ -136,24 +144,36 @@ impl<H: WebHost> Browser<H> {
                     .child(div().w_full().h(px(1.)).bg(theme.divider)),
             )
             .child(
-                div()
-                    .id("new-tab")
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(10.))
-                    .h(px(ROW_H))
-                    .px(px(10.))
-                    .rounded(px(10.))
-                    .text_size(px(13.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.ink_muted)
-                    .hover(|s| s.bg(theme.hover))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_bar(Mode::NewTab, window, cx)),
+                {
+                    let key = ("new-tab", 0);
+                    let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+                    feel(
+                        div()
+                            .id("new-tab")
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(10.))
+                            .h(px(ROW_H))
+                            .px(px(10.))
+                            .mx(px(2.5 * p))
+                            .rounded(px(10.))
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(mix(theme.ink_muted, theme.ink, h))
+                            .bg(fade(theme.hover, h))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_bar(Mode::NewTab, window, cx)),
+                            )
+                            // The plus turns a quarter as the pointer arrives.
+                            .child(icon("plus", 16., mix(theme.ink_muted, theme.ink, h)).with_transformation(
+                                Transformation::rotate(gpui::radians(h * std::f32::consts::FRAC_PI_2)),
+                            ))
+                            .child("New Tab"),
+                        key,
+                        cx,
                     )
-                    .child(icon("plus", 16., theme.ink_muted))
-                    .child("New Tab"),
+                },
             )
             .child(self.render_zone(space, Zone::Today, theme, cx));
 
@@ -181,25 +201,22 @@ impl<H: WebHost> Browser<H> {
         let (back, fwd, loading) = page.map_or((false, false, false), |p| {
             (p.can_go_back(), p.can_go_forward(), p.is_loading())
         });
-        let button = |id: &'static str, name: &'static str, enabled: bool| {
-            div()
-                .id(id)
-                .size(px(24.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
+        let has_page = page.is_some();
+        let spin = self.motion.get(("reload-spin", 0), Feel::Glide) * std::f32::consts::TAU;
+        let button = |id: &'static str, name: &'static str, enabled: bool, cx: &mut Context<Self>| {
+            // Back and forward lean the way they go; reload turns once per click.
+            let lean = match id {
+                "back" => -2.,
+                "forward" => 2.,
+                _ => 0.,
+            };
+            let turn = if id == "reload" { spin } else { 0. };
+            self.icon_button(id, name, enabled, lean, turn, theme, cx)
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .when(enabled, |d| d.hover(|s| s.bg(theme.hover)))
-                .child(icon(
-                    name,
-                    16.,
-                    if enabled { theme.ink_muted } else { theme.ink_faint },
-                ))
         };
         // Back and forward: click to go, hold (or right-click) for history.
-        let history = |id: &'static str, name: &'static str, enabled: bool, back: bool| {
-            button(id, name, enabled).when(enabled, |d| {
+        let history = |id: &'static str, name: &'static str, enabled: bool, back: bool, cx: &mut Context<Self>| {
+            button(id, name, enabled, cx).when(enabled, |d| {
                 d.on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
@@ -219,31 +236,31 @@ impl<H: WebHost> Browser<H> {
                 )
             })
         };
+        let toggle = button("toggle-sidebar", "panel-left", true, cx).on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
+        });
+        let back_button = history("back", "arrow-left", back, true, cx);
+        let forward_button = history("forward", "arrow-right", fwd, false, cx);
+        let reload = button("reload", if loading { "x" } else { "rotate-cw" }, has_page, cx).on_click(
+            cx.listener(|this, _, window, cx| {
+                this.motion.from(("reload-spin", 0), Feel::Glide, 0.0, 1.0);
+                window.dispatch_action(Box::new(crate::actions::Reload), cx)
+            }),
+        );
         div()
             .flex()
             .items_center()
             .gap(px(8.))
             // Traffic lights: 52 wide, then a 14 gap.
             .child(div().w(px(58.)))
-            .child(button("toggle-sidebar", "panel-left", true).on_click(|_, window, cx| {
-                window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
-            }))
+            .child(toggle)
             .child(
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(history("back", "arrow-left", back, true))
-                    .child(history("forward", "arrow-right", fwd, false))
-                    .child(
-                        button(
-                            "reload",
-                            if loading { "x" } else { "rotate-cw" },
-                            page.is_some(),
-                        )
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(crate::actions::Reload), cx)
-                        }),
-                    ),
+                    .child(back_button)
+                    .child(forward_button)
+                    .child(reload),
             )
     }
 
@@ -254,13 +271,13 @@ impl<H: WebHost> Browser<H> {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let active = self.active_tab();
-        let rows: Vec<_> = self
+        let rows: Vec<AnyElement> = self
             .session
             .tabs(space, zone)
             .enumerate()
-            .map(|(i, tab)| self.render_tab_row(tab, i, active, theme, cx))
+            .map(|(i, tab)| self.render_tab_row(tab, i, theme, cx).into_any_element())
             .collect();
+        let rows = self.with_ghosts(rows, (space, zone, None), theme);
         let hover = theme.glass;
         div()
             .id(match zone {
@@ -283,18 +300,82 @@ impl<H: WebHost> Browser<H> {
             .children(rows)
     }
 
+    /// `rows` with the rows that just left `list` collapsing at their old places.
+    fn with_ghosts(&self, mut rows: Vec<AnyElement>, list: List, theme: &Theme) -> Vec<AnyElement> {
+        let mut ghosts: Vec<&Ghost> = self.ghosts.iter().filter(|g| g.list == list).collect();
+        ghosts.sort_by_key(|g| g.index);
+        for g in ghosts {
+            let t = self.motion.get(("ghost", g.id.0), Feel::Glide).clamp(0.0, 1.0);
+            let image = g.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned();
+            let row = div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(10.))
+                .h(px(ROW_H * t))
+                .mt(px(-6. * (1. - t)))
+                .px(px(10.))
+                .overflow_hidden()
+                .opacity(t)
+                .rounded(px(10.))
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(favicon(image, &g.title, false, 16., theme))
+                .child(div().flex_1().min_w_0().truncate().child(g.title.clone()));
+            rows.insert(g.index.min(rows.len()), row.into_any_element());
+        }
+        rows
+    }
+
+    /// An icon button: hover fades its well in, a press shrinks the icon.
+    /// `lean` nudges the icon sideways on hover; `turn` rotates it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn icon_button(
+        &self,
+        id: &'static str,
+        name: &'static str,
+        enabled: bool,
+        lean: f32,
+        turn: f32,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let key = (id, 0);
+        let (h, p) = if enabled {
+            (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press))
+        } else {
+            (0., 0.)
+        };
+        let scale = 1. - 0.18 * p;
+        let color = if enabled { mix(theme.ink_muted, theme.ink, h) } else { theme.ink_faint };
+        let el = div()
+            .id(id)
+            .size(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .bg(fade(theme.hover, h))
+            .child(
+                icon(name, 16., color).with_transformation(
+                    Transformation::rotate(gpui::radians(turn))
+                        .with_scaling(gpui::size(scale, scale))
+                        .with_translation(gpui::point(px(lean * h), px(0.))),
+                ),
+            );
+        feel(el, key, cx)
+    }
+
     fn render_tab_row(
         &self,
         tab: &Tab,
         index: usize,
-        active: Option<TabId>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let id = tab.id;
         let (space, zone, folder) = (tab.space, tab.zone, tab.folder);
         let title = SharedString::from(tab_title(tab).to_string());
-        let group = SharedString::from(format!("tab-{}", id.0));
         let loading = self
             .pages
             .get(&id)
@@ -305,25 +386,33 @@ impl<H: WebHost> Browser<H> {
             title: title.clone(),
             theme: *theme,
         };
-        let selected = active == Some(id);
+        let key = ("tab", id.0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        let sel = self.motion.get(("sel", id.0), Feel::Glide).clamp(0.0, 1.0);
+        // 1 while a row that just arrived is still growing in.
+        let hidden = self.motion.get(("tab-in", id.0), Feel::Glide).clamp(0.0, 1.0);
+        let close_key = ("tab-x", id.0);
+        let (ch, cp) = (self.motion.get(close_key, Feel::Hover), self.motion.get(close_key, Feel::Press));
 
-        div()
+        let row = div()
             .id(("tab", id.0))
-            .group(group.clone())
             .flex()
             .flex_none()
             .items_center()
             .gap(px(10.))
-            .h(px(ROW_H))
+            .h(px(ROW_H * (1. - hidden)))
+            .mt(px(-6. * hidden))
+            .opacity(1. - hidden)
+            .overflow_hidden()
             .px(px(10.))
+            .mx(px(2.5 * p))
             .rounded(px(10.))
             .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .when(selected, |d| {
-                d.bg(theme.glass_strong)
-                    .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 1., 3.)])
+            .bg(mix(fade(theme.hover, h), theme.glass_strong, sel))
+            .when(sel > 0.0, |d| {
+                d.shadow(vec![shadow(Hsla { a: 0.14 * sel, ..theme.ink }, 1., 3.)])
             })
-            .when(!selected, |d| d.hover(|s| s.bg(theme.hover)))
             .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
             .on_mouse_up(
                 MouseButton::Middle,
@@ -353,7 +442,7 @@ impl<H: WebHost> Browser<H> {
                 theme,
             ))
             .child(div().flex_1().min_w_0().truncate().child(title))
-            .child(
+            .child(feel(
                 div()
                     .id(("close", id.0))
                     .size(px(20.))
@@ -361,15 +450,20 @@ impl<H: WebHost> Browser<H> {
                     .items_center()
                     .justify_center()
                     .rounded(px(5.))
-                    .opacity(0.)
-                    .group_hover(group, |s| s.opacity(1.))
-                    .hover(|s| s.bg(theme.glass))
+                    .opacity(h.max(sel * 0.6))
+                    .bg(fade(theme.glass_strong, ch))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.close_tab_id(id, window, cx);
                     }))
-                    .child(icon("x", 14., theme.ink_muted)),
-            )
+                    .child(icon("x", 14., mix(theme.ink_muted, theme.ink, ch)).with_transformation(
+                        Transformation::scale(gpui::size(1. - 0.2 * cp, 1. - 0.2 * cp))
+                            .with_rotation(gpui::radians(ch * std::f32::consts::FRAC_PI_2)),
+                    )),
+                close_key,
+                cx,
+            ));
+        feel(row, key, cx)
     }
 
     /// Favourites: the same tiles in every Space. With none yet, a thin strip
@@ -390,7 +484,32 @@ impl<H: WebHost> Browser<H> {
                 title: title.clone(),
                 theme: *theme,
             };
-            div()
+            let key = ("favorite", id.0);
+            let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+            let sel = self.motion.get(("sel", id.0), Feel::Glide).clamp(0.0, 1.0);
+            let hidden = self.motion.get(("tab-in", id.0), Feel::Glide).clamp(0.0, 1.0);
+            // The tile shrinks inside a fixed cell, so pressing never moves its neighbours.
+            let inset = 3. * p + 16. * hidden;
+            let tile = div()
+                .w(px(FAV_W - 2. * inset))
+                .h(px(FAV_H - 2. * inset))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(10.))
+                .opacity(1. - hidden)
+                .bg(mix(mix(theme.glass, theme.glass_strong, 0.6 * h), theme.glass_strong, sel))
+                .when(sel > 0.0 || selected, |d| {
+                    d.shadow(vec![shadow(Hsla { a: 0.14 * sel, ..theme.ink }, 1., 3.)])
+                })
+                .child(favicon(
+                    tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
+                    &title,
+                    loading,
+                    20. * (1. - 0.1 * p),
+                    theme,
+                ));
+            let cell = div()
                 .id(("favorite", id.0))
                 .w(px(FAV_W))
                 .h(px(FAV_H))
@@ -398,12 +517,7 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .justify_center()
                 .rounded(px(10.))
-                .bg(theme.glass)
-                .when(selected, |d| {
-                    d.bg(theme.glass_strong)
-                        .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 1., 3.)])
-                })
-                .when(!selected, |d| d.hover(|s| s.bg(theme.glass_strong)))
+                .child(tile)
                 .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
                 .on_mouse_down(
                     MouseButton::Right,
@@ -416,15 +530,9 @@ impl<H: WebHost> Browser<H> {
                 .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                     this.session.move_tab(d.id, space, Zone::Favorite, i);
                     this.sync(window, cx);
-                }))
-                .child(favicon(
-                    tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
-                    &title,
-                    loading,
-                    20.,
-                    theme,
-                ))
-        });
+                }));
+            feel(cell, key, cx)
+        }).collect::<Vec<_>>();
         div()
             .id("favorites")
             .flex_none()
@@ -454,13 +562,14 @@ impl<H: WebHost> Browser<H> {
             .map_or(if open { 1.0 } else { 0.0 }, |s| s.value().clamp(0.0, 1.0));
         let animating = self.folder_motion.contains_key(&id);
         let active = self.active_tab();
-        let rows: Vec<_> = self
+        let rows: Vec<AnyElement> = self
             .session
             .folder_tabs(id)
             .enumerate()
             .filter(|(_, t)| open || animating || active == Some(t.id))
-            .map(|(i, tab)| self.render_tab_row(tab, i, active, theme, cx))
+            .map(|(i, tab)| self.render_tab_row(tab, i, theme, cx).into_any_element())
             .collect();
+        let rows = self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme);
         let n = rows.len() as f32;
         let full = 6. + n * ROW_H + (n - 1.).max(0.) * 6.;
         let name = match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
@@ -473,6 +582,7 @@ impl<H: WebHost> Browser<H> {
                 .track_focus(&self.input_focus)
                 .on_key_down(cx.listener(Self::on_input_key))
                 .child(field.render("Folder name", theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }))
+                .with_animation("rename-in", fade_in(), |d, t| d.opacity(t))
                 .into_any_element(),
             None => div()
                 .flex_1()
@@ -482,11 +592,13 @@ impl<H: WebHost> Browser<H> {
                 .into_any_element(),
         };
         let glass = theme.glass;
+        let key = ("folder", id.0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
         div()
             .flex()
             .flex_none()
             .flex_col()
-            .child(
+            .child(feel(
                 div()
                     .id(("folder", id.0))
                     .flex()
@@ -496,9 +608,10 @@ impl<H: WebHost> Browser<H> {
                     .h(px(ROW_H))
                     .px(px(10.))
                     .rounded(px(10.))
+                    .mx(px(2.5 * p))
                     .text_size(px(13.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .hover(|s| s.bg(theme.hover))
+                    .bg(fade(theme.hover, h))
                     .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                         // The first click of a double-click already toggled it.
                         let open = this.session.folder(id).is_some_and(|f| f.collapsed);
@@ -521,9 +634,13 @@ impl<H: WebHost> Browser<H> {
                         this.set_folder_open(id, true);
                         this.sync(window, cx);
                     }))
-                    .child(icon(if open { "folder-open" } else { "folder" }, 16., theme.ink))
+                    .child(icon(if open { "folder-open" } else { "folder" }, 16., theme.ink).with_transformation(
+                        Transformation::scale(gpui::size(1. - 0.15 * p, 1. - 0.15 * p)),
+                    ))
                     .child(name),
-            )
+                key,
+                cx,
+            ))
             .when(!rows.is_empty(), |d| {
                 d.child(
                     div()
@@ -545,57 +662,72 @@ impl<H: WebHost> Browser<H> {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let dots = self.session.spaces().iter().map(|space| {
-            let id = space.id;
-            let hover = theme.glass;
-            div()
-                .id(("space", id.0))
-                .size(px(24.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .when(id == active, |d| d.bg(theme.glass))
-                .hover(|s| s.bg(hover))
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.activate_space(id, window, cx)),
-                )
-                .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hover))
-                .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                    this.session.move_tab(d.id, id, Zone::Today, 0);
-                    this.sync(window, cx);
-                }))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .when(id != active, |d| d.opacity(0.45))
-                        .child(SharedString::from(space.icon.clone())),
-                )
-        });
-        let button = |id: &'static str, name: &'static str| {
-            div()
-                .id(id)
-                .size(px(24.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .hover(|s| s.bg(theme.hover))
-                .child(icon(name, 16., theme.ink_muted))
-        };
+        let _ = active;
+        let dots: Vec<_> = self
+            .session
+            .spaces()
+            .iter()
+            .map(|space| {
+                let id = space.id;
+                let key = ("space", id.0);
+                let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+                let sel = self.motion.get(("space-sel", id.0), Feel::Glide).clamp(0.0, 1.0);
+                let hover = theme.glass;
+                let dot = div()
+                    .id(("space", id.0))
+                    .size(px(SPACE_DOT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .bg(fade(theme.hover, h * (1. - sel)))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.activate_space(id, window, cx)),
+                    )
+                    .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hover))
+                    .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                        this.session.move_tab(d.id, id, Zone::Today, 0);
+                        this.sync(window, cx);
+                    }))
+                    .child(
+                        div()
+                            // Emoji are text: size stands in for scale.
+                            .text_size(px(13. * (1. + 0.12 * h - 0.15 * p)))
+                            .opacity(0.45 + 0.55 * sel.max(h * 0.6))
+                            .child(SharedString::from(space.icon.clone())),
+                    );
+                feel(dot, key, cx)
+            })
+            .collect();
+        // One pill that slides to the active Space rather than a highlight per dot.
+        let pill = div()
+            .absolute()
+            .top_0()
+            .left(px(self.motion.get(("space-pill", 0), Feel::Glide)))
+            .size(px(SPACE_DOT))
+            .rounded(px(6.))
+            .bg(theme.glass);
+        let plus_turn = self.motion.get(("add-space", 0), Feel::Hover) * std::f32::consts::FRAC_PI_2;
+        let library = self
+            .icon_button("library", "archive", true, 0., 0., theme, cx)
+            .on_click(cx.listener(|this, _, window, cx| this.reopen_closed(window, cx)));
+        let add = self
+            .icon_button("add-space", "plus", true, 0., plus_turn, theme, cx)
+            .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx)));
         div()
             .h(px(32.))
             .px(px(2.))
             .flex()
             .items_center()
-            .child(button("library", "archive").on_click(
-                cx.listener(|this, _, window, cx| this.reopen_closed(window, cx)),
-            ))
-            .child(div().flex_1().flex().justify_center().children(dots))
+            .child(library)
             .child(
-                button("add-space", "plus")
-                    .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx))),
+                div()
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .child(div().relative().flex().child(pill).children(dots)),
             )
+            .child(add)
     }
 }
 
@@ -661,4 +793,8 @@ pub(crate) fn drag_or_zoom(event: &gpui::MouseDownEvent, window: &mut Window, _:
     } else {
         window.start_window_move();
     }
+}
+
+fn fade_in() -> Animation {
+    Animation::new(Duration::from_millis(160)).with_easing(gpui::ease_out_quint())
 }

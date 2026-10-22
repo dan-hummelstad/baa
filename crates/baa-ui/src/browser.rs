@@ -8,7 +8,8 @@ use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
     relative, rgb, AnyElement, AnyWindowHandle, BoxShadow, ClipboardItem, Context, Entity,
-    FocusHandle, Hsla, KeyDownEvent, Pixels, Point, Rgba, SharedString, Subscription, Window,
+    Animation, AnimationExt, Div, ElementId, FocusHandle, Hsla, KeyDownEvent, MouseButton, Pixels, Point, Rgba,
+    SharedString, Stateful, Subscription, Window,
 };
 
 use crate::{
@@ -17,8 +18,8 @@ use crate::{
     icons::icon,
     input::{Key, TextField},
     lil_baa::LilBaa,
-    motion::Spring,
-    theme::{lerp_oklch, space_gradient, surface, Theme},
+    motion::{self, Feel, Motion, Spring},
+    theme::{fade, lerp_oklch, mix, space_gradient, surface, Theme},
 };
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 258.0;
@@ -90,6 +91,15 @@ pub struct Browser<H: WebHost> {
     pub(crate) renaming_folder: Option<FolderId>,
     /// Folders opening or closing: 0 closed, 1 open. Absent = at rest.
     pub(crate) folder_motion: HashMap<FolderId, Spring>,
+    /// Hover, press and selection springs of everything the pointer touches.
+    pub(crate) motion: Motion,
+    /// Where each tab's row was at the last sync, to animate rows in and out.
+    placements: Option<HashMap<TabId, Placement>>,
+    /// Rows that just left a list, collapsing where they were.
+    pub(crate) ghosts: Vec<Ghost>,
+    shown_tab: Option<TabId>,
+    /// The command bar on its way out.
+    pub(crate) closing_bar: Option<Bar>,
     /// Favicons by URL, fetched by the pages themselves.
     pub(crate) favicons: HashMap<String, std::sync::Arc<gpui::Image>>,
     /// The active Space's extensions, for the toolbar.
@@ -170,6 +180,11 @@ impl<H: WebHost> Browser<H> {
             renaming: None,
             renaming_folder: None,
             folder_motion: HashMap::new(),
+            motion: Motion::default(),
+            placements: None,
+            ghosts: Vec::new(),
+            shown_tab: None,
+            closing_bar: None,
             favicons,
             extensions: Vec::new(),
             nav_press: None,
@@ -239,6 +254,16 @@ impl<H: WebHost> Browser<H> {
             self.slide
                 .snap(if forward != mirrored { 1.0 } else { -1.0 });
             self.slide.set_target(0.0);
+            if let Some(i) = index(space) {
+                let x = i as f32 * SPACE_DOT;
+                match self.shown_space {
+                    Some(_) => self.motion.to(("space-pill", 0), Feel::Glide, x),
+                    None => self.motion.from(("space-pill", 0), Feel::Glide, x, x),
+                }
+            }
+            for s in [self.shown_space, space].into_iter().flatten() {
+                self.motion.to(("space-sel", s.0), Feel::Glide, (Some(s) == space) as u8 as f32);
+            }
             self.shown_space = space;
             self.session
                 .archive_expired(now(), self.settings.archive_after_hours);
@@ -256,6 +281,15 @@ impl<H: WebHost> Browser<H> {
         let session = &self.session;
         self.pages.retain(|id, _| session.tab(*id).is_some());
         let active = self.active_tab();
+        if active != self.shown_tab {
+            for (id, on) in [(self.shown_tab, 0.0), (active, 1.0)] {
+                if let Some(id) = id {
+                    self.motion.to(("sel", id.0), Feel::Glide, on);
+                }
+            }
+            self.shown_tab = active;
+        }
+        self.track_rows();
         if let Some(id) = active.filter(|id| !self.pages.contains_key(id)) {
             self.create_page(id, window, cx);
         }
@@ -273,6 +307,59 @@ impl<H: WebHost> Browser<H> {
             .unwrap_or_default();
         self.save();
         cx.notify();
+    }
+
+    /// Rows that appear in a list grow in; rows that leave one (closed, pinned,
+    /// filed, archived) collapse where they were.
+    fn track_rows(&mut self) {
+        let s = &self.session;
+        let mut now = HashMap::new();
+        let mut add = |list: List, tabs: Vec<&Tab>| {
+            for (index, t) in tabs.into_iter().enumerate() {
+                now.insert(
+                    t.id,
+                    Placement {
+                        list,
+                        index,
+                        title: tab_title(t).to_string(),
+                        favicon: t.favicon.clone(),
+                    },
+                );
+            }
+        };
+        for space in s.spaces() {
+            for f in s.folders(space.id) {
+                add((space.id, Zone::Pinned, Some(f.id)), s.folder_tabs(f.id).collect());
+            }
+            add((space.id, Zone::Pinned, None), s.tabs(space.id, Zone::Pinned).collect());
+            add((space.id, Zone::Today, None), s.tabs(space.id, Zone::Today).collect());
+        }
+        if let Some(first) = s.spaces().first() {
+            add(FAVORITES, s.tabs(first.id, Zone::Favorite).collect());
+        }
+        let Some(before) = self.placements.replace(now) else {
+            return;
+        };
+        let now = self.placements.as_ref().expect("just set");
+        for (id, was) in &before {
+            if now.get(id).is_some_and(|p| p.list == was.list) || was.list == FAVORITES {
+                continue;
+            }
+            self.ghosts.retain(|g| g.id != *id);
+            self.ghosts.push(Ghost {
+                id: *id,
+                list: was.list,
+                index: was.index,
+                title: was.title.clone().into(),
+                favicon: was.favicon.clone(),
+            });
+            self.motion.from(("ghost", id.0), Feel::Glide, 1.0, 0.0);
+        }
+        for (id, p) in now {
+            if before.get(id).is_none_or(|was| was.list != p.list) {
+                self.motion.from(("tab-in", id.0), Feel::Glide, 1.0, 0.0);
+            }
+        }
     }
 
     /// Keyboard goes to the active page; a hidden page's element is not in the
@@ -787,6 +874,7 @@ impl<H: WebHost> Browser<H> {
             Mode::NewTab => TextField::default(),
         };
         self.bar = Some(Bar::new(mode, field));
+        self.closing_bar = None;
         self.find = None;
         window.focus(&self.input_focus, cx);
         cx.notify();
@@ -852,8 +940,14 @@ impl<H: WebHost> Browser<H> {
         if self.find.take().is_some() {
             self.with_page(cx, |p| p.find("", true));
         }
-        self.bar = None;
+        if let Some(mut bar) = self.bar.take() {
+            bar.scale.set_target(0.0);
+            self.closing_bar = Some(bar);
+        }
         self.menu = None;
+        self.motion.forget("menu");
+        self.motion.forget("bar-row");
+        self.motion.forget("bar-sel");
         match &self.peek {
             Some(peek) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
             None => self.focus_page(window, cx),
@@ -1268,6 +1362,16 @@ impl<H: WebHost> Browser<H> {
         if let Some(bar) = &mut self.bar {
             moving |= bar.scale.tick(dt, reduce);
         }
+        if let Some(bar) = &mut self.closing_bar {
+            let more = bar.scale.tick(dt, reduce);
+            moving |= more;
+            if !more {
+                self.closing_bar = None;
+            }
+        }
+        moving |= self.motion.tick(dt, reduce);
+        let motion = &self.motion;
+        self.ghosts.retain(|g| motion.get(("ghost", g.id.0), Feel::Glide) > 0.0);
         self.folder_motion.retain(|_, spring| {
             let more = spring.tick(dt, reduce);
             moving |= more;
@@ -1290,7 +1394,7 @@ impl<H: WebHost> Browser<H> {
             None => crate::start::render(theme).into_any_element(),
         };
         let find = self.find.as_ref().map(|field| {
-            div()
+            drop_in(div()
                 .id("find")
                 // Pages are native views: only occluding gpui keeps the click.
                 .occlude()
@@ -1315,7 +1419,7 @@ impl<H: WebHost> Browser<H> {
                     surface::ink().into(),
                     surface::muted().into(),
                     Hsla { a: 0.25, ..theme.accent },
-                ))
+                )), "find")
         });
         div()
             .relative()
@@ -1348,24 +1452,86 @@ impl<H: WebHost> Browser<H> {
             .map(|t| t.url.clone())
             .unwrap_or_default();
         let host = host_of(&url);
+        let loading = self.active_page().is_some_and(|p| p.read(cx).is_loading());
         let extensions: Vec<_> = self.extensions.iter().enumerate().map(|(i, ext)| {
             let icon_path = ext.icon.clone();
             let ext = ext.clone();
-            div()
+            let key = ("extension", i as u64);
+            let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+            let size = 16. * (1. + 0.08 * h - 0.18 * p);
+            let el = div()
                 .id(("extension", i))
                 .size(px(26.))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded(px(6.))
-                .hover(|s| s.bg(theme.hover))
+                .bg(fade(theme.hover, h))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
                 .child(match icon_path {
-                    Some(path) => gpui::img(path).size(px(16.)).into_any_element(),
-                    None => icon("sliders-horizontal", 16., theme.ink_muted).into_any_element(),
-                })
+                    Some(path) => gpui::img(path).size(px(size)).into_any_element(),
+                    None => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
+                });
+            feel(el, key, cx)
         }).collect();
+        let key = ("address", 0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        let label: SharedString = if host.is_empty() {
+            "Search or enter address".into()
+        } else {
+            host.clone().into()
+        };
+        // A new host fades in; the id changes with it, so the animation restarts.
+        let label = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .min_w_0()
+            .when(!host.is_empty(), |d| d.child(icon("link", 13., mix(theme.ink_muted, theme.ink, h))))
+            .child(div().truncate().child(label.clone()))
+            .with_animation(
+                ElementId::Name(label),
+                Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui::ease_out_quint()),
+                |d, t| d.opacity(t).ml(px(4. * (1. - t))),
+            );
+        let accent = theme.accent;
+        let progress = loading.then(|| {
+            div()
+                .absolute()
+                .bottom_0()
+                .h(px(2.))
+                .w(relative(0.3))
+                .rounded(px(1.))
+                .bg(accent)
+                .with_animation(
+                    "loading",
+                    Animation::new(std::time::Duration::from_millis(1100))
+                        .repeat()
+                        .with_easing(gpui::ease_in_out),
+                    |d, t| d.left(relative(-0.3 + 1.3 * t)),
+                )
+        });
+        let address = div()
+            .id("address")
+            .relative()
+            .overflow_hidden()
+            .flex_none()
+            .max_w(px(480.))
+            .h(px(26.))
+            .px(px(10.))
+            .mx(px(3. * p))
+            .flex()
+            .items_center()
+            .rounded(px(7.))
+            .text_size(px(13.))
+            .text_color(mix(theme.ink_muted, theme.ink, h))
+            .bg(fade(theme.hover, h))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
+            .child(label)
+            .children(progress);
+        let address = feel(address, key, cx);
         div()
             .id("header")
             .flex_none()
@@ -1383,29 +1549,7 @@ impl<H: WebHost> Browser<H> {
                     .items_center()
                     .child(self.render_window_controls(theme, cx)),
             )
-            .child(
-                div()
-                    .id("address")
-                    .flex_none()
-                    .max_w(px(480.))
-                    .h(px(26.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(7.))
-                    .text_size(px(13.))
-                    .text_color(theme.ink_muted)
-                    .hover(|s| s.bg(theme.hover))
-                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
-                    .when(!host.is_empty(), |d| d.child(icon("link", 13., theme.ink_muted)))
-                    .child(div().truncate().child(if host.is_empty() {
-                        "Search or enter address".into()
-                    } else {
-                        host
-                    })),
-            )
+            .child(address)
             .child(
                 div()
                     .flex_1()
@@ -1419,9 +1563,12 @@ impl<H: WebHost> Browser<H> {
 
     fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.history_menu.as_ref()?;
-        let rows = menu.entries.iter().map(|(offset, title)| {
+        let accent = self.theme().accent;
+        let rows: Vec<_> = menu.entries.iter().enumerate().map(|(i, (offset, title))| {
             let offset = *offset;
-            div()
+            let key = ("menu", i as u64);
+            let h = self.motion.get(key, Feel::Hover);
+            let row = div()
                 .id(("history", offset as i64 as u64))
                 .h(px(30.))
                 .px(px(10.))
@@ -1429,15 +1576,17 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .rounded(px(7.))
                 .max_w(px(360.))
-                .hover(|s| s.bg(self.theme().accent).text_color(gpui::white()))
+                .bg(fade(accent, h))
+                .text_color(mix(surface::ink().into(), gpui::white(), h))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.with_page(cx, |p| p.go_to_offset(offset));
                     this.close_overlays(window, cx);
                 }))
-                .child(div().truncate().child(SharedString::from(title.clone())))
-        });
+                .child(div().truncate().child(SharedString::from(title.clone())));
+            feel(row, key, cx)
+        }).collect();
         Some(deferred(div().absolute().inset_0().occlude().child(
-            anchored().position(menu.at).snap_to_window().child(
+            anchored().position(menu.at).snap_to_window().child(drop_in(
                 div()
                     .id("history-menu")
                     .occlude()
@@ -1452,7 +1601,8 @@ impl<H: WebHost> Browser<H> {
                     .text_color(surface::ink())
                     .on_mouse_down_out(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
                     .children(rows),
-            ),
+                "history-menu",
+            )),
         )))
     }
 
@@ -1470,26 +1620,31 @@ impl<H: WebHost> Browser<H> {
             } => self.page_menu(*tab, link.clone(), selection.clone()),
             kind => self.sidebar_menu(kind),
         };
-        let rows = items.into_iter().enumerate().map(|(i, (label, run))| {
-            div()
+        let rows: Vec<_> = items.into_iter().enumerate().map(|(i, (label, run))| {
+            let key = ("menu", i as u64);
+            let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+            let row = div()
                 .id(("menu", i))
                 .h(px(32.))
                 .px(px(10.))
+                .mx(px(2. * p))
                 .flex()
                 .items_center()
                 .rounded(px(7.))
-                .hover(|s| s.bg(theme.accent).text_color(gpui::white()))
+                .bg(fade(theme.accent, h))
+                .text_color(mix(surface::ink().into(), gpui::white(), h))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     // Closed first: a rename started by the item must stay open.
                     this.close_overlays(window, cx);
                     run(this, window, cx);
                 }))
-                .child(label)
-        });
+                .child(label);
+            feel(row, key, cx)
+        }).collect();
         // The backdrop keeps a click on the (native) page from bypassing the
         // menu's mouse_down_out.
         Some(deferred(div().absolute().inset_0().occlude().child(
-            anchored().position(menu.at).snap_to_window().child(
+            anchored().position(menu.at).snap_to_window().child(drop_in(
                 div()
                     .id("context-menu")
                     .occlude()
@@ -1506,7 +1661,8 @@ impl<H: WebHost> Browser<H> {
                         cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
                     )
                     .children(rows),
-            ),
+                "context-menu",
+            )),
         )))
     }
 
@@ -1639,6 +1795,58 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
+/// A sidebar list: (Space, zone, folder). Favourites are one list for all.
+pub(crate) type List = (SpaceId, Zone, Option<FolderId>);
+pub(crate) const FAVORITES: List = (SpaceId(0), Zone::Favorite, None);
+/// Width of a Space's emoji button in the bottom bar; the pill slides by it.
+pub(crate) const SPACE_DOT: f32 = 24.0;
+
+struct Placement {
+    list: List,
+    index: usize,
+    title: String,
+    favicon: Option<String>,
+}
+
+/// A row that left its list, drawn collapsing at its old place.
+pub(crate) struct Ghost {
+    pub id: TabId,
+    pub list: List,
+    pub index: usize,
+    pub title: SharedString,
+    pub favicon: Option<String>,
+}
+
+/// Hover and press springs for `key` (see `Motion`). Press listens in the
+/// capture phase so a handler that stops propagation cannot swallow it.
+pub(crate) fn feel<H: WebHost>(el: Stateful<Div>, key: motion::Key, cx: &mut Context<Browser<H>>) -> Stateful<Div> {
+    let press = move |on: bool| {
+        move |this: &mut Browser<H>, _: &dyn std::any::Any, _: &mut Window, cx: &mut Context<Browser<H>>| {
+            if on || this.motion.get(key, Feel::Press) != 0.0 {
+                this.motion.to(key, Feel::Press, on as u8 as f32);
+                cx.notify();
+            }
+        }
+    };
+    let (down, up, out) = (press(true), press(false), press(false));
+    el.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+        this.motion.to(key, Feel::Hover, *hovered as u8 as f32);
+        cx.notify();
+    }))
+    .capture_any_mouse_down(cx.listener(move |this, e: &gpui::MouseDownEvent, w, cx| down(this, e, w, cx)))
+    .capture_any_mouse_up(cx.listener(move |this, e: &gpui::MouseUpEvent, w, cx| up(this, e, w, cx)))
+    .on_mouse_up_out(MouseButton::Left, cx.listener(move |this, e: &gpui::MouseUpEvent, w, cx| out(this, e, w, cx)))
+}
+
+/// Overlays (menus, find) drop in: a short fade and settle.
+pub(crate) fn drop_in<E: IntoElement + gpui::Styled + 'static>(el: E, id: &'static str) -> impl IntoElement {
+    el.with_animation(
+        id,
+        Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui::ease_out_quint()),
+        |el, t| el.opacity(t).mt(px(-6. * (1. - t))),
+    )
+}
+
 /// A link previewed over the page.
 pub(crate) struct PeekPage<P> {
     pub(crate) page: Entity<P>,
@@ -1714,7 +1922,14 @@ impl<H: WebHost> Render for Browser<H> {
             (Some(sidebar), Some(self.render_reveal(None, &theme, cx)))
         };
         let peek = self.render_peek(window, cx);
-        let bar = self.render_command_bar(&theme, window, cx);
+        if let Some(bar) = &self.bar {
+            self.motion.to(("bar-sel", 0), Feel::Glide, bar.selected as f32);
+        }
+        let bar = match (&self.bar, &self.closing_bar) {
+            (Some(bar), _) => Some(self.render_command_bar(bar, true, &theme, window, cx)),
+            (None, Some(bar)) => Some(self.render_command_bar(bar, false, &theme, window, cx)),
+            _ => None,
+        };
         let menu = self.render_context_menu(&theme, cx);
         let history = self.render_history_menu(cx);
         // The sidebar brings its own padding; collapsed, the page gets the inset.

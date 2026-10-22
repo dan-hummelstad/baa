@@ -8,12 +8,12 @@ use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
 
 use crate::{
     actions,
-    browser::{host_of, shadow, tab_title, Browser},
+    browser::{feel, host_of, shadow, tab_title, Browser},
     fuzzy,
     icons::icon,
     input::{Key, TextField},
-    motion::Spring,
-    theme::{surface, Theme},
+    motion::{Feel, Spring},
+    theme::{fade, mix, surface, Theme},
 };
 
 const MAX_ROWS: usize = 9;
@@ -366,14 +366,22 @@ fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
 }
 
 impl<H: WebHost> Browser<H> {
+    /// `live` is false while the bar animates out: drawn, but deaf.
     pub(crate) fn render_command_bar(
         &self,
+        bar: &Bar,
+        live: bool,
         theme: &Theme,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        let bar = self.bar.as_ref()?;
+    ) -> impl IntoElement {
         let t = bar.scale.value();
+        // Where the selection pill is, in rows; it slides rather than jumps.
+        let pill = if live {
+            self.motion.get(("bar-sel", 0), Feel::Glide)
+        } else {
+            bar.selected as f32
+        };
         let rows = bar.rows(&self.session, &self.settings);
         let placeholder = match bar.mode {
             Mode::NewTab => "Search or enter address…",
@@ -382,13 +390,12 @@ impl<H: WebHost> Browser<H> {
         let accent = theme.accent;
         let white = gpui::white();
         let list = rows.into_iter().enumerate().map(|(i, row)| {
-            let selected = i == bar.selected;
-            let (ink, muted): (Hsla, Hsla) = if selected {
-                (white, Hsla { a: 0.82, ..white })
-            } else {
-                (surface::ink().into(), surface::muted().into())
-            };
-            let icon_color: Hsla = if selected { muted } else { surface::icon().into() };
+            // How much the pill covers this row: its text turns white with it.
+            let c = (1. - (pill - i as f32).abs()).clamp(0., 1.);
+            let ink = mix(surface::ink().into(), white, c);
+            let muted = mix(surface::muted().into(), Hsla { a: 0.82, ..white }, c);
+            let icon_color = mix(surface::icon().into(), Hsla { a: 0.82, ..white }, c);
+            let h = self.motion.get(("bar-row", i as u64), Feel::Hover);
             let leading = match &row.item {
                 Item::Tab(id) => self
                     .session
@@ -423,7 +430,7 @@ impl<H: WebHost> Browser<H> {
                 Item::Space(..) => "Switch",
                 Item::Command(_) => "Run",
             };
-            div()
+            let row_el = div()
                 .id(("bar-row", i))
                 .h(px(42.))
                 .px(px(12.))
@@ -432,8 +439,7 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .gap(px(12.))
                 .rounded(px(9.))
-                .when(selected, |d| d.bg(accent))
-                .when(!selected, |d| d.hover(|s| s.bg(surface::key())))
+                .bg(fade(surface::key().into(), h * (1. - c)))
                 .on_click(cx.listener(move |this, _, window, cx| submit(this, Some(i), window, cx)))
                 .child(leading)
                 .child(
@@ -465,45 +471,64 @@ impl<H: WebHost> Browser<H> {
                             .items_center()
                             .justify_center()
                             .rounded(px(5.))
-                            .bg(if selected { Hsla { a: 0.2, ..white } } else { surface::key().into() })
+                            .bg(mix(surface::key().into(), Hsla { a: 0.2, ..white }, c))
                             .text_size(px(11.5))
-                            .text_color(if selected { white } else { surface::icon().into() })
+                            .text_color(mix(surface::icon().into(), white, c))
                             .child(key)
                     })))
                 })
-                .when(selected, |d| {
+                .when(c > 0.01, |d| {
                     d.child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(4.))
+                            .opacity(c)
                             .text_size(px(12.5))
                             .text_color(muted)
                             .child(hint)
-                            .child(icon("arrow-right", 13., muted)),
+                            // The arrow slides in with the pill.
+                            .child(icon("arrow-right", 13., muted).with_transformation(
+                                gpui::Transformation::translate(gpui::point(px(-6. * (1. - c)), px(0.))),
+                            )),
                     )
-                })
-        });
+                });
+            feel(row_el, ("bar-row", i as u64), cx)
+        }).collect::<Vec<_>>();
+        let accent_pill = div()
+            .absolute()
+            .left(px(6.))
+            .right(px(6.))
+            .top(px(6. + 42. * pill))
+            .h(px(42.))
+            .rounded(px(9.))
+            .bg(accent);
 
-        Some(
-            div()
-                .id("command-bar-backdrop")
-                .absolute()
-                .inset_0()
-                .flex()
-                .justify_center()
-                .items_start()
-                .pt(relative(0.17))
-                .occlude()
-                .on_click(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
-                .child(
-                    div()
-                        .id("command-bar")
-                        .track_focus(&self.input_focus)
-                        .key_context("CommandBar")
-                        .on_key_down(cx.listener(Self::on_input_key))
-                        // Clicks inside must not reach the backdrop's close handler.
-                        .on_click(|_, _, cx| cx.stop_propagation())
+        let card = div()
+            .id("command-bar")
+            .when(live, |d| {
+                d.track_focus(&self.input_focus)
+                    .key_context("CommandBar")
+                    .on_key_down(cx.listener(Self::on_input_key))
+                    // Clicks inside must not reach the backdrop's close handler.
+                    .on_click(|_, _, cx| cx.stop_propagation())
+            });
+        div()
+            .id("command-bar-backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .justify_center()
+            .items_start()
+            // Drops in from a little above; leaves the same way.
+            .pt(relative(0.17))
+            .when(live, |d| {
+                d.occlude()
+                    .on_click(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
+            })
+            .child(
+                card
+                        .mt(px(-14. * (1. - t)))
                         // Spring "scale-in": gpui has no transforms, so width and opacity carry it.
                         .w(px(WIDTH * (0.94 + 0.06 * t)))
                         .h_auto()
@@ -536,9 +561,16 @@ impl<H: WebHost> Browser<H> {
                                     Hsla { a: 0.25, ..accent },
                                 )),
                         )
-                        .child(div().p(px(6.)).flex().flex_col().children(list)),
-                ),
-        )
+                        .child(
+                            div()
+                                .relative()
+                                .p(px(6.))
+                                .flex()
+                                .flex_col()
+                                .child(accent_pill)
+                                .children(list),
+                        ),
+            )
     }
 }
 

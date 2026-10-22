@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use gpui::{px, svg, AssetSource, Hsla, IntoElement, SharedString, Styled};
+use gpui::{px, svg, AssetSource, Hsla, SharedString, Styled};
 
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
@@ -38,7 +38,7 @@ impl AssetSource for Assets {
 }
 
 /// `name` is the lucide name, e.g. "arrow-left".
-pub fn icon(name: &'static str, size: f32, color: Hsla) -> impl IntoElement {
+pub fn icon(name: &'static str, size: f32, color: Hsla) -> gpui::Svg {
     svg()
         .path(SharedString::from(format!("icons/{name}.svg")))
         .size(px(size))
