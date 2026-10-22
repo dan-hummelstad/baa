@@ -63,6 +63,13 @@ unsafe impl Encode for CGRect {
 const NS_WINDOW_BELOW: isize = -1;
 /// NSViewWidthSizable | NSViewHeightSizable: margins fixed, size follows.
 const FILL: usize = 2 | 16;
+/// NSViewMinYMargin: in an unflipped superview, keeps the top-left corner put.
+const TOP_LEFT: usize = 8;
+/// Shortest time between two sizes for a page during a resize. Each new size
+/// costs the page a full style and layout pass (tens of ms on a big site);
+/// sent faster than that they queue up, and the page crawls through every
+/// stale size after the resize has ended.
+const RESIZE_INTERVAL: f64 = 0.04;
 
 /// gpui's NSView for `window`.
 pub(crate) fn gpui_view(window: &Window) -> *mut AnyObject {
@@ -76,13 +83,15 @@ pub(crate) fn gpui_view(window: &Window) -> *mut AnyObject {
 /// rounds its corners. Owns one reference; removed from the window on drop.
 pub(crate) struct Container {
     view: *mut AnyObject,
-    placed: std::cell::Cell<Option<(CGRect, CGRect)>>,
+    placed: std::cell::Cell<Option<CGRect>>,
     /// What the app asked for; layout never shows a page the app hid.
     visible: std::cell::Cell<bool>,
     /// Kept above the other pages' views (an overlay like Peek). Native views
     /// stack in insertion order, not in gpui's paint order.
     floating: std::cell::Cell<bool>,
     gpui_view: std::cell::Cell<*mut AnyObject>,
+    /// When the page last got a new size.
+    resized_at: std::cell::Cell<f64>,
 }
 
 impl Container {
@@ -124,6 +133,7 @@ impl Container {
                 visible: std::cell::Cell::new(true),
                 floating: std::cell::Cell::new(false),
                 gpui_view: std::cell::Cell::new(gpui_view),
+                resized_at: std::cell::Cell::new(0.),
             }
         }
     }
@@ -190,11 +200,14 @@ impl Container {
 
     /// Puts the container at `visible` (the element's rect clipped by its
     /// content mask) and the page at `bounds`, both in gpui window coordinates.
-    pub(crate) fn place(&self, page: *mut AnyObject, bounds: Bounds<Pixels>, visible: Bounds<Pixels>) {
+    /// True when the page's new size is held back (see [`RESIZE_INTERVAL`]):
+    /// call again on a later frame.
+    pub(crate) fn place(&self, page: *mut AnyObject, bounds: Bounds<Pixels>, visible: Bounds<Pixels>) -> bool {
+        let mut pending = false;
         unsafe {
             let content: *mut AnyObject = msg_send![self.view, superview];
             if content.is_null() {
-                return;
+                return false;
             }
             // The content view is not flipped: y grows upwards from the bottom.
             let content_frame: CGRect = msg_send![content, bounds];
@@ -223,12 +236,23 @@ impl Container {
                 self.raise();
             }
             let hidden: Bool = msg_send![self.view, isHidden];
-            if self.placed.get() != Some((clip, inner)) || page_frame(page) != Some(inner) {
-                self.placed.set(Some((clip, inner)));
+            if self.placed.get() != Some(clip) {
+                self.placed.set(Some(clip));
                 let _: () = msg_send![self.view, setFrame: clip];
-                if !page.is_null() {
-                    let _: () = msg_send![page, setAutoresizingMask: FILL];
+            }
+            let current = page_frame(page);
+            if !page.is_null() && current != Some(inner) {
+                let now = core_foundation::date::CFAbsoluteTimeGetCurrent();
+                let resized = current.is_some_and(|c| c.size != inner.size);
+                if !resized || now - self.resized_at.get() >= RESIZE_INTERVAL {
+                    if resized {
+                        self.resized_at.set(now);
+                    }
+                    // Held sizes keep the page pinned to the card's top left.
+                    let _: () = msg_send![page, setAutoresizingMask: TOP_LEFT];
                     let _: () = msg_send![page, setFrame: inner];
+                } else {
+                    pending = true;
                 }
             }
             if self.visible.get() {
@@ -238,6 +262,7 @@ impl Container {
                 set_view_hidden(page, false);
             }
         }
+        pending
     }
 
     /// Chromium only notices visibility changes, and a page created behind a

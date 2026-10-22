@@ -31,7 +31,7 @@ use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use core_foundation::{
@@ -58,8 +58,9 @@ thread_local! {
     static IN_WORK: Cell<bool> = const { Cell::new(false) };
 }
 
-/// One pending out-of-band pass at most, however often CEF asks.
-static WORK_PENDING: AtomicBool = AtomicBool::new(false);
+/// When the soonest pending out-of-band pass fires (CFAbsoluteTime bits; 0 =
+/// none). A request that is not sooner adds nothing.
+static WORK_DUE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 struct View {
@@ -168,11 +169,29 @@ extern "C" fn on_tick(_timer: core_foundation::runloop::CFRunLoopTimerRef, info:
 /// sooner than the next tick would be. Callable from any thread.
 pub(crate) fn schedule_work(delay_ms: i64) {
     let delay = (delay_ms.max(0) as f64) / 1000.;
-    if delay >= INTERVAL || WORK_PENDING.swap(true, Ordering::AcqRel) {
+    if delay >= INTERVAL {
+        return;
+    }
+    let now = unsafe { CFAbsoluteTimeGetCurrent() };
+    let due = now + delay;
+    // A sooner request must not wait behind a later pending one: Chromium
+    // posts a task per hop (a resize takes many), and each would otherwise
+    // wait up to a tick.
+    let sooner = WORK_DUE
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            let pending_due = f64::from_bits(pending);
+            (pending == 0 || due < pending_due - 0.001).then_some(due.to_bits())
+        })
+        .is_ok();
+    if !sooner {
         return;
     }
     extern "C" fn fire(_timer: core_foundation::runloop::CFRunLoopTimerRef, _info: *mut c_void) {
-        WORK_PENDING.store(false, Ordering::Release);
+        let now = unsafe { CFAbsoluteTimeGetCurrent() };
+        // Clear it unless a sooner-or-later one was booked after this one fired.
+        let _ = WORK_DUE.try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            (f64::from_bits(pending) <= now + 0.0005).then_some(0)
+        });
         let state = PUMP.with(|slot| slot.try_borrow().ok()?.as_ref().map(|p| p.state.clone()));
         match state {
             Some(state) => tick_all(&state),
@@ -186,9 +205,8 @@ pub(crate) fn schedule_work(delay_ms: i64) {
         release: None,
         copyDescription: None,
     };
-    let now = unsafe { CFAbsoluteTimeGetCurrent() };
     // One-shot; the run loop releases it after firing.
-    let timer = CFRunLoopTimer::new(now + delay, 0., 0, 0, fire, &mut context);
+    let timer = CFRunLoopTimer::new(due, 0., 0, 0, fire, &mut context);
     let main = CFRunLoop::get_main();
     unsafe {
         main.add_timer(&timer, kCFRunLoopCommonModes);

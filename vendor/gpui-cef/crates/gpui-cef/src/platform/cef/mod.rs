@@ -631,7 +631,9 @@ impl Element for PageSlot {
         self.shared.set_bounds(bounds);
         let visible = bounds.intersect(&window.content_mask().bounds);
         if visible.size.width > Pixels::ZERO && visible.size.height > Pixels::ZERO {
-            self.container.place(page_view(&self.shared), bounds, visible);
+            if self.container.place(page_view(&self.shared), bounds, visible) {
+                window.request_animation_frame();
+            }
         } else {
             self.container.set_hidden(true);
         }
