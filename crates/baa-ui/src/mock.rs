@@ -46,6 +46,10 @@ impl PageHandle for MockPage {
     fn can_go_forward(&self) -> bool {
         false
     }
+    fn history(&self) -> (Vec<(String, String)>, usize) {
+        (Vec::new(), 0)
+    }
+    fn go_to_offset(&self, _: i32) {}
     fn eval(&self, _: &str) {}
     fn set_zoom(&self, level: f64) {
         self.zoom.set(level);
@@ -101,4 +105,7 @@ impl WebHost for MockHost {
         self.deleted.borrow_mut().push(profile);
     }
     fn open_extensions(&self, _: ProfileId, _: &str, _: &mut App) {}
+    fn extensions(&self, _: ProfileId) -> Vec<baa_web::Extension> {
+        Vec::new()
+    }
 }

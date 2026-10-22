@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::{
-    browser::{host_of, shadow, tab_title, Browser, SIDEBAR_WIDTH},
+    browser::{shadow, tab_title, Browser, SIDEBAR_WIDTH},
     command_bar::Mode,
     icons::icon,
     theme::Theme,
@@ -81,7 +81,35 @@ impl<H: WebHost> Browser<H> {
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.ink_muted)
                     .child(div().text_size(px(11.)).child(SharedString::from(space_icon)))
-                    .child(SharedString::from(space_name)),
+                    .child(match &self.renaming {
+                        // Named in place: Enter keeps it, Esc leaves it as it was.
+                        Some(field) => div()
+                            .id("space-name")
+                            .flex_1()
+                            .min_w_0()
+                            .px(px(4.))
+                            .rounded(px(4.))
+                            .bg(theme.glass_strong)
+                            .text_color(theme.ink)
+                            .track_focus(&self.input_focus)
+                            .on_key_down(cx.listener(Self::on_input_key))
+                            .child(field.render(
+                                "Space name",
+                                theme.ink,
+                                theme.ink_muted,
+                                Hsla { a: 0.3, ..theme.accent },
+                            ))
+                            .into_any_element(),
+                        None => div()
+                            .id("space-name")
+                            .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
+                                if e.click_count() == 2 {
+                                    this.start_rename(window, cx);
+                                }
+                            }))
+                            .child(SharedString::from(space_name))
+                            .into_any_element(),
+                    }),
             )
             .child(self.render_zone(space, Zone::Pinned, theme, cx))
             .child(
@@ -124,16 +152,26 @@ impl<H: WebHost> Browser<H> {
             .pr(px(12.))
             .pb(px(4.))
             .pl(px(10.))
-            .child(self.render_toolbar(theme, cx))
-            .child(div().pt(px(12.)).child(self.render_url_bar(theme, cx)))
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+            .child(
+                div()
+                    .id("toolbar")
+                    .h(px(32.))
+                    .pl(px(6.))
+                    .pr(px(1.))
+                    .flex()
+                    .items_center()
+                    .on_mouse_down(gpui::MouseButton::Left, drag_or_zoom)
+                    .child(self.render_window_controls(theme, cx)),
+            )
             .child(lists)
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
     }
 
-    /// Room for the traffic lights, the sidebar toggle, and back/forward/reload.
-    /// The empty part drags the window.
-    fn render_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Room for the traffic lights, the sidebar toggle, and back/forward/reload:
+    /// the sidebar's toolbar, or the address bar's left end when it is collapsed.
+    pub(crate) fn render_window_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self
             .active_tab()
             .and_then(|id| self.pages.get(&id))
@@ -141,10 +179,7 @@ impl<H: WebHost> Browser<H> {
         let (back, fwd, loading) = page.map_or((false, false, false), |p| {
             (p.can_go_back(), p.can_go_forward(), p.is_loading())
         });
-        let button = |id: &'static str,
-                      name: &'static str,
-                      enabled: bool,
-                      action: Box<dyn gpui::Action>| {
+        let button = |id: &'static str, name: &'static str, enabled: bool| {
             div()
                 .id(id)
                 .size(px(24.))
@@ -152,96 +187,63 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .justify_center()
                 .rounded(px(6.))
-                .when(enabled, |d| {
-                    d.hover(|s| s.bg(theme.hover))
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(action.boxed_clone(), cx)
-                        })
-                })
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(enabled, |d| d.hover(|s| s.bg(theme.hover)))
                 .child(icon(
                     name,
                     16.,
                     if enabled { theme.ink_muted } else { theme.ink_faint },
                 ))
         };
+        // Back and forward: click to go, hold (or right-click) for history.
+        let history = |id: &'static str, name: &'static str, enabled: bool, back: bool| {
+            button(id, name, enabled).when(enabled, |d| {
+                d.on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.nav_down(back, e.position, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.nav_up(cx)),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        this.show_history(back, e.position, cx)
+                    }),
+                )
+            })
+        };
         div()
-            .id("toolbar")
-            .h(px(32.))
-            .pl(px(6.))
-            .pr(px(1.))
+            .flex_1()
             .flex()
             .items_center()
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move())
             // Traffic lights: 52 wide, then the same 14 gap the mock leaves.
             .child(div().w(px(62.)))
-            .child(button(
-                "toggle-sidebar",
-                "panel-left",
-                true,
-                Box::new(crate::actions::ToggleSidebar),
-            ))
+            .child(button("toggle-sidebar", "panel-left", true).on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
+            }))
             .child(div().flex_1())
             .child(
                 div()
                     .flex()
                     .gap(px(10.))
-                    .child(button("back", "arrow-left", back, Box::new(crate::actions::Back)))
-                    .child(button(
-                        "forward",
-                        "arrow-right",
-                        fwd,
-                        Box::new(crate::actions::Forward),
-                    ))
-                    .child(button(
-                        "reload",
-                        if loading { "x" } else { "rotate-cw" },
-                        page.is_some(),
-                        Box::new(crate::actions::Reload),
-                    )),
+                    .child(history("back", "arrow-left", back, true))
+                    .child(history("forward", "arrow-right", fwd, false))
+                    .child(
+                        button(
+                            "reload",
+                            if loading { "x" } else { "rotate-cw" },
+                            page.is_some(),
+                        )
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::Reload), cx)
+                        }),
+                    ),
             )
-    }
-
-    /// Arc's URL bar: the host; click edits the full URL in the command bar.
-    fn render_url_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let url = self
-            .active_tab()
-            .and_then(|id| self.session.tab(id))
-            .map(|t| t.url.clone())
-            .unwrap_or_default();
-        let host = host_of(&url);
-        let copy = url.clone();
-        div()
-            .id("url-bar")
-            .h(px(34.))
-            .pl(px(12.))
-            .pr(px(10.))
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .rounded(px(10.))
-            .bg(theme.glass)
-            .text_size(px(13.))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(if host.is_empty() { theme.ink_muted } else { theme.ink })
-            .hover(|s| s.bg(Hsla { a: theme.glass.a * 1.5, ..theme.glass }))
-            .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
-            .child(div().flex_1().min_w_0().truncate().child(if host.is_empty() {
-                "Search or enter address".into()
-            } else {
-                host
-            }))
-            .when(!url.is_empty(), |d| {
-                d.child(
-                    div()
-                        .id("copy-link")
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()));
-                        })
-                        .child(icon("link", 14., theme.ink_muted)),
-                )
-            })
-            .child(icon("sliders-horizontal", 14., theme.ink_muted))
     }
 
     fn render_zone(
@@ -331,7 +333,12 @@ impl<H: WebHost> Browser<H> {
                 this.session.move_tab(d.id, space, zone, index);
                 this.sync(window, cx);
             }))
-            .child(favicon(tab.favicon.clone(), &title, loading, theme))
+            .child(favicon(
+                tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
+                &title,
+                loading,
+                theme,
+            ))
             .child(div().flex_1().min_w_0().truncate().child(title))
             .child(
                 div()
@@ -361,15 +368,15 @@ impl<H: WebHost> Browser<H> {
     ) -> impl IntoElement {
         let dots = self.session.spaces().iter().map(|space| {
             let id = space.id;
-            let ink = theme.ink;
             let hover = theme.glass;
             div()
                 .id(("space", id.0))
-                .size(px(18.))
+                .size(px(24.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_full()
+                .rounded(px(6.))
+                .when(id == active, |d| d.bg(theme.glass))
                 .hover(|s| s.bg(hover))
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.activate_space(id, window, cx)),
@@ -379,11 +386,12 @@ impl<H: WebHost> Browser<H> {
                     this.session.move_tab(d.id, id, Zone::Today, 0);
                     this.sync(window, cx);
                 }))
-                .child(div().size(px(6.)).rounded_full().bg(if id == active {
-                    ink
-                } else {
-                    theme.ink_faint
-                }))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .when(id != active, |d| d.opacity(0.45))
+                        .child(SharedString::from(space.icon.clone())),
+                )
         });
         let button = |id: &'static str, name: &'static str| {
             div()
@@ -412,7 +420,12 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
-fn favicon(url: Option<String>, title: &str, loading: bool, theme: &Theme) -> AnyElement {
+fn favicon(
+    image: Option<std::sync::Arc<gpui::Image>>,
+    title: &str,
+    loading: bool,
+    theme: &Theme,
+) -> AnyElement {
     let letter: SharedString = title
         .split("://")
         .last()
@@ -435,10 +448,9 @@ fn favicon(url: Option<String>, title: &str, loading: bool, theme: &Theme) -> An
             .child(letter.clone())
             .into_any_element()
     };
-    let icon = match url {
-        // ponytail: favicons load via gpui's HTTP client (none set = letter fallback), not the
-        // Space's CEF context; fine for public icons, wrong for icons behind a login.
-        Some(url) => img(url)
+    // The page fetches its favicon through its own Space's storage (gpui-cef).
+    let icon = match image {
+        Some(image) => img(image)
             .size(px(16.))
             .rounded(px(4.))
             .with_fallback(fallback)
@@ -460,4 +472,13 @@ fn favicon(url: Option<String>, title: &str, loading: bool, theme: &Theme) -> An
             |d, t| d.opacity(t),
         )
         .into_any_element()
+}
+
+/// Empty toolbar space: drags the window; a double-click zooms it (macOS).
+pub(crate) fn drag_or_zoom(event: &gpui::MouseDownEvent, window: &mut Window, _: &mut gpui::App) {
+    if event.click_count == 2 {
+        window.zoom_window();
+    } else {
+        window.start_window_move();
+    }
 }

@@ -40,7 +40,7 @@ fn command_bar_opens_tabs_and_creates_pages(cx: &mut TestAppContext) {
     assert_eq!(
         urls(&b, Zone::Today, cx),
         [
-            "https://duckduckgo.com/?q=rust+lang",
+            "https://www.google.com/search?q=rust+lang",
             "https://example.com/"
         ]
     );
@@ -358,4 +358,41 @@ fn external_links_open_in_lil_baa_and_move_into_the_browser(cx: &mut TestAppCont
         let page = &b.pages[&b.active_tab().unwrap()].0;
         assert_eq!(page.read(cx).moved.get(), 1, "the live page moved windows");
     });
+}
+
+#[gpui::test]
+fn a_new_space_is_named_in_place(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.dispatch_action(NewSpace);
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| b.renaming.is_some() && b.bar.is_none()));
+    cx.simulate_input("Work");
+    cx.simulate_keystrokes("enter");
+    b.read_with(cx, |b, _| {
+        assert!(b.renaming.is_none());
+        assert_eq!(b.active_space().unwrap().name, "Work");
+    });
+}
+
+#[gpui::test]
+fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
+    use gpui::{point, px, Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
+    let (b, cx) = browser(cx);
+    cx.dispatch_action(NewSpace);
+    cx.simulate_keystrokes("escape");
+    let spaces = b.read_with(cx, |b, _| {
+        b.session().spaces().iter().map(|s| s.id).collect::<Vec<_>>()
+    });
+    let swipe = |phase, dx: f32| ScrollWheelEvent {
+        position: point(px(100.), px(300.)),
+        delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+        modifiers: Modifiers::none(),
+        touch_phase: phase,
+    };
+    b.update_in(cx, |b, window, cx| {
+        b.on_chrome_scroll(&swipe(TouchPhase::Started, 0.), window, cx);
+        b.on_chrome_scroll(&swipe(TouchPhase::Moved, 120.), window, cx);
+        b.on_chrome_scroll(&swipe(TouchPhase::Ended, 0.), window, cx);
+    });
+    assert_eq!(b.read_with(cx, |b, _| b.session().active_space()), Some(spaces[0]));
 }

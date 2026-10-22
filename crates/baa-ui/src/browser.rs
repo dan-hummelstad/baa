@@ -70,8 +70,19 @@ pub struct Browser<H: WebHost> {
     pub(crate) bar: Option<Bar>,
     pub(crate) find: Option<TextField>,
     pub(crate) menu: Option<ContextMenu>,
-    /// A link previewed over the page (Peek).
+    /// A link previewed over the page (Peek), or an extension's popup.
     pub(crate) peek: Option<PeekPage<H::Page>>,
+    /// The Space name being edited in place.
+    pub(crate) renaming: Option<TextField>,
+    /// Favicons by URL, fetched by the pages themselves.
+    pub(crate) favicons: HashMap<String, std::sync::Arc<gpui::Image>>,
+    /// The active Space's extensions, for the toolbar.
+    pub(crate) extensions: Vec<baa_web::Extension>,
+    /// Back/forward pressed and held: which way, and when.
+    pub(crate) nav_press: Option<(bool, Instant)>,
+    pub(crate) history_menu: Option<HistoryMenu>,
+    /// Two-finger swipe across the chrome, in sidebar widths, while one is on.
+    swipe: Option<f32>,
     window: AnyWindowHandle,
     focus: FocusHandle,
     /// Shared by the command bar and find bar; only one is open at a time.
@@ -119,6 +130,13 @@ impl<H: WebHost> Browser<H> {
         if settings.reduce_motion {
             cx.set_reduce_motion(true);
         }
+        let favicons = store
+            .as_ref()
+            .and_then(|s| s.load_favicons().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(url, png)| (url, std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))))
+            .collect();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
@@ -133,12 +151,18 @@ impl<H: WebHost> Browser<H> {
             find: None,
             menu: None,
             peek: None,
+            renaming: None,
+            favicons,
+            extensions: Vec::new(),
+            nav_press: None,
+            history_menu: None,
+            swipe: None,
             window: window.window_handle(),
             focus,
             input_focus: cx.focus_handle(),
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
-            reveal: Spring::new(0.0),
+            reveal: Spring::quick(0.0),
             reveal_zone: false,
             reveal_card: false,
             slide: Spring::new(0.0),
@@ -220,9 +244,15 @@ impl<H: WebHost> Browser<H> {
         for (id, (page, _)) in &self.pages {
             page.read(cx).set_visible(Some(*id) == active);
         }
-        if self.bar.is_none() && self.find.is_none() && self.peek.is_none() {
+        if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() {
             self.focus_page(window, cx);
         }
+        // ponytail: re-read on every session change; an install shows up at
+        // the next tab or Space switch.
+        self.extensions = self
+            .active_space()
+            .map(|s| self.host.extensions(s.profile))
+            .unwrap_or_default();
         self.save();
         cx.notify();
     }
@@ -265,6 +295,14 @@ impl<H: WebHost> Browser<H> {
             PageEvent::UrlChanged(url) => tab.url = url.clone(),
             PageEvent::TitleChanged(title) => tab.title = title.clone(),
             PageEvent::FaviconChanged(favicon) => tab.favicon = favicon.clone(),
+            PageEvent::FaviconImage { url, png } => {
+                if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_favicon(url, png)) {
+                    log::error!("saving favicon: {e}");
+                }
+                let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png.to_vec());
+                self.favicons.insert(url.clone(), std::sync::Arc::new(image));
+                return cx.notify();
+            }
             PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => return cx.notify(),
             PageEvent::OpenRequested {
                 url, background, ..
@@ -314,6 +352,18 @@ impl<H: WebHost> Browser<H> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_preview(space, url, false, window, cx)
+    }
+
+    /// Peek, or with `popup` an extension's toolbar popup under the address bar.
+    fn open_preview(
+        &mut self,
+        space: SpaceId,
+        url: &str,
+        popup: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(profile) = self.session.space(space).map(|s| s.profile) else {
             return;
         };
@@ -333,6 +383,7 @@ impl<H: WebHost> Browser<H> {
             space,
             url: url.into(),
             open,
+            popup,
         });
         cx.notify();
     }
@@ -394,6 +445,108 @@ impl<H: WebHost> Browser<H> {
         });
         self.pages.insert(id, (page, sub));
         self.sync(window, cx);
+    }
+
+    pub(crate) fn open_extension(
+        &mut self,
+        extension: &baa_web::Extension,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(space) = self.session.active_space() else {
+            return;
+        };
+        match &extension.popup {
+            Some(popup) => self.open_preview(space, popup, true, window, cx),
+            None => self.open_extensions(&format!("chrome://extensions/?id={}", extension.id), window, cx),
+        }
+    }
+
+    /// Back (`back`) or forward pressed: a short press navigates on release, a
+    /// long one shows that direction's history.
+    pub(crate) fn nav_down(&mut self, back: bool, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let pressed = Instant::now();
+        self.nav_press = Some((back, pressed));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HOLD).await;
+            this.update(cx, |this, cx| {
+                if this.nav_press.is_some_and(|(_, t)| t == pressed) {
+                    this.nav_press = None;
+                    this.show_history(back, at, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn nav_up(&mut self, cx: &mut Context<Self>) {
+        if let Some((back, _)) = self.nav_press.take() {
+            self.with_page(cx, |p| if back { p.go_back() } else { p.go_forward() });
+        }
+    }
+
+    pub(crate) fn show_history(&mut self, back: bool, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(page) = self.active_page() else { return };
+        let (entries, current) = page.read(cx).history();
+        let label = |(title, url): &(String, String)| {
+            if title.is_empty() { url.clone() } else { title.clone() }
+        };
+        let entries: Vec<(i32, String)> = if back {
+            entries[..current.min(entries.len())]
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(i, e)| (i as i32 - current as i32, label(e)))
+                .collect()
+        } else {
+            entries
+                .iter()
+                .enumerate()
+                .skip(current + 1)
+                .map(|(i, e)| (i as i32 - current as i32, label(e)))
+                .collect()
+        };
+        if !entries.is_empty() {
+            self.history_menu = Some(HistoryMenu { at, entries });
+            cx.notify();
+        }
+    }
+
+    /// Two-finger horizontal swipe across the chrome switches Spaces; the list
+    /// follows the fingers and a quarter width commits.
+    pub(crate) fn on_chrome_scroll(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let gpui::ScrollDelta::Pixels(delta) = event.delta else {
+            return;
+        };
+        match event.touch_phase {
+            gpui::TouchPhase::Started => self.swipe = Some(0.0),
+            gpui::TouchPhase::Moved => {
+                let Some(swipe) = &mut self.swipe else { return };
+                let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                if dx.abs() <= dy.abs() {
+                    return;
+                }
+                *swipe = (*swipe + dx / SIDEBAR_WIDTH).clamp(-1.0, 1.0);
+                self.slide.snap(*swipe);
+                cx.notify();
+            }
+            gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                let Some(swipe) = self.swipe.take() else { return };
+                if swipe.abs() > 0.25 {
+                    // Fingers left: the next Space comes in from the right.
+                    self.step_space(if swipe < 0.0 { 1 } else { -1 }, window, cx);
+                } else {
+                    self.slide.set_target(0.0);
+                    cx.notify();
+                }
+            }
+        }
     }
 
     /// A link from another app: a lil-baa window, which can be expanded into
@@ -508,7 +661,7 @@ impl<H: WebHost> Browser<H> {
             (space.accent, space.accent_to) = (top, Some(bottom));
         }
         self.activate_space(id, window, cx);
-        self.open_bar(Mode::RenameSpace, window, cx);
+        self.start_rename(window, cx);
     }
 
     pub(crate) fn new_incognito_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -611,11 +764,6 @@ impl<H: WebHost> Browser<H> {
                     .map(|t| t.url.clone())
                     .unwrap_or_default(),
             ),
-            Mode::RenameSpace => TextField::selected(
-                self.active_space()
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default(),
-            ),
             Mode::NewTab => TextField::default(),
         };
         self.bar = Some(Bar::new(mode, field));
@@ -624,7 +772,22 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// Edits the Space's name where the sidebar shows it, all selected.
+    pub(crate) fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.active_space().map(|s| s.name.clone()).unwrap_or_default();
+        self.bar = None;
+        self.find = None;
+        self.renaming = Some(TextField::selected(name));
+        if !self.sidebar_open {
+            self.reveal.set_target(1.0);
+        }
+        window.focus(&self.input_focus, cx);
+        cx.notify();
+    }
+
     pub(crate) fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.renaming = None;
+        self.history_menu = None;
         if self.find.take().is_some() {
             self.with_page(cx, |p| p.find("", true));
         }
@@ -644,7 +807,17 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) {
         let shift = event.keystroke.modifiers.shift;
-        if let Some(bar) = &mut self.bar {
+        if let Some(field) = &mut self.renaming {
+            match field.handle(&event.keystroke, cx) {
+                Key::Submit => {
+                    let text = field.text.clone();
+                    self.rename_active_space(&text);
+                    self.close_overlays(window, cx);
+                }
+                Key::Cancel => self.close_overlays(window, cx),
+                _ => {}
+            }
+        } else if let Some(bar) = &mut self.bar {
             let key = bar.field.handle(&event.keystroke, cx);
             command_bar::on_key(self, key, window, cx);
         } else if let Some(field) = &mut self.find {
@@ -680,7 +853,7 @@ impl<H: WebHost> Browser<H> {
         self.activate_tab(tabs[next], window, cx);
     }
 
-    fn step_space(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn step_space(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let spaces: Vec<SpaceId> = self.session.spaces().iter().map(|s| s.id).collect();
         let Some(i) = spaces
             .iter()
@@ -858,7 +1031,8 @@ impl<H: WebHost> Browser<H> {
                 .id("reveal-card")
                 .occlude()
                 .w(px(SIDEBAR_WIDTH))
-                .rounded(px(10.))
+                // The page's radius: a larger one shows the page past its corners.
+                .rounded(px(PAGE_RADIUS))
                 .overflow_hidden()
                 .bg(gradient_fill(theme))
                 .border_1()
@@ -924,6 +1098,40 @@ impl<H: WebHost> Browser<H> {
                     .text_color(gpui::white())
                     .child(host),
             );
+        if peek.popup {
+            // An extension's popup: a small card under the address bar's right end.
+            return Some(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(
+                        div()
+                            .id("popup-backdrop")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| this.close_peek(window, cx))),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(INSET + 5. + 32. + 2.))
+                            .right(px(INSET))
+                            .mt(px((1.0 - t) * -8.0))
+                            .w(px(380.))
+                            .h(px(520.))
+                            .opacity(t.clamp(0.0, 1.0))
+                            .rounded(px(PEEK_RADIUS))
+                            .overflow_hidden()
+                            .bg(gpui::white())
+                            .border_1()
+                            .border_color(gpui::rgba(0x0000001F))
+                            .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 12., 32.)])
+                            .child(content),
+                    )
+                    .into_any_element(),
+            );
+        }
         // Rises a little as it fades in; gpui has no transforms, so offset and opacity carry it.
         let rise = (1.0 - t) * 24.0;
         let card = div()
@@ -1033,14 +1241,20 @@ impl<H: WebHost> Browser<H> {
                     Hsla { a: 0.25, ..theme.accent },
                 ))
         });
+        let bar = self.render_address_bar(theme, cx);
         div()
             .relative()
             .flex_1()
             .min_w_0()
             .h_full()
+            .flex()
+            .flex_col()
+            .child(bar)
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
                     .rounded(px(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
@@ -1048,6 +1262,119 @@ impl<H: WebHost> Browser<H> {
                     .child(content),
             )
             .children(find)
+    }
+
+    /// Above the page, across its width: the short URL in the middle (click to
+    /// edit), extensions at the right end, and with the sidebar collapsed the
+    /// window controls at the left. Empty space drags the window.
+    fn render_address_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let url = self
+            .active_tab()
+            .and_then(|id| self.session.tab(id))
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
+        let host = host_of(&url);
+        let extensions: Vec<_> = self.extensions.iter().enumerate().map(|(i, ext)| {
+            let icon_path = ext.icon.clone();
+            let ext = ext.clone();
+            div()
+                .id(("extension", i))
+                .size(px(26.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .hover(|s| s.bg(theme.hover))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
+                .child(match icon_path {
+                    Some(path) => gpui::img(path).size(px(16.)).into_any_element(),
+                    None => icon("sliders-horizontal", 16., theme.ink_muted).into_any_element(),
+                })
+        }).collect();
+        let controls = collapsed_controls(self, theme, cx);
+        div()
+            .id("address-bar")
+            .flex_none()
+            .h(px(32.))
+            .mt(px(5.))
+            .mb(px(4.))
+            .flex()
+            .items_center()
+            .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+            .child(div().flex_1().flex().items_center().children(controls))
+            .child(
+                div()
+                    .id("address")
+                    .flex_none()
+                    .max_w(px(480.))
+                    .h(px(28.))
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .text_size(px(13.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(if host.is_empty() { theme.ink_muted } else { theme.ink })
+                    .hover(|s| s.bg(theme.hover))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
+                    .child(div().truncate().child(if host.is_empty() {
+                        "Search or enter address".into()
+                    } else {
+                        host
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(2.))
+                    .children(extensions),
+            )
+    }
+
+    fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let menu = self.history_menu.as_ref()?;
+        let rows = menu.entries.iter().map(|(offset, title)| {
+            let offset = *offset;
+            div()
+                .id(("history", offset as i64 as u64))
+                .h(px(30.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .rounded(px(7.))
+                .max_w(px(360.))
+                .hover(|s| s.bg(self.theme().accent).text_color(gpui::white()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.with_page(cx, |p| p.go_to_offset(offset));
+                    this.close_overlays(window, cx);
+                }))
+                .child(div().truncate().child(SharedString::from(title.clone())))
+        });
+        Some(deferred(div().absolute().inset_0().occlude().child(
+            anchored().position(menu.at).snap_to_window().child(
+                div()
+                    .id("history-menu")
+                    .occlude()
+                    .min_w(px(220.))
+                    .p(px(5.))
+                    .rounded(px(10.))
+                    .bg(surface::bg())
+                    .border_1()
+                    .border_color(surface::border())
+                    .shadow(vec![shadow(gpui::rgba(0x18122C29).into(), 8., 24.)])
+                    .text_size(px(13.))
+                    .text_color(surface::ink())
+                    .on_mouse_down_out(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
+                    .children(rows),
+            ),
+        )))
     }
 
     fn render_context_menu(
@@ -1141,6 +1468,25 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
+/// With the sidebar collapsed, its window controls move to the address bar.
+fn collapsed_controls<H: WebHost>(
+    browser: &Browser<H>,
+    theme: &Theme,
+    cx: &mut Context<Browser<H>>,
+) -> Option<AnyElement> {
+    (browser.sidebar_w.value() < 1.0).then(|| {
+        div()
+            .w(px(SIDEBAR_WIDTH - 22.))
+            .flex()
+            .items_center()
+            // Same place as in the sidebar (16 from the window edge, where the
+            // traffic lights start); the bar itself starts at the inset.
+            .pl(px(16. - INSET))
+            .child(browser.render_window_controls(theme, cx))
+            .into_any_element()
+    })
+}
+
 /// A link previewed over the page.
 pub(crate) struct PeekPage<P> {
     pub(crate) page: Entity<P>,
@@ -1148,7 +1494,19 @@ pub(crate) struct PeekPage<P> {
     pub(crate) space: SpaceId,
     pub(crate) url: String,
     open: Spring,
+    /// An extension popup rather than a link preview.
+    pub(crate) popup: bool,
 }
+
+/// Back/forward held down: the history in that direction.
+pub(crate) struct HistoryMenu {
+    pub at: Point<Pixels>,
+    /// (offset from the current entry, title).
+    pub entries: Vec<(i32, String)>,
+}
+
+/// Back/forward pressed this long shows history instead.
+const HOLD: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// The window's Space gradient, top to bottom.
 pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {
@@ -1206,6 +1564,7 @@ impl<H: WebHost> Render for Browser<H> {
         let peek = self.render_peek(window, cx);
         let bar = self.render_command_bar(&theme, cx);
         let menu = self.render_context_menu(&theme, cx);
+        let history = self.render_history_menu(cx);
         // The sidebar brings its own padding; collapsed, the page gets the inset.
         let docked_w = self.sidebar_w.value().max(0.0);
         let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
@@ -1218,7 +1577,8 @@ impl<H: WebHost> Render for Browser<H> {
             .size_full()
             .flex()
             .when(right, |d| d.flex_row_reverse())
-            .py(px(INSET))
+            .pb(px(INSET))
+            .pt(px(INSET))
             .when(right, |d| d.pl(px(INSET)).pr(px(edge)))
             .when(!right, |d| d.pr(px(INSET)).pl(px(edge)))
             .bg(gradient_fill(&theme))
@@ -1236,7 +1596,8 @@ impl<H: WebHost> Render for Browser<H> {
             .children(reveal.into_iter().flatten())
             .children(peek)
             .children(bar)
-            .children(menu);
+            .children(menu)
+            .children(history);
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {

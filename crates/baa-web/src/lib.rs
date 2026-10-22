@@ -15,6 +15,8 @@ pub enum PageEvent {
     UrlChanged(String),
     TitleChanged(String),
     FaviconChanged(Option<String>),
+    /// The favicon at `url`, as PNG.
+    FaviconImage { url: String, png: std::sync::Arc<Vec<u8>> },
     LoadingChanged(bool),
     HistoryChanged { can_go_back: bool, can_go_forward: bool },
     /// Page asked to open a new window/tab (window.open, target=_blank, shift- or
@@ -37,6 +39,10 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn is_loading(&self) -> bool;
     fn can_go_back(&self) -> bool;
     fn can_go_forward(&self) -> bool;
+    /// The back/forward list as (title, url), and the current entry's index.
+    fn history(&self) -> (Vec<(String, String)>, usize);
+    /// Moves through history; negative is back.
+    fn go_to_offset(&self, offset: i32);
     fn eval(&self, script: &str);
     /// `level` is a factor: 1.0 is 100%.
     fn set_zoom(&self, level: f64);
@@ -72,4 +78,16 @@ pub trait WebHost: 'static {
     /// Chrome's own extension UI for `profile` (Web Store installs, chrome://extensions,
     /// extension popups), in a native Chrome-style window.
     fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App);
+    /// Extensions installed in `profile`, for the toolbar.
+    fn extensions(&self, profile: ProfileId) -> Vec<Extension>;
+}
+
+/// An installed extension, as the toolbar shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Extension {
+    pub id: String,
+    pub name: String,
+    pub icon: Option<std::path::PathBuf>,
+    /// Its toolbar popup page, if it has one.
+    pub popup: Option<String>,
 }

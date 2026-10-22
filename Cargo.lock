@@ -627,6 +627,7 @@ dependencies = [
  "gpui",
  "gpui-cef",
  "log",
+ "serde_json",
 ]
 
 [[package]]

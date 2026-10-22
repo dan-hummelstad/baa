@@ -21,6 +21,7 @@ impl Store {
     fn init(conn: Connection) -> Result<Store> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)", [])?;
+        conn.execute("CREATE TABLE IF NOT EXISTS favicons (url TEXT PRIMARY KEY, png BLOB NOT NULL)", [])?;
         Ok(Store { conn })
     }
 
@@ -54,6 +55,21 @@ impl Store {
         self.put("settings", settings)
     }
 
+    /// Favicons as PNG, by their URL, so restored tabs show theirs at launch.
+    // ponytail: never pruned. Ceiling: one row per site ever visited; drop rows
+    // no tab references if the file grows.
+    pub fn load_favicons(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare("SELECT url, png FROM favicons")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    pub fn save_favicon(&self, url: &str, png: &[u8]) -> Result<()> {
+        self.conn
+            .execute("INSERT OR REPLACE INTO favicons VALUES (?1, ?2)", rusqlite::params![url, png])
+            .map(drop)
+    }
+
     fn get(&self, key: &str) -> Result<Option<String>> {
         self.conn.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0)).optional()
     }
@@ -68,6 +84,14 @@ impl Store {
 mod tests {
     use super::*;
     use crate::{ProfileId, SidebarSide, Zone};
+
+    #[test]
+    fn favicons_round_trip() {
+        let store = Store::open(":memory:").unwrap();
+        store.save_favicon("https://a/f.ico", b"png1").unwrap();
+        store.save_favicon("https://a/f.ico", b"png2").unwrap();
+        assert_eq!(store.load_favicons().unwrap(), [("https://a/f.ico".to_string(), b"png2".to_vec())]);
+    }
 
     #[test]
     fn session_round_trip_skips_incognito() {

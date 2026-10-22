@@ -130,12 +130,16 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             icon_urls: Option<&mut CefStringList>,
         ) {
             // Taking the list moves CEF's borrowed one out; the empty one left
             // behind is ours to free.
             let first = icon_urls.and_then(|urls| std::mem::take(urls).into_iter().next());
+            if let (Some(url), Some(host)) = (&first, browser.and_then(|b| b.host())) {
+                let mut callback = GpuiCefFaviconCallback::new(self.shared.clone());
+                host.download_image(Some(&url.as_str().into()), 1, 32, 0, Some(&mut callback));
+            }
             self.shared.push_event(WebviewEvent::FaviconChanged(first));
         }
 
@@ -212,6 +216,63 @@ fn cursor_style(cursor: CursorType) -> CursorStyle {
         // WAIT, PROGRESS, HELP, ZOOMIN/OUT and the panning cursors have no gpui
         // equivalent; the arrow is the least surprising fallback.
         _ => CursorStyle::Arrow,
+    }
+}
+
+wrap_download_image_callback! {
+    pub(crate) struct GpuiCefFaviconCallback {
+        shared: Rc<Shared>,
+    }
+
+    impl DownloadImageCallback {
+        fn on_download_image_finished(
+            &self,
+            image_url: Option<&CefString>,
+            _http_status_code: ::std::os::raw::c_int,
+            image: Option<&mut Image>,
+        ) {
+            let (Some(url), Some(image)) = (image_url, image) else { return };
+            // CEF returns nothing unless it may write the pixel size back.
+            let (mut width, mut height) = (0, 0);
+            // 2x, so it stays sharp on Retina at 16 points.
+            let Some(png) = image.as_png(2., 1, Some(&mut width), Some(&mut height)) else {
+                return;
+            };
+            let mut bytes = vec![0; png.size()];
+            png.data(Some(&mut bytes), 0);
+            self.shared.push_event(WebviewEvent::FaviconImage {
+                url: url.to_string(),
+                png: std::sync::Arc::new(bytes),
+            });
+        }
+    }
+}
+
+wrap_navigation_entry_visitor! {
+    pub(crate) struct GpuiCefHistoryVisitor {
+        entries: Rc<std::cell::RefCell<(Vec<crate::HistoryEntry>, usize)>>,
+    }
+
+    impl NavigationEntryVisitor {
+        fn visit(
+            &self,
+            entry: Option<&mut NavigationEntry>,
+            current: ::std::os::raw::c_int,
+            index: ::std::os::raw::c_int,
+            _total: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if let Some(entry) = entry {
+                let mut entries = self.entries.borrow_mut();
+                if current != 0 {
+                    entries.1 = index.max(0) as usize;
+                }
+                entries.0.push(crate::HistoryEntry {
+                    url: CefString::from(&entry.url()).to_string(),
+                    title: CefString::from(&entry.title()).to_string(),
+                });
+            }
+            1
+        }
     }
 }
 

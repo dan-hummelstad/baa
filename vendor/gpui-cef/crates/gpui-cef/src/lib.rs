@@ -41,6 +41,13 @@
 mod options;
 mod platform;
 
+/// One entry of a page's back/forward list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryEntry {
+    pub url: String,
+    pub title: String,
+}
+
 pub use options::{
     CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
@@ -62,6 +69,9 @@ pub enum WebviewEvent {
     TitleChanged(String),
     /// The page's first favicon URL; `None` when it declares none.
     FaviconChanged(Option<String>),
+    /// The favicon's image, as PNG, fetched through the page's own storage
+    /// profile (so icons behind a login work).
+    FaviconImage { url: String, png: std::sync::Arc<Vec<u8>> },
     LoadingChanged(bool),
     HistoryChanged {
         can_go_back: bool,

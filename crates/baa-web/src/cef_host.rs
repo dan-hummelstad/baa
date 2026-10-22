@@ -10,7 +10,7 @@ use std::{
 use gpui::{div, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, IntoElement, Window};
 use gpui_cef::{Download, ProfileOptions, WebviewEvent, WebviewOptions};
 
-use crate::{PageEvent, PageHandle, ProfileId, WebHost};
+use crate::{Extension, PageEvent, PageHandle, ProfileId, WebHost};
 
 /// A page. gpui-cef's webview implements [`PageHandle`] directly, so the UI
 /// holds the same entity CEF paints into.
@@ -154,6 +154,7 @@ impl WebHost for CefWebHost {
                 WebviewEvent::UrlChanged(url) => PageEvent::UrlChanged(url),
                 WebviewEvent::TitleChanged(title) => PageEvent::TitleChanged(title),
                 WebviewEvent::FaviconChanged(url) => PageEvent::FaviconChanged(url),
+                WebviewEvent::FaviconImage { url, png } => PageEvent::FaviconImage { url, png },
                 WebviewEvent::LoadingChanged(loading) => PageEvent::LoadingChanged(loading),
                 WebviewEvent::HistoryChanged {
                     can_go_back,
@@ -226,6 +227,13 @@ impl WebHost for CefWebHost {
         log::warn!("extensions are macOS-only for now");
     }
 
+    fn extensions(&self, profile: ProfileId) -> Vec<Extension> {
+        if is_ephemeral(profile) {
+            return Vec::new();
+        }
+        installed_extensions(&profile_dir(&self.root, profile))
+    }
+
     fn delete_profile(&self, profile: ProfileId) {
         self.profiles.borrow_mut().remove(&profile);
         if is_ephemeral(profile) {
@@ -272,6 +280,13 @@ impl PageHandle for CefPage {
     fn can_go_forward(&self) -> bool {
         CefPage::can_go_forward(self)
     }
+    fn history(&self) -> (Vec<(String, String)>, usize) {
+        let (entries, current) = CefPage::history(self);
+        (entries.into_iter().map(|e| (e.title, e.url)).collect(), current)
+    }
+    fn go_to_offset(&self, offset: i32) {
+        CefPage::go_to_offset(self, offset)
+    }
     fn eval(&self, script: &str) {
         CefPage::eval(self, script)
     }
@@ -309,6 +324,68 @@ impl PageHandle for CefPage {
     // ponytail: WebView2 children cannot change windows; the page stays put.
     #[cfg(not(target_os = "macos"))]
     fn move_to_window(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {}
+}
+
+/// Chrome keeps each extension in `Extensions/<id>/<version>/`; this reads the
+/// newest version's manifest (and `_locales` for a `__MSG_name__` name).
+// ponytail: lists what is on disk, so an extension disabled in
+// chrome://extensions still shows. Ceiling: read Preferences for its state.
+fn installed_extensions(profile: &Path) -> Vec<Extension> {
+    let Ok(ids) = std::fs::read_dir(profile.join("Extensions")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Extension> = ids
+        .flatten()
+        .filter_map(|id| {
+            let mut versions: Vec<PathBuf> = std::fs::read_dir(id.path())
+                .ok()?
+                .flatten()
+                .map(|v| v.path())
+                .filter(|v| v.join("manifest.json").exists())
+                .collect();
+            versions.sort();
+            let dir = versions.pop()?;
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).ok()?).ok()?;
+            let id = id.file_name().to_string_lossy().into_owned();
+            let action = manifest.get("action").or_else(|| manifest.get("browser_action"));
+            let icon = action
+                .and_then(|a| a.get("default_icon"))
+                .or_else(|| manifest.get("icons"))
+                .and_then(|icons| match icons {
+                    serde_json::Value::String(path) => Some(path.clone()),
+                    serde_json::Value::Object(sizes) => ["32", "48", "38", "64", "16", "128"]
+                        .iter()
+                        .find_map(|s| sizes.get(*s))
+                        .or_else(|| sizes.values().next())
+                        .and_then(|v| v.as_str().map(String::from)),
+                    _ => None,
+                })
+                .map(|path| dir.join(path.trim_start_matches('/')));
+            let popup = action
+                .and_then(|a| a.get("default_popup"))
+                .and_then(|p| p.as_str())
+                .map(|p| format!("chrome-extension://{id}/{}", p.trim_start_matches('/')));
+            let name = manifest.get("name").and_then(|n| n.as_str()).unwrap_or(&id).to_string();
+            let name = localized(&dir, &manifest, &name).unwrap_or(name);
+            Some(Extension { id, name, icon, popup })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+fn localized(dir: &Path, manifest: &serde_json::Value, name: &str) -> Option<String> {
+    let key = name.strip_prefix("__MSG_")?.strip_suffix("__")?;
+    let locale = manifest.get("default_locale")?.as_str()?;
+    let messages: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.join("_locales").join(locale).join("messages.json")).ok()?,
+    )
+    .ok()?;
+    // Chrome matches message keys case-insensitively.
+    let map = messages.as_object()?;
+    let entry = map.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))?.1;
+    Some(entry.get("message")?.as_str()?.to_string())
 }
 
 // Ids count down from u64::MAX; baa-model's count up from 1.
@@ -355,6 +432,35 @@ fn purge_deleted_profiles(root: &Path) {
         }
     }
     let _ = std::fs::remove_file(list);
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+
+    #[test]
+    fn reads_name_icon_and_popup_from_the_newest_version() {
+        let root = std::env::temp_dir().join(format!("baa-ext-{}", std::process::id()));
+        let dir = root.join("Extensions/abc/1.0_0");
+        std::fs::create_dir_all(dir.join("_locales/en")).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"name":"__MSG_extName__","default_locale":"en","action":{"default_icon":{"16":"i16.png","32":"i32.png"},"default_popup":"popup.html"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("_locales/en/messages.json"), r#"{"extname":{"message":"Blocker"}}"#).unwrap();
+        let found = installed_extensions(&root);
+        assert_eq!(
+            found,
+            [Extension {
+                id: "abc".into(),
+                name: "Blocker".into(),
+                icon: Some(dir.join("i32.png")),
+                popup: Some("chrome-extension://abc/popup.html".into()),
+            }]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 #[cfg(test)]

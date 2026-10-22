@@ -85,11 +85,14 @@ impl TextField {
         selection: Hsla,
     ) -> impl IntoElement {
         let empty = self.text.is_empty();
+        let caret = || div().flex_shrink_0().w(px(1.5)).h(px(16.)).bg(text);
         div()
             .flex()
             .items_center()
             .min_w_0()
             .overflow_hidden()
+            // Empty: the caret sits where typing starts, before the hint.
+            .when(empty, |d| d.child(caret()))
             .child(
                 div()
                     .truncate()
@@ -103,7 +106,7 @@ impl TextField {
                         self.text.clone()
                     })),
             )
-            .child(div().flex_shrink_0().w(px(1.5)).h(px(16.)).bg(text))
+            .when(!empty, |d| d.child(caret()))
     }
 }
 

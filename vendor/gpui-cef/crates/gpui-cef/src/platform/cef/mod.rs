@@ -438,6 +438,21 @@ impl Webview {
         }
     }
 
+    /// The back/forward list and the index of the current entry.
+    pub fn history(&self) -> (Vec<crate::HistoryEntry>, usize) {
+        let entries: Rc<RefCell<(Vec<crate::HistoryEntry>, usize)>> = Rc::default();
+        if let Some(host) = self.host() {
+            let mut visitor = handlers::GpuiCefHistoryVisitor::new(entries.clone());
+            host.navigation_entries(Some(&mut visitor), 0);
+        }
+        entries.take()
+    }
+
+    /// Moves `offset` entries through history: negative is back.
+    pub fn go_to_offset(&self, offset: i32) {
+        self.eval(&format!("history.go({offset})"));
+    }
+
     pub fn stop(&self) {
         if let Some(browser) = self.shared.browser() {
             browser.stop_load();

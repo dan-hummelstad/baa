@@ -16,11 +16,11 @@ pub struct SearchEngine {
 
 /// Choices offered in settings; the first is the default. Users may also enter their own.
 pub const SEARCH_ENGINES: &[(&str, &str)] = &[
+    ("Google", "https://www.google.com/search?q=%s"),
     ("DuckDuckGo", "https://duckduckgo.com/?q=%s"),
     ("Brave Search", "https://search.brave.com/search?q=%s"),
     ("Startpage", "https://www.startpage.com/do/search?q=%s"),
     ("Kagi", "https://kagi.com/search?q=%s"),
-    ("Google", "https://www.google.com/search?q=%s"),
     ("Bing", "https://www.bing.com/search?q=%s"),
 ];
 
@@ -104,16 +104,16 @@ mod tests {
         assert_eq!(s.resolve_input("127.0.0.1:8080"), "http://127.0.0.1:8080/");
         assert_eq!(s.resolve_input("1.1.1.1"), "https://1.1.1.1/");
         assert_eq!(s.resolve_input("http://a.b"), "http://a.b");
-        assert_eq!(s.resolve_input("rust lang"), "https://duckduckgo.com/?q=rust+lang");
-        assert_eq!(s.resolve_input("foo"), "https://duckduckgo.com/?q=foo");
-        assert_eq!(s.resolve_input("c++"), "https://duckduckgo.com/?q=c%2B%2B");
+        assert_eq!(s.resolve_input("rust lang"), "https://www.google.com/search?q=rust+lang");
+        assert_eq!(s.resolve_input("foo"), "https://www.google.com/search?q=foo");
+        assert_eq!(s.resolve_input("c++"), "https://www.google.com/search?q=c%2B%2B");
     }
 
     #[test]
     fn missing_fields_default() {
         let s: Settings = serde_json::from_str(r#"{"reduce_motion":true}"#).unwrap();
         assert!(s.reduce_motion);
-        assert_eq!(s.search_engine.name, "DuckDuckGo");
+        assert_eq!(s.search_engine.name, "Google");
         assert_eq!(s.archive_after_hours, 12);
     }
 }

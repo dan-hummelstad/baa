@@ -23,8 +23,6 @@ pub enum Mode {
     NewTab,
     /// ⌘L: prefilled with the current URL; Enter navigates the current tab.
     Address,
-    /// Text becomes the active Space's "icon name".
-    RenameSpace,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,10 +85,7 @@ impl Bar {
     }
 
     fn rows(&self, session: &Session, settings: &Settings) -> Vec<Row> {
-        match self.mode {
-            Mode::RenameSpace => Vec::new(),
-            _ => rows(&self.field.text, session, settings),
-        }
+        rows(&self.field.text, session, settings)
     }
 }
 
@@ -194,11 +189,7 @@ fn submit<H: WebHost>(
     cx: &mut Context<Browser<H>>,
 ) {
     let Some(bar) = this.bar.as_ref() else { return };
-    let (mode, text) = (bar.mode, bar.field.text.clone());
-    if mode == Mode::RenameSpace {
-        this.rename_active_space(&text);
-        return this.close_overlays(window, cx);
-    }
+    let mode = bar.mode;
     let rows = bar.rows(&this.session, &this.settings);
     let Some(row) = rows.into_iter().nth(row.unwrap_or(bar.selected)) else {
         return;
@@ -211,7 +202,7 @@ fn submit<H: WebHost>(
         Item::Command(c) => match c {
             Command::NewSpace => this.new_space(window, cx),
             Command::NewIncognitoSpace => this.new_incognito_space(window, cx),
-            Command::RenameSpace => this.open_bar(Mode::RenameSpace, window, cx),
+            Command::RenameSpace => this.start_rename(window, cx),
             Command::ChangeSpaceColor => this.cycle_space_color(window, cx),
             Command::DeleteSpace => this.delete_active_space(window, cx),
             Command::SwapSidebarSide => this.swap_sidebar_side(cx),
@@ -236,7 +227,6 @@ impl<H: WebHost> Browser<H> {
         let placeholder = match bar.mode {
             Mode::NewTab => "Search or enter address…",
             Mode::Address => "Enter address…",
-            Mode::RenameSpace => "Space name (start with an emoji to change the icon)",
         };
         let accent = theme.accent;
         let white = gpui::white();
@@ -343,9 +333,8 @@ impl<H: WebHost> Browser<H> {
                                 .flex()
                                 .items_center()
                                 .text_size(px(19.))
-                                .when(bar.mode != Mode::RenameSpace, |d| {
-                                    d.border_b_1().border_color(surface::line())
-                                })
+                                .border_b_1()
+                                .border_color(surface::line())
                                 .child(bar.field.render(
                                     placeholder,
                                     surface::ink().into(),
@@ -353,9 +342,7 @@ impl<H: WebHost> Browser<H> {
                                     gpui::Hsla { a: 0.25, ..accent },
                                 )),
                         )
-                        .when(bar.mode != Mode::RenameSpace, |d| {
-                            d.child(div().p(px(6.)).flex().flex_col().children(list))
-                        }),
+                        .child(div().p(px(6.)).flex().flex_col().children(list)),
                 ),
         )
     }
@@ -387,7 +374,7 @@ mod tests {
     fn typed_text_comes_first_then_best_tab() {
         let (s, gh, _) = session();
         let r = rows("gh", &s, &Settings::default());
-        assert_eq!(r[0].item, Item::Open("https://duckduckgo.com/?q=gh".into()));
+        assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
         assert_eq!(r[0].label, "Search “gh”");
         assert_eq!(r[1].item, Item::Tab(gh));
     }

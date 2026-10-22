@@ -225,6 +225,15 @@ impl Webview {
     }
 
     /// Shows or hides the child window, e.g. when switching tabs.
+    // ponytail: no back/forward list on this backend yet.
+    pub fn history(&self) -> (Vec<crate::HistoryEntry>, usize) {
+        (Vec::new(), 0)
+    }
+
+    pub fn go_to_offset(&self, offset: i32) {
+        self.eval(&format!("history.go({offset})"));
+    }
+
     /// No-op: a native child window has square corners.
     pub fn set_corner_radius(&self, _radius: f32) {}
 

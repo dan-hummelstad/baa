@@ -5,6 +5,8 @@ use gpui::{SpringConfig, SpringState};
 
 /// Arc-ish snappy spring: settles in ~300 ms with a hint of overshoot.
 const SNAPPY: SpringConfig = SpringConfig::new(400.0, 32.0, 1.0);
+/// Quicker, for things the pointer summons (the collapsed sidebar): ~180 ms.
+const QUICK: SpringConfig = SpringConfig::new(900.0, 50.0, 1.0);
 
 const EPSILON: f32 = 0.001;
 /// A dropped frame must not turn into a teleport.
@@ -26,6 +28,13 @@ impl Spring {
                 velocity: 0.0,
             },
             target: value,
+        }
+    }
+
+    pub fn quick(value: f32) -> Self {
+        Self {
+            config: QUICK,
+            ..Self::new(value)
         }
     }
 

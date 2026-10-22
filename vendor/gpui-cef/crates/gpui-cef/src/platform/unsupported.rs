@@ -79,6 +79,15 @@ impl Webview {
     pub fn set_zoom(&self, _factor: f64) {}
     pub fn find(&self, _text: &str, _forward: bool) {}
     pub fn show_dev_tools(&self) {}
+    // ponytail: no back/forward list on this backend yet.
+    pub fn history(&self) -> (Vec<crate::HistoryEntry>, usize) {
+        (Vec::new(), 0)
+    }
+
+    pub fn go_to_offset(&self, offset: i32) {
+        self.eval(&format!("history.go({offset})"));
+    }
+
     /// No-op: a native child window has square corners.
     pub fn set_corner_radius(&self, _radius: f32) {}
 
