@@ -150,11 +150,52 @@ impl Pump {
 /// Ticks the pump once per display refresh (120 Hz on ProMotion), in phase with
 /// vsync, so wheel input and repaints land on display frames.
 pub(crate) mod display_link {
+    use std::cell::Cell;
+
     use objc2::{
-        class, msg_send,
+        class,
+        encode::{Encode, Encoding},
+        msg_send,
         runtime::{AnyObject, ClassBuilder, NSObject, Sel},
         sel, ClassType as _,
     };
+
+    #[repr(C)]
+    struct CAFrameRateRange {
+        minimum: f32,
+        maximum: f32,
+        preferred: f32,
+    }
+
+    unsafe impl Encode for CAFrameRateRange {
+        const ENCODING: Encoding = Encoding::Struct("CAFrameRateRange", &[f32::ENCODING; 3]);
+    }
+
+    thread_local! {
+        static LINK: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
+        static HIGH: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// ProMotion idles at 60 Hz unless asked, and the link follows the display,
+    /// so input and frames would be paced at 60 too. Ask for the full rate while
+    /// pages scroll or animate; let it drop when idle to save power.
+    pub(super) fn set_high_rate(high: bool) {
+        let link = LINK.with(Cell::get);
+        if link.is_null() || HIGH.with(|h| h.replace(high)) == high {
+            return;
+        }
+        log::debug!("display link: {} rate", if high { "full" } else { "default" });
+        let max = max_refresh_rate() as f32;
+        let range = if high {
+            CAFrameRateRange { minimum: max, maximum: max, preferred: max }
+        } else {
+            // All zero: the system default.
+            CAFrameRateRange { minimum: 0., maximum: 0., preferred: 0. }
+        };
+        unsafe {
+            let _: () = msg_send![link, setPreferredFrameRateRange: range];
+        }
+    }
 
     extern "C-unwind" fn tick(_this: *mut AnyObject, _sel: Sel, _link: *mut AnyObject) {
         // Clone the state out so ticking (which may register webviews) does not
@@ -211,6 +252,7 @@ pub(crate) mod display_link {
             // kCFRunLoopCommonModes is toll-free bridged to NSRunLoopCommonModes.
             let mode = core_foundation::runloop::kCFRunLoopCommonModes as *const AnyObject;
             let _: () = msg_send![link, addToRunLoop: run_loop, forMode: mode];
+            LINK.with(|l| l.set(link));
             true
         }
     }
@@ -270,6 +312,19 @@ pub(crate) fn schedule_work(delay_ms: i64) {
 }
 
 fn tick_all(state: &PumpState) {
+    if log::log_enabled!(log::Level::Debug) {
+        thread_local!(static RATE: Cell<(f64, u32)> = const { Cell::new((0., 0)) });
+        RATE.with(|rate| {
+            let now = unsafe { CFAbsoluteTimeGetCurrent() };
+            let (since, ticks) = rate.get();
+            if now - since >= 1. {
+                log::debug!("pump: {:.0} ticks/s", ticks as f64 / (now - since));
+                rate.set((now, 0));
+            } else {
+                rate.set((since, ticks + 1));
+            }
+        });
+    }
     // Driving CEF here, with gpui's App unborrowed, is the whole point. Calling
     // this while the App is borrowed lets gpui's paint re-enter from the run
     // loop Chromium spins, which panics with "RefCell already borrowed".
@@ -282,12 +337,22 @@ fn tick_all(state: &PumpState) {
         Err(_) => return,
     };
 
+    let mut active = false;
     for view in views {
-        tick_view(&view);
+        active |= tick_view(&view);
     }
+    // Stay at the full rate for a moment after the last frame, so the gaps
+    // between scroll events or animation frames do not drop it.
+    thread_local!(static QUIET_TICKS: Cell<u32> = const { Cell::new(0) });
+    let quiet = QUIET_TICKS.with(|q| {
+        q.set(if active { 0 } else { q.get().saturating_add(1) });
+        q.get()
+    });
+    display_link::set_high_rate(quiet < 60);
 }
 
-fn tick_view(view: &View) {
+/// Whether this view had input or a new frame this tick.
+fn tick_view(view: &View) -> bool {
     if view.shared.take_resized() {
         if let Some(host) = view.shared.host() {
             use cef::ImplBrowserHost as _;
@@ -295,19 +360,19 @@ fn tick_view(view: &View) {
         }
     }
 
-    if let Some((at, dx, dy)) = view.shared.take_scroll() {
+    let scrolled = view.shared.take_scroll().is_some_and(|(at, dx, dy)| {
         if let Some(host) = view.shared.host() {
             use cef::ImplBrowserHost as _;
             host.send_mouse_wheel_event(Some(&at), dx, dy);
         }
-    }
-
+        true
+    });
 
     let stale = view.shared.take_stale_cpu_frames();
     let events = view.shared.take_events();
     let dirty = view.shared.take_dirty();
     if stale.is_empty() && !dirty {
-        return;
+        return scrolled;
     }
 
     let mut cx = view.cx.clone();
@@ -323,4 +388,5 @@ fn tick_view(view: &View) {
             cx.notify();
         }
     });
+    true
 }
