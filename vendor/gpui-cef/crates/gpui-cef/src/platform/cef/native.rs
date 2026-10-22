@@ -8,10 +8,9 @@
 //! Layering: the window's content view holds one clipping container per page,
 //! ordered *below* gpui's view. gpui's layer is transparent where a page element
 //! punches a hole (see `punch_buffer`), so gpui draws over and around the page
-//! as before. AppKit sends clicks and hover over a page straight to Chromium,
-//! unless gpui's own hit test has something occluding above it there (see
-//! `route_mouse_to_page`); scrolls still arrive at gpui's view, which hands
-//! them on (`forward_scroll`). Keyboard and IME go to Chromium natively, as first
+//! as before. gpui's view keeps every mouse event and hit-tests with its own
+//! occlusion; the page element hands the original NSEvent to Chromium's view
+//! (see `install_mouse_forwarding`). Keyboard and IME go to Chromium natively, as first
 //! responder; its shortcuts get offered to gpui first (`offer_key_equivalent`).
 
 use std::{
@@ -100,6 +99,11 @@ impl Container {
             let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
             let _: () = msg_send![view, setHidden: Bool::YES];
             if !gpui_view.is_null() {
+                // Behind the page holes: white, like a page, rather than the
+                // desktop through gpui's transparent layer while a tab switches.
+                let window: *mut AnyObject = msg_send![gpui_view, window];
+                let white: *mut AnyObject = msg_send![class!(NSColor), whiteColor];
+                let _: () = msg_send![window, setBackgroundColor: white];
                 let content: *mut AnyObject = msg_send![gpui_view, superview];
                 let _: () = msg_send![
                     content,
@@ -276,7 +280,6 @@ fn page_frame(page: *mut AnyObject) -> Option<CGRect> {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        PAGES.with(|pages| pages.borrow_mut().remove(&(self.view as usize)));
         unsafe {
             let _: () = msg_send![self.view, removeFromSuperview];
             let _: () = msg_send![self.view, release];
@@ -284,45 +287,132 @@ impl Drop for Container {
     }
 }
 
-/// A page container's gpui view, and whether gpui's own hit test puts the page
-/// frontmost under the mouse.
-type Page = (usize, Box<dyn Fn() -> bool>);
+const MOUSE_SELECTORS: [&str; 11] = [
+    "mouseDown:",
+    "mouseUp:",
+    "mouseMoved:",
+    "mouseDragged:",
+    "rightMouseDown:",
+    "rightMouseUp:",
+    "rightMouseDragged:",
+    "otherMouseDown:",
+    "otherMouseUp:",
+    "otherMouseDragged:",
+    "scrollWheel:",
+];
 
 thread_local! {
-    static PAGES: RefCell<HashMap<usize, Page>> = RefCell::new(HashMap::new());
+    /// The mouse NSEvent gpui's view is handling right now.
+    static EVENT: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
+    /// gpui's own implementations, by selector.
+    static ORIGINALS: RefCell<HashMap<Sel, Imp>> = RefCell::new(HashMap::new());
+    /// Set while an event is being handed to a page; gpui's view then steps out
+    /// of hit tests (see `install_hit_test`).
+    static FORWARDING: Cell<bool> = const { Cell::new(false) };
+    static GPUI_VIEW_CLASS: Cell<*const AnyClass> = const { Cell::new(std::ptr::null()) };
+    static WINDOW_SEND_EVENT: Cell<Option<Imp>> = const { Cell::new(None) };
 }
 
-/// Lets AppKit deliver mouse events over `container` straight to the page,
-/// whenever `frontmost` says gpui draws nothing interactive above it there.
-/// Chromium ignores mouse events that a window hit test does not land on its
-/// own view, so they cannot be forwarded from gpui instead.
-pub(crate) fn route_mouse_to_page(
-    gpui_view: *mut AnyObject,
-    container: &Container,
-    frontmost: impl Fn() -> bool + 'static,
-) {
-    if gpui_view.is_null() {
+/// gpui's view stays in charge of the mouse: it hit-tests with its own
+/// occlusion, hovers and scrolls its own UI, and the page element hands the
+/// original NSEvent on. This wraps gpui's view's mouse methods so they record
+/// that event, and makes the view step aside while one is being handed on.
+/// Idempotent.
+// ponytail: method replacement on gpui's view class. Ceiling: breaks if gpui
+// stops handling these selectors on its NSView. Upgrade: an event hook in gpui.
+pub(crate) fn install_mouse_forwarding(gpui_view: *mut AnyObject) {
+    if gpui_view.is_null() || ORIGINALS.with(|o| !o.borrow().is_empty()) {
         return;
     }
-    install_hit_test(gpui_view);
-    PAGES.with(|pages| {
-        pages
-            .borrow_mut()
-            .insert(container.view as usize, (gpui_view as usize, Box::new(frontmost)))
-    });
+    type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
+    unsafe extern "C-unwind" fn record(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
+        let previous = EVENT.with(|e| e.replace(event));
+        if let Some(original) = ORIGINALS.with(|o| o.borrow().get(&cmd).copied()) {
+            let original: Handler = unsafe { std::mem::transmute::<Imp, Handler>(original) };
+            unsafe { original(this, cmd, event) };
+        }
+        EVENT.with(|e| e.set(previous));
+    }
+    unsafe {
+        let class = objc2::ffi::object_getClass(gpui_view) as *mut AnyClass;
+        for name in MOUSE_SELECTORS {
+            let selector = Sel::register(&std::ffi::CString::new(name).unwrap());
+            let Some(method) = (*class).instance_method(selector) else { continue };
+            ORIGINALS.with(|o| o.borrow_mut().insert(selector, method.implementation()));
+            objc2::ffi::class_replaceMethod(
+                class,
+                selector,
+                std::mem::transmute::<Handler, Imp>(record),
+                c"v@:@".as_ptr(),
+            );
+        }
+        install_hit_test(class);
+        GPUI_VIEW_CLASS.with(|c| c.set(class));
+        let window: *mut AnyObject = msg_send![gpui_view, window];
+        if !window.is_null() {
+            route_mouse_moves(objc2::ffi::object_getClass(window) as *mut AnyClass);
+        }
+    }
 }
 
-/// gpui's view answers hit tests with nil over a frontmost page, so the page
-/// view under it gets the event.
-// ponytail: adds hitTest: to gpui's view class. Ceiling: breaks if gpui defines
-// its own hitTest:. Upgrade: a pass-through region API in gpui.
-fn install_hit_test(gpui_view: *mut AnyObject) {
-    thread_local!(static INSTALLED: Cell<bool> = const { Cell::new(false) });
-    if INSTALLED.with(|i| i.replace(true)) {
-        return;
+/// AppKit sends mouse moves to the first responder, which is Chromium's view
+/// while a page has focus; gpui would never learn where the pointer is (no
+/// hover, no edge reveal). gpui's windows hand every move to gpui's view.
+unsafe fn route_mouse_moves(window_class: *mut AnyClass) {
+    type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
+    unsafe extern "C-unwind" fn send_event(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
+        unsafe {
+            let kind: usize = msg_send![event, type];
+            if kind == 5 {
+                if let Some(view) = find_gpui_view(this) {
+                    let _: () = msg_send![view, mouseMoved: event];
+                    return;
+                }
+            }
+            if let Some(original) = WINDOW_SEND_EVENT.with(Cell::get) {
+                let original: Handler = std::mem::transmute::<Imp, Handler>(original);
+                original(this, cmd, event);
+            }
+        }
     }
+    unsafe {
+        let Some(method) = (*window_class).instance_method(sel!(sendEvent:)) else {
+            return;
+        };
+        WINDOW_SEND_EVENT.with(|o| o.set(Some(method.implementation())));
+        objc2::ffi::class_replaceMethod(
+            window_class,
+            sel!(sendEvent:),
+            std::mem::transmute::<Handler, Imp>(send_event),
+            c"v@:@".as_ptr(),
+        );
+    }
+}
+
+/// The gpui view among `window`'s content view's subviews.
+unsafe fn find_gpui_view(window: *mut AnyObject) -> Option<*mut AnyObject> {
+    let class = GPUI_VIEW_CLASS.with(Cell::get);
+    unsafe {
+        let content: *mut AnyObject = msg_send![window, contentView];
+        if content.is_null() {
+            return None;
+        }
+        let subviews: *mut AnyObject = msg_send![content, subviews];
+        let count: usize = msg_send![subviews, count];
+        (0..count).rev().find_map(|i| {
+            let view: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+            (objc2::ffi::object_getClass(view) == class).then_some(view)
+        })
+    }
+}
+
+/// Chromium drops a mouse event unless the window's hit test at its location
+/// lands on Chromium's own view; while one is being handed on, gpui's view
+/// answers nil so the test falls through to the page.
+unsafe fn install_hit_test(class: *mut AnyClass) {
+    type HitTest = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, CGPoint) -> *mut AnyObject;
     unsafe extern "C-unwind" fn hit_test(this: *mut AnyObject, _: Sel, point: CGPoint) -> *mut AnyObject {
-        if unsafe { page_frontmost_at(this, point) } {
+        if FORWARDING.with(Cell::get) {
             return std::ptr::null_mut();
         }
         unsafe {
@@ -331,8 +421,6 @@ fn install_hit_test(gpui_view: *mut AnyObject) {
         }
     }
     unsafe {
-        let class = objc2::ffi::object_getClass(gpui_view) as *mut AnyClass;
-        type HitTest = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, CGPoint) -> *mut AnyObject;
         objc2::ffi::class_addMethod(
             class,
             sel!(hitTest:),
@@ -342,81 +430,47 @@ fn install_hit_test(gpui_view: *mut AnyObject) {
     }
 }
 
-/// `point` is in the superview's coordinates, like the containers' frames.
-unsafe fn page_frontmost_at(gpui_view: *mut AnyObject, point: CGPoint) -> bool {
-    PAGES.with(|pages| {
-        pages.borrow().iter().any(|(&container, (view, frontmost))| {
-            if *view != gpui_view as usize {
-                return false;
-            }
-            let container = container as *mut AnyObject;
-            let hidden: Bool = unsafe { msg_send![container, isHiddenOrHasHiddenAncestor] };
-            let frame: CGRect = unsafe { msg_send![container, frame] };
-            !hidden.as_bool()
-                && point.x >= frame.origin.x
-                && point.x < frame.origin.x + frame.size.width
-                && point.y >= frame.origin.y
-                && point.y < frame.origin.y + frame.size.height
-                && frontmost()
-        })
-    })
-}
-
-thread_local! {
-    /// The scroll NSEvent gpui's view is handling right now.
-    static SCROLL_EVENT: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
-    static GPUI_SCROLL_WHEEL: Cell<Option<Imp>> = const { Cell::new(None) };
-}
-
-/// AppKit sends scroll events to gpui's view even where its hit test passes
-/// the point through, so gpui's view records each one for the page element to
-/// hand on (see [`forward_scroll`]). Idempotent.
-// ponytail: replaces scrollWheel: on gpui's view class. Ceiling: breaks if gpui
-// stops implementing it on its NSView. Upgrade: an event hook in gpui.
-pub(crate) fn record_scroll_events(gpui_view: *mut AnyObject) {
-    if gpui_view.is_null() || GPUI_SCROLL_WHEEL.with(|o| o.get().is_some()) {
-        return;
-    }
-    unsafe extern "C-unwind" fn scroll_wheel(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
-        let previous = SCROLL_EVENT.with(|e| e.replace(event));
-        if let Some(original) = GPUI_SCROLL_WHEEL.with(Cell::get) {
-            type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
-            let original: Handler = unsafe { std::mem::transmute::<Imp, Handler>(original) };
-            unsafe { original(this, cmd, event) };
-        }
-        SCROLL_EVENT.with(|e| e.set(previous));
-    }
-    unsafe {
-        let class = objc2::ffi::object_getClass(gpui_view) as *mut AnyClass;
-        let Some(method) = (*class).instance_method(sel!(scrollWheel:)) else {
-            return;
-        };
-        GPUI_SCROLL_WHEEL.with(|o| o.set(Some(method.implementation())));
-        type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
-        objc2::ffi::class_replaceMethod(
-            class,
-            sel!(scrollWheel:),
-            std::mem::transmute::<Handler, Imp>(scroll_wheel),
-            c"v@:@".as_ptr(),
-        );
-    }
-}
-
-/// Hands the scroll event gpui is handling to the view of `page` under it, so
-/// Chromium gets the original event with its phases and momentum.
-pub(crate) fn forward_scroll(page: *mut AnyObject) {
-    let event = SCROLL_EVENT.with(Cell::get);
+/// Hands the mouse event gpui is handling to the deepest view of `page` under
+/// it, or to `target` (the view a drag started on). Returns the view that got it.
+pub(crate) fn forward_current_event(
+    page: *mut AnyObject,
+    target: Option<*mut AnyObject>,
+) -> Option<*mut AnyObject> {
+    let event = EVENT.with(Cell::get);
     if page.is_null() || event.is_null() {
-        return;
+        return None;
     }
     unsafe {
-        let in_window: CGPoint = msg_send![event, locationInWindow];
-        let parent: *mut AnyObject = msg_send![page, superview];
-        let point: CGPoint =
-            msg_send![parent, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
-        let hit: *mut AnyObject = msg_send![page, hitTest: point];
-        let target = if hit.is_null() { page } else { hit };
-        let _: () = msg_send![target, scrollWheel: event];
+        let kind: usize = msg_send![event, type];
+        let selector = match kind {
+            1 => sel!(mouseDown:),
+            2 => sel!(mouseUp:),
+            3 => sel!(rightMouseDown:),
+            4 => sel!(rightMouseUp:),
+            5 => sel!(mouseMoved:),
+            6 => sel!(mouseDragged:),
+            7 => sel!(rightMouseDragged:),
+            22 => sel!(scrollWheel:),
+            25 => sel!(otherMouseDown:),
+            26 => sel!(otherMouseUp:),
+            27 => sel!(otherMouseDragged:),
+            _ => return None,
+        };
+        let target = match target {
+            Some(target) => target,
+            None => {
+                let in_window: CGPoint = msg_send![event, locationInWindow];
+                let parent: *mut AnyObject = msg_send![page, superview];
+                let point: CGPoint =
+                    msg_send![parent, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
+                let hit: *mut AnyObject = msg_send![page, hitTest: point];
+                if hit.is_null() { page } else { hit }
+            }
+        };
+        FORWARDING.with(|f| f.set(true));
+        let _: *mut AnyObject = msg_send![target, performSelector: selector, withObject: event];
+        FORWARDING.with(|f| f.set(false));
+        Some(target)
     }
 }
 

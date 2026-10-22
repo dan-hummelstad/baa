@@ -38,6 +38,8 @@ pub(crate) struct Shared {
     created: Cell<bool>,
     /// Set when Chromium took keyboard focus itself (a click in the page).
     focused_natively: Cell<bool>,
+    /// The page's native view, kept until CEF has closed the browser.
+    closing: RefCell<Option<std::rc::Rc<dyn std::any::Any>>>,
 }
 
 impl Shared {
@@ -57,6 +59,7 @@ impl Shared {
             wants_focus: Cell::new(false),
             created: Cell::new(false),
             focused_natively: Cell::new(false),
+            closing: RefCell::new(None),
         })
     }
 
@@ -89,6 +92,14 @@ impl Shared {
         self.created.set(true);
         // Layout has to run again to place the new view.
         self.dirty.set(true);
+    }
+
+    pub(crate) fn hold_until_closed(&self, view: std::rc::Rc<dyn std::any::Any>) {
+        *self.closing.borrow_mut() = Some(view);
+    }
+
+    pub(crate) fn release_closed(&self) {
+        self.closing.borrow_mut().take();
     }
 
     pub(crate) fn set_focused_natively(&self) {

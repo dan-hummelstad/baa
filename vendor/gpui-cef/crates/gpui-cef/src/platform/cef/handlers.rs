@@ -293,8 +293,15 @@ wrap_life_span_handler! {
             }
         }
 
+        /// The page is a child view of the app's window: by default CEF closes
+        /// that whole window along with the browser (and the app quits).
+        fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            1
+        }
+
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
             self.shared.push_event(WebviewEvent::Closed);
+            self.shared.release_closed();
         }
     }
 }

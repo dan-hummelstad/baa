@@ -61,6 +61,7 @@ impl<H: WebHost> Browser<H> {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+
             .relative()
             .left(px(self.slide.value() * SIDEBAR_WIDTH))
             .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
@@ -70,6 +71,7 @@ impl<H: WebHost> Browser<H> {
             .gap(px(6.))
             .child(
                 div()
+                    .flex_none()
                     .h(px(20.))
                     .px(px(10.))
                     .flex()
@@ -84,6 +86,7 @@ impl<H: WebHost> Browser<H> {
             .child(self.render_zone(space, Zone::Pinned, theme, cx))
             .child(
                 div()
+                    .flex_none()
                     .h(px(22.))
                     .px(px(10.))
                     .flex()
@@ -103,7 +106,7 @@ impl<H: WebHost> Browser<H> {
                     .text_size(px(13.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.ink_muted)
-                    .hover(|s| s.bg(theme.glass))
+                    .hover(|s| s.bg(theme.hover))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_bar(Mode::NewTab, window, cx)),
                     )
@@ -150,7 +153,7 @@ impl<H: WebHost> Browser<H> {
                 .justify_center()
                 .rounded(px(6.))
                 .when(enabled, |d| {
-                    d.hover(|s| s.bg(theme.glass))
+                    d.hover(|s| s.bg(theme.hover))
                         .on_click(move |_, window, cx| {
                             window.dispatch_action(action.boxed_clone(), cx)
                         })
@@ -262,6 +265,7 @@ impl<H: WebHost> Browser<H> {
                 Zone::Today => "today",
             })
             .flex()
+            .flex_none()
             .flex_col()
             .gap(px(6.))
             // An empty zone still needs somewhere to drop.
@@ -315,7 +319,7 @@ impl<H: WebHost> Browser<H> {
                 d.bg(theme.glass_strong)
                     .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 1., 3.)])
             })
-            .when(!selected, |d| d.hover(|s| s.bg(theme.glass)))
+            .when(!selected, |d| d.hover(|s| s.bg(theme.hover)))
             .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
             .on_mouse_up(
                 MouseButton::Middle,
@@ -389,7 +393,7 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .justify_center()
                 .rounded(px(6.))
-                .hover(|s| s.bg(theme.glass))
+                .hover(|s| s.bg(theme.hover))
                 .child(icon(name, 16., theme.ink_muted))
         };
         div()

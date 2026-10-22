@@ -32,8 +32,8 @@ use cef::{
     RequestContextSettings, Settings, WindowInfo,
 };
 use gpui::{
-    div, relative, App, AppContext as _, Bounds, Context, DispatchPhase, Element, ElementId,
-    Focusable, ScrollWheelEvent,
+    div, relative, App, Bounds, Context, DispatchPhase, Element, ElementId,
+    Focusable, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
     LayoutId, ParentElement, Pixels, Render, Style, Styled, Window,
 };
@@ -266,8 +266,9 @@ pub struct Webview {
     focus_handle: gpui::FocusHandle,
     /// The view the page lives in, below gpui's.
     container: Rc<native::Container>,
-    /// The page element's hitbox, for routing the mouse.
-    hitbox: Rc<RefCell<Option<Hitbox>>>,
+    /// The page view a mouse drag started on, and whether the pointer is over
+    /// the page; across frames, so a repaint mid-click loses nothing.
+    pointer: Rc<Pointer>,
     /// gpui's own view, which gets keyboard focus back when the page loses it.
     gpui_view: *mut AnyObject,
     corner_radius: Rc<Cell<f32>>,
@@ -283,10 +284,8 @@ impl Webview {
         let shared = Shared::new(options.url.clone());
         let gpui_view = native::gpui_view(window);
         shared.set_gpui_view(gpui_view);
-        native::record_scroll_events(gpui_view);
+        native::install_mouse_forwarding(gpui_view);
         let container = Rc::new(native::Container::new(gpui_view, options.corner_radius));
-        let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
-        route_mouse(gpui_view, &container, &hitbox, window, cx);
 
         // Provisional size until layout runs; the element sets the real frame.
         let size = window.viewport_size();
@@ -340,7 +339,7 @@ impl Webview {
             shared,
             focus_handle,
             container,
-            hitbox,
+            pointer: Rc::default(),
             gpui_view,
             corner_radius: Rc::new(Cell::new(options.corner_radius)),
             find_text: RefCell::default(),
@@ -368,7 +367,7 @@ impl Webview {
         self.shared.set_gpui_view(gpui_view);
         self.gpui_view = gpui_view;
         self.container.move_below(gpui_view);
-        route_mouse(gpui_view, &self.container, &self.hitbox, window, cx);
+        native::install_mouse_forwarding(gpui_view);
         (self._pump, self._focus_subscriptions) = attach(&self.shared, &self.focus_handle, window, cx);
         cx.notify();
     }
@@ -499,6 +498,10 @@ impl Webview {
 
 impl Drop for Webview {
     fn drop(&mut self) {
+        // CEF still talks to the page's view while the browser closes, so the
+        // view stays in the window, hidden, until on_before_close lets it go.
+        self.container.set_visible(false, page_view(&self.shared));
+        self.shared.hold_until_closed(self.container.clone());
         if let Some(host) = self.host() {
             host.close_browser(1);
         }
@@ -522,32 +525,11 @@ impl Render for Webview {
             .child(PageSlot {
                 shared: self.shared.clone(),
                 container: self.container.clone(),
-                hitbox: self.hitbox.clone(),
+                focus_handle: self.focus_handle.clone(),
+                pointer: self.pointer.clone(),
                 corner_radius: self.corner_radius.get(),
             })
     }
-}
-
-/// Same rule as any gpui element: the page takes the mouse where its hitbox is
-/// not occluded.
-fn route_mouse(
-    gpui_view: *mut AnyObject,
-    container: &native::Container,
-    hitbox: &Rc<RefCell<Option<Hitbox>>>,
-    window: &Window,
-    cx: &Context<Webview>,
-) {
-    let hitbox = hitbox.clone();
-    let cx = cx.to_async();
-    let handle = window.window_handle();
-    native::route_mouse_to_page(gpui_view, container, move || {
-        let Some(hitbox) = hitbox.borrow().clone() else {
-            return false;
-        };
-        cx.clone()
-            .update_window(handle, |_, window, _| hitbox.should_handle_scroll(window))
-            .unwrap_or(false)
-    });
 }
 
 /// Keyboard focus follows gpui's: the page's view is first responder while the
@@ -586,8 +568,15 @@ fn page_view(shared: &Shared) -> *mut AnyObject {
 struct PageSlot {
     shared: Rc<Shared>,
     container: Rc<native::Container>,
-    hitbox: Rc<RefCell<Option<Hitbox>>>,
+    focus_handle: gpui::FocusHandle,
+    pointer: Rc<Pointer>,
     corner_radius: f32,
+}
+
+#[derive(Default)]
+struct Pointer {
+    drag: Cell<Option<*mut AnyObject>>,
+    inside: Cell<bool>,
 }
 
 impl Element for PageSlot {
@@ -631,9 +620,7 @@ impl Element for PageSlot {
         } else {
             self.container.set_hidden(true);
         }
-        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        *self.hitbox.borrow_mut() = Some(hitbox.clone());
-        hitbox
+        window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
     fn paint(
@@ -654,14 +641,53 @@ impl Element for PageSlot {
         // choice goes through it.
         window.set_cursor_style(self.shared.cursor(), hitbox);
 
-        // Clicks and hover reach the page natively (see native.rs); scrolls
-        // still come to gpui's view, which hands them on where the page is
-        // not occluded.
+        // gpui hit-tests (overlays drawn over the page keep the mouse); the page
+        // gets the original NSEvent, so Chromium sees real clicks, trackpad
+        // phases and momentum. A drag stays with the view it started on.
+        let shared = self.shared.clone();
+        let focus = self.focus_handle.clone();
+        let hit = hitbox.clone();
+        let pointer = self.pointer.clone();
+        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble && hit.is_hovered(window) {
+                pointer
+                    .drag
+                    .set(native::forward_current_event(page_view(&shared), None));
+                window.focus(&focus, cx);
+            }
+        });
+        let shared = self.shared.clone();
+        let hit = hitbox.clone();
+        let pointer = self.pointer.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            if let Some(view) = pointer.drag.get().filter(|_| event.pressed_button.is_some()) {
+                native::forward_current_event(page_view(&shared), Some(view));
+                return;
+            }
+            // Moves over the page, and the first one off it so hover ends.
+            let over = hit.is_hovered(window);
+            if over || pointer.inside.get() {
+                pointer.inside.set(over);
+                native::forward_current_event(page_view(&shared), None);
+            }
+        });
+        let shared = self.shared.clone();
+        let pointer = self.pointer.clone();
+        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
+            if phase == DispatchPhase::Bubble {
+                if let Some(view) = pointer.drag.take() {
+                    native::forward_current_event(page_view(&shared), Some(view));
+                }
+            }
+        });
         let shared = self.shared.clone();
         let hit = hitbox.clone();
         window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, _| {
             if phase == DispatchPhase::Bubble && hit.should_handle_scroll(window) {
-                native::forward_scroll(page_view(&shared));
+                native::forward_current_event(page_view(&shared), None);
             }
         });
     }

@@ -16,6 +16,8 @@ pub struct Theme {
     /// Translucent white fills: resting (URL bar, hover) and selected (active tab).
     pub glass: Hsla,
     pub glass_strong: Hsla,
+    /// Hovered rows and buttons on the gradient.
+    pub hover: Hsla,
     pub divider: Hsla,
     /// Saturated Space colour: command bar selection, focus rings.
     pub accent: Hsla,
@@ -69,6 +71,7 @@ impl Theme {
             ink_faint: with_alpha(ink, 0.30),
             glass: with_alpha(white, if dark { 0.08 } else { 0.24 }),
             glass_strong: with_alpha(white, if dark { 0.15 } else { 0.91 }),
+            hover: with_alpha(white, if dark { 0.10 } else { 0.45 }),
             divider: with_alpha(if dark { white } else { ink }, 0.12),
             accent: Hsla::from(from_oklch([if dark { 0.65 } else { 0.52 }, c.clamp(0.12, 0.2), h])),
         }
