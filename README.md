@@ -42,7 +42,7 @@ Useful environment variables when running the bundle:
 
 App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Windows): `baa.db`
 (session + settings), `profile/space-<id>/` (per-Space Chromium profile), `keymap.json`
-(overrides `crates/baa-ui/keymaps/default.json`).
+(overrides `crates/baa-ui/keymaps/macos.json` or `windows.json`).
 
 ## Layout
 
