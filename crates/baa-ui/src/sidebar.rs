@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use baa_model::{SpaceId, Tab, TabId, Zone};
+use baa_model::{Folder, SpaceId, Tab, TabId, Zone};
 use baa_web::{PageHandle, WebHost};
 use gpui::{
     div, img, prelude::*, pulsating_between, px, Animation, AnimationExt, AnyElement, Context,
@@ -12,13 +12,16 @@ use gpui::{
 };
 
 use crate::{
-    browser::{shadow, tab_title, Browser, SIDEBAR_WIDTH},
+    browser::{shadow, tab_title, Browser, MenuKind, SIDEBAR_WIDTH},
     command_bar::Mode,
     icons::icon,
     theme::Theme,
 };
 
 const ROW_H: f32 = 38.;
+/// Favourite tiles, four to a row (pen.dev "Favorite").
+const FAV_W: f32 = 53.;
+const FAV_H: f32 = 44.;
 
 #[derive(Clone)]
 pub(crate) struct DraggedTab {
@@ -61,7 +64,12 @@ impl<H: WebHost> Browser<H> {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.open_menu(MenuKind::Sidebar, e.position, cx)
+                }),
+            )
             .relative()
             .left(px(self.slide.value() * SIDEBAR_WIDTH))
             .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
@@ -81,7 +89,7 @@ impl<H: WebHost> Browser<H> {
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.ink_muted)
                     .child(div().text_size(px(11.)).child(SharedString::from(space_icon)))
-                    .child(match &self.renaming {
+                    .child(match self.renaming.as_ref().filter(|_| self.renaming_folder.is_none()) {
                         // Named in place: Enter keeps it, Esc leaves it as it was.
                         Some(field) => div()
                             .id("space-name")
@@ -110,6 +118,12 @@ impl<H: WebHost> Browser<H> {
                             .child(SharedString::from(space_name))
                             .into_any_element(),
                     }),
+            )
+            .children(
+                self.session
+                    .folders(space)
+                    .map(|f| self.render_folder(f, theme, cx))
+                    .collect::<Vec<_>>(),
             )
             .child(self.render_zone(space, Zone::Pinned, theme, cx))
             .child(
@@ -152,6 +166,7 @@ impl<H: WebHost> Browser<H> {
             .pb(px(4.))
             .pl(px(10.))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+            .child(self.render_favorites(space, theme, cx))
             .child(lists)
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
@@ -251,6 +266,7 @@ impl<H: WebHost> Browser<H> {
             .id(match zone {
                 Zone::Pinned => "pinned",
                 Zone::Today => "today",
+                Zone::Favorite => "favorites",
             })
             .flex()
             .flex_none()
@@ -276,7 +292,7 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let id = tab.id;
-        let (space, zone) = (tab.space, tab.zone);
+        let (space, zone, folder) = (tab.space, tab.zone, tab.folder);
         let title = SharedString::from(tab_title(tab).to_string());
         let group = SharedString::from(format!("tab-{}", id.0));
         let loading = self
@@ -316,13 +332,24 @@ impl<H: WebHost> Browser<H> {
             .on_drag(drag, |d, _, _, cx| cx.new(|_| d.clone()))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.border_t_2().border_color(accent))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                this.session.move_tab(d.id, space, zone, index);
+                match folder {
+                    Some(folder) => this.session.move_to_folder(d.id, folder, index),
+                    None => this.session.move_tab(d.id, space, zone, index),
+                }
                 this.sync(window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuKind::Tab(id), e.position, cx);
+                }),
+            )
             .child(favicon(
                 tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
                 &title,
                 loading,
+                16.,
                 theme,
             ))
             .child(div().flex_1().min_w_0().truncate().child(title))
@@ -343,6 +370,159 @@ impl<H: WebHost> Browser<H> {
                     }))
                     .child(icon("x", 14., theme.ink_muted)),
             )
+    }
+
+    /// Favourites: the same tiles in every Space. With none yet, a thin strip
+    /// that opens into a row while a tab is dragged over it, so starting a
+    /// drag never shifts the list.
+    fn render_favorites(&self, space: SpaceId, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let favorites: Vec<&Tab> = self.session.tabs(space, Zone::Favorite).collect();
+        let empty = favorites.is_empty();
+        let active = self.active_tab();
+        let (accent, glass) = (theme.accent, theme.glass);
+        let tiles = favorites.into_iter().enumerate().map(|(i, tab)| {
+            let id = tab.id;
+            let selected = active == Some(id);
+            let title = SharedString::from(tab_title(tab).to_string());
+            let loading = self.pages.get(&id).is_some_and(|(p, _)| p.read(cx).is_loading());
+            let drag = DraggedTab {
+                id,
+                title: title.clone(),
+                theme: *theme,
+            };
+            div()
+                .id(("favorite", id.0))
+                .w(px(FAV_W))
+                .h(px(FAV_H))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(10.))
+                .bg(theme.glass)
+                .when(selected, |d| {
+                    d.bg(theme.glass_strong)
+                        .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 1., 3.)])
+                })
+                .when(!selected, |d| d.hover(|s| s.bg(theme.glass_strong)))
+                .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        this.open_menu(MenuKind::Tab(id), e.position, cx)
+                    }),
+                )
+                .on_drag(drag, |d, _, _, cx| cx.new(|_| d.clone()))
+                .drag_over::<DraggedTab>(move |s, _, _, _| s.border_2().border_color(accent))
+                .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                    this.session.move_tab(d.id, space, Zone::Favorite, i);
+                    this.sync(window, cx);
+                }))
+                .child(favicon(
+                    tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
+                    &title,
+                    loading,
+                    20.,
+                    theme,
+                ))
+        });
+        div()
+            .id("favorites")
+            .flex_none()
+            .when(empty, |d| d.h(px(8.)))
+            .when(!empty, |d| d.mt(px(4.)).mb(px(8.)))
+            .flex()
+            .flex_wrap()
+            .gap(px(8.))
+            .rounded(px(10.))
+            .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass).min_h(px(FAV_H)))
+            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                this.session.move_tab(d.id, space, Zone::Favorite, usize::MAX);
+                this.sync(window, cx);
+            }))
+            .children(tiles)
+    }
+
+    /// A folder row, then its tabs indented unless it is collapsed (its active
+    /// tab still shows, as in Arc).
+    fn render_folder(&self, folder: &Folder, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = folder.id;
+        let open = !folder.collapsed;
+        let active = self.active_tab();
+        let rows: Vec<_> = self
+            .session
+            .folder_tabs(id)
+            .enumerate()
+            .filter(|(_, t)| open || active == Some(t.id))
+            .map(|(i, tab)| self.render_tab_row(tab, i, active, theme, cx))
+            .collect();
+        let name = match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
+            Some(field) => div()
+                .flex_1()
+                .min_w_0()
+                .px(px(4.))
+                .rounded(px(4.))
+                .bg(theme.glass_strong)
+                .track_focus(&self.input_focus)
+                .on_key_down(cx.listener(Self::on_input_key))
+                .child(field.render("Folder name", theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }))
+                .into_any_element(),
+            None => div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(SharedString::from(folder.name.clone()))
+                .into_any_element(),
+        };
+        let glass = theme.glass;
+        div()
+            .flex()
+            .flex_none()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .id(("folder", id.0))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(10.))
+                    .h(px(ROW_H))
+                    .px(px(10.))
+                    .rounded(px(10.))
+                    .text_size(px(13.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .hover(|s| s.bg(theme.hover))
+                    .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                        // The first click of a double-click already toggled it.
+                        if let Some(f) = this.session.folder_mut(id) {
+                            f.collapsed = !f.collapsed;
+                        }
+                        if e.click_count() == 2 {
+                            this.start_folder_rename(id, window, cx);
+                        }
+                        this.sync(window, cx);
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_menu(MenuKind::Folder(id), e.position, cx);
+                        }),
+                    )
+                    .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass))
+                    .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                        this.session.move_to_folder(d.id, id, usize::MAX);
+                        if let Some(f) = this.session.folder_mut(id) {
+                            f.collapsed = false;
+                        }
+                        this.sync(window, cx);
+                    }))
+                    .child(icon(if open { "folder-open" } else { "folder" }, 16., theme.ink))
+                    .child(name),
+            )
+            .when(!rows.is_empty(), |d| {
+                d.child(div().pl(px(14.)).flex().flex_col().gap(px(6.)).children(rows))
+            })
     }
 
     /// Library, the Space dots, and New Space.
@@ -410,6 +590,7 @@ fn favicon(
     image: Option<std::sync::Arc<gpui::Image>>,
     title: &str,
     loading: bool,
+    size: f32,
     theme: &Theme,
 ) -> AnyElement {
     let letter: SharedString = title
@@ -422,13 +603,13 @@ fn favicon(
     let accent = theme.accent;
     let fallback = move || {
         div()
-            .size(px(16.))
+            .size(px(size))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.))
+            .rounded(px(size / 4.))
             .bg(accent)
-            .text_size(px(9.))
+            .text_size(px(size * 0.56))
             .font_weight(gpui::FontWeight::BOLD)
             .text_color(gpui::white())
             .child(letter.clone())
@@ -437,8 +618,8 @@ fn favicon(
     // The page fetches its favicon through its own Space's storage (gpui-cef).
     let icon = match image {
         Some(image) => img(image)
-            .size(px(16.))
-            .rounded(px(4.))
+            .size(px(size))
+            .rounded(px(size / 4.))
             .with_fallback(fallback)
             .into_any_element(),
         None => fallback(),
@@ -448,7 +629,7 @@ fn favicon(
     }
     // with_animation honours gpui's reduce_motion on its own.
     div()
-        .size(px(16.))
+        .size(px(size))
         .child(icon)
         .with_animation(
             "loading",

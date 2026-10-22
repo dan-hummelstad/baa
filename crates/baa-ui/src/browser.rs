@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, time::Instant};
 
-use baa_model::{now, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId};
+use baa_model::{now, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
@@ -55,10 +55,20 @@ const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 type MenuAction<H> = Box<dyn Fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>)>;
 
 pub(crate) struct ContextMenu {
-    pub tab: TabId,
     pub at: Point<Pixels>,
-    pub link: Option<String>,
-    pub selection: Option<String>,
+    pub kind: MenuKind,
+}
+
+pub(crate) enum MenuKind {
+    Page {
+        tab: TabId,
+        link: Option<String>,
+        selection: Option<String>,
+    },
+    /// Right-clicks in the sidebar.
+    Tab(TabId),
+    Folder(FolderId),
+    Sidebar,
 }
 
 pub struct Browser<H: WebHost> {
@@ -76,6 +86,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) peek: Option<PeekPage<H::Page>>,
     /// The Space name being edited in place.
     pub(crate) renaming: Option<TextField>,
+    /// Set when `renaming` edits this folder's name instead of the Space's.
+    pub(crate) renaming_folder: Option<FolderId>,
     /// Favicons by URL, fetched by the pages themselves.
     pub(crate) favicons: HashMap<String, std::sync::Arc<gpui::Image>>,
     /// The active Space's extensions, for the toolbar.
@@ -154,6 +166,7 @@ impl<H: WebHost> Browser<H> {
             menu: None,
             peek: None,
             renaming: None,
+            renaming_folder: None,
             favicons,
             extensions: Vec::new(),
             nav_press: None,
@@ -326,10 +339,12 @@ impl<H: WebHost> Browser<H> {
                 selection,
             } => {
                 self.menu = Some(ContextMenu {
-                    tab: id,
                     at: point(px(*x), px(*y)),
-                    link: link_url.clone(),
-                    selection: selection.clone(),
+                    kind: MenuKind::Page {
+                        tab: id,
+                        link: link_url.clone(),
+                        selection: selection.clone(),
+                    },
                 });
                 return cx.notify();
             }
@@ -780,6 +795,7 @@ impl<H: WebHost> Browser<H> {
         self.bar = None;
         self.find = None;
         self.renaming = Some(TextField::selected(name));
+        self.renaming_folder = None;
         if !self.sidebar_open {
             self.reveal.set_target(1.0);
         }
@@ -787,8 +803,36 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// A new folder in the active Space, holding `tab` if given, named in place.
+    pub(crate) fn new_folder(&mut self, tab: Option<TabId>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = self.session.active_space() else {
+            return;
+        };
+        let id = self.session.add_folder(space, "New Folder");
+        if let Some(tab) = tab {
+            self.session.move_to_folder(tab, id, usize::MAX);
+        }
+        self.sync(window, cx);
+        self.start_folder_rename(id, window, cx);
+    }
+
+    pub(crate) fn start_folder_rename(&mut self, id: FolderId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(name) = self.session.folder(id).map(|f| f.name.clone()) else {
+            return;
+        };
+        self.start_rename(window, cx);
+        self.renaming = Some(TextField::selected(name));
+        self.renaming_folder = Some(id);
+    }
+
+    pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.menu = Some(ContextMenu { at, kind });
+        cx.notify();
+    }
+
     pub(crate) fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.renaming = None;
+        self.renaming_folder = None;
         self.history_menu = None;
         if self.find.take().is_some() {
             self.with_page(cx, |p| p.find("", true));
@@ -812,8 +856,13 @@ impl<H: WebHost> Browser<H> {
         if let Some(field) = &mut self.renaming {
             match field.handle(&event.keystroke, cx) {
                 Key::Submit => {
-                    let text = field.text.clone();
-                    self.rename_active_space(&text);
+                    let text = field.text.trim().to_string();
+                    match self.renaming_folder.and_then(|id| self.session.folder_mut(id)) {
+                        Some(folder) if !text.is_empty() => folder.name = text,
+                        Some(_) => {}
+                        None => self.rename_active_space(&text),
+                    }
+                    self.save();
                     self.close_overlays(window, cx);
                 }
                 Key::Cancel => self.close_overlays(window, cx),
@@ -1393,51 +1442,14 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let menu = self.menu.as_ref()?;
-        let mut items: Vec<(&'static str, MenuAction<H>)> = Vec::new();
-        if let Some(link) = menu.link.clone() {
-            let space = self.session.tab(menu.tab).map(|t| t.space);
-            let open = link.clone();
-            items.push((
-                "Open Link in New Tab",
-                Box::new(move |this, window, cx| {
-                    if let Some(space) = space {
-                        this.session.open_tab(space, &open, now());
-                        this.sync(window, cx);
-                    }
-                }),
-            ));
-            items.push((
-                "Copy Link",
-                Box::new(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
-                }),
-            ));
-        }
-        if let Some(text) = menu.selection.clone().filter(|s| !s.is_empty()) {
-            items.push((
-                "Copy",
-                Box::new(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                }),
-            ));
-        }
-        items.push((
-            "Back",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_back())),
-        ));
-        items.push((
-            "Forward",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_forward())),
-        ));
-        items.push((
-            "Reload",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.reload())),
-        ));
-        items.push((
-            "Inspect",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.open_devtools())),
-        ));
-
+        let items = match &menu.kind {
+            MenuKind::Page {
+                tab,
+                link,
+                selection,
+            } => self.page_menu(*tab, link.clone(), selection.clone()),
+            kind => self.sidebar_menu(kind),
+        };
         let rows = items.into_iter().enumerate().map(|(i, (label, run))| {
             div()
                 .id(("menu", i))
@@ -1448,8 +1460,9 @@ impl<H: WebHost> Browser<H> {
                 .rounded(px(7.))
                 .hover(|s| s.bg(theme.accent).text_color(gpui::white()))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    run(this, window, cx);
+                    // Closed first: a rename started by the item must stay open.
                     this.close_overlays(window, cx);
+                    run(this, window, cx);
                 }))
                 .child(label)
         });
@@ -1475,6 +1488,134 @@ impl<H: WebHost> Browser<H> {
                     .children(rows),
             ),
         )))
+    }
+
+    fn sidebar_menu(&self, kind: &MenuKind) -> Vec<(&'static str, MenuAction<H>)> {
+        let mut items: Vec<(&'static str, MenuAction<H>)> = Vec::new();
+        let space = self.session.active_space();
+        match *kind {
+            MenuKind::Tab(id) => {
+                let Some(tab) = self.session.tab(id) else {
+                    return items;
+                };
+                let zone = tab.zone;
+                if zone == Zone::Favorite {
+                    items.push((
+                        "Remove from Favorites",
+                        Box::new(move |this, window, cx| {
+                            if let Some(space) = space {
+                                this.session.move_tab(id, space, Zone::Today, 0);
+                                this.sync(window, cx);
+                            }
+                        }),
+                    ));
+                } else {
+                    items.push((
+                        "Add to Favorites",
+                        // The Space argument is ignored: a favourite keeps its own.
+                        Box::new(move |this, window, cx| {
+                            let space = this.session.tab(id).map(|t| t.space);
+                            if let Some(space) = space {
+                                this.session.move_tab(id, space, Zone::Favorite, usize::MAX);
+                                this.sync(window, cx);
+                            }
+                        }),
+                    ));
+                    items.push((
+                        if zone == Zone::Pinned { "Unpin" } else { "Pin" },
+                        Box::new(move |this, window, cx| {
+                            this.session.toggle_pin(id);
+                            this.sync(window, cx);
+                        }),
+                    ));
+                    items.push((
+                        "Move to New Folder",
+                        Box::new(move |this, window, cx| this.new_folder(Some(id), window, cx)),
+                    ));
+                }
+                items.push((
+                    "Close Tab",
+                    Box::new(move |this, window, cx| this.close_tab_id(id, window, cx)),
+                ));
+            }
+            MenuKind::Folder(id) => {
+                items.push((
+                    "Rename Folder",
+                    Box::new(move |this, window, cx| this.start_folder_rename(id, window, cx)),
+                ));
+                items.push((
+                    "Delete Folder",
+                    Box::new(move |this, window, cx| {
+                        this.session.remove_folder(id);
+                        this.sync(window, cx);
+                    }),
+                ));
+            }
+            MenuKind::Sidebar | MenuKind::Page { .. } => {
+                items.push((
+                    "New Folder",
+                    Box::new(|this, window, cx| this.new_folder(None, window, cx)),
+                ));
+                items.push((
+                    "New Tab",
+                    Box::new(|this, window, cx| this.open_bar(Mode::NewTab, window, cx)),
+                ));
+            }
+        }
+        items
+    }
+
+    fn page_menu(
+        &self,
+        tab: TabId,
+        link: Option<String>,
+        selection: Option<String>,
+    ) -> Vec<(&'static str, MenuAction<H>)> {
+        let mut items: Vec<(&'static str, MenuAction<H>)> = Vec::new();
+        if let Some(link) = link {
+            let space = self.session.tab(tab).map(|t| t.space);
+            let open = link.clone();
+            items.push((
+                "Open Link in New Tab",
+                Box::new(move |this, window, cx| {
+                    if let Some(space) = space {
+                        this.session.open_tab(space, &open, now());
+                        this.sync(window, cx);
+                    }
+                }),
+            ));
+            items.push((
+                "Copy Link",
+                Box::new(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                }),
+            ));
+        }
+        if let Some(text) = selection.filter(|s| !s.is_empty()) {
+            items.push((
+                "Copy",
+                Box::new(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                }),
+            ));
+        }
+        items.push((
+            "Back",
+            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_back())),
+        ));
+        items.push((
+            "Forward",
+            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_forward())),
+        ));
+        items.push((
+            "Reload",
+            Box::new(|this, _, cx| this.with_page(cx, |p| p.reload())),
+        ));
+        items.push((
+            "Inspect",
+            Box::new(|this, _, cx| this.with_page(cx, |p| p.open_devtools())),
+        ));
+        items
     }
 }
 

@@ -21,8 +21,9 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 
 Early. Milestones 0–3 of `PLAN.md` are implemented: tabs, Spaces, per-Space storage, keymap,
 command bar, de-Googling, plus Peek (links that open a tab, or shift-click, preview in a card) and
-lil-baa (links from other apps open in a small window you can move into the browser). The UI follows
-the pen.dev mocks. Still to come from milestone 4: gestures, favorites, folders, split view. Windows currently runs on WebView2 through the vendored gpui-cef fallback, not CEF.
+lil-baa (links from other apps open in a small window you can move into the browser), favourites
+(shared by every Space) and folders. The UI follows the pen.dev mocks. Still to come from milestone 4:
+split view. Windows currently runs on WebView2 through the vendored gpui-cef fallback, not CEF.
 
 ## Build
 
@@ -71,7 +72,9 @@ App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Window
 ⌘1–8 tab n · ⌘9 last · ⌃⌥→/← next/prev Space · ⌘D pin · ⌘F find · ⌘⇧N incognito Space.
 Everything is remappable in `keymap.json` (GPUI's keymap format). Two-finger swipe across the
 sidebar or address bar switches Spaces; hold (or right-click) Back/Forward for history; double-click
-the top bar to zoom the window; double-click a Space's name to rename it.
+the top bar to zoom the window; double-click a Space's name to rename it. Right-click the sidebar for
+New Folder; right-click a tab to favourite, pin or file it; drag tabs onto a folder or the strip above
+the Space name.
 
 ## Third-party notices
 

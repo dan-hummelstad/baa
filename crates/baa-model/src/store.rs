@@ -33,7 +33,12 @@ impl Store {
             .map(|v| serde_json::from_str(&v))
             .transpose()
             .map_err(|e| Error::FromSqlConversionFailure(0, Type::Text, e.into()))?;
-        Ok(stored.filter(|s| !s.spaces.is_empty()).unwrap_or_else(Session::first_run))
+        let mut s = stored.filter(|s| !s.spaces.is_empty()).unwrap_or_else(Session::first_run);
+        // An incognito Space that was active is not stored; open the first one instead.
+        if s.active_space.is_none_or(|id| s.space(id).is_none()) {
+            s.active_space = s.spaces.first().map(|sp| sp.id);
+        }
+        Ok(s)
     }
 
     /// Incognito Spaces and their tabs are left out.
@@ -42,6 +47,7 @@ impl Store {
         let mut s = s.clone();
         s.spaces.retain(|sp| !sp.ephemeral);
         s.tabs.retain(|t| !incognito.contains(&t.space));
+        s.folders.retain(|f| !incognito.contains(&f.space));
         s.active_space = s.active_space.filter(|id| !incognito.contains(id));
         self.put("session", &s)
     }
@@ -120,7 +126,7 @@ mod tests {
         assert_eq!(back.tabs(sp, Zone::Pinned).collect::<Vec<_>>(), s.tabs(sp, Zone::Pinned).collect::<Vec<_>>());
         assert_eq!(back.tabs(sp, Zone::Today).collect::<Vec<_>>(), s.tabs(sp, Zone::Today).collect::<Vec<_>>());
         assert_eq!(back.archived(), s.archived());
-        assert_eq!(back.active_space(), None, "incognito was active, so nothing is stored");
+        assert_eq!(back.active_space(), Some(sp), "incognito was active, so the first Space opens");
         assert!(back.tabs.iter().all(|t| t.space != incog));
         assert_eq!(back.last_id, s.last_id);
     }

@@ -14,7 +14,7 @@ macro_rules! icons {
 }
 
 icons!(
-    "archive", "arrow-left", "arrow-right", "chevron-down", "globe", "house", "link",
+    "archive", "arrow-left", "arrow-right", "chevron-down", "folder", "folder-open", "globe", "house", "link",
     "maximize-2", "panel-left", "plus", "rotate-cw", "search", "sliders-horizontal", "x",
 );
 

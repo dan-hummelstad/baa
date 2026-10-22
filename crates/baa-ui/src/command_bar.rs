@@ -33,6 +33,7 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
     NewSpace,
+    NewFolder,
     NewIncognitoSpace,
     ToggleSidebar,
     CopyUrl,
@@ -48,13 +49,14 @@ pub enum Command {
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 13] = [
+const COMMANDS: [(Command, &str); 14] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
     (Command::Find, "Find in Page"),
     (Command::ReopenClosedTab, "Reopen Closed Tab"),
     (Command::NewIncognitoSpace, "New Incognito Space"),
+    (Command::NewFolder, "New Folder"),
     (Command::RenameSpace, "Rename Space"),
     (Command::ChangeSpaceColor, "Change Space Color"),
     (Command::SwapSidebarSide, "Move Sidebar to Other Side"),
@@ -88,6 +90,7 @@ impl Command {
             Command::CopyUrl => "link",
             Command::Find => "search",
             Command::ReopenClosedTab => "rotate-cw",
+            Command::NewFolder => "folder",
             Command::DeleteSpace => "x",
             Command::RenameSpace | Command::ChangeSpaceColor => "house",
             _ => "sliders-horizontal",
@@ -311,6 +314,7 @@ fn submit<H: WebHost>(
         Item::Command(c) => match c {
             Command::NewSpace => this.new_space(window, cx),
             Command::NewIncognitoSpace => this.new_incognito_space(window, cx),
+            Command::NewFolder => this.new_folder(None, window, cx),
             Command::RenameSpace => this.start_rename(window, cx),
             Command::ChangeSpaceColor => this.cycle_space_color(window, cx),
             Command::DeleteSpace => this.delete_active_space(window, cx),

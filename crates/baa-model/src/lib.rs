@@ -23,9 +23,24 @@ pub struct SpaceId(pub u64);
 pub struct TabId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FolderId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Zone {
     Pinned,
     Today,
+    /// Shown at the top of every Space. The tab keeps the Space (and so the
+    /// profile) it was favourited from.
+    Favorite,
+}
+
+/// A collapsible group of pinned tabs in one Space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: FolderId,
+    pub space: SpaceId,
+    pub name: String,
+    pub collapsed: bool,
 }
 
 /// User-visible storage profile ("Personal", "Work"). Several Spaces may share one.
@@ -58,6 +73,9 @@ pub struct Tab {
     pub id: TabId,
     pub space: SpaceId,
     pub zone: Zone,
+    /// Set only on pinned tabs.
+    #[serde(default)]
+    pub folder: Option<FolderId>,
     pub url: String,
     pub title: String,
     /// Favicon URL as reported by the page.
@@ -77,8 +95,10 @@ const ARCHIVE_CAP: usize = 500;
 pub struct Session {
     profiles: Vec<Profile>,
     spaces: Vec<Space>,
-    /// Live tabs. Order within each (space, zone) is the sidebar order.
+    /// Live tabs. Order within each list (see `same_list`) is the sidebar order.
     tabs: Vec<Tab>,
+    /// In sidebar order; per Space they sit above the loose pinned tabs.
+    folders: Vec<Folder>,
     /// Newest first.
     archive: Vec<Tab>,
     /// Reopen stack: (tab, its index within its (space, zone) list when closed).
@@ -165,6 +185,7 @@ impl Session {
         let i = self.spaces.iter().position(|s| s.id == id)?;
         let space = self.spaces.remove(i);
         self.tabs.retain(|t| t.space != id);
+        self.folders.retain(|f| f.space != id);
         if self.active_space == Some(id) {
             self.active_space = self.spaces.get(i.saturating_sub(1)).map(|s| s.id);
         }
@@ -201,14 +222,69 @@ impl Session {
         self.tabs.iter_mut().find(|t| t.id == id)
     }
 
-    /// One sidebar zone of a Space, in display order.
+    /// One sidebar zone of a Space, in display order, without the tabs in
+    /// folders. `Zone::Favorite` lists every Space's favourites.
     pub fn tabs(&self, space: SpaceId, zone: Zone) -> impl Iterator<Item = &Tab> {
-        self.tabs.iter().filter(move |t| t.space == space && t.zone == zone)
+        self.tabs
+            .iter()
+            .filter(move |t| t.zone == zone && t.folder.is_none() && (zone == Zone::Favorite || t.space == space))
     }
 
-    /// Every live tab of a Space: pinned first, then Today.
+    /// Every live tab of a Space, in sidebar order: folders, loose pinned, Today.
+    /// Favourites are not part of any one Space.
     pub fn space_tabs(&self, space: SpaceId) -> impl Iterator<Item = &Tab> {
-        self.tabs(space, Zone::Pinned).chain(self.tabs(space, Zone::Today))
+        self.folders(space)
+            .flat_map(|f| self.folder_tabs(f.id))
+            .chain(self.tabs(space, Zone::Pinned))
+            .chain(self.tabs(space, Zone::Today))
+    }
+
+    pub fn folders(&self, space: SpaceId) -> impl Iterator<Item = &Folder> {
+        self.folders.iter().filter(move |f| f.space == space)
+    }
+
+    pub fn folder(&self, id: FolderId) -> Option<&Folder> {
+        self.folders.iter().find(|f| f.id == id)
+    }
+
+    pub fn folder_mut(&mut self, id: FolderId) -> Option<&mut Folder> {
+        self.folders.iter_mut().find(|f| f.id == id)
+    }
+
+    pub fn folder_tabs(&self, folder: FolderId) -> impl Iterator<Item = &Tab> {
+        self.tabs.iter().filter(move |t| t.folder == Some(folder))
+    }
+
+    pub fn add_folder(&mut self, space: SpaceId, name: &str) -> FolderId {
+        let id = FolderId(self.alloc());
+        self.folders.push(Folder { id, space, name: name.into(), collapsed: false });
+        id
+    }
+
+    /// Its tabs stay pinned, below the remaining folders.
+    pub fn remove_folder(&mut self, id: FolderId) {
+        self.folders.retain(|f| f.id != id);
+        let tabs: Vec<TabId> = self.folder_tabs(id).map(|t| t.id).collect();
+        for tab in tabs {
+            if let Some((mut tab, _)) = self.take(tab) {
+                tab.folder = None;
+                self.insert(tab, usize::MAX);
+            }
+        }
+    }
+
+    /// Drag into a folder: the tab becomes pinned in the folder's Space.
+    pub fn move_to_folder(&mut self, id: TabId, folder: FolderId, index: usize) {
+        let Some(space) = self.folder(folder).map(|f| f.space) else { return };
+        let Some((mut tab, old_index)) = self.take(id) else { return };
+        let (from, old_zone) = (tab.space, tab.zone);
+        tab.space = space;
+        tab.zone = Zone::Pinned;
+        tab.folder = Some(folder);
+        self.insert(tab, index);
+        if from != space {
+            self.pick_neighbour(from, id, old_zone, old_index);
+        }
     }
 
     /// Opens at the top of Today (Arc puts new tabs under the New Tab row) and activates it.
@@ -218,6 +294,7 @@ impl Session {
             id,
             space,
             zone: Zone::Today,
+            folder: None,
             url: url.into(),
             title: String::new(),
             favicon: None,
@@ -229,28 +306,30 @@ impl Session {
         id
     }
 
-    /// Inserts at `index` within the tab's (space, zone) list, clamped to its end.
+    /// Inserts at `index` within the tab's list, clamped to its end.
     fn insert(&mut self, tab: Tab, index: usize) {
-        let same: Vec<usize> =
-            (0..self.tabs.len()).filter(|&i| self.tabs[i].space == tab.space && self.tabs[i].zone == tab.zone).collect();
+        let same: Vec<usize> = (0..self.tabs.len()).filter(|&i| same_list(&self.tabs[i], &tab)).collect();
         let at = same.get(index).copied().or(same.last().map(|i| i + 1)).unwrap_or(self.tabs.len());
         self.tabs.insert(at, tab);
     }
 
-    /// Removes a live tab; returns it and its index within its (space, zone) list.
+    /// Removes a live tab; returns it and its index within its list.
     fn take(&mut self, id: TabId) -> Option<(Tab, usize)> {
         let i = self.tabs.iter().position(|t| t.id == id)?;
         let tab = self.tabs.remove(i);
-        let index = self.tabs[..i].iter().filter(|t| t.space == tab.space && t.zone == tab.zone).count();
+        let index = self.tabs[..i].iter().filter(|t| same_list(t, &tab)).count();
         Some((tab, index))
     }
 
-    /// Drag: reorder, change zone (pin/unpin), or move to another Space.
+    /// Drag: reorder, change zone (pin/unpin/favourite), move to another Space,
+    /// or out of a folder. A favourite keeps its own Space.
     pub fn move_tab(&mut self, id: TabId, space: SpaceId, zone: Zone, index: usize) {
         let Some((mut tab, old_index)) = self.take(id) else { return };
         let (from, old_zone) = (tab.space, tab.zone);
+        let space = if zone == Zone::Favorite { from } else { space };
         tab.space = space;
         tab.zone = zone;
+        tab.folder = None;
         self.insert(tab, index);
         if from != space {
             self.pick_neighbour(from, id, old_zone, old_index);
@@ -264,13 +343,19 @@ impl Session {
         match zone {
             Zone::Today => self.move_tab(id, space, Zone::Pinned, usize::MAX),
             Zone::Pinned => self.move_tab(id, space, Zone::Today, 0),
+            Zone::Favorite => {}
         }
     }
 
     /// Shows a tab: makes it and its Space active, and stamps both it and the tab it
     /// replaces so a tab is never archived right after you leave it.
+    /// A favourite shows in the active Space instead of switching to its own.
     pub fn activate_tab(&mut self, id: TabId, now: u64) {
-        let Some(space) = self.tab(id).map(|t| t.space) else { return };
+        let Some(tab) = self.tab(id) else { return };
+        let space = match tab.zone {
+            Zone::Favorite => self.active_space.unwrap_or(tab.space),
+            _ => tab.space,
+        };
         let prev = self.space(space).and_then(|s| s.active_tab);
         for t in self.tabs.iter_mut().filter(|t| t.id == id || Some(t.id) == prev) {
             t.last_active = now;
@@ -299,7 +384,17 @@ impl Session {
     }
 
     /// ⌘W. Pushes onto the reopen stack and, unless incognito, the archive.
+    /// A favourite stays; it is only put away, like Arc's.
     pub fn close_tab(&mut self, id: TabId, now: u64) {
+        if self.tab(id).is_some_and(|t| t.zone == Zone::Favorite) {
+            for i in 0..self.spaces.len() {
+                if self.spaces[i].active_tab == Some(id) {
+                    let next = self.space_tabs(self.spaces[i].id).next().map(|t| t.id);
+                    self.spaces[i].active_tab = next;
+                }
+            }
+            return;
+        }
         let Some((tab, index)) = self.take(id) else { return };
         self.pick_neighbour(tab.space, id, tab.zone, index);
         if !self.space(tab.space).is_some_and(|s| s.ephemeral) {
@@ -322,6 +417,9 @@ impl Session {
     fn revive(&mut self, mut tab: Tab, index: usize, now: u64) -> Option<TabId> {
         if self.space(tab.space).is_none() {
             tab.space = self.active_space?;
+        }
+        if tab.folder.is_some_and(|f| self.folder(f).is_none_or(|f| f.space != tab.space)) {
+            tab.folder = None;
         }
         tab.archived_at = None;
         let id = tab.id;
@@ -367,8 +465,14 @@ impl Session {
         let mut tab = self.archive.remove(i);
         self.closed.retain(|(t, _)| t.id != id);
         tab.zone = Zone::Today;
+        tab.folder = None;
         self.revive(tab, 0, now)
     }
+}
+
+/// Tabs share an ordered list: all favourites, or one Space's folder, loose pinned or Today tabs.
+fn same_list(a: &Tab, b: &Tab) -> bool {
+    a.zone == b.zone && (a.zone == Zone::Favorite || (a.space == b.space && a.folder == b.folder))
 }
 
 #[cfg(test)]
@@ -377,6 +481,46 @@ mod tests {
 
     fn urls(s: &Session, space: SpaceId, zone: Zone) -> Vec<String> {
         s.tabs(space, zone).map(|t| t.url.clone()).collect()
+    }
+
+    #[test]
+    fn folders_hold_pinned_tabs_and_give_them_back() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 0);
+        let b = s.open_tab(sp, "b", 0);
+        let f = s.add_folder(sp, "Reading");
+        s.move_to_folder(a, f, usize::MAX);
+        s.move_to_folder(b, f, 0);
+        assert_eq!(s.folder_tabs(f).map(|t| t.url.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        assert_eq!(s.tab(a).unwrap().zone, Zone::Pinned, "a folder pins what goes in");
+        assert!(urls(&s, sp, Zone::Pinned).is_empty() && urls(&s, sp, Zone::Today).is_empty());
+        assert_eq!(s.space_tabs(sp).count(), 2);
+        s.move_tab(b, sp, Zone::Today, 0);
+        assert_eq!(s.tab(b).unwrap().folder, None);
+        s.remove_folder(f);
+        assert_eq!(urls(&s, sp, Zone::Pinned), ["a"]);
+    }
+
+    #[test]
+    fn favorites_show_in_every_space_and_only_put_away() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let work = s.add_space("Work", "💼", None);
+        let fav = s.open_tab(sp, "fav", 0);
+        let other = s.open_tab(sp, "other", 0);
+        s.move_tab(fav, work, Zone::Favorite, 0);
+        assert_eq!(s.tab(fav).unwrap().space, sp, "keeps its profile's Space");
+        assert_eq!(urls(&s, work, Zone::Favorite), ["fav"]);
+        s.set_active_space(work);
+        s.activate_tab(fav, 1);
+        assert_eq!(s.active_space(), Some(work), "opens in the Space you are in");
+        assert_eq!(s.space(work).unwrap().active_tab, Some(fav));
+        s.close_tab(fav, 2);
+        assert!(s.tab(fav).is_some());
+        assert_eq!(s.space(work).unwrap().active_tab, None);
+        s.activate_tab(other, 3);
+        assert_eq!(s.active_space(), Some(sp));
     }
 
     #[test]

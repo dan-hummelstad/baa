@@ -416,3 +416,36 @@ fn typing_fetches_suggestions_once_it_pauses(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down enter");
     assert_eq!(urls(&b, Zone::Today, cx), ["https://www.google.com/search?q=gh+cli"]);
 }
+
+#[gpui::test]
+fn folders_are_named_in_place_and_favorites_follow_every_space(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
+
+    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), window, cx));
+    cx.simulate_input("Reading");
+    cx.simulate_keystrokes("enter");
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        let folder = s.folders(s.active_space().unwrap()).next().unwrap();
+        assert_eq!(folder.name, "Reading");
+        assert_eq!(s.folder_tabs(folder.id).next().unwrap().id, tab);
+        assert!(b.renaming.is_none());
+    });
+
+    b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        b.session.move_tab(tab, space, Zone::Favorite, 0);
+        b.new_space(window, cx);
+        b.close_overlays(window, cx);
+        b.activate_tab(tab, window, cx);
+    });
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        assert_eq!(s.active_space(), Some(s.spaces()[1].id), "a favourite opens where you are");
+        assert_eq!(b.active_tab(), Some(tab));
+    });
+}
