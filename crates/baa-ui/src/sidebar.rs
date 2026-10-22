@@ -65,7 +65,7 @@ impl<H: WebHost> Browser<H> {
             .relative()
             .left(px(self.slide.value() * SIDEBAR_WIDTH))
             .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
-            .pt(px(18.))
+            .pt(px(4.))
             .flex()
             .flex_col()
             .gap(px(6.))
@@ -148,29 +148,16 @@ impl<H: WebHost> Browser<H> {
             .h_full()
             .flex()
             .flex_col()
-            .pt(px(5.))
             .pr(px(12.))
             .pb(px(4.))
             .pl(px(10.))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
-            .child(
-                div()
-                    .id("toolbar")
-                    .h(px(32.))
-                    .pl(px(6.))
-                    .pr(px(1.))
-                    .flex()
-                    .items_center()
-                    .on_mouse_down(gpui::MouseButton::Left, drag_or_zoom)
-                    .child(self.render_window_controls(theme, cx)),
-            )
             .child(lists)
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
     }
 
-    /// Room for the traffic lights, the sidebar toggle, and back/forward/reload:
-    /// the sidebar's toolbar, or the address bar's left end when it is collapsed.
+    /// Room for the traffic lights, then the sidebar toggle and back/forward/reload.
     pub(crate) fn render_window_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self
             .active_tab()
@@ -218,19 +205,18 @@ impl<H: WebHost> Browser<H> {
             })
         };
         div()
-            .flex_1()
             .flex()
             .items_center()
-            // Traffic lights: 52 wide, then the same 14 gap the mock leaves.
-            .child(div().w(px(62.)))
+            .gap(px(8.))
+            // Traffic lights: 52 wide, then a 14 gap.
+            .child(div().w(px(58.)))
             .child(button("toggle-sidebar", "panel-left", true).on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
             }))
-            .child(div().flex_1())
             .child(
                 div()
                     .flex()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .child(history("back", "arrow-left", back, true))
                     .child(history("forward", "arrow-right", fwd, false))
                     .child(

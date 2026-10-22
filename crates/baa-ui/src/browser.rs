@@ -22,6 +22,8 @@ use crate::{
 };
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 258.0;
+/// The window-wide row with the traffic lights, navigation, URL and extensions.
+pub(crate) const HEADER_H: f32 = 38.0;
 /// Gap between the window edge and the page card (and the floating sidebar).
 pub(crate) const INSET: f32 = 9.0;
 /// The page card's corner radius; the native page view is rounded to match.
@@ -1027,7 +1029,7 @@ impl<H: WebHost> Browser<H> {
         // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
         let offset = INSET + (shown - 1.0) * (SIDEBAR_WIDTH + INSET * 2.0);
         let card = sidebar.map(|sidebar| {
-            edge(div().absolute().top(px(INSET)).bottom(px(INSET)), offset)
+            edge(div().absolute().top(px(HEADER_H)).bottom(px(INSET)), offset)
                 .id("reveal-card")
                 .occlude()
                 .w(px(SIDEBAR_WIDTH))
@@ -1115,7 +1117,7 @@ impl<H: WebHost> Browser<H> {
                     .child(
                         div()
                             .absolute()
-                            .top(px(INSET + 5. + 32. + 2.))
+                            .top(px(HEADER_H + 2.))
                             .right(px(INSET))
                             .mt(px((1.0 - t) * -8.0))
                             .w(px(380.))
@@ -1241,7 +1243,6 @@ impl<H: WebHost> Browser<H> {
                     Hsla { a: 0.25, ..theme.accent },
                 ))
         });
-        let bar = self.render_address_bar(theme, cx);
         div()
             .relative()
             .flex_1()
@@ -1249,7 +1250,6 @@ impl<H: WebHost> Browser<H> {
             .h_full()
             .flex()
             .flex_col()
-            .child(bar)
             .child(
                 div()
                     .flex_1()
@@ -1264,10 +1264,10 @@ impl<H: WebHost> Browser<H> {
             .children(find)
     }
 
-    /// Above the page, across its width: the short URL in the middle (click to
-    /// edit), extensions at the right end, and with the sidebar collapsed the
-    /// window controls at the left. Empty space drags the window.
-    fn render_address_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The window's top row (Arc's top-bar layout): traffic lights, sidebar
+    /// toggle and navigation at the left, the short URL centred on the window,
+    /// extensions at the right. Empty space drags the window.
+    fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let url = self
             .active_tab()
             .and_then(|id| self.session.tab(id))
@@ -1292,35 +1292,40 @@ impl<H: WebHost> Browser<H> {
                     None => icon("sliders-horizontal", 16., theme.ink_muted).into_any_element(),
                 })
         }).collect();
-        let controls = collapsed_controls(self, theme, cx);
         div()
-            .id("address-bar")
+            .id("header")
             .flex_none()
-            .h(px(32.))
-            .mt(px(5.))
-            .mb(px(4.))
+            .h(px(HEADER_H))
+            .pl(px(16.))
+            .pr(px(INSET + 2.))
             .flex()
             .items_center()
             .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
-            .child(div().flex_1().flex().items_center().children(controls))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .child(self.render_window_controls(theme, cx)),
+            )
             .child(
                 div()
                     .id("address")
                     .flex_none()
                     .max_w(px(480.))
-                    .h(px(28.))
-                    .px(px(14.))
+                    .h(px(26.))
+                    .px(px(10.))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(px(8.))
+                    .gap(px(6.))
+                    .rounded(px(7.))
                     .text_size(px(13.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(if host.is_empty() { theme.ink_muted } else { theme.ink })
+                    .text_color(theme.ink_muted)
                     .hover(|s| s.bg(theme.hover))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
+                    .when(!host.is_empty(), |d| d.child(icon("link", 13., theme.ink_muted)))
                     .child(div().truncate().child(if host.is_empty() {
                         "Search or enter address".into()
                     } else {
@@ -1333,7 +1338,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .justify_end()
-                    .gap(px(2.))
+                    .gap(px(4.))
                     .children(extensions),
             )
     }
@@ -1468,25 +1473,6 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
-/// With the sidebar collapsed, its window controls move to the address bar.
-fn collapsed_controls<H: WebHost>(
-    browser: &Browser<H>,
-    theme: &Theme,
-    cx: &mut Context<Browser<H>>,
-) -> Option<AnyElement> {
-    (browser.sidebar_w.value() < 1.0).then(|| {
-        div()
-            .w(px(SIDEBAR_WIDTH - 22.))
-            .flex()
-            .items_center()
-            // Same place as in the sidebar (16 from the window edge, where the
-            // traffic lights start); the bar itself starts at the inset.
-            .pl(px(16. - INSET))
-            .child(browser.render_window_controls(theme, cx))
-            .into_any_element()
-    })
-}
-
 /// A link previewed over the page.
 pub(crate) struct PeekPage<P> {
     pub(crate) page: Entity<P>,
@@ -1570,29 +1556,37 @@ impl<H: WebHost> Render for Browser<H> {
         let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
         let right = self.side() == SidebarSide::Right;
 
+        let header = self.render_header(&theme, cx);
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
             .relative()
             .size_full()
             .flex()
-            .when(right, |d| d.flex_row_reverse())
-            .pb(px(INSET))
-            .pt(px(INSET))
-            .when(right, |d| d.pl(px(INSET)).pr(px(edge)))
-            .when(!right, |d| d.pr(px(INSET)).pl(px(edge)))
+            .flex_col()
             .bg(gradient_fill(&theme))
             .text_color(theme.ink)
             .text_size(px(13.))
+            .child(header)
             .child(
                 div()
-                    .flex_shrink_0()
-                    .h_full()
-                    .w(px(docked_w))
-                    .overflow_hidden()
-                    .children(docked),
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .when(right, |d| d.flex_row_reverse())
+                    .pb(px(INSET))
+                    .when(right, |d| d.pl(px(INSET)).pr(px(edge)))
+                    .when(!right, |d| d.pr(px(INSET)).pl(px(edge)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .h_full()
+                            .w(px(docked_w))
+                            .overflow_hidden()
+                            .children(docked),
+                    )
+                    .child(page),
             )
-            .child(page)
             .children(reveal.into_iter().flatten())
             .children(peek)
             .children(bar)

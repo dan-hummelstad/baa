@@ -83,7 +83,7 @@ fn main() {
             titlebar: Some(TitlebarOptions {
                 title: Some("baa".into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(16.), px(23.))),
+                traffic_light_position: Some(point(px(16.), px(12.))),
             }),
             // Pages are native views under gpui's layer, seen through the hole
             // each page element punches; that needs a transparent layer.
