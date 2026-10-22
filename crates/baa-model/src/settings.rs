@@ -1,0 +1,119 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SidebarSide {
+    #[default]
+    Left,
+    Right,
+}
+
+/// `url` holds `%s` where the encoded query goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchEngine {
+    pub name: String,
+    pub url: String,
+}
+
+/// Choices offered in settings; the first is the default. Users may also enter their own.
+pub const SEARCH_ENGINES: &[(&str, &str)] = &[
+    ("DuckDuckGo", "https://duckduckgo.com/?q=%s"),
+    ("Brave Search", "https://search.brave.com/search?q=%s"),
+    ("Startpage", "https://www.startpage.com/do/search?q=%s"),
+    ("Kagi", "https://kagi.com/search?q=%s"),
+    ("Google", "https://www.google.com/search?q=%s"),
+    ("Bing", "https://www.bing.com/search?q=%s"),
+];
+
+impl Default for SearchEngine {
+    fn default() -> Self {
+        let (name, url) = SEARCH_ENGINES[0];
+        SearchEngine { name: name.into(), url: url.into() }
+    }
+}
+
+/// Global settings. Stored as JSON so adding a field needs no migration; missing
+/// fields take their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub search_engine: SearchEngine,
+    /// Search-as-you-type requests to the engine; off so typing contacts nobody (PLAN.md §5).
+    pub search_suggest: bool,
+    pub sidebar_side: SidebarSide,
+    /// Forces reduced motion; the UI also honours the OS setting.
+    pub reduce_motion: bool,
+    /// Today tabs idle this long are archived (PLAN.md §3); 0 = never.
+    pub archive_after_hours: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            search_engine: SearchEngine::default(),
+            search_suggest: false,
+            sidebar_side: SidebarSide::Left,
+            reduce_motion: false,
+            archive_after_hours: 12,
+        }
+    }
+}
+
+impl Settings {
+    /// Command-bar text → URL to load: a URL as typed, a bare host gets `https://`
+    /// (`http://` for loopback, where dev servers rarely have TLS), anything else is a search.
+    // ponytail: heuristic only (no public-suffix list); "1.5" counts as an IPv4 host.
+    pub fn resolve_input(&self, text: &str) -> String {
+        let text = text.trim();
+        if !text.contains(char::is_whitespace) {
+            if text.contains("://") || ["about:", "data:", "file:", "mailto:"].iter().any(|p| text.starts_with(p)) {
+                return text.to_string();
+            }
+            if let Ok(mut u) = url::Url::parse(&format!("https://{text}")) {
+                let (hosty, loopback) = match u.host() {
+                    Some(url::Host::Domain(d)) => (
+                        d == "localhost"
+                            || d.rsplit_once('.').is_some_and(|(_, tld)| !tld.is_empty() && tld.chars().all(char::is_alphabetic)),
+                        d == "localhost",
+                    ),
+                    Some(url::Host::Ipv4(ip)) => (true, ip.is_loopback()),
+                    Some(url::Host::Ipv6(ip)) => (true, ip.is_loopback()),
+                    None => (false, false),
+                };
+                if loopback {
+                    u.set_scheme("http").expect("https -> http is allowed");
+                }
+                if hosty {
+                    return u.into();
+                }
+            }
+        }
+        let q: String = url::form_urlencoded::byte_serialize(text.as_bytes()).collect();
+        self.search_engine.url.replace("%s", &q)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_input() {
+        let s = Settings::default();
+        assert_eq!(s.resolve_input("example.com"), "https://example.com/");
+        assert_eq!(s.resolve_input("localhost:3000/x"), "http://localhost:3000/x");
+        assert_eq!(s.resolve_input("127.0.0.1:8080"), "http://127.0.0.1:8080/");
+        assert_eq!(s.resolve_input("1.1.1.1"), "https://1.1.1.1/");
+        assert_eq!(s.resolve_input("http://a.b"), "http://a.b");
+        assert_eq!(s.resolve_input("rust lang"), "https://duckduckgo.com/?q=rust+lang");
+        assert_eq!(s.resolve_input("foo"), "https://duckduckgo.com/?q=foo");
+        assert_eq!(s.resolve_input("c++"), "https://duckduckgo.com/?q=c%2B%2B");
+    }
+
+    #[test]
+    fn missing_fields_default() {
+        let s: Settings = serde_json::from_str(r#"{"reduce_motion":true}"#).unwrap();
+        assert!(s.reduce_motion);
+        assert_eq!(s.search_engine.name, "DuckDuckGo");
+        assert_eq!(s.archive_after_hours, 12);
+    }
+}
