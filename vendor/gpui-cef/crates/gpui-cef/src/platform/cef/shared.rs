@@ -14,6 +14,27 @@ use std::{
 use cef::{Browser, BrowserHost, ImplBrowser};
 use gpui::{px, size, Bounds, CursorStyle, Pixels, RenderImage, Size};
 
+/// Debug log: page frames delivered per second and the slowest gap, every 2 s.
+fn frame_stats() {
+    use std::time::Instant;
+    thread_local!(static STATS: RefCell<(Option<Instant>, Option<Instant>, u32, f32)> = const { RefCell::new((None, None, 0, 0.)) });
+    STATS.with(|stats| {
+        let mut s = stats.borrow_mut();
+        let now = Instant::now();
+        if let Some(last) = s.1 {
+            s.3 = s.3.max((now - last).as_secs_f32() * 1000.);
+        }
+        s.1 = Some(now);
+        s.2 += 1;
+        let start = *s.0.get_or_insert(now);
+        let elapsed = (now - start).as_secs_f32();
+        if elapsed >= 2. {
+            log::debug!("frames: {:.0}/s, worst gap {:.1} ms", s.2 as f32 / elapsed, s.3);
+            *s = (Some(now), Some(now), 0, 0.);
+        }
+    });
+}
+
 /// The most recent frame handed over by CEF.
 pub(crate) enum Frame {
     /// From `on_accelerated_paint`: a GPU texture referenced in place.
@@ -93,6 +114,11 @@ pub(crate) struct Shared {
     browser: RefCell<Option<Browser>>,
     /// Events waiting for the pump to emit them.
     events: RefCell<Vec<crate::WebviewEvent>>,
+    /// Wheel input waiting for the next display frame, and where it happened.
+    scroll: RefCell<super::scroll::Scroll>,
+    scroll_at: RefCell<Option<cef::MouseEvent>>,
+    /// GPU copies of accelerated frames: [view, popup].
+    gpu_copy: [RefCell<Option<super::gpu_copy::GpuCopy>>; 2],
 }
 
 impl Shared {
@@ -119,6 +145,9 @@ impl Shared {
             received_frame: Cell::new(false),
             browser: RefCell::new(None),
             events: RefCell::new(Vec::new()),
+            scroll: Default::default(),
+            scroll_at: RefCell::new(None),
+            gpu_copy: Default::default(),
         })
     }
 
@@ -179,6 +208,30 @@ impl Shared {
         self.scale_factor.get()
     }
 
+    pub(crate) fn push_scroll(&self, at: cef::MouseEvent, dx: f32, dy: f32, precise: bool) {
+        *self.scroll_at.borrow_mut() = Some(at);
+        self.scroll.borrow_mut().push(dx, dy, precise);
+    }
+
+    /// This frame's share of pending wheel input, ready for CEF.
+    pub(crate) fn take_scroll(&self) -> Option<(cef::MouseEvent, i32, i32)> {
+        let (dx, dy) = self.scroll.borrow_mut().step()?;
+        Some((self.scroll_at.borrow().clone()?, dx, dy))
+    }
+
+    /// Copies CEF's pooled frame into one this webview owns.
+    pub(crate) fn copy_accelerated(
+        &self,
+        popup: bool,
+        buffer: &core_video::pixel_buffer::CVPixelBuffer,
+    ) -> Option<core_video::pixel_buffer::CVPixelBuffer> {
+        let mut slot = self.gpu_copy[popup as usize].borrow_mut();
+        if slot.is_none() {
+            *slot = super::gpu_copy::GpuCopy::new();
+        }
+        slot.as_mut()?.copy(buffer)
+    }
+
     pub(crate) fn put_frame(&self, frame: Frame) {
         // One line in the log is enough to tell which path is live.
         if !self.received_frame.replace(true) {
@@ -199,6 +252,9 @@ impl Shared {
             }
         }
 
+        if log::log_enabled!(log::Level::Debug) {
+            frame_stats();
+        }
         self.view.put(frame);
         self.dirty.set(true);
     }

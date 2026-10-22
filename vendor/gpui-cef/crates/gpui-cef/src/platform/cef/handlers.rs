@@ -91,12 +91,12 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         /// With `external_message_pump` enabled, CEF uses this to say when it
-        /// would like `do_message_loop_work()` to be called.
-        ///
-        /// Nothing to do here: [`super::pump`] drives the loop from a 60Hz timer
-        /// on the main run loop, so the call happens within 16ms regardless.
-        /// Calling more often than requested only costs a little efficiency.
-        fn on_schedule_message_pump_work(&self, _delay_ms: i64) {}
+        /// would like `do_message_loop_work()` to be called. Waiting for the next
+        /// vsync tick instead costs a tick per browser-thread hop, and a frame
+        /// takes several: 40 fps measured instead of 120. Any thread.
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            super::pump::schedule_work(delay_ms);
+        }
     }
 }
 
@@ -197,7 +197,12 @@ wrap_render_handler! {
             };
 
             match CVPixelBuffer::from_io_surface(&surface, None) {
-                Ok(buffer) => put_frame(&self.shared, type_, SharedFrame::Accelerated(buffer)),
+                Ok(buffer) => {
+                    let popup = type_ == PaintElementType::POPUP;
+                    if let Some(owned) = self.shared.copy_accelerated(popup, &buffer) {
+                        put_frame(&self.shared, type_, SharedFrame::Accelerated(owned));
+                    }
+                }
                 Err(status) => {
                     log::error!("CVPixelBufferCreateWithIOSurface failed: {status}");
                 }

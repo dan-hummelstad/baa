@@ -22,6 +22,9 @@ cef.workspace = true
 image = "0.25"
 core-video = { version = "0.5.2", features = ["metal"] }
 io-surface = "0.16"
+# Blits CEF's pooled IOSurface frames into our own (gpu_copy.rs). Both already in the graph via gpui.
+metal = "0.33"
+foreign-types = "0.5"
 objc2 = "0.6"
 core-foundation = "0.10"
 

@@ -41,7 +41,8 @@ Useful environment variables when running the bundle:
 |---|---|
 | `BAA_CEF_LOG=<file>` | CEF's own log, verbose |
 | `RUST_LOG=info` | shell log on stderr |
-| `GPUI_CEF_ACCELERATED=1` | try the shared-texture paint path (not yet supported by stock GPUI) |
+| `BAA_CPU_PAINT=1` | use the CPU-copy paint path instead of GPU frames |
+| `RUST_LOG=gpui_cef=debug` | log delivered page frames per second |
 
 App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Windows): `baa.db`
 (session + settings), `profile/space-<id>/` (per-Space Chromium profile), `keymap.json`

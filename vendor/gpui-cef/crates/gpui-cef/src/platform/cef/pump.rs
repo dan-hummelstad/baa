@@ -37,12 +37,13 @@ use core_foundation::{
     date::CFAbsoluteTimeGetCurrent,
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext},
 };
+use core_foundation::base::TCFType as _;
 use gpui::{AsyncApp, WeakEntity};
 
 use super::{shared::Shared, Webview};
 
-/// How often to drive CEF, in seconds. Roughly 60fps.
-const INTERVAL: f64 = 1. / 60.;
+/// Fallback tick when no display link is available (macOS < 14), in seconds.
+const INTERVAL: f64 = 1. / 120.;
 
 thread_local! {
     /// The one timer, created on first use and left running for the life of the
@@ -55,8 +56,6 @@ thread_local! {
 struct View {
     id: u64,
     shared: Rc<Shared>,
-    /// On the shared-texture path, frame production has to be driven from here.
-    accelerated: bool,
     webview: WeakEntity<Webview>,
     cx: AsyncApp,
 }
@@ -69,7 +68,7 @@ struct PumpState {
 
 struct Pump {
     // The timer is never removed, but keep it so its lifetime is explicit.
-    _timer: CFRunLoopTimer,
+    _timer: Option<CFRunLoopTimer>,
     // What the timer's context points at. Has to outlive the timer.
     state: Rc<PumpState>,
 }
@@ -99,7 +98,6 @@ impl Drop for Registration {
 /// Registers a webview with the process-wide pump, starting it if needed.
 pub(crate) fn register(
     shared: Rc<Shared>,
-    accelerated: bool,
     webview: WeakEntity<Webview>,
     cx: AsyncApp,
 ) -> Registration {
@@ -112,7 +110,6 @@ pub(crate) fn register(
         pump.state.views.borrow_mut().push(View {
             id,
             shared,
-            accelerated,
             webview,
             cx,
         });
@@ -124,6 +121,9 @@ pub(crate) fn register(
 impl Pump {
     fn start() -> Self {
         let state = Rc::new(PumpState::default());
+        if display_link::start() {
+            return Self { _timer: None, state };
+        }
 
         let mut context = CFRunLoopTimerContext {
             version: 0,
@@ -141,8 +141,77 @@ impl Pump {
         }
 
         Self {
-            _timer: timer,
+            _timer: Some(timer),
             state,
+        }
+    }
+}
+
+/// Ticks the pump once per display refresh (120 Hz on ProMotion), in phase with
+/// vsync, so wheel input and repaints land on display frames.
+pub(crate) mod display_link {
+    use objc2::{
+        class, msg_send,
+        runtime::{AnyObject, ClassBuilder, NSObject, Sel},
+        sel, ClassType as _,
+    };
+
+    extern "C-unwind" fn tick(_this: *mut AnyObject, _sel: Sel, _link: *mut AnyObject) {
+        // Clone the state out so ticking (which may register webviews) does not
+        // hold the PUMP borrow.
+        let state = super::PUMP.with(|slot| slot.try_borrow().ok()?.as_ref().map(|p| p.state.clone()));
+        if let Some(state) = state {
+            super::tick_all(&state);
+        }
+    }
+
+    /// The main screen's highest refresh rate (120 on ProMotion), 60 if unknown.
+    pub(crate) fn max_refresh_rate() -> i32 {
+        unsafe {
+            let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
+            if screen.is_null() {
+                return 60;
+            }
+            let fps: isize = msg_send![screen, maximumFramesPerSecond];
+            if fps > 0 { fps as i32 } else { 60 }
+        }
+    }
+
+    /// `[NSScreen displayLinkWithTarget:selector:]` on the main run loop. False
+    /// before macOS 14, where the caller falls back to a timer.
+    // ponytail: tied to the main screen. Ceiling: a window on a 60 Hz external
+    // display still ticks at the main screen's rate. Upgrade: NSView's display link.
+    pub(super) fn start() -> bool {
+        unsafe {
+            let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
+            if screen.is_null() {
+                return false;
+            }
+            let supported: bool =
+                msg_send![screen, respondsToSelector: sel!(displayLinkWithTarget:selector:)];
+            if !supported {
+                return false;
+            }
+            let Some(mut builder) = ClassBuilder::new(c"GpuiCefPumpTarget", NSObject::class()) else {
+                return false;
+            };
+            builder.add_method(
+                sel!(tick:),
+                tick as extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject),
+            );
+            let target_class = builder.register();
+            // Lives for the process: the run loop retains the link, the link its target.
+            let target: *mut AnyObject = msg_send![target_class, new];
+            let link: *mut AnyObject =
+                msg_send![screen, displayLinkWithTarget: target, selector: sel!(tick:)];
+            if link.is_null() {
+                return false;
+            }
+            let run_loop: *mut AnyObject = msg_send![class!(NSRunLoop), mainRunLoop];
+            // kCFRunLoopCommonModes is toll-free bridged to NSRunLoopCommonModes.
+            let mode = core_foundation::runloop::kCFRunLoopCommonModes as *const AnyObject;
+            let _: () = msg_send![link, addToRunLoop: run_loop, forMode: mode];
+            true
         }
     }
 }
@@ -151,12 +220,60 @@ extern "C" fn on_tick(_timer: core_foundation::runloop::CFRunLoopTimerRef, info:
     if info.is_null() {
         return;
     }
-    let state = unsafe { &*(info as *const PumpState) };
+    tick_all(unsafe { &*(info as *const PumpState) });
+}
 
+thread_local! {
+    /// Chromium can spin a nested run loop inside `do_message_loop_work`; a
+    /// scheduled pass must not re-enter it.
+    static IN_WORK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// One pending out-of-band pass at most, however often CEF asks.
+static WORK_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn do_work() {
+    if IN_WORK.with(|flag| flag.replace(true)) {
+        return;
+    }
+    cef::do_message_loop_work();
+    IN_WORK.with(|flag| flag.set(false));
+}
+
+/// Runs `do_message_loop_work` on the main run loop after `delay_ms`, when that is
+/// sooner than the next tick would be. Callable from any thread.
+pub(crate) fn schedule_work(delay_ms: i64) {
+    use std::sync::atomic::Ordering;
+    let delay = (delay_ms.max(0) as f64) / 1000.;
+    if delay >= INTERVAL || WORK_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    extern "C" fn fire(_timer: core_foundation::runloop::CFRunLoopTimerRef, _info: *mut c_void) {
+        WORK_PENDING.store(false, std::sync::atomic::Ordering::Release);
+        do_work();
+    }
+    let mut context = CFRunLoopTimerContext {
+        version: 0,
+        info: std::ptr::null_mut(),
+        retain: None,
+        release: None,
+        copyDescription: None,
+    };
+    let now = unsafe { CFAbsoluteTimeGetCurrent() };
+    // One-shot; the run loop releases it after firing.
+    let timer = CFRunLoopTimer::new(now + delay, 0., 0, 0, fire, &mut context);
+    let main = CFRunLoop::get_main();
+    unsafe {
+        main.add_timer(&timer, kCFRunLoopCommonModes);
+        core_foundation::runloop::CFRunLoopWakeUp(main.as_concrete_TypeRef());
+    }
+}
+
+fn tick_all(state: &PumpState) {
     // Driving CEF here, with gpui's App unborrowed, is the whole point. Calling
     // this while the App is borrowed lets gpui's paint re-enter from the run
     // loop Chromium spins, which panics with "RefCell already borrowed".
-    cef::do_message_loop_work();
+    do_work();
 
     // Snapshot, because the updates below run application code that may add or
     // remove webviews.
@@ -178,13 +295,13 @@ fn tick_view(view: &View) {
         }
     }
 
-    if view.accelerated {
-        // With external_begin_frame_enabled, this is what makes CEF draw a frame.
+    if let Some((at, dx, dy)) = view.shared.take_scroll() {
         if let Some(host) = view.shared.host() {
             use cef::ImplBrowserHost as _;
-            host.send_external_begin_frame();
+            host.send_mouse_wheel_event(Some(&at), dx, dy);
         }
     }
+
 
     let stale = view.shared.take_stale_cpu_frames();
     let events = view.shared.take_events();

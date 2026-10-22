@@ -2750,11 +2750,13 @@ dependencies = [
  "cef",
  "core-foundation 0.10.1",
  "core-video",
+ "foreign-types",
  "gpui",
  "gpui_platform",
  "image",
  "io-surface",
  "log",
+ "metal",
  "objc2 0.6.5",
  "parking_lot",
  "raw-window-handle",
@@ -2765,7 +2767,6 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed?rev=ef075910c99ce2c8fd07da4174e7c3bb71513f35#ef075910c99ce2c8fd07da4174e7c3bb71513f35"
 dependencies = [
  "anyhow",
  "block",

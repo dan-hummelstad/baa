@@ -13,14 +13,21 @@
 //!    run loop; see [`pump`] for why it cannot live on gpui's executor.
 
 mod chrome_window;
+mod gpu_copy;
 mod handlers;
 mod ime;
 mod input;
 mod nsapp;
 mod pump;
+mod scroll;
 mod shared;
 
 pub use chrome_window::open_chrome_window;
+
+/// The main screen's highest refresh rate, e.g. 120 on ProMotion.
+pub fn max_refresh_rate() -> i32 {
+    pump::display_link::max_refresh_rate()
+}
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -306,7 +313,12 @@ impl Webview {
             // Receive frames through a shared texture (IOSurface).
             shared_texture_enabled: accelerated as _,
             // With a shared texture we also drive frame production ourselves.
-            external_begin_frame_enabled: accelerated as _,
+            // ponytail: CEF drives frames (at windowless_frame_rate), not us. CEF
+            // 151-156 date external BeginFrames with a fixed 16.67 ms interval and
+            // no deadline, which skips rAF ticks once the page's main thread is
+            // busy (cef#4311). Switch back to vsync-driven frames when cef#4312 or
+            // cef#4317 ships.
+            external_begin_frame_enabled: 0,
             ..Default::default()
         };
 
@@ -340,7 +352,6 @@ impl Webview {
 
         let pump = pump::register(
             shared.clone(),
-            accelerated,
             cx.entity().downgrade(),
             cx.to_async(),
         );
@@ -514,14 +525,14 @@ impl Webview {
     }
 
     fn send_scroll(&self, event: &ScrollWheelEvent) {
-        let Some(host) = self.host() else { return };
         let flags = input::modifiers(&event.modifiers);
         let cef_event = input::mouse_event(event.position, self.shared.bounds(), flags);
-        let (dx, dy) = match event.delta {
-            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),
-            ScrollDelta::Lines(delta) => (delta.x * LINE_HEIGHT, delta.y * LINE_HEIGHT),
+        let (dx, dy, precise) = match event.delta {
+            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
+            ScrollDelta::Lines(delta) => (delta.x * LINE_HEIGHT, delta.y * LINE_HEIGHT, false),
         };
-        host.send_mouse_wheel_event(Some(&cef_event), dx.round() as i32, dy.round() as i32);
+        // The pump sends it on the next display frame.
+        self.shared.push_scroll(cef_event, dx, dy, precise);
     }
 
     fn send_key_down(&mut self, event: &KeyDownEvent, _window: &Window, _cx: &mut Context<Self>) {

@@ -143,6 +143,13 @@ impl WebHost for CefWebHost {
     ) -> Entity<CefPage> {
         let options = WebviewOptions {
             profile: self.profile(profile),
+            // GPU frames through the patched gpui_apple; BAA_CPU_PAINT=1 is the
+            // escape hatch if a machine's accelerated path misbehaves.
+            accelerated: std::env::var_os("BAA_CPU_PAINT").is_none(),
+            // Twice the display rate: every vsync then shows exactly two fresh
+            // page frames. At 1x, CEF's capturer drops frames that land a hair
+            // early (60 ms hitches measured); 144 on a 120 Hz screen beats.
+            frame_rate: refresh_rate() * 2,
             ..WebviewOptions::url(url)
         };
         let page = cx.new(|cx| CefPage::new(window, cx, options));
@@ -297,6 +304,16 @@ impl PageHandle for CefPage {
 // Ids count down from u64::MAX; baa-model's count up from 1.
 fn is_ephemeral(id: ProfileId) -> bool {
     id.0 > u64::MAX / 2
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_rate() -> i32 {
+    gpui_cef::max_refresh_rate()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_rate() -> i32 {
+    60
 }
 
 fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
