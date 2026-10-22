@@ -31,6 +31,9 @@ cargo bundle                                        # macOS: the app only runs b
 open target/bundle/baa.app
 ```
 
+Judge smoothness only on `cargo bundle --release`. A debug build lays out GPUI too slowly to
+present more than ~60 fps.
+
 Development loop: `cargo check -p <crate>` and `cargo test -p <crate>`. A full `cargo build -p baa`
 is slow; run it once at the end. `cargo test --workspace` and
 `cargo clippy --workspace --all-targets -- -D warnings` are what CI runs.
