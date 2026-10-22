@@ -11,7 +11,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 
 ## Ownership (one crate per orchestrator; do not edit outside yours)
 - `crates/baa-model`   data + SQLite + settings
-- `crates/baa-privacy` switches, host blocklist, adblock engine (uBO lists)
+- `crates/baa-privacy` switches, host blocklist
 - `crates/baa-web`     CEF host (`WebHost` trait in lib.rs is the contract; UI codes against it) + `vendor/gpui-cef`
 - `crates/baa-ui`      GPUI views, theme, motion
 - `crates/baa`         app shell wiring (integration orchestrator only)

@@ -41,7 +41,7 @@ code changes required. No baa.me backend exists in v1.
 | De-Googling | **Runtime stripping** of stock CEF (§5) | Building CEF against ungoogled-chromium / Helium patches | Building Chromium is 4–8 h on a 32-core box, not viable on hosted runners per release, and the ungoogled-on-CEF path is undocumented folklore (forum thread, "not all patches apply"). CEF Alloy already has no sign-in, sync, Chrome UI, or account machinery. What is left is switchable or blockable. Keep a source build as a documented v2 option. |
 | Storage isolation | One `CefRequestContext` per Space with `cache_path = <profile>/spaces/<id>` | Chromium profiles | Context = Chromium `BrowserContext`/`StoragePartition`: cookies, localStorage, IDB, cache, SW, permissions all isolated. Exactly what Arc "profiles" do. Several Spaces may share one context (Arc allows that too). |
 | Updates | **GitHub Actions cron** bumps CEF pin from `cef-builds.spotifycdn.com/index.json` and the `cef` crate, opens a PR, CI builds, auto-merge on green, release | Sparkle/own update server | No code change needed for an engine bump. App self-update is v1.1. |
-| Ad blocking | **uBlock Origin bundled by default**, as a built-in engine: `adblock-rust` (Brave's uBO-syntax-compatible engine) loading uBO's default filter lists, network blocking in `CefResourceRequestHandler`, cosmetic filters injected per frame | Loading the uBO extension itself | CEF's Alloy style (the only style with OSR) does **not** support extensions at all (removed in M127, issue #3859). The engine route gives uBO's lists, syntax and behaviour inside OSR. See §5b. |
+| Ad blocking | **None in v1** (decided 2026-10-22; filter-list licensing and bundle size) | Bundled `adblock-rust` engine with uBO lists; loading the uBO extension | Note: CEF's Alloy style (the only style with OSR) does **not** support extensions at all (removed in M127, issue #3859), so an extension is not a later option either. If ad blocking returns, it is the built-in engine route (the removed code is in git history, commit a860789). |
 
 ---
 
@@ -106,7 +106,7 @@ baa/
 ```
 
 Rust edition 2021 (2024 once the pinned gpui rev compiles under it), MSRV = stable (1.99.1 on the dev box). Keep dependency count low: gpui, cef, rusqlite, serde, parking_lot,
-log, anyhow, url, adblock. No async runtime; CEF and GPUI both pump their own loops (CEF via
+log, anyhow, url. No async runtime; CEF and GPUI both pump their own loops (CEF via
 `external_message_pump` + `do_message_loop_work` scheduled on GPUI's foreground executor, as gpui-cef does).
 
 ---
@@ -131,16 +131,6 @@ Mapping each item to what a *binary* CEF Alloy build lets us do:
 | Media router / Cast | Yes | `--disable-features=MediaRouter` + host block |
 | Google Fonts / Google domains in web content | web content, not browser | not our business (that is the page) |
 | Widevine CDM | downloaded via component updater | not shipped in v1; Netflix won't work. Documented. |
-
-### 5b. uBlock Origin, bundled (as an engine)
-
-- Crate: `adblock` (Brave, Rust, MIT/MPL). Parses uBO/ABP filter syntax incl. `$third-party`, `$domain`, `##`, `#@#`, `:has()` procedural cosmetics, scriptlets.
-- Lists shipped in the binary (compressed) and refreshed from their canonical URLs every 24 h, user-switchable, like uBO's defaults: uBO filters (ads, privacy, badware, quick-fixes, unbreak), EasyList, EasyPrivacy, Peter Lowe's, URLhaus. Updates go to the list hosts only (allowlisted in the §5.3 proxy test).
-- Network: `CefResourceRequestHandler::OnBeforeResourceLoad` → `engine.check_network_request(url, source_url, resource_type)` → cancel, or redirect to a bundled neutered resource (`$redirect=` support).
-- Cosmetic: on `OnLoadStart` per frame, inject `engine.url_cosmetic_resources(url)` stylesheet + exception rules via `ExecuteJavaScript`/`CSS` insertion; hide generic cosmetics behind a cheap `class`/`id` observer script like uBO's.
-- CNAME uncloaking (Helium's addition): resolve first-party subdomains via `CefRequestContextHandler`/host resolver and re-check against the engine. v1.1.
-- UI: per-site toggle in the address pill with blocked-count badge, per-Space on/off, "my filters" text box. Default **on** for every Space.
-- `baa-privacy` owns it; `baa-web` only calls `should_block()`/`cosmetics_for()`.
 
 Implementation = three mechanisms, all in `baa-privacy`:
 1. **Switches** appended in `OnBeforeCommandLineProcessing`.
@@ -257,7 +247,7 @@ Each milestone ends with something runnable. Estimates are solo-dev, full-time.
 | 0 | **Skeleton** | Workspace builds on mac+win in CI; GPUI window with empty sidebar; CEF 154 initialised, one OSR tab renders example.com as a rounded element with a GPUI badge over it (gpui-cef demo, vendored). | 1 |
 | 1 | **Tabs + input** | Multiple tabs, switch, close, title/favicon/loading from CEF handlers; keyboard, IME, scroll, cursor, context menu, `<select>` popups, downloads, find. Sidebar today/pinned zones with drag. Session persisted to SQLite. | 3 |
 | 2 | **Spaces + isolation** | Spaces CRUD, theme tint, per-space request context, incognito space, switcher + keybinds, single-instance + open-URL. Login to two Google accounts in two Spaces proves isolation. | 2 |
-| 3 | **Privacy + uBO** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI; adblock engine with uBO lists, network + cosmetic blocking, per-site toggle. | 2 |
+| 3 | **Privacy** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI. | 1 |
 | 4 | **Arc feel** | Spring/FLIP motion, sidebar collapse + hover reveal, space swipe, page back/forward swipe, Peek, Little baa, command bar with fuzzy search over tabs/history, auto-archive. | 4 |
 | 5 | **Ship** | mac bundle signed+notarized, win signed; `release.yml`; `cef-bump.yml` live; split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
 | 6 | **Zero-copy** | IOSurface path on mac, D3D11 shared-texture path on win, GPUI BGRA patch upstreamed. | 2 |

@@ -6,8 +6,8 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 - Shell: Rust + [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) (Zed's UI framework).
 - Engine: [CEF](https://bitbucket.org/chromiumembedded/cef) in off-screen rendering mode, so every
   page is an ordinary GPUI element that can be clipped, animated and layered under popovers.
-- Privacy: Chromium switches, a host blocklist and a bundled uBlock Origin-style engine. No baa.me
-  backend, no telemetry.
+- Privacy: Chromium switches and a host blocklist strip Google services. No baa.me backend, no
+  telemetry. No ad blocker (CEF's off-screen mode cannot load extensions; see PLAN.md §2).
 - Targets: macOS and Windows. The engine pin is bumped automatically by a daily GitHub Action.
 
 `PLAN.md` is the spec. `CLAUDE.md` holds the rules for agents working in this repo.
@@ -15,7 +15,7 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 ## Status
 
 Early. Milestones 0–3 of `PLAN.md` are implemented: tabs, Spaces, per-Space storage, keymap,
-command bar, de-Googling, ad blocking. Milestone 4 (the Arc feel: gestures, Peek, Little baa)
+command bar, de-Googling. Milestone 4 (the Arc feel: gestures, Peek, Little baa)
 is next. Windows currently runs on WebView2 through the vendored gpui-cef fallback, not CEF.
 
 ## Build
@@ -52,7 +52,7 @@ App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Window
 | `crates/baa-ui` | GPUI views: sidebar, command bar, theme, motion, keymap actions |
 | `crates/baa-web` | the `WebHost` / `PageHandle` contract and its CEF implementation |
 | `crates/baa-model` | Spaces, tabs, settings, SQLite persistence |
-| `crates/baa-privacy` | Chromium switches, host blocklist, adblock engine and bundled lists |
+| `crates/baa-privacy` | Chromium switches, host blocklist |
 | `vendor/gpui-cef` | vendored CEF-in-GPUI host (off-screen rendering, input, IME) |
 | `xtask` | bundle, sign, notarize, CEF bump helpers |
 
@@ -62,21 +62,10 @@ App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Window
 ⌘1–8 tab n · ⌘9 last · ⌃⌥→/← next/prev Space · ⌘D pin · ⌘F find · ⌘⇧N incognito Space.
 Everything is remappable in `keymap.json` (GPUI's keymap format).
 
-## Filter lists and licensing
-
-baa ships compressed copies of these lists in `crates/baa-privacy/assets/filters` and refreshes
-them from their canonical URLs. The lists are data loaded at runtime, distributed unmodified,
-each under its own licence; baa's own code is MIT OR Apache-2.0.
-
-| List | Source | Licence |
-|---|---|---|
-| uBlock filters (ads, privacy, badware, quick fixes, unbreak) | ublockorigin.github.io/uAssets | GPLv3 |
-| EasyList, EasyPrivacy | easylist.to | GPLv3 / CC BY-SA 3.0 (dual) |
-| Peter Lowe's ad and tracking server list | pgl.yoyo.org/adservers | author's terms: attribution required, no resale; commercial redistribution needs permission |
-| Online Malicious URL Blocklist (URLhaus) | malware-filter.gitlab.io | CC0 1.0 |
+## Third-party notices
 
 CEF and Chromium are BSD-3; GPUI is Apache-2.0; gpui-cef is MIT OR Apache-2.0. A `CREDITS.html`
-with all third-party notices is part of the release milestone.
+with all notices is part of the release milestone.
 
 ## Licence
 

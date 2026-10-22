@@ -4,13 +4,9 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, OnceLock,
-    },
+    sync::Arc,
 };
 
-use baa_privacy::{Adblock, Decision};
 use gpui::{div, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, IntoElement, Window};
 use gpui_cef::{Download, ProfileOptions, WebviewEvent, WebviewOptions};
 
@@ -85,27 +81,16 @@ impl Downloads {
 pub struct CefWebHost {
     root: PathBuf,
     profiles: RefCell<HashMap<ProfileId, gpui_cef::Profile>>,
-    adblock_on: RefCell<HashMap<ProfileId, Arc<AtomicBool>>>,
     next_ephemeral: Cell<u64>,
-    /// Empty until the lists are parsed on a background thread (about a second).
-    adblock: Arc<OnceLock<Adblock>>,
     downloads: Entity<Downloads>,
 }
 
 impl CefWebHost {
     fn new(root: PathBuf, cx: &mut App) -> Self {
-        let adblock = Arc::new(OnceLock::new());
-        let dir = root.join("adblock");
-        let cell = adblock.clone();
-        std::thread::spawn(move || {
-            let _ = cell.set(Adblock::load(&dir));
-        });
         Self {
             root,
             profiles: RefCell::default(),
-            adblock_on: RefCell::default(),
             next_ephemeral: Cell::new(u64::MAX),
-            adblock,
             downloads: cx.new(|_| Downloads::default()),
         }
     }
@@ -115,59 +100,20 @@ impl CefWebHost {
         self.downloads.clone()
     }
 
-    /// Per-site toggles, "my filters" and list refresh. `None` while loading.
-    pub fn adblock(&self) -> Option<&Adblock> {
-        self.adblock.get()
-    }
-
-    // ponytail: the toggle is per storage profile, not per Space, because
-    // create_page only knows the profile. Ceiling: Spaces sharing a profile
-    // share the switch.
-    /// uBO on/off for every page in `profile`, effective from the next request.
-    pub fn set_adblock(&self, profile: ProfileId, on: bool) {
-        self.adblock_switch(profile).store(on, Ordering::Relaxed);
-    }
-
-    fn adblock_switch(&self, profile: ProfileId) -> Arc<AtomicBool> {
-        self.adblock_on
-            .borrow_mut()
-            .entry(profile)
-            .or_insert_with(|| Arc::new(AtomicBool::new(true)))
-            .clone()
-    }
-
     fn profile(&self, id: ProfileId) -> Option<gpui_cef::Profile> {
         if let Some(profile) = self.profiles.borrow().get(&id) {
             return Some(profile.clone());
         }
-        let (adblock, on) = (self.adblock.clone(), self.adblock_switch(id));
-        let filter: gpui_cef::FilterHook = Arc::new(move |request| {
-            if baa_privacy::block_browser_request(
+        let filter: gpui_cef::FilterHook = Arc::new(|request| {
+            baa_privacy::block_browser_request(
                 request.url,
                 request.resource_type,
                 request.page_initiated,
-            ) {
-                return Decision::Block;
-            }
-            match adblock.get() {
-                Some(adblock) if request.page_initiated && on.load(Ordering::Relaxed) => {
-                    adblock.should_block(request.url, request.source_url, request.resource_type)
-                }
-                _ => Decision::Allow,
-            }
-        });
-        let (adblock, on) = (self.adblock.clone(), self.adblock_switch(id));
-        let observer = generic_cosmetics_observer();
-        let load_start_script: gpui_cef::ScriptHook = Arc::new(move |url| {
-            if !url.starts_with("http") || !on.load(Ordering::Relaxed) {
-                return None;
-            }
-            Some(adblock.get()?.cosmetics_for(url) + &observer)
+            )
         });
         let options = ProfileOptions {
             cache_path: (!is_ephemeral(id)).then(|| profile_dir(&self.root, id)),
             filter,
-            load_start_script,
             prefs_off: baa_privacy::PREFS_OFF,
         };
         match gpui_cef::Profile::new(options) {
@@ -201,8 +147,6 @@ impl WebHost for CefWebHost {
         };
         let page = cx.new(|cx| CefPage::new(window, cx, options));
         let downloads = self.downloads.clone();
-        let adblock = self.adblock.clone();
-        let adblock_on = self.adblock_switch(profile);
         cx.subscribe(&page, move |page, event: &WebviewEvent, cx| {
             let event = match event.clone() {
                 WebviewEvent::UrlChanged(url) => PageEvent::UrlChanged(url),
@@ -242,18 +186,7 @@ impl WebHost for CefWebHost {
                     });
                     return;
                 }
-                WebviewEvent::Message(message) => {
-                    let Some(adblock) =
-                        adblock.get().filter(|_| adblock_on.load(Ordering::Relaxed))
-                    else {
-                        return;
-                    };
-                    let page = page.read(cx);
-                    if let Some(script) = generic_cosmetics_reply(adblock, &page.url(), &message) {
-                        page.eval(&script);
-                    }
-                    return;
-                }
+                WebviewEvent::Message(_) => return,
             };
             page.update(cx, |_, cx| cx.emit(event));
         })
@@ -269,7 +202,6 @@ impl WebHost for CefWebHost {
 
     fn delete_profile(&self, profile: ProfileId) {
         self.profiles.borrow_mut().remove(&profile);
-        self.adblock_on.borrow_mut().remove(&profile);
         if is_ephemeral(profile) {
             return;
         }
@@ -385,47 +317,6 @@ fn purge_deleted_profiles(root: &Path) {
     let _ = std::fs::remove_file(list);
 }
 
-const COSMETIC_TAG: &str = "baa-cosmetic:";
-
-/// Main-frame script that reports the classes and ids it sees, so generic
-/// `##.ad` rules can be answered with CSS (PLAN.md §5b).
-fn generic_cosmetics_observer() -> String {
-    let prefix = format!("{}{COSMETIC_TAG}", gpui_cef::MESSAGE_PREFIX);
-    format!(
-        r#"(()=>{{if(window!==top)return;const seen=new Set();let c=[],i=[],t=0;
-const add=e=>{{if(e.id&&!seen.has('#'+e.id)){{seen.add('#'+e.id);i.push(e.id)}}for(const n of e.classList||[])if(!seen.has('.'+n)){{seen.add('.'+n);c.push(n)}}}};
-const flush=()=>{{t=0;if(c.length||i.length)console.debug({prefix:?}+JSON.stringify({{c,i}}));c=[];i=[]}};
-const scan=n=>{{if(n.nodeType!==1)return;add(n);for(const e of n.querySelectorAll('[id],[class]'))add(e);if(!t)t=setTimeout(flush,100)}};
-new MutationObserver(ms=>{{for(const m of ms)for(const n of m.addedNodes)scan(n)}}).observe(document,{{childList:true,subtree:true}});}})();
-"#
-    )
-}
-
-/// The script answering one observer report, if any rule matched. The report
-/// comes from the page, so it is only ever used to hide things on that page.
-fn generic_cosmetics_reply(adblock: &Adblock, page_url: &str, message: &str) -> Option<String> {
-    let report: serde_json::Value =
-        serde_json::from_str(message.strip_prefix(COSMETIC_TAG)?).ok()?;
-    let strings = |key: &str| -> Vec<String> {
-        report[key]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let css = adblock.generic_css_for(page_url, &strings("c"), &strings("i"));
-    if css.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "(()=>{{const s=new CSSStyleSheet();s.replaceSync({});document.adoptedStyleSheets=[...document.adoptedStyleSheets,s];}})();",
-        serde_json::Value::String(css)
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,16 +368,4 @@ mod tests {
         assert_eq!(list.items[0].received_bytes, 5);
     }
 
-    #[test]
-    fn malformed_cosmetic_reports_are_ignored() {
-        let adblock = Adblock::load(&std::env::temp_dir().join("baa-web-no-lists"));
-        assert_eq!(
-            generic_cosmetics_reply(&adblock, "https://a.test/", "not ours"),
-            None
-        );
-        assert_eq!(
-            generic_cosmetics_reply(&adblock, "https://a.test/", "baa-cosmetic:{"),
-            None
-        );
-    }
 }

@@ -12,7 +12,7 @@ use core_video::pixel_buffer::CVPixelBuffer;
 use gpui::{px, size, Bounds, CursorStyle, RenderImage};
 
 use super::shared::{Frame as SharedFrame, Shared};
-use crate::{Download, DownloadState, FilterHook, ScriptHook, WebviewEvent};
+use crate::{Download, DownloadState, FilterHook, WebviewEvent};
 
 /// Settings carried by `cef::App`.
 #[derive(Clone)]
@@ -360,27 +360,9 @@ fn cursor_style(cursor: CursorType) -> CursorStyle {
 wrap_load_handler! {
     pub(crate) struct GpuiCefLoadHandler {
         shared: Rc<Shared>,
-        load_start_script: Option<ScriptHook>,
     }
 
     impl LoadHandler {
-        /// Runs the profile's per-frame script (cosmetic filters) as early as
-        /// the new document exists.
-        fn on_load_start(
-            &self,
-            _browser: Option<&mut Browser>,
-            frame: Option<&mut cef::Frame>,
-            _transition_type: TransitionType,
-        ) {
-            let (Some(hook), Some(frame)) = (&self.load_start_script, frame) else {
-                return;
-            };
-            let url = CefString::from(&frame.url()).to_string();
-            if let Some(script) = hook(&url) {
-                frame.execute_java_script(Some(&script.as_str().into()), Some(&url.as_str().into()), 0);
-            }
-        }
-
         fn on_loading_state_change(
             &self,
             _browser: Option<&mut Browser>,
@@ -663,59 +645,31 @@ wrap_request_context_handler! {
                     .filter(|u| !u.is_empty())
                     .unwrap_or(initiator),
             };
-            let decision = (self.filter)(&crate::Request {
+            let block = (self.filter)(&crate::Request {
                 url: &url,
                 source_url: &source_url,
                 resource_type: kind,
                 page_initiated,
             });
             // None means CEF's default handling, so allowed requests cost nothing.
-            (decision != baa_privacy::Decision::Allow).then(|| DecisionHandler::new(decision))
+            block.then(CancelHandler::new)
         }
     }
 }
 
 wrap_resource_request_handler! {
-    pub(crate) struct DecisionHandler {
-        decision: baa_privacy::Decision,
-    }
+    pub(crate) struct CancelHandler {}
 
     impl ResourceRequestHandler {
-        // cef-rs's default here is RV_CANCEL, so always answer.
+        // cef-rs's default here is RV_CANCEL already, but be explicit.
         fn on_before_resource_load(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut cef::Frame>,
-            request: Option<&mut cef::Request>,
+            _request: Option<&mut cef::Request>,
             _callback: Option<&mut Callback>,
         ) -> ReturnValue {
-            match (&self.decision, request) {
-                (baa_privacy::Decision::Block, _) => ReturnValue::CANCEL,
-                (baa_privacy::Decision::Rewrite(url), Some(request)) => {
-                    request.set_url(Some(&url.as_str().into()));
-                    ReturnValue::CONTINUE
-                }
-                _ => ReturnValue::CONTINUE,
-            }
-        }
-
-        /// `$redirect=`: answer with the neutered resource instead of the network.
-        fn resource_handler(
-            &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut cef::Frame>,
-            _request: Option<&mut cef::Request>,
-        ) -> Option<ResourceHandler> {
-            let baa_privacy::Decision::Redirect { mime, body } = &self.decision else {
-                return None;
-            };
-            // CEF copies the bytes into the reader.
-            let mut body = body.clone();
-            let stream = stream_reader_create_for_data(body.as_mut_ptr().cast(), body.len())?;
-            Some(wrapper::stream_resource_handler::StreamResourceHandler::new_with_stream(
-                mime.clone(),
-                stream,
-            ))
+            ReturnValue::CANCEL
         }
     }
 }
@@ -789,11 +743,11 @@ wrap_client! {
 }
 
 impl GpuiCefClient {
-    pub(crate) fn build(shared: Rc<Shared>, load_start_script: Option<ScriptHook>) -> Client {
+    pub(crate) fn build(shared: Rc<Shared>) -> Client {
         Self::new(
             GpuiCefRenderHandler::new(shared.clone()),
             GpuiCefDisplayHandler::new(shared.clone()),
-            GpuiCefLoadHandler::new(shared.clone(), load_start_script),
+            GpuiCefLoadHandler::new(shared.clone()),
             GpuiCefLifeSpanHandler::new(shared.clone()),
             GpuiCefRequestHandler::new(shared.clone()),
             GpuiCefContextMenuHandler::new(shared.clone()),

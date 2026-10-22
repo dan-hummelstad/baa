@@ -50,7 +50,6 @@ pub struct Space {
     pub ephemeral: bool,
     /// Overrides [`Settings::sidebar_side`] for this Space.
     pub sidebar_side: Option<SidebarSide>,
-    pub adblock: bool,
     pub active_tab: Option<TabId>,
 }
 
@@ -155,7 +154,6 @@ impl Session {
             profile,
             ephemeral,
             sidebar_side: None,
-            adblock: true,
             active_tab: None,
         });
         id

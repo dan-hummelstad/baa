@@ -82,7 +82,6 @@ mod tests {
         s.close_tab(c, 13);
         let work = s.add_space("Work", "💼", None);
         s.space_mut(work).unwrap().sidebar_side = Some(SidebarSide::Right);
-        s.space_mut(work).unwrap().adblock = false;
         let incog = s.add_ephemeral_space("Incognito", ProfileId(u64::MAX));
         s.open_tab(incog, "https://secret", 14);
 

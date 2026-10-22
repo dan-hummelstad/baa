@@ -123,10 +123,8 @@ pub struct Request<'a> {
     pub page_initiated: bool,
 }
 
-/// Decides what happens to a request. Called on CEF's IO thread.
-pub type FilterHook = std::sync::Arc<dyn Fn(&Request) -> baa_privacy::Decision + Send + Sync>;
-/// Given a frame's URL as it starts loading, returns script to run in it.
-pub type ScriptHook = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// `true` cancels the request. Called on CEF's IO thread.
+pub type FilterHook = std::sync::Arc<dyn Fn(&Request) -> bool + Send + Sync>;
 
 /// Settings for one storage profile, see [`crate::Profile::new`].
 #[derive(Clone)]
@@ -135,7 +133,6 @@ pub struct ProfileOptions {
     /// memory (incognito).
     pub cache_path: Option<std::path::PathBuf>,
     pub filter: FilterHook,
-    pub load_start_script: ScriptHook,
     /// Boolean Chromium prefs set to false once the context is up. One this
     /// build does not register is logged and skipped.
     pub prefs_off: &'static [&'static str],

@@ -46,7 +46,7 @@ use gpui::{
 };
 
 use self::shared::{Frame, Shared};
-use crate::{Error, ProfileOptions, RuntimeOptions, ScriptHook, WebviewOptions};
+use crate::{Error, ProfileOptions, RuntimeOptions, WebviewOptions};
 
 /// Pixels to scroll per wheel line, used to convert gpui's `ScrollDelta::Lines`.
 const LINE_HEIGHT: f32 = 20.;
@@ -238,7 +238,6 @@ pub fn init(options: RuntimeOptions) -> crate::Result<Runtime> {
 #[derive(Clone)]
 pub struct Profile {
     context: RequestContext,
-    load_start_script: ScriptHook,
 }
 
 impl Profile {
@@ -257,10 +256,7 @@ impl Profile {
         let mut handler = handlers::ProfileContextHandler::new(options.filter, options.prefs_off);
         let context = request_context_create_context(Some(&settings), Some(&mut handler))
             .ok_or_else(|| Error::Backend("cef_request_context_create_context() failed".into()))?;
-        Ok(Self {
-            context,
-            load_start_script: options.load_start_script,
-        })
+        Ok(Self { context })
     }
 }
 
@@ -323,10 +319,7 @@ impl Webview {
         };
 
         let profile = options.profile.clone();
-        let mut client = handlers::GpuiCefClient::build(
-            shared.clone(),
-            profile.as_ref().map(|p| p.load_start_script.clone()),
-        );
+        let mut client = handlers::GpuiCefClient::build(shared.clone());
         let mut context = profile.map(|p| p.context);
         // Async on purpose: with the Chrome bootstrap, CreateBrowserSync returns
         // null until the profile's request context has initialised, which a

@@ -45,8 +45,7 @@ mod options;
 mod platform;
 
 pub use options::{
-    CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, ScriptHook,
-    WebviewOptions,
+    CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
 pub use platform::{init, Profile, Runtime, Webview};
 

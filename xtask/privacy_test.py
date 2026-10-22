@@ -8,8 +8,8 @@ APP is the bundled app (baa.app) or its executable. ALLOWLIST is the output of
 one exact host per line). Needs `mitmdump` on PATH (pip install mitmproxy).
 
 The app opens a local page on 127.0.0.1, which Chromium never proxies, so every
-request mitmproxy sees was made by the engine itself or by baa (e.g. filter-list
-refreshes) and has to be allowlisted.
+request mitmproxy sees was made by the engine itself or by baa and has to be
+allowlisted.
 """
 import argparse
 import http.server

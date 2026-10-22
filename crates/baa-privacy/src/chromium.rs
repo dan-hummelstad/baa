@@ -91,17 +91,12 @@ pub fn block_browser_request(url: &str, resource_type: ResourceType, is_page_ini
         .any(|d| host == *d || host.strip_suffix(d).is_some_and(|p| p.ends_with('.')))
 }
 
-/// Hosts the §5.3 CI proxy test tolerates; anything else contacted fails the run. The filter
-/// list hosts are here because a fresh profile refreshes its lists on first launch.
+/// Hosts the §5.3 CI proxy test tolerates; anything else contacted fails the run.
 /// `cargo run -p baa-privacy --example proxy_allowlist` prints one per line.
 pub const PROXY_ALLOWLIST: &[&str] = &[
     "localhost",
     "127.0.0.1",
     "::1",
-    "ublockorigin.github.io",
-    "easylist.to",
-    "pgl.yoyo.org",
-    "malware-filter.gitlab.io",
 ];
 
 #[cfg(test)]

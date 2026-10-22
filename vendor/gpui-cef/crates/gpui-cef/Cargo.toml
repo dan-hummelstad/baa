@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# ResourceType and Decision: the request filter hook's input and output.
+# ResourceType: the request filter hook's input.
 baa-privacy.workspace = true
 gpui.workspace = true
 log.workspace = true

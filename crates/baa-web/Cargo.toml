@@ -11,4 +11,3 @@ gpui-cef.workspace = true
 baa-model.workspace = true
 baa-privacy.workspace = true
 log.workspace = true
-serde_json.workspace = true
