@@ -32,7 +32,8 @@ use cef::{
     RequestContextSettings, Settings, WindowInfo,
 };
 use gpui::{
-    div, relative, App, AppContext as _, Bounds, Context, Element, ElementId, Focusable,
+    div, relative, App, AppContext as _, Bounds, Context, DispatchPhase, Element, ElementId,
+    Focusable, ScrollWheelEvent,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
     LayoutId, ParentElement, Pixels, Render, Style, Styled, Window,
 };
@@ -282,6 +283,7 @@ impl Webview {
         let shared = Shared::new(options.url.clone());
         let gpui_view = native::gpui_view(window);
         shared.set_gpui_view(gpui_view);
+        native::record_scroll_events(gpui_view);
         let container = Rc::new(native::Container::new(gpui_view, options.corner_radius));
         let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
         route_mouse(gpui_view, &container, &hitbox, window, cx);
@@ -651,6 +653,17 @@ impl Element for PageSlot {
         // gpui sets the cursor for the hitbox under the mouse, so the page's
         // choice goes through it.
         window.set_cursor_style(self.shared.cursor(), hitbox);
+
+        // Clicks and hover reach the page natively (see native.rs); scrolls
+        // still come to gpui's view, which hands them on where the page is
+        // not occluded.
+        let shared = self.shared.clone();
+        let hit = hitbox.clone();
+        window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, _| {
+            if phase == DispatchPhase::Bubble && hit.should_handle_scroll(window) {
+                native::forward_scroll(page_view(&shared));
+            }
+        });
     }
 }
 

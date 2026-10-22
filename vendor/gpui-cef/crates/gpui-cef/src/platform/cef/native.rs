@@ -8,9 +8,10 @@
 //! Layering: the window's content view holds one clipping container per page,
 //! ordered *below* gpui's view. gpui's layer is transparent where a page element
 //! punches a hole (see `punch_buffer`), so gpui draws over and around the page
-//! as before. AppKit sends mouse events over a page straight to Chromium,
+//! as before. AppKit sends clicks and hover over a page straight to Chromium,
 //! unless gpui's own hit test has something occluding above it there (see
-//! `route_mouse_to_page`). Keyboard and IME go to Chromium natively, as first
+//! `route_mouse_to_page`); scrolls still arrive at gpui's view, which hands
+//! them on (`forward_scroll`). Keyboard and IME go to Chromium natively, as first
 //! responder; its shortcuts get offered to gpui first (`offer_key_equivalent`).
 
 use std::{
@@ -359,6 +360,64 @@ unsafe fn page_frontmost_at(gpui_view: *mut AnyObject, point: CGPoint) -> bool {
                 && frontmost()
         })
     })
+}
+
+thread_local! {
+    /// The scroll NSEvent gpui's view is handling right now.
+    static SCROLL_EVENT: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
+    static GPUI_SCROLL_WHEEL: Cell<Option<Imp>> = const { Cell::new(None) };
+}
+
+/// AppKit sends scroll events to gpui's view even where its hit test passes
+/// the point through, so gpui's view records each one for the page element to
+/// hand on (see [`forward_scroll`]). Idempotent.
+// ponytail: replaces scrollWheel: on gpui's view class. Ceiling: breaks if gpui
+// stops implementing it on its NSView. Upgrade: an event hook in gpui.
+pub(crate) fn record_scroll_events(gpui_view: *mut AnyObject) {
+    if gpui_view.is_null() || GPUI_SCROLL_WHEEL.with(|o| o.get().is_some()) {
+        return;
+    }
+    unsafe extern "C-unwind" fn scroll_wheel(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
+        let previous = SCROLL_EVENT.with(|e| e.replace(event));
+        if let Some(original) = GPUI_SCROLL_WHEEL.with(Cell::get) {
+            type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
+            let original: Handler = unsafe { std::mem::transmute::<Imp, Handler>(original) };
+            unsafe { original(this, cmd, event) };
+        }
+        SCROLL_EVENT.with(|e| e.set(previous));
+    }
+    unsafe {
+        let class = objc2::ffi::object_getClass(gpui_view) as *mut AnyClass;
+        let Some(method) = (*class).instance_method(sel!(scrollWheel:)) else {
+            return;
+        };
+        GPUI_SCROLL_WHEEL.with(|o| o.set(Some(method.implementation())));
+        type Handler = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
+        objc2::ffi::class_replaceMethod(
+            class,
+            sel!(scrollWheel:),
+            std::mem::transmute::<Handler, Imp>(scroll_wheel),
+            c"v@:@".as_ptr(),
+        );
+    }
+}
+
+/// Hands the scroll event gpui is handling to the view of `page` under it, so
+/// Chromium gets the original event with its phases and momentum.
+pub(crate) fn forward_scroll(page: *mut AnyObject) {
+    let event = SCROLL_EVENT.with(Cell::get);
+    if page.is_null() || event.is_null() {
+        return;
+    }
+    unsafe {
+        let in_window: CGPoint = msg_send![event, locationInWindow];
+        let parent: *mut AnyObject = msg_send![page, superview];
+        let point: CGPoint =
+            msg_send![parent, convertPoint: in_window, fromView: std::ptr::null_mut::<AnyObject>()];
+        let hit: *mut AnyObject = msg_send![page, hitTest: point];
+        let target = if hit.is_null() { page } else { hit };
+        let _: () = msg_send![target, scrollWheel: event];
+    }
 }
 
 /// Lets gpui's view handle `event` as a key equivalent; whether it did.
