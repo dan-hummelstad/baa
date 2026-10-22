@@ -1,0 +1,89 @@
+# PLAN.md §13. Build, test, lint and bundle on both targets, then prove the
+# de-Googling holds (§5.3). cef-bump PRs auto-merge only when all of this is green.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s xtask -p 'test_*.py'
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            artifact: baa-macos-arm64
+          - os: windows-2025
+            artifact: baa-windows-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: cargo test --release --workspace
+      - run: cargo clippy --release --workspace --all-targets -- -D warnings
+
+      - run: cargo run --release -p xtask -- bundle --release
+      - run: cargo run --release -p baa-privacy --example proxy_allowlist > target/bundle/proxy-allowlist.txt
+      # upload-artifact drops the executable bit; ditto keeps the .app intact.
+      - if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent target/bundle/baa.app target/bundle/baa.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}-unsigned
+          path: |
+            target/bundle/baa.zip
+            target/bundle/baa/
+            target/bundle/proxy-allowlist.txt
+          if-no-files-found: error
+
+  # §5.3: launch the bundle behind mitmproxy for 60 s; any host outside
+  # baa_privacy::PROXY_ALLOWLIST fails the run (and so blocks a cef-bump merge).
+  privacy:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            artifact: baa-macos-arm64
+            app: bundle/baa.app
+          - os: windows-2025
+            artifact: baa-windows-x64
+            app: bundle/baa/baa.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install mitmproxy
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.artifact }}-unsigned
+          path: bundle
+      - if: runner.os == 'macOS'
+        run: ditto -x -k bundle/baa.zip bundle
+      - run: python3 xtask/privacy_test.py ${{ matrix.app }} bundle/proxy-allowlist.txt --seconds 60

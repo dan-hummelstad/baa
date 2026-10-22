@@ -1,0 +1,31 @@
+# Build environment shared by ci.yml and release.yml: Rust (rust-toolchain.toml),
+# sccache, CMake's Ninja + MSVC for cef-dll-sys's C++ wrapper, and the CEF cache.
+name: setup
+description: Rust + CEF build environment for baa
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.13"
+    - run: pip install ninja
+      shell: bash
+    - uses: ilammy/msvc-dev-cmd@v1
+      if: runner.os == 'Windows'
+    - uses: mozilla-actions/sccache-action@v0.0.11
+    - run: rustup toolchain install
+      shell: bash
+    # cef-dll-sys downloads the CEF distribution (~300 MB) into
+    # $CEF_PATH/<cef version>/ when missing, so cache it per pinned version.
+    # The env var also overrides the dev-box path in .cargo/config.toml.
+    - id: cef
+      shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        echo "CEF_PATH=${{ runner.temp }}/cef" >> "$GITHUB_ENV"
+        echo "version=$(python3 xtask/cef_current.py < Cargo.lock)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/cef
+        key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}

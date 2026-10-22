@@ -1,0 +1,135 @@
+# PLAN.md §13. Signed builds for both targets and a GitHub Release, versioned
+# <app semver>+cef<cef version> so an engine-only release is visible.
+# Runs on a v* tag, or when a push to main changes the locked CEF version
+# (a merged cef-bump PR).
+#
+# Secrets, by name:
+#   MACOS_CERT_P12_BASE64   "Developer ID Application" certificate + private key (.p12), base64
+#   MACOS_CERT_PASSWORD     password of that .p12
+#   MACOS_SIGN_IDENTITY     e.g. "Developer ID Application: Daniel Hummelstad (TEAMID)"
+#   APPLE_ID                Apple ID used for notarization
+#   APPLE_TEAM_ID           10-character Apple team ID
+#   APPLE_APP_PASSWORD      app-specific password for APPLE_ID
+#   AZURE_TENANT_ID         Entra tenant of the signing service principal
+#   AZURE_CLIENT_ID         service principal with the "Artifact Signing Certificate Profile Signer" role
+#   AZURE_CLIENT_SECRET     its client secret
+#   AZURE_SIGNING_ENDPOINT  account region endpoint, e.g. https://weu.codesigning.azure.net/
+#   AZURE_SIGNING_ACCOUNT   Artifact (Trusted) Signing account name
+#   AZURE_CERT_PROFILE      certificate profile name
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: [Cargo.lock]   # not applied to tag pushes
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      file: ${{ steps.v.outputs.file }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: v
+        run: |
+          CEF=$(python3 xtask/cef_current.py < Cargo.lock)
+          APP=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          echo "version=$APP+cef$CEF" >> "$GITHUB_OUTPUT"
+          echo "file=$APP-cef$CEF" >> "$GITHUB_OUTPUT"   # no '+' in asset names
+          PREV=$(git show HEAD~1:Cargo.lock | python3 xtask/cef_current.py || echo none)
+          echo "release=$([ "$GITHUB_REF_TYPE" = tag ] || [ "$PREV" != "$CEF" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: cargo run --release -p xtask -- bundle --release
+      - uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+      - name: Sign, package, notarize
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          DMG: target/bundle/baa-${{ needs.version.outputs.file }}-macos-arm64.dmg
+        run: |
+          cargo run --release -p xtask -- sign target/bundle/baa.app
+          mkdir "$RUNNER_TEMP/dmg"
+          ditto target/bundle/baa.app "$RUNNER_TEMP/dmg/baa.app"
+          ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
+          hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -format UDZO "$DMG"
+          cargo run --release -p xtask -- sign "$DMG"
+          # ponytail: only the dmg is notarized and stapled; the app inside relies on the
+          # online ticket check. Staple the .app too if offline first launch matters.
+          cargo run --release -p xtask -- notarize "$DMG"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: target/bundle/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: cargo run --release -p xtask -- bundle --release
+      - uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: target/bundle/baa
+          files-folder-filter: exe,dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      # ponytail: zip only; an MSIX installer is the next step if users need Start menu + uninstall.
+      - shell: pwsh
+        run: Compress-Archive -Path target/bundle/baa -DestinationPath target/bundle/baa-${{ needs.version.outputs.file }}-windows-x64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: target/bundle/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      # ponytail: GitHub Release only; mirroring to baa.me/dl (§13) waits until baa.me hosts anything.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', needs.version.outputs.version) }}
+        run: >
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+          --title "baa ${{ needs.version.outputs.version }}" --generate-notes
