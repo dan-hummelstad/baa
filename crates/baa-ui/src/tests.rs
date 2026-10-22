@@ -606,8 +606,37 @@ fn downloads_show_in_the_header_and_settings_open(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     b.read_with(cx, |b, _| assert_eq!(b.downloads_seen, 1));
-    cx.dispatch_action(ShowDownloads);
-    b.read_with(cx, |b, _| assert_eq!(b.popover, Some(crate::prompts::Popover::Downloads)));
     cx.dispatch_action(OpenSettings);
-    b.read_with(cx, |b, _| assert!(b.settings_open && b.popover.is_none()));
+    b.read_with(cx, |b, _| assert!(b.settings_open));
+}
+
+#[gpui::test]
+fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let list = b.read_with(cx, |b, _| b.host.downloads());
+    for state in [baa_web::DownloadState::InProgress, baa_web::DownloadState::Complete, baa_web::DownloadState::Complete] {
+        list.update(cx, |list, cx| {
+            list.upsert(baa_web::Download {
+                id: 1,
+                url: "https://a.example/f.zip".into(),
+                path: "/tmp/f.zip".into(),
+                received_bytes: 10,
+                total_bytes: 10,
+                state,
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.saved_downloads.len(), 1, "saved once, when it finished");
+        assert_eq!(b.store().unwrap().downloads().unwrap()[0].path, "/tmp/f.zip");
+    });
+    cx.dispatch_action(ShowDownloads);
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.library.as_ref().map(|l| l.section), Some(crate::library::Section::Downloads));
+        assert_eq!(b.sidebar_width(), crate::library::LIBRARY_WIDTH);
+    });
+    cx.dispatch_action(ShowDownloads);
+    b.read_with(cx, |b, _| assert!(b.library.is_none()));
 }

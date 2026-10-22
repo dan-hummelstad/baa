@@ -679,10 +679,10 @@ impl<H: WebHost> Browser<H> {
             .border_t_1()
             .border_color(surface::line())
             .child(
-                button("downloads-folder", "Show Downloads Folder", false, theme, self, cx).on_click(cx.listener(
-                    |_, _, _, cx| {
-                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-                        cx.open_with_system(&home.join("Downloads"));
+                button("downloads-all", "Show All", false, theme, self, cx).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.close_overlays(window, cx);
+                        this.open_library(crate::library::Section::Downloads, cx);
                     },
                 )),
             )

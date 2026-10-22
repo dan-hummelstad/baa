@@ -6,6 +6,7 @@ mod command_bar;
 mod fuzzy;
 mod icons;
 mod input;
+mod library;
 mod lil_baa;
 mod motion;
 mod prefs;

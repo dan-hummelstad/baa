@@ -58,6 +58,9 @@ impl Render for DraggedTab {
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn render_sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        if self.library.is_some() {
+            return self.render_library(theme, cx);
+        }
         let Some(space) = self.active_space().map(|s| s.id) else {
             return div().into_any_element();
         };
@@ -742,7 +745,7 @@ impl<H: WebHost> Browser<H> {
         let plus_turn = self.motion.get(("add-space", 0), Feel::Hover) * std::f32::consts::FRAC_PI_2;
         let library = self
             .icon_button("library", "archive", true, 0., 0., theme, cx)
-            .on_click(cx.listener(|this, _, window, cx| this.reopen_closed(window, cx)));
+            .on_click(cx.listener(|this, _, _, cx| this.open_library(crate::library::Section::Downloads, cx)));
         let add = self
             .icon_button("add-space", "plus", true, 0., plus_turn, theme, cx)
             .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx)));

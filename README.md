@@ -22,7 +22,8 @@ motion, on top of a stock Chromium engine that is stripped of Google services at
 Early. Milestones 0–3 of `PLAN.md` are implemented: tabs, Spaces, per-Space storage, keymap,
 command bar, de-Googling, plus Peek (links that open a tab, or shift-click, preview in a card) and
 lil-baa (links from other apps open in a small window you can move into the browser), favourites
-(shared by every Space) and folders. Browser basics: downloads (header button and list), history
+(shared by every Space) and folders. Browser basics: a Library (the archive button, or swipe right past the first Space) with
+downloads kept across launches and archived tabs, a header downloads button, history
 (in ⌘T, and ⌘Y), permission prompts and per-site settings, page dialogs drawn over the page,
 print, view source, reader mode, Picture in Picture, translate, tab mute, Settings (⌘,), and import
 of Arc's Spaces and other browsers' history. Password managers work through their Chrome extensions;
@@ -75,7 +76,7 @@ App data lives in `~/Library/Application Support/baa` (`%APPDATA%\baa` on Window
 
 ⌘T command bar / new tab · ⌘L address · ⌘S sidebar · ⌘W close · ⌘⇧T reopen · ⌃⇥ next tab ·
 ⌘1–8 tab n · ⌘9 last · ⌃⌥→/← next/prev Space · ⌘D pin · ⌘F find · ⌘⇧N incognito Space ·
-⌘Y history · ⌘⇧J downloads · ⌘P print · ⌥⌘U view source · ⌘⇧R reader mode · ⌘, settings.
+⌘Y history · ⌘⇧J Library downloads · ⌘P print · ⌥⌘U view source · ⌘⇧R reader mode · ⌘, settings.
 Everything is remappable in `keymap.json` (GPUI's keymap format). Two-finger swipe across the
 sidebar or address bar switches Spaces; hold (or right-click) Back/Forward for history; double-click
 the top bar to zoom the window; double-click a Space's name to rename it. Right-click the sidebar for

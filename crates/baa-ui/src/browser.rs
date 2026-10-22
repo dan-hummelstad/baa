@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use baa_model::{now, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
+use baa_model::{now, DownloadRecord, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
@@ -73,6 +73,10 @@ pub(crate) enum MenuKind {
     },
     /// Right-clicks in the sidebar.
     Tab(TabId),
+    /// A finished download in the Library.
+    Download { path: String, url: String },
+    /// The Library's Downloads filter.
+    LibraryFilter,
     Folder(FolderId),
     Sidebar,
 }
@@ -122,6 +126,13 @@ pub struct Browser<H: WebHost> {
     pub(crate) cleared_downloads: HashSet<u32>,
     pub(crate) downloads_seen: usize,
     pub(crate) settings_open: bool,
+    /// The Library, shown in the sidebar instead of the Space.
+    pub(crate) library: Option<crate::library::Library>,
+    pub(crate) library_focus: FocusHandle,
+    /// Finished downloads, newest first, kept across launches.
+    pub(crate) saved_downloads: Vec<DownloadRecord>,
+    /// This session's downloads already saved.
+    pub(crate) recorded_downloads: HashSet<u32>,
     /// A short confirmation at the bottom of the window, and how many so far.
     pub(crate) toast: Option<SharedString>,
     pub(crate) toasts: u64,
@@ -135,7 +146,7 @@ pub struct Browser<H: WebHost> {
     focus: FocusHandle,
     /// Shared by the command bar and find bar; only one is open at a time.
     pub(crate) input_focus: FocusHandle,
-    sidebar_open: bool,
+    pub(crate) sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
     reveal: Spring,
@@ -188,8 +199,11 @@ impl<H: WebHost> Browser<H> {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let downloads = cx.observe(&host.downloads(), |this: &mut Self, list, cx| {
-            this.downloads_changed(list.read(cx).items.len(), cx)
+            let items = list.read(cx).items.clone();
+            this.remember_downloads(&items);
+            this.downloads_changed(items.len(), cx)
         });
+        let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let mut this = Self {
             host,
             store,
@@ -220,6 +234,10 @@ impl<H: WebHost> Browser<H> {
             cleared_downloads: HashSet::new(),
             downloads_seen: 0,
             settings_open: false,
+            library: None,
+            library_focus: cx.focus_handle(),
+            saved_downloads,
+            recorded_downloads: HashSet::new(),
             toast: None,
             toasts: 0,
             _downloads: downloads,
@@ -737,7 +755,18 @@ impl<H: WebHost> Browser<H> {
             }
             gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
                 let Some(swipe) = self.swipe.take() else { return };
-                if swipe.abs() > 0.25 {
+                let first = self.session.spaces().first().map(|s| s.id) == self.session.active_space();
+                if self.library.is_some() {
+                    // Fingers left: back to the first Space, which lies to the right.
+                    if swipe < -0.25 {
+                        self.close_library(window, cx);
+                    }
+                    self.slide.set_target(0.0);
+                } else if swipe > 0.25 && first {
+                    // Past the first Space lies the Library (Arc).
+                    self.slide.set_target(0.0);
+                    self.open_library(crate::library::Section::Downloads, cx);
+                } else if swipe.abs() > 0.25 {
                     // Fingers left: the next Space comes in from the right.
                     self.step_space(if swipe < 0.0 { 1 } else { -1 }, window, cx);
                 } else {
@@ -1175,7 +1204,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
             this.sidebar_open = !this.sidebar_open;
             this.sidebar_w.set_target(if this.sidebar_open {
-                SIDEBAR_WIDTH
+                this.sidebar_width()
             } else {
                 0.0
             });
@@ -1251,7 +1280,10 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &ShowDownloads, window, cx| {
-            this.toggle_popover(crate::prompts::Popover::Downloads, window, cx)
+            match this.library.as_ref().map(|l| l.section) {
+                Some(crate::library::Section::Downloads) => this.close_library(window, cx),
+                _ => this.open_library(crate::library::Section::Downloads, cx),
+            }
         }))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
@@ -1290,7 +1322,7 @@ impl<H: WebHost> Browser<H> {
             SidebarSide::Right => window.viewport_size().width - at.x,
         });
         let reach = if self.reveal_hover {
-            INSET + SIDEBAR_WIDTH + REVEAL_SLACK
+            INSET + self.sidebar_width() + REVEAL_SLACK
         } else {
             REVEAL_EDGE
         };
@@ -1341,12 +1373,13 @@ impl<H: WebHost> Browser<H> {
             .occlude();
         let shown = self.reveal.value();
         // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
-        let offset = INSET + (shown - 1.0) * (SIDEBAR_WIDTH + INSET * 2.0);
+        let width = self.sidebar_width();
+        let offset = INSET + (shown - 1.0) * (width + INSET * 2.0);
         let card = sidebar.map(|sidebar| {
             edge(div().absolute().top(px(HEADER_H)).bottom(px(INSET)), offset)
                 .id("reveal-card")
                 .occlude()
-                .w(px(SIDEBAR_WIDTH))
+                .w(px(width))
                 // The page's radius: a larger one shows the page past its corners.
                 .rounded(px(PAGE_RADIUS))
                 .overflow_hidden()
@@ -1905,6 +1938,32 @@ impl<H: WebHost> Browser<H> {
                     "Close Tab",
                     Box::new(move |this, window, cx| this.close_tab_id(id, window, cx)),
                 ));
+            }
+            MenuKind::Download { ref path, ref url } => {
+                let (open, reveal, link, forget) = (path.clone(), path.clone(), url.clone(), path.clone());
+                items.push(("Open", Box::new(move |_, _, cx| cx.open_with_system(std::path::Path::new(&open)))));
+                items.push((
+                    "Show in Finder",
+                    Box::new(move |_, _, cx| cx.reveal_path(std::path::Path::new(&reveal))),
+                ));
+                items.push((
+                    "Copy Download Link",
+                    Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))),
+                ));
+                items.push(("Remove from List", Box::new(move |this, _, cx| this.forget_download(&forget, cx))));
+            }
+            MenuKind::LibraryFilter => {
+                for (kind, label) in crate::library::KINDS {
+                    items.push((
+                        label,
+                        Box::new(move |this, _, cx| {
+                            if let Some(library) = &mut this.library {
+                                library.filter = kind;
+                            }
+                            cx.notify();
+                        }),
+                    ));
+                }
             }
             MenuKind::Folder(id) => {
                 items.push((

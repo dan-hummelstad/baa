@@ -23,6 +23,16 @@ pub(crate) fn is_web(url: &str) -> bool {
 /// `serde(default)` makes added fields migration-free.
 // ponytail: whole-session rewrite per save; fine for hundreds of tabs. Give tabs their own
 // table if saves show up in profiles.
+/// A finished download, as the Library lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadRecord {
+    pub path: String,
+    pub url: String,
+    pub bytes: i64,
+    /// Unix seconds.
+    pub finished_at: i64,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -39,6 +49,11 @@ impl Store {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS history (url TEXT PRIMARY KEY, title TEXT NOT NULL, \
              visits INTEGER NOT NULL, last_visit INTEGER NOT NULL)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS downloads (path TEXT PRIMARY KEY, url TEXT NOT NULL, \
+             bytes INTEGER NOT NULL, finished_at INTEGER NOT NULL)",
             [],
         )?;
         Ok(Store { conn })
@@ -186,11 +201,49 @@ impl Store {
         let json = serde_json::to_string(value).expect("model types serialize");
         self.conn.execute("INSERT OR REPLACE INTO kv VALUES (?1, ?2)", [key, &json]).map(drop)
     }
+
+    /// Saving the same file again (a re-download over it) updates the row.
+    pub fn record_download(&self, d: &DownloadRecord) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO downloads VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![d.path, d.url, d.bytes, d.finished_at],
+            )
+            .map(drop)
+    }
+
+    /// Newest first.
+    pub fn downloads(&self) -> Result<Vec<DownloadRecord>> {
+        let mut q = self
+            .conn
+            .prepare("SELECT path, url, bytes, finished_at FROM downloads ORDER BY finished_at DESC")?;
+        let rows = q.query_map([], |r| {
+            Ok(DownloadRecord { path: r.get(0)?, url: r.get(1)?, bytes: r.get(2)?, finished_at: r.get(3)? })
+        })?;
+        rows.collect()
+    }
+
+    pub fn remove_download(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM downloads WHERE path = ?1", [path]).map(drop)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloads_are_kept_newest_first_and_one_per_file() {
+        let store = Store::open(":memory:").unwrap();
+        let rec = |path: &str, at| DownloadRecord { path: path.into(), url: "https://a.example/f".into(), bytes: 3, finished_at: at };
+        store.record_download(&rec("/d/a", 1)).unwrap();
+        store.record_download(&rec("/d/b", 2)).unwrap();
+        store.record_download(&rec("/d/a", 3)).unwrap();
+        let paths: Vec<String> = store.downloads().unwrap().into_iter().map(|d| d.path).collect();
+        assert_eq!(paths, ["/d/a", "/d/b"]);
+        store.remove_download("/d/a").unwrap();
+        assert_eq!(store.downloads().unwrap().len(), 1);
+    }
     use crate::{ProfileId, SidebarSide, Zone};
 
     #[test]
