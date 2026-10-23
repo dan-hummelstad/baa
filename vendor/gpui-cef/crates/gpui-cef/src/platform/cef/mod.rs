@@ -19,7 +19,7 @@ mod nsapp;
 mod pump;
 mod shared;
 
-pub use chrome_window::open_chrome_window;
+pub use chrome_window::{on_chrome_tab, ChromePage};
 pub use fetch::fetch;
 pub use handlers::cancel_download;
 use std::{
@@ -123,6 +123,9 @@ impl Runtime {
         {
             return Err(Error::Initialize);
         }
+        // CEF needs pumping before the first webview too: the app may show
+        // only its own pages and still drive hidden ones.
+        pump::start();
 
         Ok(())
     }
@@ -389,10 +392,19 @@ impl Webview {
         // Async on purpose: with the Chrome bootstrap, CreateBrowserSync returns
         // null until the profile's request context has initialised, which a
         // fresh on-disk profile has not. The handle arrives in on_after_created.
+        shared.set_auto_resize(options.auto_resize);
+        // The script has to be in before the first real document starts.
+        let first_url = match options.init_script.clone() {
+            Some(script) => {
+                shared.start_with(script, options.url.clone());
+                "about:blank".to_string()
+            }
+            None => options.url.clone(),
+        };
         let created = browser_host_create_browser(
             Some(&window_info),
             Some(&mut client),
-            Some(&options.url.as_str().into()),
+            Some(&first_url.as_str().into()),
             Some(&browser_settings),
             None,
             context.as_mut(),

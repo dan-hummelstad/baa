@@ -1,7 +1,8 @@
 //! Settings (⌘,): a card over the window, in the command bar's style. Every
 //! change saves at once; there is no Apply.
 
-use baa_model::{import, SearchEngine, SidebarSide, SEARCH_ENGINES};
+use crate::theme::r;
+use baa_model::{import, ChromeStyle, SearchEngine, SidebarSide, SEARCH_ENGINES};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, SharedString, Window};
 
@@ -9,7 +10,7 @@ use crate::{
     browser::{drop_in, feel, shadow, Browser},
     icons::icon,
     motion::Feel,
-    theme::{fade, mix, surface, Theme},
+    theme::{ascii, fade, mix, surface, Theme},
 };
 
 const PASSWORDS_APP: &str = "/System/Applications/Passwords.app";
@@ -52,8 +53,8 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_wrap()
             .gap(px(2.))
-            .rounded(px(8.))
-            .bg(surface::key())
+            .rounded(r(8.))
+            .when(!ascii(), |d| d.bg(surface::key()))
             .children(options.into_iter().enumerate().map(|(i, (value, label))| {
                 let selected = value == on;
                 let key = (id, i as u64);
@@ -64,13 +65,18 @@ impl<H: WebHost> Browser<H> {
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .rounded(px(6.))
+                    .rounded(r(6.))
                     .text_size(px(12.))
-                    .when(selected, |d| d.bg(gpui::white()).shadow(vec![shadow(gpui::rgba(0x0000001F).into(), 1., 2.)]))
-                    .when(!selected, |d| d.bg(fade(gpui::white(), 0.5 * h)))
+                    .when(selected, |d| d.bg(surface::raised()).shadow(vec![shadow(gpui::rgba(0x0000001F).into(), 1., 2.)]))
+                    .when(!selected, |d| d.bg(fade(surface::raised().into(), 0.5 * h)))
                     .text_color(if selected { surface::ink() } else { surface::muted() })
+                    .when(ascii() && selected, |d| d.bg(surface::key()).text_color(self.theme().accent))
                     .on_click(cx.listener(move |this, _, _, cx| this.update_settings(cx, |s| set(s, value))))
-                    .child(label);
+                    .child(if ascii() {
+                        SharedString::from(format!("[{} {label} ]", if selected { "◉" } else { " " }))
+                    } else {
+                        label
+                    });
                 feel(el, key, cx)
             }))
     }
@@ -84,12 +90,20 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let t = self.motion.get((key, 0), Feel::Glide);
+        if ascii() {
+            return div()
+                .id(key)
+                .text_color(if on { theme.accent } else { surface::icon().into() })
+                .on_click(cx.listener(move |this, _, _, cx| this.update_settings(cx, flip)))
+                .child(if on { "[x]" } else { "[ ]" })
+                .into_any_element();
+        }
         div()
             .id(key)
             .w(px(36.))
             .h(px(22.))
             .p(px(2.))
-            .rounded(px(11.))
+            .rounded(r(11.))
             .bg(mix(surface::line().into(), theme.accent, t.clamp(0., 1.)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.update_settings(cx, flip);
@@ -99,10 +113,11 @@ impl<H: WebHost> Browser<H> {
                 div()
                     .size(px(18.))
                     .ml(px(14. * t))
-                    .rounded(px(9.))
+                    .rounded(r(9.))
                     .bg(gpui::white())
                     .shadow(vec![shadow(gpui::rgba(0x00000033).into(), 1., 3.)]),
             )
+            .into_any_element()
     }
 
     pub(crate) fn render_settings(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -129,6 +144,9 @@ impl<H: WebHost> Browser<H> {
                 .child(div().flex_none().max_w(px(330.)).flex().justify_end().child(control))
         };
         let section = |title: &'static str| {
+            if ascii() {
+                return crate::theme::ascii::rule_label(title, surface::icon().into()).pt(px(16.)).pb(px(2.));
+            }
             div()
                 .pt(px(16.))
                 .pb(px(2.))
@@ -149,7 +167,7 @@ impl<H: WebHost> Browser<H> {
                     .px(px(11.))
                     .flex()
                     .items_center()
-                    .rounded(px(7.))
+                    .rounded(r(7.))
                     .bg(mix(surface::key().into(), surface::line().into(), h))
                     .text_size(px(12.5))
                     .font_weight(gpui::FontWeight::MEDIUM)
@@ -168,6 +186,19 @@ impl<H: WebHost> Browser<H> {
             .overflow_y_scroll()
             .flex()
             .flex_col()
+            .child(section("Appearance"))
+            .child(row(
+                "Chrome".into(),
+                Some("ASCII draws the window in a monospace terminal frame."),
+                self.segments(
+                    "pref-chrome",
+                    vec![(ChromeStyle::Arc, "Arc".into()), (ChromeStyle::Ascii, "ASCII".into())],
+                    s.chrome,
+                    |s, c| s.chrome = c,
+                    cx,
+                )
+                .into_any_element(),
+            ))
             .child(section("Search"))
             .child(row(
                 "Search engine".into(),
@@ -277,7 +308,7 @@ impl<H: WebHost> Browser<H> {
             .opacity(t.clamp(0., 1.))
             .flex()
             .flex_col()
-            .rounded(px(14.))
+            .rounded(r(14.))
             .bg(surface::bg())
             .border_1()
             .border_color(surface::border())
@@ -286,6 +317,7 @@ impl<H: WebHost> Browser<H> {
                 shadow(gpui::rgba(0x18122C1F).into(), 8., 24.),
             ])
             .text_color(surface::ink())
+            .when(ascii(), |d| d.relative().border_color(gpui::transparent_black()).child(crate::theme::ascii::outline(14.)))
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -296,7 +328,7 @@ impl<H: WebHost> Browser<H> {
                     .justify_between()
                     .border_b_1()
                     .border_color(surface::line())
-                    .child(div().text_size(px(16.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Settings"))
+                    .child(div().text_size(px(16.)).font_weight(gpui::FontWeight::SEMIBOLD).when(!ascii(), |d| d.child("Settings")))
                     .child(
                         div()
                             .id("settings-close")
@@ -304,13 +336,14 @@ impl<H: WebHost> Browser<H> {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(7.))
+                            .rounded(r(7.))
                             .hover(|s| s.bg(surface::key()))
                             .on_click(cx.listener(|this, _, window, cx| this.close_overlays(window, cx)))
                             .child(icon("x", 14., surface::icon().into())),
                     ),
             )
-            .child(body);
+            .child(body)
+            .when(ascii(), |d| d.child(crate::theme::ascii::box_title("SETTINGS", theme.accent)));
         Some(
             div()
                 .id("settings-backdrop")

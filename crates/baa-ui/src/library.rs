@@ -3,6 +3,7 @@
 //! Downloads (kept across launches, grouped by age, searchable and filtered by
 //! kind) and Archived Tabs.
 
+use crate::theme::r;
 use std::path::{Path, PathBuf};
 
 use baa_model::{now, DownloadRecord, TabId};
@@ -203,7 +204,7 @@ impl<H: WebHost> Browser<H> {
                 .items_center()
                 .justify_center()
                 .gap(px(6.))
-                .rounded(px(12.))
+                .rounded(r(12.))
                 .bg(if on { theme.glass_strong } else { fade(theme.hover, h) })
                 .text_size(px(11.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -248,7 +249,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .gap(px(8.))
-            .rounded(px(10.))
+            .rounded(r(10.))
             .bg(theme.glass)
             .text_size(px(13.))
             .track_focus(&self.library_focus)
@@ -271,7 +272,7 @@ impl<H: WebHost> Browser<H> {
                     .flex_none()
                     .items_center()
                     .gap(px(6.))
-                    .rounded(px(10.))
+                    .rounded(r(10.))
                     .bg(mix(theme.glass, theme.glass_strong, 0.5 * h))
                     .text_size(px(13.))
                     .text_color(theme.ink)
@@ -370,7 +371,7 @@ impl<H: WebHost> Browser<H> {
             .flex_none()
             .items_center()
             .gap(px(10.))
-            .rounded(px(10.))
+            .rounded(r(10.))
             .bg(fade(theme.hover, h))
             .opacity(if dim { 0.5 } else { 1. })
             .child(div().size(px(32.)).flex_none().flex().items_center().justify_center().child(thumb))
@@ -426,7 +427,7 @@ impl<H: WebHost> Browser<H> {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(r(6.))
                         .hover(|s| s.bg(theme.glass_strong))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -444,9 +445,9 @@ impl<H: WebHost> Browser<H> {
                             .mx(px(50.))
                             .mb(px(4.))
                             .h(px(3.))
-                            .rounded(px(2.))
+                            .rounded(r(2.))
                             .bg(theme.glass)
-                            .child(div().h_full().w(relative(fraction.unwrap_or(0.3).clamp(0.03, 1.))).rounded(px(2.)).bg(theme.accent)),
+                            .child(div().h_full().w(relative(fraction.unwrap_or(0.3).clamp(0.03, 1.))).rounded(r(2.)).bg(theme.accent)),
                     )
                     .into_any_element(),
             );
@@ -466,7 +467,7 @@ impl<H: WebHost> Browser<H> {
             let thumb = if kind == Kind::Images && present {
                 img(path.clone())
                     .size(px(30.))
-                    .rounded(px(5.))
+                    .rounded(r(5.))
                     .object_fit(gpui::ObjectFit::Cover)
                     .with_fallback(fallback)
                     .into_any_element()
@@ -517,7 +518,7 @@ impl<H: WebHost> Browser<H> {
             }
             let thumb = favicon
                 .and_then(|f| self.favicons.get(&f).cloned())
-                .map(|image| img(image).size(px(18.)).rounded(px(4.)).into_any_element())
+                .map(|image| img(image).size(px(18.)).rounded(r(4.)).into_any_element())
                 .unwrap_or_else(|| icon("globe", 18., theme.ink_muted).into_any_element());
             let row = self
                 .library_row(("library-archived", id.0), thumb, (title, host_of(&url)), false, theme, cx)

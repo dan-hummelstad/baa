@@ -2,6 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    rc::Rc,
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
@@ -10,7 +11,7 @@ use std::{
 use gpui::{div, AnyElement, App, AppContext as _, Entity, EventEmitter, FocusHandle, IntoElement, Window};
 use gpui_cef::{ProfileOptions, WebviewEvent, WebviewOptions};
 
-use crate::{Downloads, Extension, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
+use crate::{Callback, ChromeSheet, ChromeTabs, Downloads, ExtensionChange, ExtensionInfo, SiteAccess, Extension, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
 
 /// A page. gpui-cef's webview implements [`PageHandle`] directly, so the UI
 /// holds the same entity CEF paints into.
@@ -69,15 +70,40 @@ pub struct CefWebHost {
     profiles: RefCell<HashMap<ProfileId, gpui_cef::Profile>>,
     next_ephemeral: Cell<u64>,
     downloads: Entity<Downloads>,
+    chrome_tabs: Entity<ChromeTabs>,
+    /// Per profile, the hidden chrome://extensions page baa's own drives.
+    extension_pages: Rc<RefCell<HashMap<ProfileId, gpui_cef::ChromePage>>>,
+    /// Per profile, Chrome's settings shown as a sheet: the page, its URL and skin.
+    chrome_pages: RefCell<HashMap<ProfileId, ChromeSheetPage>>,
 }
 
 impl CefWebHost {
     fn new(root: PathBuf, cx: &mut App) -> Self {
+        let chrome_tabs = cx.new(|_| ChromeTabs::default());
+        {
+            let (tabs, app) = (chrome_tabs.downgrade(), cx.to_async());
+            // CEF calls in from its message loop, which may run inside an app
+            // update; the push waits for the next turn.
+            gpui_cef::on_chrome_tab(move |url| {
+                let tabs = tabs.clone();
+                app.spawn(async move |cx| {
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.0.push(url);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            });
+        }
         Self {
             root,
             profiles: RefCell::default(),
             next_ephemeral: Cell::new(u64::MAX),
             downloads: cx.new(|_| Downloads::default()),
+            chrome_tabs,
+            extension_pages: Rc::default(),
+            chrome_pages: RefCell::default(),
         }
     }
 
@@ -112,20 +138,47 @@ impl CefWebHost {
     }
 }
 
-impl WebHost for CefWebHost {
-    type Page = CefPage;
+impl CefWebHost {
+    /// Runs `script` (an expression, maybe a promise) on `profile`'s hidden
+    /// chrome://extensions page; `done` gets its value, or `None` if it threw
+    /// or the page never came up.
+    fn on_extensions_page(
+        &self,
+        profile: ProfileId,
+        script: String,
+        cx: &mut App,
+        done: Callback<Option<serde_json::Value>>,
+    ) {
+        let script = format!(
+            "(async () => {{ if (!chrome.developerPrivate) throw 'loading'; return JSON.stringify((await ({script})) ?? null); }})()"
+        );
+        let page = ExtensionsPage {
+            pages: self.extension_pages.clone(),
+            id: profile,
+            profile: self.profile(profile),
+            script,
+        };
+        page.run(cx.to_async(), 40, done);
+    }
 
-    fn create_page(
+    /// A page; with `init_script`, an extension popup that the script lets act
+    /// on the active tab.
+    fn open(
         &self,
         profile: ProfileId,
         url: &str,
+        init_script: Option<String>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<CefPage> {
+        let popup = init_script.is_some();
         let options = WebviewOptions {
             profile: self.profile(profile),
             // The page card's radius in baa-ui; Peek sets its own.
             corner_radius: 8.,
+            init_script,
+            // Chrome's limits for an extension popup.
+            auto_resize: popup.then(|| (gpui::size(gpui::px(25.), gpui::px(25.)), gpui::size(gpui::px(800.), gpui::px(600.)))),
             ..WebviewOptions::url(url)
         };
         let page = cx.new(|cx| CefPage::new(window, cx, options));
@@ -186,12 +239,54 @@ impl WebHost for CefWebHost {
                 }
                 WebviewEvent::DialogClosed => PageEvent::DialogClosed,
                 WebviewEvent::AudibleChanged(on) => PageEvent::AudibleChanged(on),
+                WebviewEvent::PreferredSize(size) => PageEvent::PreferredSize(size),
+                // Only the tabs shim posts; see `tabs_shim`.
+                WebviewEvent::Message(m) if popup => {
+                    let web = |url: &str| url.starts_with("http") || url.starts_with("chrome-extension://");
+                    match m.split_once(':') {
+                        Some(("load", url)) if web(url) => PageEvent::ActiveTabLoad(Some(url.into())),
+                        Some(("open", url)) if web(url) => PageEvent::OpenRequested {
+                            url: url.into(),
+                            from_user_gesture: true,
+                            background: false,
+                        },
+                        _ if m == "reload" => PageEvent::ActiveTabLoad(None),
+                        _ => return,
+                    }
+                }
                 WebviewEvent::Message(_) => return,
             };
             page.update(cx, |_, cx| cx.emit(event));
         })
         .detach();
         page
+    }
+}
+
+
+impl WebHost for CefWebHost {
+    type Page = CefPage;
+
+    fn create_page(
+        &self,
+        profile: ProfileId,
+        url: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<CefPage> {
+        self.open(profile, url, None, window, cx)
+    }
+
+    fn create_popup(
+        &self,
+        profile: ProfileId,
+        url: &str,
+        tab_url: &str,
+        tab_title: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<CefPage> {
+        self.open(profile, url, Some(tabs_shim(tab_url, tab_title)), window, cx)
     }
 
     fn ephemeral_profile(&self) -> ProfileId {
@@ -200,26 +295,64 @@ impl WebHost for CefWebHost {
         ProfileId(id)
     }
 
-    #[cfg(target_os = "macos")]
-    fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App) {
-        let (profile, url) = (self.profile(profile), url.to_string());
-        // A profile created moments ago is not usable for a native browser yet.
-        cx.spawn(async move |cx| {
-            for _ in 0..20 {
-                if gpui_cef::open_chrome_window(profile.as_ref(), &url) {
-                    return;
-                }
-                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
-            }
-            log::error!("could not open the extensions window");
-        })
-        .detach();
+    fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>) {
+        if is_ephemeral(profile) {
+            return done(Some(Vec::new()), cx);
+        }
+        self.on_extensions_page(profile, EXTENSION_DETAILS.into(), cx, Box::new(|value, cx| {
+            done(value.map(|v| parse_extension_details(&v)), cx)
+        }));
     }
 
-    // ponytail: Windows still runs on WebView2, which has no Chrome extension UI.
-    #[cfg(not(target_os = "macos"))]
-    fn open_extensions(&self, _profile: ProfileId, _url: &str, _cx: &mut App) {
-        log::warn!("extensions are macOS-only for now");
+    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool {
+        let mut pages = self.chrome_pages.borrow_mut();
+        for (id, ChromeSheetPage { page, .. }) in pages.iter() {
+            if sheet.is_none() || *id != profile {
+                page.hide();
+            }
+        }
+        let Some(sheet) = sheet else { return true };
+        let entry = match pages.entry(profile) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                let script = skin_loader(&sheet.css);
+                let Some(page) = gpui_cef::ChromePage::open(self.profile(profile).as_ref(), &sheet.url, Some(script)) else {
+                    return false;
+                };
+                slot.insert(ChromeSheetPage { page, url: sheet.url.clone(), css: sheet.css.clone(), dark: None })
+            }
+        };
+        let ChromeSheetPage { page, url, css, dark } = entry;
+        if *dark != Some(sheet.dark) && page.set_dark(sheet.dark) {
+            *dark = Some(sheet.dark);
+        }
+        if *url != sheet.url {
+            page.load_url(&sheet.url);
+            *url = sheet.url.clone();
+        }
+        if *css != sheet.css {
+            let css_js = serde_json::to_string(&sheet.css).unwrap_or_default();
+            page.eval(&format!("window.__baaSkin && __baaSkin({css_js})"), |_| {});
+            *css = sheet.css.clone();
+        }
+        page.show_over(window, sheet.bounds, sheet.corner_radius)
+    }
+
+    fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
+        let id = serde_json::to_string(id).unwrap_or_default();
+        let script = match change {
+            ExtensionChange::Enable(on) => format!("chrome.management.setEnabled({id}, {on})"),
+            ExtensionChange::Remove => format!("chrome.management.uninstall({id}, {{ showConfirmDialog: false }})"),
+            ExtensionChange::SiteAccess(access) => {
+                let access = match access {
+                    SiteAccess::OnClick => "ON_CLICK",
+                    SiteAccess::OnSpecificSites => "ON_SPECIFIC_SITES",
+                    SiteAccess::OnAllSites => "ON_ALL_SITES",
+                };
+                format!("chrome.developerPrivate.updateExtensionConfiguration({{ extensionId: {id}, hostAccess: '{access}' }})")
+            }
+        };
+        self.on_extensions_page(profile, script, cx, Box::new(|value, cx| done(value.is_some(), cx)));
     }
 
     fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
@@ -228,6 +361,10 @@ impl WebHost for CefWebHost {
 
     fn downloads(&self) -> Entity<Downloads> {
         self.downloads.clone()
+    }
+
+    fn chrome_tabs(&self) -> Entity<ChromeTabs> {
+        self.chrome_tabs.clone()
     }
 
     fn cancel_download(&self, id: u32) {
@@ -363,6 +500,200 @@ impl PageHandle for CefPage {
     fn move_to_window(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {}
 }
 
+/// Chrome's settings in the sheet: the page, its address, skin, and the colour
+/// scheme it was last told (`None` before it was up).
+struct ChromeSheetPage {
+    page: gpui_cef::ChromePage,
+    url: String,
+    css: String,
+    dark: Option<bool>,
+}
+
+/// Runs before each of Chrome's pages: puts baa's skin over Chrome's styles.
+/// A skin changed since (`__baaSkin`) is kept in the page's storage under this
+/// run's token, so the next page in the sheet starts in it and a later run
+/// starts from `css`.
+fn skin_loader(css: &str) -> String {
+    let css = serde_json::to_string(css).unwrap_or_default();
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!(
+        r#"(() => {{
+  const token = '{token}';
+  const apply = css => {{
+    // Before the document has a root, wait for it.
+    const root = document.head || document.documentElement;
+    if (!root) {{
+      document.addEventListener('DOMContentLoaded', () => apply(css), {{ once: true }});
+      return;
+    }}
+    let s = document.getElementById('baa-skin');
+    if (!s) {{
+      s = document.createElement('style');
+      s.id = 'baa-skin';
+      root.appendChild(s);
+    }}
+    s.textContent = css;
+  }};
+  window.__baaSkin = css => {{
+    try {{ localStorage.setItem('baa-skin', JSON.stringify({{ token, css }})); }} catch {{}}
+    apply(css);
+  }};
+  let saved = null;
+  try {{ saved = JSON.parse(localStorage.getItem('baa-skin')); }} catch {{}}
+  apply(saved && saved.token === token ? saved.css : {css});
+}})();"#
+    )
+}
+
+/// One script for the hidden extensions page, retried while the page loads.
+struct ExtensionsPage {
+    pages: Rc<RefCell<HashMap<ProfileId, gpui_cef::ChromePage>>>,
+    id: ProfileId,
+    profile: Option<gpui_cef::Profile>,
+    script: String,
+}
+
+impl ExtensionsPage {
+    fn run(self, app: gpui::AsyncApp, tries: u32, done: Callback<Option<serde_json::Value>>) {
+        let page = {
+            let mut pages = self.pages.borrow_mut();
+            match pages.get(&self.id) {
+                Some(page) => Some(page.clone()),
+                None => gpui_cef::ChromePage::open(self.profile.as_ref(), "chrome://extensions/", None).inspect(|page| {
+                    pages.insert(self.id, page.clone());
+                }),
+            }
+        };
+        let Some(page) = page else {
+            return self.again(app, tries, done);
+        };
+        let script = self.script.clone();
+        page.eval(&script, move |result| {
+            let result: Option<serde_json::Value> = result.and_then(|r| serde_json::from_str(&r).ok());
+            // A throw (the page still loading, or the call failing) comes back as exceptionDetails.
+            let value = result
+                .filter(|r| r.get("exceptionDetails").is_none())
+                .and_then(|r| r["result"]["value"].as_str().and_then(|v| serde_json::from_str(v).ok()));
+            // ponytail: a call that fails for good is retried like a page still loading.
+            match value {
+                Some(value) => {
+                    app.spawn(async move |cx| cx.update(|cx| done(Some(value), cx))).detach();
+                }
+                None => self.again(app, tries, done),
+            }
+        });
+    }
+
+    fn again(self, app: gpui::AsyncApp, tries: u32, done: Callback<Option<serde_json::Value>>) {
+        app.clone()
+            .spawn(async move |cx| {
+                if tries == 0 {
+                    log::error!("the extensions page did not answer");
+                    return cx.update(|cx| done(None, cx));
+                }
+                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                self.run(cx.clone(), tries - 1, done);
+            })
+            .detach();
+    }
+}
+
+/// Every extension, as chrome://extensions lists them.
+const EXTENSION_DETAILS: &str = "chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true, includeTerminated: true })";
+
+fn parse_extension_details(list: &serde_json::Value) -> Vec<ExtensionInfo> {
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+    let mut out: Vec<ExtensionInfo> = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["location"] != "COMPONENT" && e["type"] != "THEME")
+        .map(|e| {
+            let permissions = &e["permissions"];
+            ExtensionInfo {
+                id: text(&e["id"]),
+                name: text(&e["name"]),
+                description: text(&e["description"]),
+                version: text(&e["version"]),
+                enabled: e["state"] == "ENABLED",
+                permissions: permissions["simplePermissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| text(&p["message"]))
+                    .filter(|m| !m.is_empty())
+                    .collect(),
+                site_access: match permissions["runtimeHostPermissions"]["hostAccess"].as_str() {
+                    Some("ON_CLICK") => Some(SiteAccess::OnClick),
+                    Some("ON_SPECIFIC_SITES") => Some(SiteAccess::OnSpecificSites),
+                    Some("ON_ALL_SITES") => Some(SiteAccess::OnAllSites),
+                    _ => None,
+                },
+                options: e["optionsPage"]["url"].as_str().filter(|u| !u.is_empty()).map(String::from),
+            }
+        })
+        .collect();
+    out.sort_by_key(|e| e.name.to_lowercase());
+    out
+}
+
+/// Extensions see only Chrome-style tabs and baa's pages are Alloy-style, so
+/// a popup asking for "the active tab" gets nothing. This answers with the
+/// tab it was opened over, and passes its reloads and navigations of that tab
+/// back as messages.
+// ponytail: query, get, reload, update, create and openOptionsPage only; tabs.sendMessage and
+// scripting into the tab still fail. Ceiling: Chrome-style tabs, which CEF
+// cannot put in a native child view.
+fn tabs_shim(url: &str, title: &str) -> String {
+    let tab = serde_json::json!({
+        "id": -1, "index": 0, "windowId": -1, "active": true, "highlighted": true,
+        "pinned": false, "incognito": false, "audible": false, "discarded": false,
+        "autoDiscardable": true, "groupId": -1, "status": "complete", "url": url, "title": title,
+    });
+    format!(
+        r#"(() => {{
+  const tabs = globalThis.chrome && chrome.tabs;
+  if (!tabs) return;
+  const tab = {tab};
+  const post = m => console.debug({prefix:?} + m);
+  const done = (cb, v) => typeof cb === 'function' ? void cb(v) : Promise.resolve(v);
+  const real = {{ query: tabs.query, get: tabs.get, reload: tabs.reload, update: tabs.update }};
+  tabs.query = function (info, cb) {{
+    return info && info.active ? done(cb, [{{ ...tab }}]) : real.query.apply(tabs, arguments);
+  }};
+  tabs.get = function (id, cb) {{
+    return id === tab.id ? done(cb, {{ ...tab }}) : real.get.apply(tabs, arguments);
+  }};
+  tabs.reload = function (id, props, cb) {{
+    if (typeof id === 'number' && id !== tab.id) return real.reload.apply(tabs, arguments);
+    post('reload');
+    return done([...arguments].find(a => typeof a === 'function'));
+  }};
+  tabs.update = function (id, props, cb) {{
+    if (typeof id !== 'number') [id, props, cb] = [tab.id, id, props];
+    if (id !== tab.id) return real.update.apply(tabs, arguments);
+    if (props && props.url) post('load:' + new URL(props.url, location.href).href);
+    return done(cb, {{ ...tab }});
+  }};
+  // Chrome would open these in a window of its own; they belong in baa's tabs.
+  tabs.create = function (props, cb) {{
+    if (props && props.url) post('open:' + new URL(props.url, location.href).href);
+    return done(cb, {{ ...tab }});
+  }};
+  chrome.runtime.openOptionsPage = function (cb) {{
+    const m = chrome.runtime.getManifest();
+    const page = m.options_page || (m.options_ui && m.options_ui.page);
+    if (page) post('open:' + chrome.runtime.getURL(page));
+    return done(cb);
+  }};
+}})();"#,
+        prefix = gpui_cef::MESSAGE_PREFIX,
+    )
+}
+
 /// Chrome keeps each extension in `Extensions/<id>/<version>/`; this reads the
 /// newest version's manifest (and `_locales` for a `__MSG_name__` name).
 // ponytail: lists what is on disk, so an extension disabled in
@@ -403,9 +734,14 @@ fn installed_extensions(profile: &Path) -> Vec<Extension> {
                 .and_then(|a| a.get("default_popup"))
                 .and_then(|p| p.as_str())
                 .map(|p| format!("chrome-extension://{id}/{}", p.trim_start_matches('/')));
+            let options = manifest
+                .get("options_page")
+                .or_else(|| manifest.get("options_ui").and_then(|o| o.get("page")))
+                .and_then(|p| p.as_str())
+                .map(|p| format!("chrome-extension://{id}/{}", p.trim_start_matches('/')));
             let name = manifest.get("name").and_then(|n| n.as_str()).unwrap_or(&id).to_string();
             let name = localized(&dir, &manifest, &name).unwrap_or(name);
-            Some(Extension { id, name, icon, popup })
+            Some(Extension { id, name, icon, popup, options })
         })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -523,13 +859,13 @@ mod extension_tests {
     use super::*;
 
     #[test]
-    fn reads_name_icon_and_popup_from_the_newest_version() {
+    fn reads_name_icon_popup_and_options_from_the_newest_version() {
         let root = std::env::temp_dir().join(format!("baa-ext-{}", std::process::id()));
         let dir = root.join("Extensions/abc/1.0_0");
         std::fs::create_dir_all(dir.join("_locales/en")).unwrap();
         std::fs::write(
             dir.join("manifest.json"),
-            r#"{"name":"__MSG_extName__","default_locale":"en","action":{"default_icon":{"16":"i16.png","32":"i32.png"},"default_popup":"popup.html"}}"#,
+            r#"{"name":"__MSG_extName__","default_locale":"en","action":{"default_icon":{"16":"i16.png","32":"i32.png"},"default_popup":"popup.html"},"options_ui":{"page":"/opts.html"}}"#,
         )
         .unwrap();
         std::fs::write(dir.join("_locales/en/messages.json"), r#"{"extname":{"message":"Blocker"}}"#).unwrap();
@@ -541,6 +877,7 @@ mod extension_tests {
                 name: "Blocker".into(),
                 icon: Some(dir.join("i32.png")),
                 popup: Some("chrome-extension://abc/popup.html".into()),
+                options: Some("chrome-extension://abc/opts.html".into()),
             }]
         );
         std::fs::remove_dir_all(&root).unwrap();

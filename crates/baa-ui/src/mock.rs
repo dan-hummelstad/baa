@@ -12,6 +12,14 @@ pub struct MockHost {
     pub deleted: RefCell<Vec<ProfileId>>,
     pub fetched: RefCell<Vec<String>>,
     pub suggest_body: RefCell<Option<String>>,
+    pub extensions: RefCell<Vec<baa_web::Extension>>,
+    pub chrome_tabs: Entity<baa_web::ChromeTabs>,
+    pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
+    pub extension_changes: RefCell<Vec<(String, baa_web::ExtensionChange)>>,
+    /// What the Chrome settings sheet last showed.
+    pub chrome_sheet: RefCell<Option<baa_web::ChromeSheet>>,
+    /// (popup url, the tab it was opened for).
+    pub popups: RefCell<Vec<(String, String)>>,
 }
 
 pub struct MockPage {
@@ -109,6 +117,12 @@ impl MockHost {
             deleted: RefCell::default(),
             fetched: RefCell::default(),
             suggest_body: RefCell::default(),
+            extensions: RefCell::default(),
+            chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
+            extension_details: RefCell::default(),
+            extension_changes: RefCell::default(),
+            chrome_sheet: RefCell::default(),
+            popups: RefCell::default(),
         }
     }
 }
@@ -135,15 +149,58 @@ impl WebHost for MockHost {
             focus: cx.focus_handle(),
         })
     }
+    fn create_popup(
+        &self,
+        profile: ProfileId,
+        url: &str,
+        tab_url: &str,
+        _: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<MockPage> {
+        self.popups.borrow_mut().push((url.into(), tab_url.into()));
+        self.create_page(profile, url, window, cx)
+    }
     fn ephemeral_profile(&self) -> ProfileId {
         ProfileId(u64::MAX)
     }
     fn delete_profile(&self, profile: ProfileId) {
         self.deleted.borrow_mut().push(profile);
     }
-    fn open_extensions(&self, _: ProfileId, _: &str, _: &mut App) {}
+    fn extension_details(
+        &self,
+        _: ProfileId,
+        cx: &mut App,
+        done: baa_web::Callback<Option<Vec<baa_web::ExtensionInfo>>>,
+    ) {
+        done(Some(self.extension_details.borrow().clone()), cx)
+    }
+    fn show_chrome_page(&self, _: ProfileId, sheet: Option<baa_web::ChromeSheet>, _: &mut Window) -> bool {
+        *self.chrome_sheet.borrow_mut() = sheet;
+        true
+    }
+    fn change_extension(
+        &self,
+        _: ProfileId,
+        id: &str,
+        change: baa_web::ExtensionChange,
+        cx: &mut App,
+        done: baa_web::Callback<bool>,
+    ) {
+        self.extension_changes.borrow_mut().push((id.into(), change));
+        let mut list = self.extension_details.borrow_mut();
+        match change {
+            baa_web::ExtensionChange::Remove => list.retain(|e| e.id != id),
+            baa_web::ExtensionChange::Enable(on) => list.iter_mut().filter(|e| e.id == id).for_each(|e| e.enabled = on),
+            baa_web::ExtensionChange::SiteAccess(a) => {
+                list.iter_mut().filter(|e| e.id == id).for_each(|e| e.site_access = Some(a))
+            }
+        }
+        drop(list);
+        done(true, cx)
+    }
     fn extensions(&self, _: ProfileId) -> Vec<baa_web::Extension> {
-        Vec::new()
+        self.extensions.borrow().clone()
     }
     fn fetch(&self, _: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
         self.fetched.borrow_mut().push(url.into());
@@ -151,6 +208,9 @@ impl WebHost for MockHost {
     }
     fn downloads(&self) -> Entity<Downloads> {
         self.downloads.clone()
+    }
+    fn chrome_tabs(&self) -> Entity<baa_web::ChromeTabs> {
+        self.chrome_tabs.clone()
     }
     fn cancel_download(&self, _: u32) {}
     fn site_permission(&self, _: ProfileId, url: &str, kind: Permission) -> PermissionState {

@@ -108,6 +108,13 @@ impl Drop for Registration {
 }
 
 /// Registers a webview with the process-wide pump, starting it if needed.
+/// Starts the timer, if nothing has yet.
+pub(crate) fn start() {
+    PUMP.with(|slot| {
+        slot.borrow_mut().get_or_insert_with(Pump::start);
+    });
+}
+
 pub(crate) fn register(
     shared: Rc<Shared>,
     webview: WeakEntity<Webview>,
@@ -227,6 +234,8 @@ fn tick_all(state: &PumpState) {
     // this while the App is borrowed lets gpui's paint re-enter from the run
     // loop Chromium spins, which panics with "RefCell already borrowed".
     do_work();
+    super::native::place_chrome_dialogs();
+    super::chrome_window::close_handed_tabs();
 
     // Snapshot, because the updates below run application code that may add or
     // remove webviews.

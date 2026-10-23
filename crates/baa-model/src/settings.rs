@@ -7,6 +7,15 @@ pub enum SidebarSide {
     Right,
 }
 
+/// Window chrome look: Arc's Space gradients, or a monospace terminal frame
+/// (pen.dev "1. ASCII Chrome").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ChromeStyle {
+    #[default]
+    Arc,
+    Ascii,
+}
+
 /// `url` holds `%s` where the encoded query goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchEngine {
@@ -45,6 +54,9 @@ pub struct Settings {
     pub reduce_motion: bool,
     /// Today tabs idle this long are archived (PLAN.md §3); 0 = never.
     pub archive_after_hours: u32,
+    pub chrome: ChromeStyle,
+    /// Extension ids kept out of the toolbar; they stay in the extensions menu.
+    pub unpinned_extensions: Vec<String>,
 }
 
 impl Default for Settings {
@@ -55,6 +67,8 @@ impl Default for Settings {
             sidebar_side: SidebarSide::Left,
             reduce_motion: false,
             archive_after_hours: 12,
+            chrome: ChromeStyle::Arc,
+            unpinned_extensions: Vec::new(),
         }
     }
 }

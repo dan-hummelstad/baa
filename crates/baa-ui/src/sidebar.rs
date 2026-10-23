@@ -2,6 +2,7 @@
 //! the traffic lights, URL bar, the Space's pinned and Today tabs with drag
 //! reorder, New Tab, and the Space dots.
 
+use crate::theme::r;
 use std::time::Duration;
 
 use baa_model::{Folder, SpaceId, Tab, TabId, Zone};
@@ -16,10 +17,13 @@ use crate::{
     command_bar::Mode,
     icons::icon,
     motion::Feel,
-    theme::{fade, mix, Theme},
+    theme::{ascii, fade, mix, Theme},
 };
 
-const ROW_H: f32 = 38.;
+/// Arc's rows, or ASCII Chrome's one-line rows.
+fn row_h() -> f32 {
+    if ascii() { 24. } else { 38. }
+}
 /// Favourite tiles, four to a row (pen.dev "Favorite").
 const FAV_W: f32 = 53.;
 const FAV_H: f32 = 44.;
@@ -35,11 +39,11 @@ impl Render for DraggedTab {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(SIDEBAR_WIDTH - 22.))
-            .h(px(ROW_H))
+            .h(px(row_h()))
             .px(px(10.))
             .flex()
             .items_center()
-            .rounded(px(10.))
+            .rounded(r(10.))
             .bg(self.theme.glass_strong)
             .text_color(self.theme.ink)
             .text_size(px(13.))
@@ -106,23 +110,24 @@ impl<H: WebHost> Browser<H> {
                             .flex_1()
                             .min_w_0()
                             .px(px(4.))
-                            .rounded(px(4.))
+                            .rounded(r(4.))
                             .bg(theme.glass_strong)
                             .text_color(theme.ink)
                             .track_focus(&self.input_focus)
                             .on_key_down(cx.listener(Self::on_input_key))
+                            .on_mouse_down_out(cx.listener(|this, _, window, cx| this.commit_rename(window, cx)))
                             .child(field.render(
                                 "Space name",
                                 theme.ink,
                                 theme.ink_muted,
                                 Hsla { a: 0.3, ..theme.accent },
                             ))
-                            .with_animation("rename-in", fade_in(), |d, t| d.opacity(t))
+                            .with_animation("rename-in", rename_in(), |d, t| d.opacity(0.6 + 0.4 * t))
                             .into_any_element(),
                         None => div()
                             .id("space-name")
-                            .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
-                                if e.click_count() == 2 {
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if crate::motion::double_click(("space-name", 0)) {
                                     this.start_rename(window, cx);
                                 }
                             }))
@@ -130,22 +135,34 @@ impl<H: WebHost> Browser<H> {
                             .into_any_element(),
                     }),
             )
-            .children(
-                self.session
-                    .folders(space)
-                    .map(|f| self.render_folder(f, theme, cx))
-                    .collect::<Vec<_>>(),
-            )
-            .child(self.render_zone(space, Zone::Pinned, theme, cx))
+            .when(ascii(), |d| d.child(crate::theme::ascii::rule_label("PINNED", theme.ink_faint).flex_none().h(px(20.))))
+            // Folders belong to the pinned section: one column, so they move as one.
             .child(
                 div()
+                    .flex()
+                    .flex_none()
+                    .flex_col()
+                    .gap(px(6.))
+                    .children(
+                        self.session
+                            .folders(space)
+                            .map(|f| self.render_folder(f, theme, cx))
+                            .collect::<Vec<_>>(),
+                    )
+                    .child(self.render_zone(space, Zone::Pinned, theme, cx)),
+            )
+            .child(if ascii() {
+                crate::theme::ascii::rule_label("TODAY", theme.ink_faint).debug_selector(|| "today-rule".into()).flex_none().h(px(20.)).mt(px(4.))
+            } else {
+                div()
+                    .debug_selector(|| "today-rule".into())
                     .flex_none()
                     .h(px(22.))
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .child(div().w_full().h(px(1.)).bg(theme.divider)),
-            )
+                    .child(div().w_full().h(px(1.)).bg(theme.divider))
+            })
             .child(
                 {
                     let key = ("new-tab", 0);
@@ -157,10 +174,10 @@ impl<H: WebHost> Browser<H> {
                             .flex_none()
                             .items_center()
                             .gap(px(10.))
-                            .h(px(ROW_H))
+                            .h(px(row_h()))
                             .px(px(10.))
                             .mx(px(2.5 * p))
-                            .rounded(px(10.))
+                            .rounded(r(10.))
                             .text_size(px(13.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(mix(theme.ink_muted, theme.ink, h))
@@ -172,7 +189,10 @@ impl<H: WebHost> Browser<H> {
                             .child(icon("plus", 16., mix(theme.ink_muted, theme.ink, h)).with_transformation(
                                 Transformation::rotate(gpui::radians(h * std::f32::consts::FRAC_PI_2)),
                             ))
-                            .child("New Tab"),
+                            .child("New Tab")
+                            .when(ascii(), |d| {
+                                d.child(div().flex_1()).child(div().text_color(theme.ink_faint).child("⌘T"))
+                            }),
                         key,
                         cx,
                     )
@@ -274,13 +294,13 @@ impl<H: WebHost> Browser<H> {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let rows: Vec<AnyElement> = self
+        let rows: Vec<(f32, AnyElement)> = self
             .session
             .tabs(space, zone)
             .enumerate()
-            .map(|(i, tab)| self.render_tab_row(tab, i, theme, cx).into_any_element())
+            .map(|(i, tab)| (self.row_shown(tab.id, 1.0), self.render_tab_row(tab, i, 1.0, theme, cx).into_any_element()))
             .collect();
-        let rows = self.with_ghosts(rows, (space, zone, None), theme);
+        let rows = stack(self.with_ghosts(rows, (space, zone, None), theme), false);
         let hover = theme.glass;
         div()
             .id(match zone {
@@ -291,10 +311,10 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_none()
             .flex_col()
-            .gap(px(6.))
+            // No gap: `stack` spaces the rows.
             // An empty zone still needs somewhere to drop.
             .min_h(px(8.))
-            .rounded(px(10.))
+            .rounded(r(10.))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hover))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                 this.session.move_tab(d.id, space, zone, usize::MAX);
@@ -304,7 +324,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// `rows` with the rows that just left `list` collapsing at their old places.
-    fn with_ghosts(&self, mut rows: Vec<AnyElement>, list: List, theme: &Theme) -> Vec<AnyElement> {
+    fn with_ghosts(&self, mut rows: Vec<(f32, AnyElement)>, list: List, theme: &Theme) -> Vec<(f32, AnyElement)> {
         let mut ghosts: Vec<&Ghost> = self.ghosts.iter().filter(|g| g.list == list).collect();
         ghosts.sort_by_key(|g| g.index);
         for g in ghosts {
@@ -315,17 +335,16 @@ impl<H: WebHost> Browser<H> {
                 .flex_none()
                 .items_center()
                 .gap(px(10.))
-                .h(px(ROW_H * t))
-                .mt(px(-6. * (1. - t)))
+                .h(px(row_h() * t))
                 .px(px(10.))
                 .overflow_hidden()
                 .opacity(t)
-                .rounded(px(10.))
+                .rounded(r(10.))
                 .text_size(px(13.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .child(favicon(image, &g.title, false, 16., theme))
                 .child(div().flex_1().min_w_0().truncate().child(g.title.clone()));
-            rows.insert(g.index.min(rows.len()), row.into_any_element());
+            rows.insert(g.index.min(rows.len()), (t, row.into_any_element()));
         }
         rows
     }
@@ -357,7 +376,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(6.))
+            .rounded(r(6.))
             .bg(fade(theme.hover, h))
             .child(
                 icon(name, 16., color).with_transformation(
@@ -369,10 +388,18 @@ impl<H: WebHost> Browser<H> {
         feel(el, key, cx)
     }
 
+    /// How much of a row is in: below 1 while it grows in, or folds away
+    /// (`shown`, a closing folder).
+    fn row_shown(&self, id: TabId, shown: f32) -> f32 {
+        let growing = self.motion.get(("tab-in", id.0), Feel::Glide).clamp(0.0, 1.0);
+        shown.min(1. - growing)
+    }
+
     fn render_tab_row(
         &self,
         tab: &Tab,
         index: usize,
+        shown: f32,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -393,7 +420,7 @@ impl<H: WebHost> Browser<H> {
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
         let sel = self.motion.get(("sel", id.0), Feel::Glide).clamp(0.0, 1.0);
         // 1 while a row that just arrived is still growing in.
-        let hidden = self.motion.get(("tab-in", id.0), Feel::Glide).clamp(0.0, 1.0);
+        let hidden = 1. - self.row_shown(id, shown);
         let close_key = ("tab-x", id.0);
         let (ch, cp) = (self.motion.get(close_key, Feel::Hover), self.motion.get(close_key, Feel::Press));
 
@@ -403,18 +430,24 @@ impl<H: WebHost> Browser<H> {
             .flex_none()
             .items_center()
             .gap(px(10.))
-            .h(px(ROW_H * (1. - hidden)))
-            .mt(px(-6. * hidden))
+            .h(px(row_h() * (1. - hidden)))
             .opacity(1. - hidden)
             .overflow_hidden()
             .px(px(10.))
             .mx(px(2.5 * p))
-            .rounded(px(10.))
+            .rounded(r(10.))
             .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .bg(mix(fade(theme.hover, h), theme.glass_strong, sel))
             .when(sel > 0.0, |d| {
                 d.shadow(vec![shadow(Hsla { a: 0.14 * sel, ..theme.ink }, 1., 3.)])
+            })
+            .when(ascii(), |d| {
+                d.relative()
+                    .gap(px(8.))
+                    .font_weight(if sel > 0.5 { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                    .text_color(mix(theme.ink_muted, theme.ink, sel.max(h)))
+                    .child(div().absolute().left_0().opacity(sel).text_color(accent).child("▌"))
             })
             .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
             .on_mouse_up(
@@ -453,7 +486,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(5.))
+                    .rounded(r(5.))
                     .opacity(h.max(sel * 0.6))
                     .bg(fade(theme.glass_strong, ch))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -488,7 +521,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(5.))
+            .rounded(r(5.))
             .bg(fade(theme.glass_strong, h))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -531,9 +564,10 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(10.))
+                .rounded(r(10.))
                 .opacity(1. - hidden)
                 .bg(mix(mix(theme.glass, theme.glass_strong, 0.6 * h), theme.glass_strong, sel))
+                .when(ascii(), |d| d.border_1().border_color(mix(crate::theme::ascii::rule().into(), accent, sel)))
                 .when(sel > 0.0 || selected, |d| {
                     d.shadow(vec![shadow(Hsla { a: 0.14 * sel, ..theme.ink }, 1., 3.)])
                 })
@@ -551,7 +585,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(10.))
+                .rounded(r(10.))
                 .child(tile)
                 .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
                 .on_mouse_down(
@@ -576,7 +610,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_wrap()
             .gap(px(8.))
-            .rounded(px(10.))
+            .rounded(r(10.))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass).min_h(px(FAV_H)))
             .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                 this.session.move_tab(d.id, space, Zone::Favorite, usize::MAX);
@@ -597,27 +631,30 @@ impl<H: WebHost> Browser<H> {
             .map_or(if open { 1.0 } else { 0.0 }, |s| s.value().clamp(0.0, 1.0));
         let animating = self.folder_motion.contains_key(&id);
         let active = self.active_tab();
-        let rows: Vec<AnyElement> = self
+        let rows: Vec<(f32, AnyElement)> = self
             .session
             .folder_tabs(id)
             .enumerate()
             .filter(|(_, t)| open || animating || active == Some(t.id))
-            .map(|(i, tab)| self.render_tab_row(tab, i, theme, cx).into_any_element())
+            // The active tab stays put while the rest fold around it.
+            .map(|(i, tab)| {
+                let shown = if active == Some(tab.id) { 1.0 } else { t };
+                (self.row_shown(tab.id, shown), self.render_tab_row(tab, i, shown, theme, cx).into_any_element())
+            })
             .collect();
-        let rows = self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme);
-        let n = rows.len() as f32;
-        let full = 6. + n * ROW_H + (n - 1.).max(0.) * 6.;
+        let rows = stack(self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme), true);
         let name = match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
             Some(field) => div()
                 .flex_1()
                 .min_w_0()
                 .px(px(4.))
-                .rounded(px(4.))
+                .rounded(r(4.))
                 .bg(theme.glass_strong)
                 .track_focus(&self.input_focus)
                 .on_key_down(cx.listener(Self::on_input_key))
+                            .on_mouse_down_out(cx.listener(|this, _, window, cx| this.commit_rename(window, cx)))
                 .child(field.render("Folder name", theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }))
-                .with_animation("rename-in", fade_in(), |d, t| d.opacity(t))
+                .with_animation("rename-in", rename_in(), |d, t| d.opacity(0.6 + 0.4 * t))
                 .into_any_element(),
             None => div()
                 .flex_1()
@@ -640,18 +677,18 @@ impl<H: WebHost> Browser<H> {
                     .flex_none()
                     .items_center()
                     .gap(px(10.))
-                    .h(px(ROW_H))
+                    .h(px(row_h()))
                     .px(px(10.))
-                    .rounded(px(10.))
+                    .rounded(r(10.))
                     .mx(px(2.5 * p))
                     .text_size(px(13.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .bg(fade(theme.hover, h))
-                    .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         // The first click of a double-click already toggled it.
                         let open = this.session.folder(id).is_some_and(|f| f.collapsed);
                         this.set_folder_open(id, open);
-                        if e.click_count() == 2 {
+                        if crate::motion::double_click(("folder", id.0)) {
                             this.start_folder_rename(id, window, cx);
                         }
                         this.sync(window, cx);
@@ -679,12 +716,10 @@ impl<H: WebHost> Browser<H> {
             .when(!rows.is_empty(), |d| {
                 d.child(
                     div()
-                        .pt(px(6.))
                         .pl(px(14.))
                         .flex()
                         .flex_col()
-                        .gap(px(6.))
-                        .when(animating, |d| d.h(px(full * t)).overflow_hidden().opacity(t))
+                        .debug_selector(|| "folder-rows".into())
                         .children(rows),
                 )
             })
@@ -714,7 +749,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.))
+                    .rounded(r(6.))
                     .bg(fade(theme.hover, h * (1. - sel)))
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.activate_space(id, window, cx)),
@@ -740,8 +775,14 @@ impl<H: WebHost> Browser<H> {
             .top_0()
             .left(px(self.motion.get(("space-pill", 0), Feel::Glide)))
             .size(px(SPACE_DOT))
-            .rounded(px(6.))
-            .bg(theme.glass);
+            .rounded(r(6.))
+            .bg(theme.glass)
+            .when(ascii(), |d| {
+                let bracket = |c: &'static str| div().absolute().top(px(3.)).text_color(theme.accent).child(c);
+                d.bg(theme.glass_strong)
+                    .child(bracket("[").left(px(-4.)))
+                    .child(bracket("]").right(px(-4.)))
+            });
         let plus_turn = self.motion.get(("add-space", 0), Feel::Hover) * std::f32::consts::FRAC_PI_2;
         let library = self
             .icon_button("library", "archive", true, 0., 0., theme, cx)
@@ -754,6 +795,7 @@ impl<H: WebHost> Browser<H> {
             .px(px(2.))
             .flex()
             .items_center()
+            .when(ascii(), |d| d.border_t_1().border_color(crate::theme::ascii::rule()))
             .child(library)
             .child(
                 div()
@@ -765,6 +807,24 @@ impl<H: WebHost> Browser<H> {
             .child(add)
     }
 }
+
+/// Rows 6px apart, each `(shown, row)` bringing the gap above it scaled by
+/// how far it and the rows before it are in, so a growing or folding row moves
+/// everything below at its own pace. `lead`: a gap above the first row too.
+/// (Margins only ever grow: gpui's layout keeps a list's height stale when its
+/// rows pull a gap back with a negative margin, and what is below then lags.)
+fn stack(rows: Vec<(f32, AnyElement)>, lead: bool) -> Vec<AnyElement> {
+    let mut before: f32 = if lead { 1. } else { 0. };
+    rows.into_iter()
+        .map(|(shown, row)| {
+            let gap = ROW_GAP * shown * before;
+            before = before.max(shown);
+            div().flex_none().mt(px(gap)).child(row).into_any_element()
+        })
+        .collect()
+}
+
+const ROW_GAP: f32 = 6.;
 
 fn favicon(
     image: Option<std::sync::Arc<gpui::Image>>,
@@ -787,7 +847,7 @@ fn favicon(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(size / 4.))
+            .rounded(r(size / 4.))
             .bg(accent)
             .text_size(px(size * 0.56))
             .font_weight(gpui::FontWeight::BOLD)
@@ -799,7 +859,7 @@ fn favicon(
     let icon = match image {
         Some(image) => img(image)
             .size(px(size))
-            .rounded(px(size / 4.))
+            .rounded(r(size / 4.))
             .with_fallback(fallback)
             .into_any_element(),
         None => fallback(),
@@ -822,12 +882,17 @@ fn favicon(
 }
 
 /// Empty toolbar space: drags the window; a double-click zooms it (macOS).
-pub(crate) fn drag_or_zoom(event: &gpui::MouseDownEvent, window: &mut Window, _: &mut gpui::App) {
-    if event.click_count == 2 {
+pub(crate) fn drag_or_zoom(_: &gpui::MouseDownEvent, window: &mut Window, _: &mut gpui::App) {
+    if crate::motion::double_click(("toolbar", 0)) {
         window.zoom_window();
     } else {
         window.start_window_move();
     }
+}
+
+/// The name turns editable at once: a short settle, never blinking out.
+fn rename_in() -> Animation {
+    Animation::new(Duration::from_millis(80)).with_easing(gpui::ease_out_quint())
 }
 
 fn fade_in() -> Animation {

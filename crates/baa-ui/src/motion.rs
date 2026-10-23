@@ -220,3 +220,41 @@ mod tests {
         assert!(s.value() > before);
     }
 }
+
+/// How close two clicks must be to count as a double-click. Ours, not the
+/// system's: macOS's default is slow enough that opening and closing a folder
+/// at a moderate pace reads as a rename.
+pub(crate) const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+thread_local! {
+    static LAST_CLICK: std::cell::Cell<Option<(&'static str, u64, std::time::Instant)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Records a click on `target`; true when it completes a double-click. A
+/// third quick click starts over rather than counting again.
+pub(crate) fn double_click(target: (&'static str, u64)) -> bool {
+    let now = std::time::Instant::now();
+    LAST_CLICK.with(|last| {
+        let double = last
+            .get()
+            .is_some_and(|(tag, id, at)| (tag, id) == target && now - at <= DOUBLE_CLICK);
+        last.set(if double { None } else { Some((target.0, target.1, now)) });
+        double
+    })
+}
+
+#[cfg(test)]
+mod double_click_tests {
+    use super::*;
+
+    #[test]
+    fn two_quick_clicks_on_one_target() {
+        assert!(!double_click(("a", 1)));
+        assert!(double_click(("a", 1)));
+        assert!(!double_click(("a", 1)), "a third click starts a new pair");
+        assert!(!double_click(("b", 1)), "another target");
+        std::thread::sleep(DOUBLE_CLICK + std::time::Duration::from_millis(20));
+        assert!(!double_click(("b", 1)), "too slow");
+    }
+}

@@ -98,6 +98,11 @@ wrap_browser_process_handler! {
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             super::pump::schedule_work(delay_ms);
         }
+
+        /// Browsers Chrome creates on its own; see [`super::on_chrome_tab`].
+        fn default_client(&self) -> Option<Client> {
+            Some(super::chrome_window::ChromeTabClient::new())
+        }
     }
 }
 
@@ -107,6 +112,13 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_auto_resize(&self, _browser: Option<&mut Browser>, new_size: Option<&cef::Size>) -> ::std::os::raw::c_int {
+            let Some(size) = new_size else { return 0 };
+            let size = gpui::size(gpui::px(size.width as f32), gpui::px(size.height as f32));
+            self.shared.push_event(WebviewEvent::PreferredSize(size));
+            1
+        }
+
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             if let Some(title) = title {
                 self.shared.set_title(title.to_string());
@@ -371,7 +383,12 @@ wrap_life_span_handler! {
 
         /// The page is a child view of the app's window: by default CEF closes
         /// that whole window along with the browser (and the app quits).
-        fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+        /// Instead only the page's own view leaves the window, which is the
+        /// tear-down CEF waits for before it destroys the browser.
+        fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            if let Some(host) = browser.and_then(|b| b.host()) {
+                super::native::detach(host.window_handle().cast());
+            }
             1
         }
 

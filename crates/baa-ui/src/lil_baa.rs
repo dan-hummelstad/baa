@@ -2,6 +2,7 @@
 //! app opens in a small window instead of the browser. "Open in <Space>" moves
 //! the live page into the browser as a tab.
 
+use crate::theme::r;
 use baa_model::{ProfileId, SpaceId};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
@@ -152,7 +153,7 @@ impl<H: WebHost> LilBaa<H> {
                 .px(px(10.))
                 .flex()
                 .items_center()
-                .rounded(px(7.))
+                .rounded(r(7.))
                 .hover(|s| s.bg(theme.accent).text_color(gpui::white()))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.space = id;
@@ -169,7 +170,7 @@ impl<H: WebHost> LilBaa<H> {
                     .mt(px(36.))
                     .min_w(px(180.))
                     .p(px(5.))
-                    .rounded(px(10.))
+                    .rounded(r(10.))
                     .bg(surface::bg())
                     .border_1()
                     .border_color(surface::border())
@@ -212,6 +213,7 @@ impl<H: WebHost> Render for LilBaa<H> {
             .bg(gradient_fill(&theme))
             .text_color(theme.ink)
             .text_size(px(13.))
+            .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))
             .child(
                 div()
                     .id("lil-toolbar")
@@ -233,7 +235,7 @@ impl<H: WebHost> Render for LilBaa<H> {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .rounded(px(9.))
+                            .rounded(r(9.))
                             .bg(theme.glass)
                             .child(icon("globe", 14., theme.ink))
                             .child(
@@ -255,7 +257,7 @@ impl<H: WebHost> Render for LilBaa<H> {
                             .flex()
                             .items_center()
                             .gap(px(7.))
-                            .rounded(px(9.))
+                            .rounded(r(9.))
                             .bg(theme.glass_strong)
                             .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 1., 3.)])
                             .text_size(px(12.5))
@@ -287,7 +289,7 @@ impl<H: WebHost> Render for LilBaa<H> {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .rounded(px(PAGE_RADIUS))
+                    .rounded(r(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])

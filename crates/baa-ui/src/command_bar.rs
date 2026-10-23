@@ -2,6 +2,7 @@
 //! search with the engine's suggestions as you type, fuzzy matches over open
 //! tabs, Spaces and quick commands, each with its keyboard shortcut.
 
+use crate::theme::r;
 use baa_model::{parse_suggestions, HistoryItem, Session, Settings, SpaceId, TabId};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
@@ -63,10 +64,12 @@ pub enum Command {
     Settings,
     ImportFromArc,
     SetUpPasswords,
+    /// Chrome's settings page at this address, in its sheet.
+    ChromeSettings(&'static str),
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 27] = [
+const COMMANDS: [(Command, &str); 34] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -94,6 +97,13 @@ const COMMANDS: [(Command, &str); 27] = [
     (Command::Settings, "Settings"),
     (Command::ImportFromArc, "Import Spaces from Arc"),
     (Command::SetUpPasswords, "Password Manager Extensions"),
+    (Command::ChromeSettings("chrome://settings/privacy"), "Privacy and Security"),
+    (Command::ChromeSettings("chrome://settings/content"), "Site Settings for All Sites"),
+    (Command::ChromeSettings("chrome://settings/clearBrowserData"), "Clear Browsing Data…"),
+    (Command::ChromeSettings("chrome://settings/autofill"), "Autofill and Passwords"),
+    (Command::ChromeSettings("chrome://settings/languages"), "Languages and Spell Check"),
+    (Command::ChromeSettings("chrome://settings/performance"), "Performance"),
+    (Command::ChromeSettings("chrome://settings"), "Chrome Settings"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -144,6 +154,7 @@ impl Command {
             Command::Settings => "settings",
             Command::ImportFromArc => "import",
             Command::SetUpPasswords => "key-round",
+            Command::ChromeSettings(_) => "settings",
             _ => "sliders-horizontal",
         }
     }
@@ -438,12 +449,18 @@ impl<H: WebHost> Browser<H> {
             Command::DeleteSpace => self.delete_active_space(window, cx),
             Command::SwapSidebarSide => self.swap_sidebar_side(cx),
             Command::Extensions => self.open_extensions("chrome://extensions/", window, cx),
-            Command::ExtensionStore => self.open_extensions("https://chromewebstore.google.com/", window, cx),
+            Command::ExtensionStore => {
+                self.close_overlays(window, cx);
+                self.open_url("https://chromewebstore.google.com/", window, cx)
+            }
             Command::TranslatePage => self.translate_page(window, cx),
             Command::SiteSettings => self.toggle_popover(crate::prompts::Popover::Site, window, cx),
             Command::ClearHistory => self.clear_history(cx),
             Command::ImportFromArc => self.import_arc(window, cx),
             Command::SetUpPasswords => self.set_up_passwords(window, cx),
+            Command::ChromeSettings(url) => {
+                self.open_own_page(url, window, cx);
+            }
             // The rest have actions, dispatched above.
             _ => {}
         }
@@ -506,7 +523,9 @@ impl<H: WebHost> Browser<H> {
             Mode::History => "Search history…",
         };
         let accent = theme.accent;
-        let white = gpui::white();
+        let ascii = crate::theme::ascii();
+        // ASCII Chrome selects with a navy bar and a cursor block, not an accent pill.
+        let white = if ascii { theme.ink } else { gpui::white() };
         let list = rows.into_iter().enumerate().map(|(i, row)| {
             // How much the pill covers this row: its text turns white with it.
             let c = (1. - (pill - i as f32).abs()).clamp(0., 1.);
@@ -520,7 +539,7 @@ impl<H: WebHost> Browser<H> {
                     .tab(*id)
                     .and_then(|tab| tab.favicon.as_ref())
                     .and_then(|url| self.favicons.get(url))
-                    .map(|image| gpui::img(image.clone()).size(px(18.)).rounded(px(4.)).into_any_element())
+                    .map(|image| gpui::img(image.clone()).size(px(18.)).rounded(r(4.)).into_any_element())
                     .unwrap_or_else(|| icon("globe", 18., icon_color).into_any_element()),
                 Item::Space(id, _) => div()
                     .w(px(18.))
@@ -557,9 +576,10 @@ impl<H: WebHost> Browser<H> {
                 .flex_none()
                 .items_center()
                 .gap(px(12.))
-                .rounded(px(9.))
+                .rounded(r(9.))
                 .bg(fade(surface::key().into(), h * (1. - c)))
                 .on_click(cx.listener(move |this, _, window, cx| submit(this, Some(i), window, cx)))
+                .when(ascii, |d| d.relative().child(div().absolute().left(px(2.)).opacity(c).text_color(accent).child("▌")))
                 .child(leading)
                 .child(
                     div()
@@ -589,7 +609,7 @@ impl<H: WebHost> Browser<H> {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(5.))
+                            .rounded(r(5.))
                             .bg(mix(surface::key().into(), Hsla { a: 0.2, ..white }, c))
                             .text_size(px(11.5))
                             .text_color(mix(surface::icon().into(), white, c))
@@ -620,8 +640,8 @@ impl<H: WebHost> Browser<H> {
             .right(px(6.))
             .top(px(6. + 42. * pill))
             .h(px(42.))
-            .rounded(px(9.))
-            .bg(accent);
+            .rounded(r(9.))
+            .bg(if ascii { theme.glass_strong } else { accent });
 
         let card = div()
             .id("command-bar")
@@ -655,7 +675,7 @@ impl<H: WebHost> Browser<H> {
                         .opacity(t.clamp(0.0, 1.0))
                         .flex()
                         .flex_col()
-                        .rounded(px(14.))
+                        .rounded(r(14.))
                         .bg(surface::bg())
                         .border_1()
                         .border_color(surface::border())
@@ -664,6 +684,7 @@ impl<H: WebHost> Browser<H> {
                             shadow(gpui::rgba(0x18122C1F).into(), 8., 24.),
                         ])
                         .text_color(surface::ink())
+                        .when(ascii, |d| d.relative().border_color(gpui::transparent_black()).child(crate::theme::ascii::outline(14.)))
                         .child(
                             div()
                                 .h(px(58.))
@@ -673,6 +694,7 @@ impl<H: WebHost> Browser<H> {
                                 .text_size(px(19.))
                                 .border_b_1()
                                 .border_color(surface::line())
+                                .when(ascii, |d| d.text_size(px(14.)).child(div().mr(px(8.)).text_color(accent).child("▸")))
                                 .child(bar.field.render(
                                     placeholder,
                                     surface::ink().into(),
@@ -688,7 +710,8 @@ impl<H: WebHost> Browser<H> {
                                 .flex_col()
                                 .child(accent_pill)
                                 .children(list),
-                        ),
+                        )
+                        .when(ascii, |d| d.child(crate::theme::ascii::box_title("COMMAND", accent))),
             )
     }
 }

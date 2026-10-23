@@ -2,7 +2,73 @@
 //! gradient per Space, and every chrome colour derived from it, so a Space
 //! switch crossfades two colours (§10). Values follow the pen.dev mocks.
 
-use gpui::{hsla, Hsla, Rgba};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use gpui::{hsla, px, Hsla, Pixels, Rgba};
+
+// ponytail: one process-wide style, since every window shares the setting.
+static ASCII: AtomicBool = AtomicBool::new(false);
+
+/// ASCII Chrome (pen.dev "1. ASCII Chrome"): monospace, navy, box rules.
+pub fn ascii() -> bool {
+    ASCII.load(Ordering::Relaxed)
+}
+
+pub fn set_ascii(on: bool) {
+    ASCII.store(on, Ordering::Relaxed);
+}
+
+/// A corner radius; ASCII Chrome only rounds as much as a `╭` does.
+pub fn r(v: f32) -> Pixels {
+    px(if ascii() { v.min(3.) } else { v })
+}
+
+pub const MONO: &str = "JetBrains Mono";
+
+/// ASCII Chrome's fixed colours (pen.dev "1. ASCII Chrome").
+pub mod ascii {
+    use gpui::{rgb, Rgba};
+    /// Box-drawing frames around the page and overlays.
+    pub fn frame() -> Rgba {
+        rgb(0x2C3950)
+    }
+    /// Section rules and favourite boxes.
+    pub fn rule() -> Rgba {
+        rgb(0x1B2433)
+    }
+    /// "── LABEL ─────────" to the container's width.
+    pub fn rule_label(label: &'static str, ink: gpui::Hsla) -> gpui::Div {
+        use gpui::{div, prelude::*};
+        // flex_none: in a scrolling column it would shrink and clip its own text.
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(div().flex_none().text_color(ink).child(format!("── {label} ")))
+            .child(div().flex_1().overflow_hidden().text_color(rule()).child("─".repeat(160)))
+    }
+    /// A box's outline. gpui paints a div's own border over its children, so a
+    /// box with a title draws its outline as its first child instead.
+    pub fn outline(radius: f32) -> gpui::Div {
+        use gpui::{div, prelude::*};
+        div().absolute().inset_0().border_1().border_color(frame()).rounded(super::r(radius))
+    }
+    /// A box's label sitting on its top edge: "╭─ LABEL ───╮". Add it last.
+    pub fn box_title(label: &'static str, accent: gpui::Hsla) -> gpui::Div {
+        use gpui::{div, prelude::*, px};
+        div()
+            .absolute()
+            .top(px(-9.))
+            .left(px(14.))
+            .px(px(5.))
+            .bg(super::surface::bg())
+            .text_size(px(12.5))
+            .text_color(accent)
+            .child(label)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -27,33 +93,40 @@ pub struct Theme {
 pub mod surface {
     use gpui::{rgb, rgba, Rgba};
     pub fn bg() -> Rgba {
-        rgba(0xFFFFFFF7)
+        if super::ascii() { rgb(0x090C12) } else { rgba(0xFFFFFFF7) }
     }
     pub fn ink() -> Rgba {
-        rgb(0x17151D)
+        if super::ascii() { rgb(0xC7D2E4) } else { rgb(0x17151D) }
     }
     pub fn muted() -> Rgba {
-        rgb(0x8A8796)
+        if super::ascii() { rgb(0x7F8DA6) } else { rgb(0x8A8796) }
     }
     pub fn icon() -> Rgba {
-        rgb(0x6E6A7A)
+        if super::ascii() { rgb(0x4C5A70) } else { rgb(0x6E6A7A) }
     }
     pub fn line() -> Rgba {
-        rgb(0xEFEDF3)
+        if super::ascii() { rgb(0x1B2433) } else { rgb(0xEFEDF3) }
     }
     pub fn border() -> Rgba {
-        rgba(0x18122C29)
+        if super::ascii() { rgb(0x2C3950) } else { rgba(0x18122C29) }
     }
     pub fn key() -> Rgba {
-        rgb(0xF3F2F6)
+        if super::ascii() { rgb(0x102535) } else { rgb(0xF3F2F6) }
+    }
+    /// A raised segment or knob.
+    pub fn raised() -> Rgba {
+        if super::ascii() { rgb(0x16334C) } else { rgb(0xFFFFFF) }
     }
     pub fn scrim() -> Rgba {
-        rgba(0x1814243D)
+        if super::ascii() { rgba(0x04070CCC) } else { rgba(0x1814243D) }
     }
 }
 
 impl Theme {
     pub fn from_gradient(top: Rgba, bottom: Rgba) -> Self {
+        if ascii() {
+            return Self::ascii(bottom);
+        }
         let [l, c, h] = to_oklch(bottom);
         let dark = l < 0.45;
         let with_alpha = |c: Hsla, a: f32| Hsla { a, ..c };
@@ -74,6 +147,26 @@ impl Theme {
             hover: with_alpha(white, if dark { 0.10 } else { 0.45 }),
             divider: with_alpha(if dark { white } else { ink }, 0.12),
             accent: Hsla::from(from_oklch([if dark { 0.65 } else { 0.52 }, c.clamp(0.12, 0.2), h])),
+        }
+    }
+}
+
+impl Theme {
+    /// The Space's hue survives as the accent and a tint at the top of the navy.
+    fn ascii(space: Rgba) -> Self {
+        let [_, c, h] = to_oklch(space);
+        let rgb = |hex: u32| Hsla::from(gpui::rgb(hex));
+        Self {
+            bg_top: from_oklch([0.31, 0.055, h]),
+            bg_bottom: gpui::rgb(0x06080D),
+            ink: rgb(0xC7D2E4),
+            ink_muted: rgb(0x7F8DA6),
+            ink_faint: rgb(0x4C5A70),
+            glass: rgb(0x0E1D2B),
+            glass_strong: rgb(0x102535),
+            hover: rgb(0x0E1D2B),
+            divider: rgb(0x1B2433),
+            accent: Hsla::from(from_oklch([0.85, c.clamp(0.10, 0.15), h])),
         }
     }
 }
@@ -236,6 +329,14 @@ mod tests {
         assert!(light.ink.l < 0.3);
         let night = Theme::from_gradient(rgb(0x34304A), rgb(0x16151E));
         assert!(night.ink.l > 0.9);
+    }
+
+    #[test]
+    fn ascii_keeps_the_space_hue_on_navy() {
+        let t = Theme::ascii(rgb(0x6C9CFF));
+        assert!(t.ink.l > 0.8 && to_oklch(t.bg_bottom)[0] < 0.2);
+        let (accent, space) = (to_oklch(t.accent.to_rgb()), to_oklch(rgb(0x6C9CFF)));
+        assert!((accent[2] - space[2]).abs() < 15. && accent[0] > 0.75, "gamut clipping may shift it a little: {accent:?}");
     }
 
     #[test]

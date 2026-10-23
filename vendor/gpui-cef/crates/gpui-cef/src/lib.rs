@@ -51,9 +51,7 @@ pub struct HistoryEntry {
 pub use options::{
     CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
-pub use platform::{cancel_download, fetch, init, Profile, Runtime, Webview};
-#[cfg(target_os = "macos")]
-pub use platform::open_chrome_window;
+pub use platform::{cancel_download, fetch, init, on_chrome_tab, ChromePage, Profile, Runtime, Webview};
 
 /// What a [`Webview`] reports to the application, through
 /// [`gpui::EventEmitter`].
@@ -117,6 +115,8 @@ pub enum WebviewEvent {
     DialogClosed,
     /// The page started or stopped playing sound (its own `<video>`/`<audio>`).
     AudibleChanged(bool),
+    /// The size the page's content wants, with [`WebviewOptions::auto_resize`].
+    PreferredSize(gpui::Size<gpui::Pixels>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

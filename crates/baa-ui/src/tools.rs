@@ -2,6 +2,7 @@
 //! source, reader mode, Picture in Picture, translate, history import and
 //! clearing, Arc import, password manager setup. Results show as a toast.
 
+use crate::theme::r;
 use baa_model::import;
 use baa_web::{PageHandle, WebHost};
 use gpui::{div, prelude::*, px, Context, SharedString, Window};
@@ -114,7 +115,7 @@ impl<H: WebHost> Browser<H> {
                         .opacity(t.clamp(0., 1.))
                         .px(px(14.))
                         .py(px(9.))
-                        .rounded(px(10.))
+                        .rounded(r(10.))
                         .bg(gpui::rgba(0x1E1B26F0))
                         .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 8., 24.)])
                         .text_size(px(13.))
@@ -214,7 +215,8 @@ impl<H: WebHost> Browser<H> {
 
     /// Password manager extensions; baa-web connects them to their Mac apps.
     pub(crate) fn set_up_passwords(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_extensions("https://chromewebstore.google.com/search/password%20manager", window, cx);
+        self.close_overlays(window, cx);
+        self.open_url("https://chromewebstore.google.com/search/password%20manager", window, cx);
     }
 }
 

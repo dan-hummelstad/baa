@@ -1,5 +1,6 @@
 //! What the page card shows with no tab open (pen.dev "Web View" start page).
 
+use crate::theme::r;
 use gpui::{div, prelude::*, px, rgb, FontWeight, SharedString};
 
 use crate::theme::Theme;
@@ -48,7 +49,7 @@ pub fn render(theme: &Theme) -> impl IntoElement {
                     .px(px(8.))
                     .flex()
                     .items_center()
-                    .rounded(px(6.))
+                    .rounded(r(6.))
                     .bg(rgb(0xF6F5F9))
                     .border_1()
                     .border_color(rgb(0xE3E1EA))

@@ -34,7 +34,15 @@ pub enum PageEvent {
     AudibleChanged(bool),
     /// This page started a download (it lands in the host's [`Downloads`]).
     DownloadStarted,
+    /// An extension popup asked to load `url` in the tab it is for; `None` reloads it.
+    ActiveTabLoad(Option<String>),
+    /// An extension popup's content size changed.
+    PreferredSize(gpui::Size<gpui::Pixels>),
 }
+
+/// URLs waiting to be opened as tabs, oldest first.
+#[derive(Default)]
+pub struct ChromeTabs(pub Vec<String>);
 
 /// Every download any page started this session, oldest first.
 #[derive(Default)]
@@ -104,13 +112,29 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
 pub trait WebHost: 'static {
     type Page: PageHandle;
     fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
+    /// An extension's toolbar popup, acting on the tab at `tab_url`.
+    fn create_popup(
+        &self,
+        profile: ProfileId,
+        url: &str,
+        tab_url: &str,
+        tab_title: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self::Page>;
     /// In-memory profile; nothing persisted (incognito Space).
     fn ephemeral_profile(&self) -> ProfileId;
     /// Drop a profile's on-disk data once all its pages are closed.
     fn delete_profile(&self, profile: ProfileId);
-    /// Chrome's own extension UI for `profile` (Web Store installs, chrome://extensions,
-    /// extension popups), in a native Chrome-style window.
-    fn open_extensions(&self, profile: ProfileId, url: &str, cx: &mut App);
+    /// Everything Chrome's extensions page shows about `profile`'s extensions,
+    /// for baa's own; `done` gets `None` if it could not be read.
+    fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>);
+    /// Chrome's own page (`chrome://settings…`) over part of `window`,
+    /// restyled with `sheet.css`; `None` hides it. False while it is not up
+    /// yet: call again.
+    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool;
+    /// Carries out `change`; `done` once it has, with whether it worked.
+    fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>);
     /// Extensions installed in `profile`, for the toolbar.
     fn extensions(&self, profile: ProfileId) -> Vec<Extension>;
     /// GETs `url` through `profile`'s network stack (search suggestions);
@@ -118,10 +142,58 @@ pub trait WebHost: 'static {
     fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>);
     /// The download tray's data; observe it for updates.
     fn downloads(&self) -> Entity<Downloads>;
+    /// Pages Chrome itself wanted open (an extension's `chrome.tabs.create`);
+    /// observe it and take them as tabs.
+    fn chrome_tabs(&self) -> Entity<ChromeTabs>;
     fn cancel_download(&self, id: u32);
     /// What `profile` remembers about `kind` for `url`'s site.
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState;
     fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState);
+}
+
+/// Where and how [`WebHost::show_chrome_page`] shows Chrome's page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChromeSheet {
+    pub url: String,
+    /// In window coordinates.
+    pub bounds: gpui::Bounds<gpui::Pixels>,
+    pub corner_radius: f32,
+    /// A stylesheet over Chrome's own: baa's skin.
+    pub css: String,
+    /// Whether the skin is dark, so Chrome's own light/dark rules match it.
+    pub dark: bool,
+}
+
+/// Called once with the answer, on the main thread.
+pub type Callback<T> = Box<dyn FnOnce(T, &mut App)>;
+
+/// An extension as Chrome's extensions page knows it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExtensionInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub enabled: bool,
+    /// What it may do, in Chrome's words ("Read your browsing history").
+    pub permissions: Vec<String>,
+    /// Where it may run, when that is the user's choice.
+    pub site_access: Option<SiteAccess>,
+    pub options: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteAccess {
+    OnClick,
+    OnSpecificSites,
+    OnAllSites,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionChange {
+    Enable(bool),
+    SiteAccess(SiteAccess),
+    Remove,
 }
 
 /// An installed extension, as the toolbar shows it.
@@ -132,4 +204,6 @@ pub struct Extension {
     pub icon: Option<std::path::PathBuf>,
     /// Its toolbar popup page, if it has one.
     pub popup: Option<String>,
+    /// Its settings page, if it has one.
+    pub options: Option<String>,
 }

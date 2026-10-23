@@ -39,6 +39,9 @@ pub(crate) struct Shared {
     wants_focus: Cell<bool>,
     /// Set when the browser arrives; the webview finishes setting it up.
     created: Cell<bool>,
+    /// An init script and the URL to load once it is installed.
+    start: RefCell<Option<(String, String)>>,
+    auto_resize: Cell<Option<(gpui::Size<Pixels>, gpui::Size<Pixels>)>>,
     /// Set when Chromium took keyboard focus itself (a click in the page).
     focused_natively: Cell<bool>,
     /// The page's native view, kept until CEF has closed the browser.
@@ -80,6 +83,8 @@ impl Shared {
             gpui_view: Cell::new(std::ptr::null_mut()),
             wants_focus: Cell::new(false),
             created: Cell::new(false),
+            start: RefCell::new(None),
+            auto_resize: Cell::new(None),
             focused_natively: Cell::new(false),
             closing: RefCell::new(None),
             dialog: RefCell::new(None),
@@ -107,16 +112,36 @@ impl Shared {
     }
 
     pub(crate) fn set_browser(&self, browser: Browser) {
+        if let (Some((min, max)), Some(host)) = (self.auto_resize.get(), browser.host()) {
+            use cef::ImplBrowserHost as _;
+            let size = |s: gpui::Size<Pixels>| cef::Size {
+                width: f32::from(s.width) as i32,
+                height: f32::from(s.height) as i32,
+            };
+            host.set_auto_resize_enabled(1, Some(&size(min)), Some(&size(max)));
+        }
         if self.wants_focus.get() {
             if let Some(host) = browser.host() {
                 use cef::ImplBrowserHost as _;
                 host.set_focus(1);
             }
         }
+        if let Some((script, url)) = self.start.borrow_mut().take() {
+            install_init_script(&browser, &script, url);
+        }
         *self.browser.borrow_mut() = Some(browser);
         self.created.set(true);
         // Layout has to run again to place the new view.
         self.dirty.set(true);
+    }
+
+    pub(crate) fn set_auto_resize(&self, range: Option<(gpui::Size<Pixels>, gpui::Size<Pixels>)>) {
+        self.auto_resize.set(range);
+    }
+
+    /// Opens `url` with `script` installed first, once the browser exists.
+    pub(crate) fn start_with(&self, script: String, url: String) {
+        *self.start.borrow_mut() = Some((script, url));
     }
 
     pub(crate) fn hold_until_closed(&self, view: std::rc::Rc<dyn std::any::Any>) {
@@ -322,4 +347,56 @@ mod tests {
         );
         assert!(shared.take_events().is_empty());
     }
+}
+
+const INIT_SCRIPT: i32 = 1;
+
+use cef::rc::Rc as _;
+use cef::{DevToolsMessageObserver, ImplDevToolsMessageObserver, WrapDevToolsMessageObserver};
+
+cef::wrap_dev_tools_message_observer! {
+    struct InitScriptLoad {
+        url: String,
+        // Its own registration: held until the page is on its way, since the
+        // session goes without an observer, and dropped then, since a held
+        // one keeps the closed browser alive.
+        registration: std::rc::Rc<RefCell<Option<cef::Registration>>>,
+    }
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            message_id: ::std::os::raw::c_int,
+            success: ::std::os::raw::c_int,
+            _result: Option<&[u8]>,
+        ) {
+            use cef::{ImplBrowser as _, ImplFrame as _};
+            if message_id != INIT_SCRIPT {
+                return;
+            }
+            if success == 0 {
+                log::error!("the page's init script was refused");
+            }
+            if let Some(frame) = browser.and_then(|b| b.main_frame()) {
+                frame.load_url(Some(&self.url.as_str().into()));
+            }
+            self.registration.borrow_mut().take();
+        }
+    }
+}
+
+/// Registers `script` for every new document, then loads `url` once Chromium
+/// has it, so the first document runs it too.
+fn install_init_script(browser: &Browser, script: &str, url: String) -> Option<()> {
+    use cef::{ImplBrowser as _, ImplBrowserHost as _, ImplDictionaryValue as _};
+    let host = browser.host()?;
+    let slot = std::rc::Rc::default();
+    let registration = host.add_dev_tools_message_observer(Some(&mut InitScriptLoad::new(url, std::rc::Rc::clone(&slot))));
+    *slot.borrow_mut() = registration;
+    let mut params = cef::dictionary_value_create()?;
+    params.set_string(Some(&"source".into()), Some(&script.into()));
+    // New-document scripts only run while the Page domain is on.
+    host.execute_dev_tools_method(0, Some(&"Page.enable".into()), None);
+    host.execute_dev_tools_method(INIT_SCRIPT, Some(&"Page.addScriptToEvaluateOnNewDocument".into()), Some(&mut params));
+    Some(())
 }

@@ -1,8 +1,9 @@
 //! What a page waits on the user for (permission requests, `alert`/`confirm`/
-//! `prompt`, "leave site?"), and the header's popovers: downloads and the
-//! site's settings. All drawn in gpui over the page, like Arc, instead of
+//! `prompt`, "leave site?"), and the header's popovers: downloads, the
+//! site's settings and extensions. All drawn in gpui over the page, like Arc, instead of
 //! Chromium's app-modal panels.
 
+use crate::theme::r;
 use std::path::Path;
 
 use baa_model::TabId;
@@ -41,6 +42,7 @@ pub(crate) struct DialogAsk {
 pub(crate) enum Popover {
     Downloads,
     Site,
+    Extensions,
 }
 
 /// The site permissions the site panel lists.
@@ -157,7 +159,7 @@ fn button<H: WebHost>(
         .mx(px(1.5 * p))
         .flex()
         .items_center()
-        .rounded(px(7.))
+        .rounded(r(7.))
         .bg(bg)
         .text_size(px(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
@@ -313,7 +315,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(6.))
+            .rounded(r(6.))
             .bg(fade(theme.hover, h.max(open as u8 as f32)))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_popover(Popover::Downloads, window, cx)))
@@ -330,11 +332,134 @@ impl<H: WebHost> Browser<H> {
                     .left(px(6.))
                     .w(px(14.))
                     .h(px(2.))
-                    .rounded(px(1.))
+                    .rounded(r(1.))
                     .bg(theme.ink_faint)
-                    .child(div().h_full().w(relative(f.clamp(0.05, 1.))).rounded(px(1.)).bg(theme.accent))
+                    .child(div().h_full().w(relative(f.clamp(0.05, 1.))).rounded(r(1.)).bg(theme.accent))
             }));
         Some(feel(el, key, cx).into_any_element())
+    }
+
+    /// The header's extensions button, Arc's: every extension, pinned or not.
+    pub(crate) fn render_extensions_button(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let key = ("extensions", 0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        let open = self.popover == Some(Popover::Extensions);
+        let el = div()
+            .id("extensions-button")
+            .size(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(r(6.))
+            .bg(fade(theme.hover, h.max(open as u8 as f32)))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_popover(Popover::Extensions, window, cx)))
+            .child(icon("puzzle", 15. * (1. - 0.15 * p), mix(theme.ink_muted, theme.ink, h)));
+        feel(el, key, cx).into_any_element()
+    }
+
+    /// Every extension as a tile: click opens it, the badge pins it to the
+    /// toolbar, a right click has the rest.
+    fn render_extensions_panel(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let unpinned = &self.settings.unpinned_extensions;
+        let tile = |id: (&'static str, u64), h: f32| {
+            div()
+                .id(id)
+                .relative()
+                .h(px(60.))
+                .min_w_0()
+                .px(px(4.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .rounded(r(9.))
+                .bg(mix(surface::key().into(), surface::line().into(), h))
+        };
+        let mut tiles: Vec<AnyElement> = self
+            .extensions
+            .iter()
+            .enumerate()
+            .map(|(i, ext)| {
+                let key = ("ext-tile", i as u64);
+                let h = self.motion.get(key, Feel::Hover);
+                let pinned = !unpinned.contains(&ext.id);
+                let (open, pin, menu) = (ext.clone(), ext.id.clone(), ext.id.clone());
+                let badge = div()
+                    .id(("ext-pin", i as u64))
+                    .absolute()
+                    .top(px(4.))
+                    .right(px(4.))
+                    .size(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(r(9.))
+                    .when(pinned, |d| d.bg(surface::raised()).shadow(vec![shadow(gpui::rgba(0x0000002E).into(), 1., 3.)]))
+                    .opacity(if pinned { 1. } else { h })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_extension_pin(&pin, cx);
+                    }))
+                    .child(icon(if pinned { "pin" } else { "pin-off" }, 10., if pinned { theme.accent } else { surface::icon().into() }));
+                let el = tile(key, h)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.close_overlays(window, cx);
+                        this.open_extension(&open, window, cx);
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            this.open_menu(crate::browser::MenuKind::Extension(menu.clone()), e.position, cx)
+                        }),
+                    )
+                    .child(match &ext.icon {
+                        Some(path) => gpui::img(path.clone()).size(px(20.)).into_any_element(),
+                        None => icon("puzzle", 18., surface::icon().into()).into_any_element(),
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_center()
+                            .text_size(px(10.5))
+                            .text_color(surface::muted())
+                            .child(SharedString::from(ext.name.clone())),
+                    )
+                    .child(badge);
+                feel(el, key, cx).into_any_element()
+            })
+            .collect();
+        let key = ("ext-add", 0);
+        let h = self.motion.get(key, Feel::Hover);
+        let add = tile(key, h)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.close_overlays(window, cx);
+                this.open_url("https://chromewebstore.google.com/", window, cx)
+            }))
+            .child(icon("plus", 18., surface::icon().into()))
+            .child(div().text_size(px(10.5)).text_color(surface::muted()).child("Add"));
+        tiles.push(feel(add, key, cx).into_any_element());
+        drop_in(
+            Self::popover_card("extensions-panel", 300.)
+                .child(div().px(px(8.)).py(px(6.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Extensions"))
+                .child(div().px(px(2.)).grid().grid_cols(4).gap(px(6.)).children(tiles))
+                .child(
+                    div()
+                        .mt(px(8.))
+                        .pt(px(6.))
+                        .px(px(4.))
+                        .flex()
+                        .border_t_1()
+                        .border_color(surface::line())
+                        .child(button("extensions-manage", "Manage Extensions", false, theme, self, cx).on_click(
+                            cx.listener(|this, _, window, cx| this.open_extensions("chrome://extensions/", window, cx)),
+                        )),
+                ),
+            "extensions-panel",
+        )
+        .into_any_element()
     }
 
     /// Lock (secure) or warning, at the right end of the address pill; opens
@@ -356,7 +481,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(4.))
+            .rounded(r(4.))
             .bg(fade(theme.hover, h))
             .on_click(cx.listener(|this, _, window, cx| {
                 cx.stop_propagation();
@@ -394,7 +519,7 @@ impl<H: WebHost> Browser<H> {
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .rounded(px(7.))
+                    .rounded(r(7.))
                     .border_1()
                     .border_color(theme.accent)
                     .bg(gpui::white())
@@ -416,7 +541,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
-                .rounded(px(12.))
+                .rounded(r(12.))
                 .bg(surface::bg())
                 .border_1()
                 .border_color(surface::border())
@@ -466,7 +591,7 @@ impl<H: WebHost> Browser<H> {
                         .absolute()
                         .inset_0()
                         .occlude()
-                        .rounded(px(crate::browser::PAGE_RADIUS))
+                        .rounded(r(crate::browser::PAGE_RADIUS))
                         .bg(surface::scrim()),
                 )
                 .child(drop_in(card, "page-dialog"));
@@ -488,7 +613,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .rounded(px(12.))
+                .rounded(r(12.))
                 .bg(surface::bg())
                 .border_1()
                 .border_color(surface::border())
@@ -531,9 +656,10 @@ impl<H: WebHost> Browser<H> {
         let card = match which {
             Popover::Downloads => self.render_downloads(theme, cx),
             Popover::Site => self.render_site_panel(cx)?,
+            Popover::Extensions => self.render_extensions_panel(theme, cx),
         };
         let placed = match which {
-            Popover::Downloads => div().absolute().top(px(HEADER_H)).right(px(INSET)).child(card),
+            Popover::Downloads | Popover::Extensions => div().absolute().top(px(HEADER_H)).right(px(INSET)).child(card),
             Popover::Site => div()
                 .absolute()
                 .top(px(HEADER_H))
@@ -573,7 +699,7 @@ impl<H: WebHost> Browser<H> {
             .p(px(6.))
             .flex()
             .flex_col()
-            .rounded(px(12.))
+            .rounded(r(12.))
             .bg(surface::bg())
             .border_1()
             .border_color(surface::border())
@@ -603,7 +729,7 @@ impl<H: WebHost> Browser<H> {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(r(6.))
                         .hover(|s| s.bg(surface::line()))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -619,7 +745,7 @@ impl<H: WebHost> Browser<H> {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(r(6.))
                         .hover(|s| s.bg(surface::line()))
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.stop_propagation();
@@ -637,7 +763,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .rounded(px(8.))
+                    .rounded(r(8.))
                     .bg(fade(surface::key().into(), h))
                     .when(done, |d| {
                         d.on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&open_path)))
@@ -654,9 +780,9 @@ impl<H: WebHost> Browser<H> {
                             .child(match (running, fraction) {
                                 (true, Some(f)) => div()
                                     .h(px(4.))
-                                    .rounded(px(2.))
+                                    .rounded(r(2.))
                                     .bg(surface::line())
-                                    .child(div().h_full().w(relative(f.clamp(0.02, 1.))).rounded(px(2.)).bg(theme.accent))
+                                    .child(div().h_full().w(relative(f.clamp(0.02, 1.))).rounded(r(2.)).bg(theme.accent))
                                     .into_any_element(),
                                 _ => div()
                                     .text_size(px(11.5))
@@ -736,9 +862,9 @@ impl<H: WebHost> Browser<H> {
                         .px(px(8.))
                         .flex()
                         .items_center()
-                        .rounded(px(5.))
+                        .rounded(r(5.))
                         .text_size(px(11.5))
-                        .when(on, |d| d.bg(gpui::white()).shadow(vec![shadow(gpui::rgba(0x0000001F).into(), 1., 2.)]))
+                        .when(on, |d| d.bg(crate::theme::surface::raised()).shadow(vec![shadow(gpui::rgba(0x0000001F).into(), 1., 2.)]))
                         .text_color(if on { surface::ink() } else { surface::muted() })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.host.set_site_permission(profile, &url, kind, value);
@@ -754,7 +880,7 @@ impl<H: WebHost> Browser<H> {
                     .gap(px(10.))
                     .child(icon(permission_icon(kind), 15., surface::icon().into()))
                     .child(div().flex_1().child(permission_name(kind)))
-                    .child(div().p(px(2.)).flex().rounded(px(7.)).bg(surface::key()).children(segments))
+                    .child(div().p(px(2.)).flex().rounded(r(7.)).bg(surface::key()).children(segments))
                     .into_any_element()
             })
             .collect();

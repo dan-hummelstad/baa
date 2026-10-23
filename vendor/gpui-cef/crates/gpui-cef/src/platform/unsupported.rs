@@ -59,6 +59,9 @@ impl Webview {
     }
 
     pub fn load_url(&self, _url: &str) {}
+    pub fn set_dark(&self, _dark: bool) -> bool {
+        false
+    }
     pub fn reload(&self) {}
     pub fn go_back(&self) {}
     pub fn go_forward(&self) {}
@@ -149,3 +152,23 @@ impl Profile {
     }
     pub fn set_permission(&self, _url: &str, _kind: crate::Permission, _state: crate::PermissionState) {}
 }
+
+/// No Chrome-style pages without CEF.
+#[derive(Clone)]
+pub struct ChromePage;
+
+impl ChromePage {
+    pub fn open(_profile: Option<&Profile>, _url: &str, _init_script: Option<String>) -> Option<Self> {
+        None
+    }
+    pub fn load_url(&self, _url: &str) {}
+    pub fn show_over(&self, _window: &gpui::Window, _bounds: gpui::Bounds<gpui::Pixels>, _corner_radius: f32) -> bool {
+        false
+    }
+    pub fn hide(&self) {}
+    pub fn eval(&self, _expression: &str, done: impl FnOnce(Option<String>) + 'static) {
+        done(None)
+    }
+}
+
+pub fn on_chrome_tab(_open: impl Fn(String) + 'static) {}

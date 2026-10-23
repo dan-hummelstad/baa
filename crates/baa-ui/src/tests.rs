@@ -640,3 +640,194 @@ fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
     cx.dispatch_action(ShowDownloads);
     b.read_with(cx, |b, _| assert!(b.library.is_none()));
 }
+
+#[gpui::test]
+fn an_opening_folder_pushes_today_down_with_it(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example", "c.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let folder = b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        let tabs: Vec<_> = b.session.tabs(space, Zone::Today).map(|t| t.id).collect();
+        b.new_folder(Some(tabs[1]), window, cx);
+        b.close_overlays(window, cx);
+        let folder = b.session.folders(space).next().unwrap().id;
+        b.session.move_to_folder(tabs[2], folder, 1);
+        b.activate_tab(tabs[0], window, cx);
+        for tab in &tabs {
+            b.motion.from(("tab-in", tab.0), crate::motion::Feel::Glide, 0.0, 0.0);
+        }
+        b.set_folder_open(folder, false);
+        b.folder_motion.clear();
+        folder
+    });
+    cx.run_until_parked();
+    let gap = |cx: &mut VisualTestContext| {
+        let rows = cx.debug_bounds("folder-rows");
+        let today = cx.debug_bounds("today-rule").unwrap();
+        rows.map(|r| (f32::from(today.top() - r.bottom()), f32::from(r.size.height)))
+    };
+    for t in [0.25, 0.5, 0.75, 1.0] {
+        b.update(cx, |b, cx| {
+            b.set_folder_open(folder, true);
+            b.folder_motion.insert(folder, crate::motion::Spring::new(t));
+            b.folder_motion.get_mut(&folder).unwrap().set_target(1.0);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (below, height) = gap(cx).expect("the folder's rows render");
+        assert_eq!(below, 20., "TODAY stays the same distance under the rows at t={t}");
+        assert!((height - 88. * t).abs() < 1.5, "the rows are {height}px tall at t={t}, not grown with the spring");
+    }
+}
+
+#[gpui::test]
+fn clicking_away_keeps_the_name_being_typed(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), window, cx));
+    cx.simulate_input("Reading");
+    cx.run_until_parked();
+    cx.simulate_click(gpui::point(gpui::px(700.), gpui::px(400.)), gpui::Modifiers::none());
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        assert!(b.renaming.is_none(), "the field closes");
+        assert_eq!(s.folders(s.active_space().unwrap()).next().unwrap().name, "Reading");
+    });
+}
+
+#[gpui::test]
+fn an_extension_popup_acts_on_the_tab_it_opened_over(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let ext = baa_web::Extension {
+        id: "ubo".into(),
+        name: "uBO Lite".into(),
+        icon: None,
+        popup: Some("chrome-extension://ubo/popup.html".into()),
+        options: None,
+    };
+    b.update(cx, |b, _| *b.host.extensions.borrow_mut() = vec![ext.clone()]);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    b.update_in(cx, |b, window, cx| b.open_extension(&ext, window, cx));
+    b.read_with(cx, |b, _| {
+        assert_eq!(
+            *b.host.popups.borrow(),
+            [("chrome-extension://ubo/popup.html".to_string(), "https://a.example/".to_string())]
+        );
+    });
+    // The popup's tabs.update on that tab lands on the tab, not in the popup.
+    let popup = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+    popup.update(cx, |_, cx| cx.emit(PageEvent::ActiveTabLoad(Some("https://b.example/".into()))));
+    cx.run_until_parked();
+    b.read_with(cx, |b, cx| {
+        assert_eq!(*b.active_page().unwrap().read(cx).url.borrow(), "https://b.example/");
+        assert_eq!(*popup.read(cx).url.borrow(), "chrome-extension://ubo/popup.html");
+    });
+
+    // The card takes the content's size: the first one at once, later ones by animation.
+    let size = |w: f32, h: f32| PageEvent::PreferredSize(gpui::size(gpui::px(w), gpui::px(h)));
+    popup.update(cx, |_, cx| cx.emit(size(320., 410.)));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        let (w, h) = b.peek.as_ref().unwrap().size.as_ref().unwrap();
+        assert_eq!((w.value(), h.value()), (320., 410.));
+    });
+    popup.update(cx, |_, cx| cx.emit(size(320., 300.)));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert_eq!(b.peek.as_ref().unwrap().size.as_ref().unwrap().1.target(), 300.));
+
+    // Its options page (or any page it opens) is a baa tab, and the popup closes.
+    popup.update(cx, |_, cx| {
+        cx.emit(PageEvent::OpenRequested {
+            url: "chrome-extension://ubo/dashboard.html".into(),
+            from_user_gesture: true,
+            background: false,
+        })
+    });
+    cx.run_until_parked();
+    b.read_with(cx, |b, cx| {
+        assert!(b.peek.is_none());
+        assert_eq!(*b.active_page().unwrap().read(cx).url.borrow(), "chrome-extension://ubo/dashboard.html");
+    });
+
+    b.update(cx, |b, cx| b.toggle_extension_pin("ubo", cx));
+    b.read_with(cx, |b, _| assert_eq!(b.settings.unpinned_extensions, ["ubo"]));
+    b.update(cx, |b, cx| b.toggle_extension_pin("ubo", cx));
+    b.read_with(cx, |b, _| assert!(b.settings.unpinned_extensions.is_empty()));
+}
+
+#[gpui::test]
+fn tabs_chrome_opens_itself_open_in_baa(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tabs = b.read_with(cx, |b, _| b.host.chrome_tabs.clone());
+    tabs.update(cx, |tabs, cx| {
+        tabs.0.push("chrome-extension://op/welcome.html".into());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(urls(&b, Zone::Today, cx), ["chrome-extension://op/welcome.html"]);
+    assert!(tabs.read_with(cx, |tabs, _| tabs.0.is_empty()));
+}
+
+#[gpui::test]
+fn chromes_extensions_page_is_baas_own_tab(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let info = baa_web::ExtensionInfo {
+        id: "ubo".into(),
+        name: "uBO Lite".into(),
+        enabled: true,
+        ..Default::default()
+    };
+    b.update(cx, |b, _| {
+        *b.host.extension_details.borrow_mut() = vec![info.clone()];
+        *b.host.extensions.borrow_mut() = vec![baa_web::Extension {
+            id: "ubo".into(),
+            name: "uBO Lite".into(),
+            icon: None,
+            popup: None,
+            options: None,
+        }];
+    });
+    let created = b.read_with(cx, |b, _| b.host.created.borrow().len());
+    b.update_in(cx, |b, window, cx| b.open_url("chrome://extensions/?id=ubo", window, cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.active_tab_url().as_deref(), Some("baa://extensions"));
+        assert_eq!(b.host.created.borrow().len(), created, "no web page for it");
+        assert_eq!(b.extensions_page.list.as_deref(), Some(&[info][..]));
+        assert_eq!(b.extensions_page.open.as_deref(), Some("ubo"));
+    });
+    // Opening it again goes back to the same tab.
+    b.update_in(cx, |b, window, cx| b.open_url("chrome://extensions/", window, cx));
+    assert_eq!(urls(&b, Zone::Today, cx), ["baa://extensions"]);
+
+    // Switched off, it leaves the toolbar; Chrome is told.
+    b.update(cx, |b, cx| b.change_extension("ubo", baa_web::ExtensionChange::Enable(false), cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        assert_eq!(*b.host.extension_changes.borrow(), [("ubo".to_string(), baa_web::ExtensionChange::Enable(false))]);
+        assert!(!b.extension_enabled("ubo"));
+    });
+}
+
+#[gpui::test]
+fn chrome_settings_open_skinned_in_a_sheet(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update_in(cx, |b, window, cx| b.open_url("chrome://settings/privacy", window, cx));
+    cx.run_until_parked();
+    let sheet = b.read_with(cx, |b, _| b.host.chrome_sheet.borrow().clone()).expect("shown");
+    assert_eq!(sheet.url, "chrome://settings/privacy");
+    assert!(sheet.css.contains("--cr-fallback-color-primary"), "skinned");
+    assert!(urls(&b, Zone::Today, cx).is_empty(), "a sheet, not a tab");
+    b.update_in(cx, |b, window, cx| b.close_overlays(window, cx));
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| b.host.chrome_sheet.borrow().is_none()), "hidden again");
+}

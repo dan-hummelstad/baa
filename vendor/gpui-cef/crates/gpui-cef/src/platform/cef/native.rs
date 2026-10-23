@@ -310,6 +310,15 @@ fn page_frame(page: *mut AnyObject) -> Option<CGRect> {
     (!page.is_null()).then(|| unsafe { msg_send![page, frame] })
 }
 
+/// Takes a page's view out of the window.
+pub(crate) fn detach(view: *mut AnyObject) {
+    if !view.is_null() {
+        unsafe {
+            let _: () = msg_send![view, removeFromSuperview];
+        }
+    }
+}
+
 impl Drop for Container {
     fn drop(&mut self) {
         unsafe {
@@ -565,3 +574,125 @@ pub(crate) fn punch_buffer(radius: usize) -> Option<CVPixelBuffer> {
         Some(buffer)
     })
 }
+
+
+/// Chrome's own dialogs (the Web Store's "Add extension?") come up as titled
+/// windows of their own with an opaque titlebar over their first line,
+/// centred on the screen. This clears the titlebar and puts each one at the
+/// top centre of the front app window.
+// ponytail: polled from the pump; a window notification would do it without polling.
+pub(crate) fn place_chrome_dialogs() {
+    const TITLED: usize = 1;
+    const CLOSABLE_OR_RESIZABLE: usize = 2 | 8;
+    // Below the app's top bar, as Chrome puts them under its toolbar.
+    const TOP: f64 = 44.;
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let windows: *mut AnyObject = msg_send![app, orderedWindows];
+        let n: usize = msg_send![windows, count];
+        let class_of = |w: *mut AnyObject| (*w).class().name().to_string_lossy().into_owned();
+        let Some(main) = (0..n)
+            .map(|i| -> *mut AnyObject { msg_send![windows, objectAtIndex: i] })
+            .find(|&w| class_of(w).contains("GPUIWindow"))
+        else {
+            return;
+        };
+        for i in 0..n {
+            let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+            let mask: usize = msg_send![w, styleMask];
+            let done: Bool = msg_send![w, titlebarAppearsTransparent];
+            if !class_of(w).contains("NativeWidgetMacNSWindow")
+                || mask & TITLED == 0
+                || mask & CLOSABLE_OR_RESIZABLE != 0
+                || done.as_bool()
+            {
+                continue;
+            }
+            let _: () = msg_send![w, setTitlebarAppearsTransparent: Bool::YES];
+            let _: () = msg_send![w, setTitleVisibility: 1isize];
+            let parent: CGRect = msg_send![main, frame];
+            let frame: CGRect = msg_send![w, frame];
+            let origin = CGPoint {
+                x: parent.origin.x + (parent.size.width - frame.size.width) / 2.,
+                y: parent.origin.y + parent.size.height - TOP - frame.size.height,
+            };
+            let _: () = msg_send![w, setFrameOrigin: origin];
+        }
+    }
+}
+
+/// The NSWindow behind a CEF window handle (its content view on macOS).
+pub(crate) fn window_of(handle: *mut AnyObject) -> *mut AnyObject {
+    if handle.is_null() {
+        return handle;
+    }
+    unsafe {
+        let is_view: Bool = msg_send![handle, isKindOfClass: class!(NSView)];
+        if is_view.as_bool() {
+            msg_send![handle, window]
+        } else {
+            handle
+        }
+    }
+}
+
+/// Puts `child` (a borderless window) over `bounds` of `gpui_view`'s window,
+/// rounded, as a child window so it follows. Returns its screen frame.
+pub(crate) fn attach_over(
+    child: *mut AnyObject,
+    gpui_view: *mut AnyObject,
+    bounds: Bounds<Pixels>,
+    corner_radius: f32,
+) -> Option<[f64; 4]> {
+    if child.is_null() || gpui_view.is_null() {
+        return None;
+    }
+    unsafe {
+        let parent: *mut AnyObject = msg_send![gpui_view, window];
+        if parent.is_null() {
+            return None;
+        }
+        let outer: CGRect = msg_send![parent, frame];
+        let content: CGRect = msg_send![parent, contentRectForFrameRect: outer];
+        let (x, y, w, h) = (
+            f64::from(f32::from(bounds.origin.x)),
+            f64::from(f32::from(bounds.origin.y)),
+            f64::from(f32::from(bounds.size.width)),
+            f64::from(f32::from(bounds.size.height)),
+        );
+        let frame = CGRect {
+            origin: CGPoint { x: content.origin.x + x, y: content.origin.y + content.size.height - y - h },
+            size: CGSize { width: w, height: h },
+        };
+        let _: () = msg_send![child, setFrame: frame, display: Bool::YES];
+        let attached: *mut AnyObject = msg_send![child, parentWindow];
+        if attached != parent {
+            let _: () = msg_send![child, setOpaque: Bool::NO];
+            let _: () = msg_send![child, setHasShadow: Bool::NO];
+            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![child, setBackgroundColor: clear];
+            let _: () = msg_send![parent, addChildWindow: child, ordered: 1isize];
+        }
+        let view: *mut AnyObject = msg_send![child, contentView];
+        let _: () = msg_send![view, setWantsLayer: Bool::YES];
+        let layer: *mut AnyObject = msg_send![view, layer];
+        if !layer.is_null() {
+            let _: () = msg_send![layer, setCornerRadius: f64::from(corner_radius)];
+            let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
+        }
+        Some([frame.origin.x, frame.origin.y, w, h])
+    }
+}
+
+pub(crate) fn detach_window(child: *mut AnyObject) {
+    if child.is_null() {
+        return;
+    }
+    unsafe {
+        let parent: *mut AnyObject = msg_send![child, parentWindow];
+        if !parent.is_null() {
+            let _: () = msg_send![parent, removeChildWindow: child];
+        }
+    }
+}
+

@@ -3,6 +3,7 @@
 // ponytail: no caret movement, selection ranges or IME here; the field is append/
 // backspace/paste only. Upgrade to an `EntityInputHandler` when CJK input matters.
 
+use crate::theme::r;
 use gpui::{div, prelude::*, px, App, Hsla, Keystroke, SharedString};
 
 #[derive(Debug, PartialEq)]
@@ -99,7 +100,7 @@ impl TextField {
                     // Tight to the glyphs, so the selection hugs the text.
                     .line_height(gpui::relative(1.25))
                     .when(self.all_selected && !empty, |d| {
-                        d.bg(selection).rounded(px(3.))
+                        d.bg(selection).rounded(r(3.))
                     })
                     .text_color(if empty { dim } else { text })
                     .child(SharedString::from(if empty {

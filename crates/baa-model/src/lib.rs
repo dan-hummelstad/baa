@@ -8,7 +8,7 @@ pub mod import;
 mod settings;
 mod store;
 
-pub use settings::{parse_suggestions, SearchEngine, Settings, SidebarSide, SEARCH_ENGINES};
+pub use settings::{parse_suggestions, ChromeStyle, SearchEngine, Settings, SidebarSide, SEARCH_ENGINES};
 pub use store::{DownloadRecord, HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};

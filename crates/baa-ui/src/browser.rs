@@ -1,6 +1,7 @@
 //! Root window view. Owns the `Session` (baa-model is the source of truth for
 //! spaces/tabs), the live pages, and every §8 action handler.
 
+use crate::theme::r;
 use std::{
     collections::{HashMap, HashSet},
     time::Instant,
@@ -79,6 +80,8 @@ pub(crate) enum MenuKind {
     LibraryFilter,
     Folder(FolderId),
     Sidebar,
+    /// An extension in the extensions panel.
+    Extension(String),
 }
 
 pub struct Browser<H: WebHost> {
@@ -137,6 +140,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) toast: Option<SharedString>,
     pub(crate) toasts: u64,
     _downloads: Subscription,
+    _chrome_tabs: Subscription,
+    pub(crate) extensions_page: crate::extensions::ExtensionsPage,
+    /// Chrome's settings page shown in a sheet, by its address.
+    pub(crate) chrome_sheet: Option<String>,
     /// Back/forward pressed and held: which way, and when.
     pub(crate) nav_press: Option<(bool, Instant)>,
     pub(crate) history_menu: Option<HistoryMenu>,
@@ -148,6 +155,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) input_focus: FocusHandle,
     pub(crate) sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
+    /// The hover card's width, so opening the Library in it grows rather than jumps.
+    reveal_w: Spring,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
     reveal: Spring,
     /// Pointer over the edge zone / over the card.
@@ -203,6 +212,13 @@ impl<H: WebHost> Browser<H> {
             this.remember_downloads(&items);
             this.downloads_changed(items.len(), cx)
         });
+        // Taken by whichever window sees them first.
+        let chrome_tabs = cx.observe_in(&host.chrome_tabs(), window, |this: &mut Self, list, window, cx| {
+            let urls = list.update(cx, |list, _| std::mem::take(&mut list.0));
+            for url in urls {
+                this.open_url(&url, window, cx);
+            }
+        });
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let mut this = Self {
             host,
@@ -241,6 +257,9 @@ impl<H: WebHost> Browser<H> {
             toast: None,
             toasts: 0,
             _downloads: downloads,
+            _chrome_tabs: chrome_tabs,
+            extensions_page: Default::default(),
+            chrome_sheet: None,
             nav_press: None,
             history_menu: None,
             swipe: None,
@@ -249,6 +268,7 @@ impl<H: WebHost> Browser<H> {
             input_focus: cx.focus_handle(),
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
+            reveal_w: Spring::new(SIDEBAR_WIDTH),
             reveal: Spring::quick(0.0),
             reveal_hover: false,
             slide: Spring::new(0.0),
@@ -357,9 +377,13 @@ impl<H: WebHost> Browser<H> {
                 }
             }
             self.shown_tab = active;
+            if self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u)) {
+                self.refresh_extensions(cx);
+            }
         }
         self.track_rows();
-        if let Some(id) = active.filter(|id| !self.pages.contains_key(id)) {
+        let own = self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u));
+        if let Some(id) = active.filter(|id| !own && !self.pages.contains_key(id)) {
             self.create_page(id, window, cx);
         }
         for (id, (page, _)) in &self.pages {
@@ -531,6 +555,8 @@ impl<H: WebHost> Browser<H> {
                 return cx.notify();
             }
             PageEvent::Closed => self.session.close_tab(id, now()),
+            // Only extension popups send it.
+            PageEvent::ActiveTabLoad(_) | PageEvent::PreferredSize(_) => return,
             PageEvent::PermissionRequested { .. }
             | PageEvent::PermissionDismissed(_)
             | PageEvent::Dialog { .. }
@@ -581,8 +607,17 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         self.close_peek(window, cx);
-        let page = self.host.create_page(profile, url, window, cx);
-        page.read(cx).set_corner_radius(PEEK_RADIUS);
+        let page = if popup {
+            let (tab_url, title) = self
+                .active_tab()
+                .and_then(|id| self.session.tab(id))
+                .map(|t| (t.url.clone(), t.title.clone()))
+                .unwrap_or_default();
+            self.host.create_popup(profile, url, &tab_url, &title, window, cx)
+        } else {
+            self.host.create_page(profile, url, window, cx)
+        };
+        page.read(cx).set_corner_radius(f32::from(r(PEEK_RADIUS)));
         page.read(cx).set_floating(true);
         let sub = cx.subscribe_in(&page, window, |this, _, event, window, cx| {
             this.on_peek_event(event, window, cx)
@@ -597,7 +632,23 @@ impl<H: WebHost> Browser<H> {
             url: url.into(),
             open,
             popup,
+            size: None,
         });
+        // ponytail: a popup that never reports a size still shows, at Chrome's default-ish one.
+        if popup {
+            let page = self.peek.as_ref().map(|p| p.page.entity_id());
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+                this.update(cx, |this, cx| {
+                    let waiting = this.peek.as_ref().filter(|p| Some(p.page.entity_id()) == page && p.size.is_none());
+                    if waiting.is_some() {
+                        this.fit_popup(gpui::size(px(380.), px(520.)), cx)
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -613,14 +664,44 @@ impl<H: WebHost> Browser<H> {
                     self.open_background_tab(space, url);
                     return self.sync(window, cx);
                 }
+                // A popup's links and its options page are tabs, as in Chrome.
+                if peek.popup {
+                    let (space, url) = (peek.space, url.clone());
+                    self.close_peek(window, cx);
+                    return self.open_url_in(space, &url, window, cx);
+                }
                 peek.page.read(cx).load_url(url);
             }
             PageEvent::Closed => return self.close_peek(window, cx),
+            PageEvent::PreferredSize(size) => return self.fit_popup(*size, cx),
+            PageEvent::ActiveTabLoad(url) => match url {
+                Some(url) => self.with_page(cx, |p| p.load_url(url)),
+                None => self.with_page(cx, |p| p.reload()),
+            },
             // ponytail: Peek has no room for prompts and an unanswered one
             // freezes the page; opening it as a tab gets them.
             PageEvent::Dialog { .. } => peek.page.read(cx).answer_dialog(false, ""),
             PageEvent::PermissionRequested { id, .. } => peek.page.read(cx).answer_permission(*id, false),
             _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Sizes the popup card to its content: the first size shows the card
+    /// (it drops in at that size), later ones animate to it.
+    pub(crate) fn fit_popup(&mut self, size: gpui::Size<Pixels>, cx: &mut Context<Self>) {
+        let Some(peek) = self.peek.as_mut().filter(|p| p.popup) else { return };
+        let (w, h) = (f32::from(size.width), f32::from(size.height));
+        match &mut peek.size {
+            Some((sw, sh)) => {
+                sw.set_target(w);
+                sh.set_target(h);
+            }
+            None => {
+                peek.size = Some((Spring::new(w), Spring::new(h)));
+                peek.open = Spring::new(0.0);
+                peek.open.set_target(1.0);
+            }
         }
         cx.notify();
     }
@@ -855,6 +936,9 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) {
         self.session.set_active_space(space);
+        if self.open_own_page(url, window, cx) {
+            return;
+        }
         self.session.open_tab(space, url, now());
         self.sync(window, cx);
     }
@@ -867,6 +951,9 @@ impl<H: WebHost> Browser<H> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.open_own_page(url, window, cx) {
+            return;
+        }
         match self.active_tab().filter(|_| in_place) {
             Some(id) => {
                 if let Some(tab) = self.session.tab_mut(id) {
@@ -961,16 +1048,24 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    pub(crate) fn open_extensions(
-        &mut self,
-        url: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(profile) = self.active_space().map(|s| s.profile) {
-            self.host.open_extensions(profile, url, cx);
+    pub(crate) fn toggle_extension_pin(&mut self, id: &str, cx: &mut Context<Self>) {
+        let unpinned = &mut self.settings.unpinned_extensions;
+        match unpinned.iter().position(|x| x == id) {
+            Some(i) => {
+                unpinned.remove(i);
+            }
+            None => unpinned.push(id.into()),
         }
-        self.close_overlays(window, cx);
+        self.save_settings(cx);
+    }
+
+    /// Chrome's extensions page at `url` (maybe `?id=`), drawn by baa.
+    pub(crate) fn open_extensions(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_own_page(url, window, cx);
+    }
+
+    pub(crate) fn active_tab_url(&self) -> Option<String> {
+        self.active_tab().and_then(|id| self.session.tab(id)).map(|t| t.url.clone())
     }
 
     pub(crate) fn swap_sidebar_side(&mut self, cx: &mut Context<Self>) {
@@ -1092,6 +1187,7 @@ impl<H: WebHost> Browser<H> {
         self.menu = None;
         self.popover = None;
         self.settings_open = false;
+        self.chrome_sheet = None;
         self.motion.forget("menu");
         self.motion.forget("bar-row");
         self.motion.forget("bar-sel");
@@ -1101,6 +1197,21 @@ impl<H: WebHost> Browser<H> {
             (None, None) => self.focus_page(window, cx),
         }
         cx.notify();
+    }
+
+    /// Keeps the name being typed (Enter, or a click anywhere else).
+    pub(crate) fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = &self.renaming else {
+            return;
+        };
+        let text = field.text.trim().to_string();
+        match self.renaming_folder.and_then(|id| self.session.folder_mut(id)) {
+            Some(folder) if !text.is_empty() => folder.name = text,
+            Some(_) => {}
+            None => self.rename_active_space(&text),
+        }
+        self.save();
+        self.close_overlays(window, cx);
     }
 
     pub(crate) fn on_input_key(
@@ -1114,16 +1225,7 @@ impl<H: WebHost> Browser<H> {
             self.on_dialog_key(event, window, cx);
         } else if let Some(field) = &mut self.renaming {
             match field.handle(&event.keystroke, cx) {
-                Key::Submit => {
-                    let text = field.text.trim().to_string();
-                    match self.renaming_folder.and_then(|id| self.session.folder_mut(id)) {
-                        Some(folder) if !text.is_empty() => folder.name = text,
-                        Some(_) => {}
-                        None => self.rename_active_space(&text),
-                    }
-                    self.save();
-                    self.close_overlays(window, cx);
-                }
+                Key::Submit => self.commit_rename(window, cx),
                 Key::Cancel => self.close_overlays(window, cx),
                 _ => {}
             }
@@ -1322,7 +1424,7 @@ impl<H: WebHost> Browser<H> {
             SidebarSide::Right => window.viewport_size().width - at.x,
         });
         let reach = if self.reveal_hover {
-            INSET + self.sidebar_width() + REVEAL_SLACK
+            INSET + self.reveal_w.value() + REVEAL_SLACK
         } else {
             REVEAL_EDGE
         };
@@ -1373,7 +1475,7 @@ impl<H: WebHost> Browser<H> {
             .occlude();
         let shown = self.reveal.value();
         // Off-screen at 0, inset at 1; the spring's overshoot reads as Arc's bounce.
-        let width = self.sidebar_width();
+        let width = self.reveal_w.value();
         let offset = INSET + (shown - 1.0) * (width + INSET * 2.0);
         let card = sidebar.map(|sidebar| {
             edge(div().absolute().top(px(HEADER_H)).bottom(px(INSET)), offset)
@@ -1381,7 +1483,7 @@ impl<H: WebHost> Browser<H> {
                 .occlude()
                 .w(px(width))
                 // The page's radius: a larger one shows the page past its corners.
-                .rounded(px(PAGE_RADIUS))
+                .rounded(r(PAGE_RADIUS))
                 .overflow_hidden()
                 .bg(gradient_fill(theme))
                 .border_1()
@@ -1404,6 +1506,7 @@ impl<H: WebHost> Browser<H> {
     fn render_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let peek = self.peek.as_ref()?;
         let t = peek.open.value();
+        let size = peek.size.as_ref().map(|(w, h)| (w.value(), h.value()));
         let host = SharedString::from(host_of(&peek.url));
         let content = peek.page.update(cx, |p, cx| p.render(window, cx));
         let control = |id: &'static str, name: &'static str| {
@@ -1413,7 +1516,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(9.))
+                .rounded(r(9.))
                 .bg(gpui::rgba(0xFFFFFFEB))
                 .shadow(vec![shadow(gpui::rgba(0x0000002E).into(), 2., 8.)])
                 .hover(|s| s.bg(gpui::white()))
@@ -1437,7 +1540,7 @@ impl<H: WebHost> Browser<H> {
                 div()
                     .px(px(10.))
                     .py(px(5.))
-                    .rounded(px(8.))
+                    .rounded(r(8.))
                     .bg(gpui::rgba(0x14101E66))
                     .text_size(px(12.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1460,14 +1563,18 @@ impl<H: WebHost> Browser<H> {
                     )
                     .child(
                         div()
+                            .id("popup-card")
+                            // Clicks in the popup are not clicks on the backdrop.
+                            .occlude()
                             .absolute()
                             .top(px(HEADER_H + 2.))
                             .right(px(INSET))
                             .mt(px((1.0 - t) * -8.0))
-                            .w(px(380.))
-                            .h(px(520.))
-                            .opacity(t.clamp(0.0, 1.0))
-                            .rounded(px(PEEK_RADIUS))
+                            .w(px(size.map_or(380., |s| s.0)))
+                            .h(px(size.map_or(520., |s| s.1)))
+                            // Laid out but unseen until the content says how big it is.
+                            .opacity(if size.is_some() { t.clamp(0.0, 1.0) } else { 0. })
+                            .rounded(r(PEEK_RADIUS))
                             .overflow_hidden()
                             .bg(gpui::white())
                             .border_1()
@@ -1493,7 +1600,7 @@ impl<H: WebHost> Browser<H> {
             .child(
                 div()
                     .size_full()
-                    .rounded(px(PEEK_RADIUS))
+                    .rounded(r(PEEK_RADIUS))
                     .overflow_hidden()
                     .bg(rgb(0xFBFAF7))
                     .border_1()
@@ -1529,8 +1636,10 @@ impl<H: WebHost> Browser<H> {
         self.last_frame = now;
         let reduce = cx.reduce_motion();
         let mut moving = false;
+        self.reveal_w.set_target(self.sidebar_width());
         for spring in [
             &mut self.sidebar_w,
+            &mut self.reveal_w,
             &mut self.reveal,
             &mut self.slide,
             &mut self.fade,
@@ -1539,6 +1648,9 @@ impl<H: WebHost> Browser<H> {
         }
         if let Some(peek) = &mut self.peek {
             moving |= peek.open.tick(dt, reduce);
+            if let Some((w, h)) = &mut peek.size {
+                moving |= w.tick(dt, reduce) | h.tick(dt, reduce);
+            }
         }
         if let Some(bar) = &mut self.bar {
             moving |= bar.scale.tick(dt, reduce);
@@ -1570,7 +1682,13 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let page = self.active_page().cloned();
+        // The native view rounds itself; keep it on the card's radius as the style changes.
+        if let Some(page) = &page {
+            page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
+        }
+        let own = self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u));
         let content = match page {
+            _ if own => self.render_extensions_page(theme, cx),
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
             None => crate::start::render(theme).into_any_element(),
         };
@@ -1588,7 +1706,7 @@ impl<H: WebHost> Browser<H> {
                 .px(px(14.))
                 .flex()
                 .items_center()
-                .rounded(px(10.))
+                .rounded(r(10.))
                 .bg(surface::bg())
                 .border_1()
                 .border_color(surface::border())
@@ -1615,12 +1733,16 @@ impl<H: WebHost> Browser<H> {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .rounded(px(PAGE_RADIUS))
+                    .rounded(r(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
                     .child(content),
             )
+            // ASCII Chrome: the page sits in a box-drawn frame, a few px off its edge.
+            .when(crate::theme::ascii(), |d| {
+                d.p(px(4.)).border_1().border_color(crate::theme::ascii::frame()).rounded(px(5.))
+            })
             .children(asks)
             .children(find)
     }
@@ -1636,7 +1758,13 @@ impl<H: WebHost> Browser<H> {
             .unwrap_or_default();
         let host = host_of(&url);
         let loading = self.active_page().is_some_and(|p| p.read(cx).is_loading());
-        let extensions: Vec<_> = self.extensions.iter().enumerate().map(|(i, ext)| {
+        let unpinned = &self.settings.unpinned_extensions;
+        let pinned = self
+            .extensions
+            .iter()
+            .enumerate()
+            .filter(|(_, ext)| !unpinned.contains(&ext.id) && self.extension_enabled(&ext.id));
+        let extensions: Vec<_> = pinned.map(|(i, ext)| {
             let icon_path = ext.icon.clone();
             let ext = ext.clone();
             let key = ("extension", i as u64);
@@ -1648,7 +1776,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
+                .rounded(r(6.))
                 .bg(fade(theme.hover, h))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
@@ -1676,7 +1804,7 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(4.))
+                .rounded(r(4.))
                 .bg(fade(theme.hover, lh))
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
@@ -1726,7 +1854,7 @@ impl<H: WebHost> Browser<H> {
                 .bottom_0()
                 .h(px(2.))
                 .w(relative(0.3))
-                .rounded(px(1.))
+                .rounded(r(1.))
                 .bg(accent)
                 .with_animation(
                     "loading",
@@ -1747,13 +1875,21 @@ impl<H: WebHost> Browser<H> {
             .mx(px(3. * p))
             .flex()
             .items_center()
-            .rounded(px(7.))
+            .rounded(r(7.))
             .text_size(px(13.))
             .text_color(mix(theme.ink_muted, theme.ink, h))
             .bg(fade(theme.hover, h))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
+            // ASCII Chrome: "│ ▸ host  ⌘L │".
+            .when(crate::theme::ascii(), |d| {
+                d.gap(px(8.))
+                    .border_1()
+                    .border_color(crate::theme::ascii::frame())
+                    .child(div().text_color(theme.accent).child("▸"))
+            })
             .child(label)
+            .when(crate::theme::ascii(), |d| d.child(div().text_color(theme.ink_faint).child("⌘L")))
             .children(progress);
         let address = feel(address, key, cx);
         div()
@@ -1782,7 +1918,8 @@ impl<H: WebHost> Browser<H> {
                     .justify_end()
                     .gap(px(4.))
                     .children(self.render_download_button(theme, cx))
-                    .children(extensions),
+                    .children(extensions)
+                    .child(self.render_extensions_button(theme, cx)),
             )
     }
 
@@ -1799,7 +1936,7 @@ impl<H: WebHost> Browser<H> {
                 .px(px(10.))
                 .flex()
                 .items_center()
-                .rounded(px(7.))
+                .rounded(r(7.))
                 .max_w(px(360.))
                 .bg(fade(accent, h))
                 .text_color(mix(surface::ink().into(), gpui::white(), h))
@@ -1817,7 +1954,7 @@ impl<H: WebHost> Browser<H> {
                     .occlude()
                     .min_w(px(220.))
                     .p(px(5.))
-                    .rounded(px(10.))
+                    .rounded(r(10.))
                     .bg(surface::bg())
                     .border_1()
                     .border_color(surface::border())
@@ -1855,7 +1992,7 @@ impl<H: WebHost> Browser<H> {
                 .mx(px(2. * p))
                 .flex()
                 .items_center()
-                .rounded(px(7.))
+                .rounded(r(7.))
                 .bg(fade(theme.accent, h))
                 .text_color(mix(surface::ink().into(), gpui::white(), h))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1875,7 +2012,7 @@ impl<H: WebHost> Browser<H> {
                     .occlude()
                     .min_w(px(200.))
                     .p(px(5.))
-                    .rounded(px(10.))
+                    .rounded(r(10.))
                     .bg(surface::bg())
                     .border_1()
                     .border_color(surface::border())
@@ -1975,6 +2112,36 @@ impl<H: WebHost> Browser<H> {
                     Box::new(move |this, window, cx| {
                         this.session.remove_folder(id);
                         this.sync(window, cx);
+                    }),
+                ));
+            }
+            MenuKind::Extension(ref id) => {
+                let Some(ext) = self.extensions.iter().find(|e| &e.id == id).cloned() else {
+                    return items;
+                };
+                let pinned = !self.settings.unpinned_extensions.contains(id);
+                let (pin, manage, remove) = (id.clone(), id.clone(), id.clone());
+                items.push((
+                    if pinned { "Unpin from Toolbar" } else { "Pin to Toolbar" },
+                    Box::new(move |this, _, cx| this.toggle_extension_pin(&pin, cx)),
+                ));
+                if let Some(options) = ext.options {
+                    items.push((
+                        "Options",
+                        Box::new(move |this, window, cx| this.open_url(&options, window, cx)),
+                    ));
+                }
+                items.push((
+                    "Manage Extension",
+                    Box::new(move |this, window, cx| {
+                        this.open_extensions(&format!("chrome://extensions/?id={manage}"), window, cx)
+                    }),
+                ));
+                // ponytail: CEF has no uninstall call; Chrome's page for it has the button.
+                items.push((
+                    "Remove…",
+                    Box::new(move |this, window, cx| {
+                        this.open_extensions(&format!("chrome://extensions/?id={remove}"), window, cx)
                     }),
                 ));
             }
@@ -2107,6 +2274,8 @@ pub(crate) struct PeekPage<P> {
     open: Spring,
     /// An extension popup rather than a link preview.
     pub(crate) popup: bool,
+    /// A popup's card size, following its content; `None` until it reports one.
+    pub(crate) size: Option<(Spring, Spring)>,
 }
 
 /// Back/forward held down: the history in that direction.
@@ -2132,6 +2301,17 @@ pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {
 }
 
 pub(crate) fn shadow(color: Hsla, y: f32, blur: f32) -> BoxShadow {
+    // ponytail: ASCII Chrome keeps only the deep overlay drop; row lifts would glow on navy.
+    if crate::theme::ascii() {
+        let a = if blur >= 24. { 0.66 } else { 0. };
+        return BoxShadow {
+            color: Hsla { a, ..gpui::black() },
+            offset: point(px(0.), px(18.)),
+            blur_radius: px(48.),
+            spread_radius: px(0.),
+            inset: false,
+        };
+    }
     BoxShadow {
         color,
         offset: point(px(0.), px(y)),
@@ -2164,6 +2344,7 @@ pub(crate) fn tab_title(tab: &Tab) -> &str {
 impl<H: WebHost> Render for Browser<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tick_motion(window, cx);
+        crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         let theme = self.theme();
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);
@@ -2193,6 +2374,7 @@ impl<H: WebHost> Render for Browser<H> {
         let right = self.side() == SidebarSide::Right;
 
         let header = self.render_header(&theme, cx);
+        let chrome_sheet = self.render_chrome_sheet(&theme, window, cx);
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
@@ -2218,6 +2400,7 @@ impl<H: WebHost> Render for Browser<H> {
             .bg(gradient_fill(&theme))
             .text_color(theme.ink)
             .text_size(px(13.))
+            .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))
             .child(header)
             .child(
                 div()
@@ -2243,6 +2426,7 @@ impl<H: WebHost> Render for Browser<H> {
             .children(bar)
             .children(self.render_toast())
             .children(self.render_settings(&theme, cx))
+            .children(chrome_sheet)
             .children(popover)
             .children(menu)
             .children(history);
@@ -2254,7 +2438,7 @@ impl<H: WebHost> Render for Browser<H> {
                 }
             }))
             .on_action(cx.listener(|this, _: &ExpandPeek, window, cx| this.expand_peek(window, cx)))
-        } else if self.popover.is_some() || self.settings_open {
+        } else if self.popover.is_some() || self.settings_open || self.chrome_sheet.is_some() {
             // Escape; bound only while there is something to close, so pages keep it otherwise.
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| this.close_overlays(window, cx)))
         } else {

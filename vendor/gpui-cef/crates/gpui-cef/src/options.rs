@@ -44,6 +44,11 @@ pub struct WebviewOptions {
     /// The storage profile (cookies, cache, local storage) to load in. `None`
     /// is the global, in-memory one.
     pub profile: Option<crate::Profile>,
+    /// Runs before the page's own scripts in every document it loads.
+    pub init_script: Option<String>,
+    /// Report the content's preferred size, within (min, max), as
+    /// [`crate::WebviewEvent::PreferredSize`]. macOS (CEF) only.
+    pub auto_resize: Option<(gpui::Size<gpui::Pixels>, gpui::Size<gpui::Pixels>)>,
 }
 
 impl Default for WebviewOptions {
@@ -53,6 +58,8 @@ impl Default for WebviewOptions {
             transparent: false,
             corner_radius: 0.,
             profile: None,
+            init_script: None,
+            auto_resize: None,
         }
     }
 }
