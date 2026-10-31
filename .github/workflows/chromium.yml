@@ -5,6 +5,10 @@
 # mode=dev is a component build whose finished tree is kept for 7 days, to
 # unpack locally and build incrementally from; it runs on the runner and Xcode
 # matching the local Mac, or the SDK headers' mtimes force a full rebuild.
+#
+# Each chain is pinned to its commit: phase 1 tags it chromium/<kind>/<run id>
+# and every later phase runs from that tag, so a push mid-chain changes nothing
+# in it. Chains run in parallel; the last run of a chain deletes its tag.
 name: chromium
 run-name: chromium ${{ inputs.mode }} phase ${{ inputs.phase }}${{ inputs.budget_minutes && format(' (test, {0} min)', inputs.budget_minutes) || '' }}
 
@@ -29,19 +33,26 @@ on:
       started:
         description: "internal: epoch of phase 1"
         default: ""
+      chain:
+        description: "internal: run id of phase 1, naming the chain's tag"
+        default: ""
 
+# contents: write for the chain tags. No concurrency group: GitHub keeps one
+# pending run per group and would cancel a chain's next phase.
 permissions:
-  contents: read
+  contents: write
   actions: write
-
-concurrency: chromium-${{ inputs.mode }}${{ inputs.budget_minutes }}
 
 env:
   MAX_PHASES: 12
   ROOT: /Users/runner/work/hb
+  KIND: ${{ inputs.mode }}${{ inputs.budget_minutes && '-test' || '' }}
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   phase:
+    env:
+      CHAIN: ${{ inputs.chain }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     defaults:
@@ -154,6 +165,7 @@ jobs:
           {
             echo "## baa Chromium $(cat helium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
             echo "- phases: ${{ inputs.phase }}"
+            echo "- commit: $GITHUB_SHA"
             echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
             echo '```'; cat stats.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -179,11 +191,19 @@ jobs:
 
       - name: Next phase
         if: steps.build.outputs.status == 'running'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run chromium.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+          # The chain's tag, so it keeps running this commit. Phase 1 makes it;
+          # chains started before tags existed (phase 2+, no chain) follow their branch.
+          if [ "${{ inputs.phase }}" = 1 ]; then
+            CHAIN=$GITHUB_RUN_ID
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/chromium/$KIND/$CHAIN" -f sha="$GITHUB_SHA"
+          fi
+          ref="$GITHUB_REF_NAME"; [ -z "$CHAIN" ] || ref="chromium/$KIND/$CHAIN"
+          gh workflow run chromium.yml -R "$GITHUB_REPOSITORY" --ref "$ref" -f chain="$CHAIN" \
             -f mode="${{ inputs.mode }}" -f runner="${{ inputs.runner }}" -f xcode="${{ inputs.xcode }}" \
             -f budget_minutes="${{ inputs.budget_minutes }}" \
             -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
 
+      - name: End chain
+        if: always() && steps.build.outputs.status != 'running' && env.CHAIN != ''
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/chromium/$KIND/$CHAIN" || true
