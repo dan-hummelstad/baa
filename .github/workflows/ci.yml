@@ -1,5 +1,5 @@
 # PLAN.md §13. Build, test, lint and bundle on both targets, then prove the
-# de-Googling holds (§5.3). cef-bump PRs auto-merge only when all of this is green.
+# de-Googling holds (§5.3). The Chromium engine itself builds in chromium.yml.
 name: ci
 
 on:
@@ -57,7 +57,7 @@ jobs:
           if-no-files-found: error
 
   # §5.3: launch the bundle behind mitmproxy for 60 s; any host outside
-  # baa_privacy::PROXY_ALLOWLIST fails the run (and so blocks a cef-bump merge).
+  # baa_privacy::PROXY_ALLOWLIST fails the run.
   privacy:
     needs: build
     strategy:
