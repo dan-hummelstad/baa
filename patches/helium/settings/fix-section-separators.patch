@@ -1,0 +1,22 @@
+--- a/chrome/browser/resources/settings/a11y_page/a11y_page.html.ts
++++ b/chrome/browser/resources/settings/a11y_page/a11y_page.html.ts
+@@ -21,11 +21,7 @@ export function getHtml(this: SettingsA1
+ </if>
+ 
+ <if expr="is_macosx or is_win">
+-        ${this.enableLiveCaption_ ? html`
+-          <settings-live-caption></settings-live-caption>
+-        ` : ''}
+         <cr-link-row id="captions"
+-            class="hr"
+             label="$i18n{captionsPreferencesTitle}"
+             sub-label="$i18n{captionsPreferencesSubtitle}"
+             @click="${this.onCaptionsClick_}"
+@@ -36,7 +32,6 @@ export function getHtml(this: SettingsA1
+ 
+ <if expr="is_linux">
+           <cr-link-row id="captions"
+-              class="hr"
+               label="$i18n{captionsTitle}"
+               @click="${this.onCaptionsClick_}"
+               role-description="$i18n{subpageArrowRoleDescription}">

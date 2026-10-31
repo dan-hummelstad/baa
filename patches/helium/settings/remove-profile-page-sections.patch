@@ -1,0 +1,77 @@
+--- a/chrome/browser/resources/settings/people_page/people_page.html.ts
++++ b/chrome/browser/resources/settings/people_page/people_page.html.ts
+@@ -14,19 +14,6 @@ export function getHtml(this: SettingsPe
+       <div>
+ 
+ <if expr="not is_chromeos">
+-        ${this.shouldShowSyncAccountControl_() ? html`
+-          <settings-sync-account-control
+-              .syncStatus="${this.syncStatus!}"
+-              promo-label-with-account="$i18n{peopleSignInPrompt}"
+-              promo-label-with-no-account="$i18n{peopleSignInPrompt}"
+-              promo-secondary-label-with-account=
+-                  "$i18n{peopleSignInPromptSecondaryWithAccount}"
+-              promo-secondary-label-with-no-account=
+-                  "$i18n{peopleSignInPromptSecondaryWithNoAccount}"
+-              .accessPoint="${ChromeSigninAccessPoint.SETTINGS}">
+-          </settings-sync-account-control>
+-        ` : ''}
+-
+         ${this.shouldLinkToProfileRow_() ? html`
+           <div id="profile-row" class="cr-row first two-line"
+               ?actionable="${this.isProfileActionable_}"
+@@ -76,54 +63,11 @@ export function getHtml(this: SettingsPe
+         ` : ''}
+ </if>
+ 
+-        <!-- Shared Elements -->
+-        <cr-link-row id="account-subpage-row" class="cr-row first"
+-            @click="${this.onAccountClick_}"
+-            .label="${this.primaryAccountName_}"
+-            .subLabel="${this.getAccountRowSubtitle_()}"
+-            role-description="$i18n{subpageArrowRoleDescription}"
+-            button-aria-description="$i18n{accountPageTitle}"
+-            ?hidden="${!this.shouldLinkToAccountSettingsPage_()}">
+-          <div id="profile-icon"
+-              style="background-image: ${this.getIconImageSet_(
+-                  this.primaryAccountIconUrl_)}">
+-          </div>
+-        </cr-link-row>
+-
+-        <cr-link-row id="google-services"
+-            label="$i18n{googleServicesPageTitle}"
+-            @click="${this.onGoogleServicesClick_}"
+-            role-description="$i18n{subpageArrowRoleDescription}"
+-            ?hidden="${!this.shouldHideSyncSetupLinkRow_()}">
+-        </cr-link-row>
+-
+ <if expr="not is_chromeos">
+-        ${this.signinAllowed_ ? html`
+-          <cr-link-row id="manage-google-account"
+-              label="$i18n{manageGoogleAccount}"
+-              ?hidden="${!this.shouldShowGoogleAccount_}"
+-              @click="${this.onGoogleAccountClick_}" external>
+-          </cr-link-row>
+-
+-          <cr-link-row id="edit-profile"
+-              label="$i18n{profileNameAndPicture}"
+-              @click="${this.onProfileClick_}">
+-          </cr-link-row>
+-        ` : ''}
+-
+         <cr-link-row id="importDataDialogTrigger"
+             label="$i18n{importTitle}"
+             @click="${this.onImportDataClick_}">
+         </cr-link-row>
+-
+-        ${this.isDasherlessProfile_ ? html`
+-          <div id="sync-not-allowed" class="cr-row continuation">
+-            <cr-icon id="info-icon" icon="cr:info"></cr-icon>
+-            <div id="sync-not-allowed-text" class="flex cr-padded-text">
+-              $i18n{syncUnavailableForNonGoogleAccount}
+-            </div>
+-          </div>
+-        ` : ''}
+ </if>
+ 
+       </div>

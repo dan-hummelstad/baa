@@ -1,0 +1,43 @@
+--- a/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.h"
+ 
++#include "base/command_line.h"
+ #include "chrome/browser/glic/browser_ui/tab_underline_view.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+@@ -170,6 +171,10 @@ bool TabViewVerticalLayout::IsChildVisib
+       return false;
+     }
+ 
++    if (base::CommandLine::ForCurrentProcess()->HasSwitch("hide-tab-close-buttons")) {
++      return false;
++    }
++
+     // When uncollapsing the tabstrip, intentionally start showing the close
+     // button on active non-hovered tabs a little bit sooner than reaching the
+     // uncollapsed min width, because otherwise the close buttons in a grouped
+--- a/chrome/browser/ui/views/tabs/tab.cc
++++ b/chrome/browser/ui/views/tabs/tab.cc
+@@ -1378,7 +1378,7 @@ void Tab::UpdateIconVisibility() {
+   const bool should_show_close_button =
+       !IsLockedForOnTask(controller_->GetBrowserWindowInterface());
+ #else
+-  const bool should_show_close_button = true;
++  const bool should_show_close_button = !base::CommandLine::ForCurrentProcess()->HasSwitch("hide-tab-close-buttons");
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
+   if (IsActive()) {
+--- a/chrome/browser/ungoogled_flag_entries.h
++++ b/chrome/browser/ungoogled_flag_entries.h
+@@ -72,4 +72,8 @@
+      "Tab Hover Cards",
+      "Allows removing the tab hover cards or using a tooltip as a replacement. ungoogled-chromium flag.",
+      kOsDesktop, MULTI_VALUE_TYPE(kTabHoverCards)},
++    {"hide-tab-close-buttons",
++     "Hide tab close buttons",
++     "Hides the close buttons on tabs. ungoogled-chromium flag.",
++     kOsDesktop, SINGLE_VALUE_TYPE("hide-tab-close-buttons")},
+ #endif  // CHROME_BROWSER_UNGOOGLED_FLAG_ENTRIES_H_
