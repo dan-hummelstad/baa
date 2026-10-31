@@ -2,6 +2,9 @@
 # Chromium? Each run compiles for up to ~4.75 h, uploads the tree, and
 # re-dispatches itself with phase+1 (Helium's chained-job trick, without
 # writing out N jobs). The final run's summary has the totals.
+# profile=dev builds a component build instead and uploads the finished tree,
+# to unpack locally and build incrementally from; pick the runner and Xcode
+# that match the local Mac, or the SDK headers' mtimes force a full rebuild.
 name: chromium-feasibility
 
 on:
@@ -12,6 +15,12 @@ on:
         default: ""
       runner:
         default: macos-latest
+      profile:
+        description: "official (release-style, timing) or dev (component build, tree kept)"
+        default: official
+      xcode:
+        description: "Xcode version to build with (empty = newest on the runner)"
+        default: ""
       phase:
         default: "1"
       prev_run:
@@ -25,11 +34,12 @@ permissions:
   contents: read
   actions: write
 
-concurrency: chromium-feasibility
+concurrency: chromium-${{ inputs.profile }}
 
 env:
   MAX_PHASES: 12
   DEPOT_TOOLS_UPDATE: "0"
+  OUT: ${{ inputs.profile == 'dev' && 'out/Dev' || 'out/Release' }}
 
 jobs:
   phase:
@@ -54,7 +64,8 @@ jobs:
           sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet
           xcrun simctl delete all || true
           sudo rm -rf ~/Library/Developer/CoreSimulator
-          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          X="${{ inputs.xcode }}"
+          XCODE=$(ls -d /Applications/Xcode_${X:-*}.app | sort -V | tail -1)
           sudo xcode-select -s "$XCODE"
           for x in /Applications/Xcode_*.app; do [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
           xcodebuild -downloadComponent MetalToolchain || true
@@ -82,9 +93,22 @@ jobs:
           t=$(date +%s)
           gclient sync --no-history --shallow -j 8
           echo "sync_seconds=$(( $(date +%s) - t ))" >> stats.txt
+          mkdir -p src/$OUT
+          if [ "${{ inputs.profile }}" = dev ]; then
+          # Fast to rebuild: small dylibs, no LTO. ponytail: symbol_level 0 keeps
+          # the tree small; set 1 locally (one full rebuild) if C++ backtraces matter.
+          cat > src/$OUT/args.gn <<EOF
+          is_component_build = true
+          is_debug = false
+          target_cpu = "arm64"
+          symbol_level = 0
+          blink_symbol_level = 0
+          proprietary_codecs = false
+          ffmpeg_branding = "Chromium"
+          EOF
+          else
           # What we'd ship: official (ThinLTO + PGO), no symbols, no proprietary codecs.
-          mkdir -p src/out/Release
-          cat > src/out/Release/args.gn <<EOF
+          cat > src/$OUT/args.gn <<EOF
           is_official_build = true
           is_debug = false
           target_cpu = "arm64"
@@ -94,7 +118,8 @@ jobs:
           proprietary_codecs = false
           ffmpeg_branding = "Chromium"
           EOF
-          (cd src && gn gen out/Release)
+          fi
+          (cd src && gn gen $OUT)
           du -sh src
           df -h /
 
@@ -125,7 +150,7 @@ jobs:
           left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
           if [ $left -lt 600 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
           t=$(date +%s)
-          (cd src && gtimeout -k 7m -s SIGTERM "${left}s" autoninja -C out/Release chrome)
+          (cd src && gtimeout -k 7m -s SIGTERM "${left}s" autoninja -C $OUT chrome)
           code=$?
           echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
           if [ $code -eq 124 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
@@ -133,7 +158,7 @@ jobs:
           echo "status=finished" >> "$GITHUB_OUTPUT"
 
       - name: Pack tree
-        if: steps.build.outputs.status == 'running'
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.profile == 'dev')
         run: |
           set -eux
           tar --exclude='.git' -cf - src version.txt stats.txt | zstd -3 -T0 -o tree.tar.zst
@@ -141,13 +166,13 @@ jobs:
           df -h /
 
       - name: Upload tree
-        if: steps.build.outputs.status == 'running'
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.profile == 'dev')
         uses: actions/upload-artifact@v4
         with:
           name: chromium-tree
           path: |
             /Users/runner/work/chromium/tree.tar.zst
-          retention-days: 2
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
           compression-level: 0
 
       - name: Next phase
@@ -157,17 +182,18 @@ jobs:
         run: |
           gh workflow run chromium-feasibility.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
             -f version="$(cat version.txt)" -f runner="${{ inputs.runner }}" \
+            -f profile="${{ inputs.profile }}" -f xcode="${{ inputs.xcode }}" \
             -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
 
       - name: Report
         if: steps.build.outputs.status == 'finished'
         run: |
           set -eux
-          ls -lh src/out/Release
-          du -sh src/out/Release/Chromium.app
-          src/out/Release/Chromium.app/Contents/MacOS/Chromium --version || true
+          ls -lh src/$OUT
+          du -sh src/$OUT/Chromium.app
+          src/$OUT/Chromium.app/Contents/MacOS/Chromium --version || true
           {
-            echo "## Chromium $(cat version.txt) built on ${{ inputs.runner }}"
+            echo "## Chromium $(cat version.txt) ${{ inputs.profile }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
             echo "- phases: ${{ inputs.phase }}"
             echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
             echo '```'; cat stats.txt; echo '```'
