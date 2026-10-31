@@ -54,7 +54,11 @@ jobs:
           S="${{ inputs.started }}"; echo "STARTED=${S:-$(date +%s)}" >> "$GITHUB_ENV"
           [ "${{ inputs.phase }}" -le "$MAX_PHASES" ] || { echo "gave up after $MAX_PHASES phases"; exit 1; }
           sudo mdutil -a -i off || true
-          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet
+          df -h /
+          # Disk is the limit by the last phases (tree + build output + archive): drop what Chromium doesn't use.
+          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet \
+            ~/Library/Android ~/.dotnet ~/.ghcup ~/.rustup ~/.cargo /usr/local/lib/node_modules \
+            /opt/homebrew/Caskroom "$(brew --cache)" || true
           xcrun simctl delete all || true
           sudo rm -rf ~/Library/Developer/CoreSimulator
           # Images list each Xcode under symlinked aliases too; keep the real one.
@@ -62,7 +66,7 @@ jobs:
           sudo xcode-select -s "$XCODE"
           for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
           xcodebuild -downloadComponent MetalToolchain || true
-          brew install coreutils zstd
+          brew install coreutils zstd gnu-tar
           pip3 install requests pillow --break-system-packages
           df -h /
 
@@ -84,7 +88,14 @@ jobs:
           sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
           # Component builds compile PCHs with -fmodule-name, which this clang then
           # rejects as a module interface; official (Helium's) builds use no PCHs.
-          [ "${{ inputs.mode }}" = dev ] && echo 'enable_precompiled_headers = false' >> "$_out_dir/args.gn"
+          # No debug info either: it is most of a build folder, and the runner disk and
+          # the downloadable tree are the limits. ponytail: set symbol_level=1 locally
+          # (one full rebuild) if C++ backtraces matter.
+          if [ "${{ inputs.mode }}" = dev ]; then
+            sed -i '' '/symbol_level/d' "$_out_dir/args.gn"
+            printf '%s\n' 'enable_precompiled_headers = false' 'symbol_level = 0' \
+              'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$_out_dir/args.gn"
+          fi
           cat "$_out_dir/args.gn"
           gn_gen
           du -sh "$_src_dir"
@@ -128,12 +139,27 @@ jobs:
           [ $code -eq 0 ] || exit $code
           echo "status=finished" >> "$GITHUB_OUTPUT"
 
+      - name: Report
+        if: steps.build.outputs.status == 'finished'
+        working-directory: /Users/runner/work/hb
+        run: |
+          set -eux
+          source devutils/shared.sh
+          du -sh "$_out_dir/Helium.app"
+          {
+            echo "## Helium $(cat helium-chromium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "- phases: ${{ inputs.phase }}"
+            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
+            echo '```'; cat stats.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Pack tree
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
         working-directory: /Users/runner/work
         run: |
           set -eux
-          tar --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          # --remove-files: the archive never sits beside the whole tree on disk.
+          gtar --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
           ls -lh tree.tar.zst
           df -h /
 
@@ -155,16 +181,3 @@ jobs:
             -f mode="${{ inputs.mode }}" -f runner="${{ inputs.runner }}" -f xcode="${{ inputs.xcode }}" \
             -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
 
-      - name: Report
-        if: steps.build.outputs.status == 'finished'
-        working-directory: /Users/runner/work/hb
-        run: |
-          set -eux
-          source devutils/shared.sh
-          du -sh "$_out_dir/Helium.app"
-          {
-            echo "## Helium $(cat helium-chromium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
-            echo "- phases: ${{ inputs.phase }}"
-            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
-            echo '```'; cat stats.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
