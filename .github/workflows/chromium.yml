@@ -1,0 +1,166 @@
+# baa's Chromium: Helium's macOS tree (pinned in chromium/helium-macos.rev,
+# prepared by Helium's own scripts) built in self-chaining phases: each run
+# compiles for up to ~4.75 h, uploads the tree, and dispatches phase+1.
+# mode=dev is a component build whose finished tree is kept for 7 days, to
+# unpack locally and build incrementally from; it runs on the runner and Xcode
+# matching the local Mac, or the SDK headers' mtimes force a full rebuild.
+name: chromium
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dev (component build, tree kept) or release (official)"
+        default: dev
+      runner:
+        default: xcode-27
+      xcode:
+        default: "27.1"
+      phase:
+        default: "1"
+      prev_run:
+        description: "internal: run id holding the previous phase's tree"
+        default: ""
+      started:
+        description: "internal: epoch of phase 1"
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency: chromium-${{ inputs.mode }}
+
+env:
+  MAX_PHASES: 12
+  ROOT: /Users/runner/work/hb
+
+jobs:
+  phase:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: baa
+
+      - name: Prepare runner
+        run: |
+          set -eux
+          echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+          S="${{ inputs.started }}"; echo "STARTED=${S:-$(date +%s)}" >> "$GITHUB_ENV"
+          [ "${{ inputs.phase }}" -le "$MAX_PHASES" ] || { echo "gave up after $MAX_PHASES phases"; exit 1; }
+          sudo mdutil -a -i off || true
+          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet
+          xcrun simctl delete all || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator
+          # Images list each Xcode under symlinked aliases too; keep the real one.
+          XCODE=$(realpath /Applications/Xcode_${{ inputs.xcode }}.app)
+          sudo xcode-select -s "$XCODE"
+          for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
+          xcodebuild -downloadComponent MetalToolchain || true
+          brew install coreutils zstd
+          pip3 install requests pillow --break-system-packages
+          df -h /
+
+      - name: Prepare Helium sources (phase 1)
+        if: inputs.phase == '1'
+        run: |
+          set -eux
+          git clone https://github.com/imputnet/helium-macos.git "$ROOT"
+          cd "$ROOT"
+          git checkout "$(cat "$GITHUB_WORKSPACE/baa/chromium/helium-macos.rev")"
+          git submodule update --init --depth 1
+          t=$(date +%s)
+          source devutils/shared.sh
+          prepare_sources true
+          rm -rf "$_download_cache"
+          echo "prepare_seconds=$(( $(date +%s) - t ))" > stats.txt
+          write_gn_args arm64 "${{ inputs.mode }}"
+          # No cache backend here, and a downloaded dev tree must not need one.
+          sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
+          cat "$_out_dir/args.gn"
+          gn_gen
+          du -sh build/src
+          df -h /
+
+      - name: Restore tree (phase 2+)
+        if: inputs.phase != '1'
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-tree
+          run-id: ${{ inputs.prev_run }}
+          github-token: ${{ github.token }}
+          path: /Users/runner/work
+
+      - name: Unpack tree (phase 2+)
+        if: inputs.phase != '1'
+        working-directory: /Users/runner/work
+        run: |
+          set -eux
+          t=$(date +%s)
+          zstd -dc tree.tar.zst | tar -xf -
+          rm tree.tar.zst
+          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
+          df -h /
+
+      - name: Build
+        id: build
+        working-directory: /Users/runner/work/hb
+        run: |
+          set -ux
+          source devutils/shared.sh
+          # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
+          left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
+          if [ $left -lt 600 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          t=$(date +%s)
+          (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome)
+          code=$?
+          echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
+          if [ $code -eq 124 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          [ $code -eq 0 ] || exit $code
+          echo "status=finished" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tree
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        working-directory: /Users/runner/work
+        run: |
+          set -eux
+          tar --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          ls -lh tree.tar.zst
+          df -h /
+
+      - name: Upload tree
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-tree
+          path: /Users/runner/work/tree.tar.zst
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
+          compression-level: 0
+
+      - name: Next phase
+        if: steps.build.outputs.status == 'running'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run chromium.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f mode="${{ inputs.mode }}" -f runner="${{ inputs.runner }}" -f xcode="${{ inputs.xcode }}" \
+            -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
+
+      - name: Report
+        if: steps.build.outputs.status == 'finished'
+        working-directory: /Users/runner/work/hb
+        run: |
+          set -eux
+          source devutils/shared.sh
+          du -sh "$_out_dir/Helium.app"
+          {
+            echo "## Helium $(cat helium-chromium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "- phases: ${{ inputs.phase }}"
+            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
+            echo '```'; cat stats.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
