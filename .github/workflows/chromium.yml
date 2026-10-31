@@ -84,7 +84,7 @@ jobs:
           sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
           cat "$_out_dir/args.gn"
           gn_gen
-          du -sh build/src
+          du -sh "$_src_dir"
           df -h /
 
       - name: Restore tree (phase 2+)
