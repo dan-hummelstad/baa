@@ -1,0 +1,314 @@
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -86,6 +86,7 @@ struct DropData;
+ class ExclusiveAccessBubbleViews;
+ class ExclusiveAccessBubbleViewsContext;
+ class GlobalErrorService;
++class HeliumLayoutStateController;
+ class InfoBarContainerView;
+ class LocationBarView;
+ class MultiContentsView;
+@@ -350,6 +351,9 @@ class BrowserView : public BrowserWindow
+   // Returns whether the webapp frame toolbar should be drawn.
+   bool ShouldDrawWebAppFrameToolbar() const;
+ 
++  // Returns whether tabs should be shown in the toolbar.
++  bool ShouldDrawToolbarTabStrip() const;
++
+   // Returns whether or not strokes should be drawn around and under the tabs.
+   bool ShouldDrawTabStrokes() const;
+ 
+@@ -906,6 +910,8 @@ class BrowserView : public BrowserWindow
+   void OnVerticalTabStripModeChanged(
+       tabs::VerticalTabStripStateController* controller);
+ 
++  void OnToolbarTabStripStateChanged(HeliumLayoutStateController* controller);
++
+   // Callback for the loading animation(s) associated with this view.
+   void LoadingAnimationTimerCallback();
+   void LoadingAnimationCallback(base::TimeTicks timestamp);
+@@ -1414,6 +1420,8 @@ class BrowserView : public BrowserWindow
+ 
+   PrefChangeRegistrar registrar_;
+ 
++  base::CallbackListSubscription helium_layout_subscription_;
++
+   base::CallbackListSubscription vertical_tab_subscription_;
+ 
+   std::unique_ptr<tabs::VerticalTabStripStateController::ScopedEnableStateLock>
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1561,7 +1561,8 @@ bool BrowserView::ShouldDrawTabStrip() c
+            horizontal_tab_strip_region_view_->GetTabStripView() != nullptr;
+   }
+ 
+-  return horizontal_tab_strip_region_view_->GetTabStripView() != nullptr;
++  return horizontal_tab_strip_region_view_ != nullptr &&
++         horizontal_tab_strip_region_view_->GetTabStripView() != nullptr;
+ }
+ 
+ bool BrowserView::ShouldDrawVerticalTabStrip() const {
+@@ -1576,6 +1577,11 @@ bool BrowserView::ShouldDrawWebAppFrameT
+          GetFrameView()->ShouldShowWebAppFrameToolbar();
+ }
+ 
++bool BrowserView::ShouldDrawToolbarTabStrip() const {
++  auto* controller = HeliumLayoutStateController::From(browser_);
++  return controller && controller->IsCompactLayout() && GetIsNormalType();
++}
++
+ bool BrowserView::IsVerticalTabStripCollapsed() const {
+   if (auto* const controller =
+           tabs::VerticalTabStripStateController::From(browser_)) {
+@@ -1722,6 +1728,32 @@ void BrowserView::OnVerticalTabStripMode
+   InvalidateLayout();
+ }
+ 
++void BrowserView::OnToolbarTabStripStateChanged(
++    HeliumLayoutStateController* controller) {
++  if (!horizontal_tab_strip_region_view_) {
++    return;
++  }
++
++  if (controller && controller->IsCompactLayout() && GetIsNormalType()) {
++    toolbar_->AttachTabStripRegionView(horizontal_tab_strip_region_view_);
++  } else if (horizontal_tab_strip_region_view_->parent() != this) {
++    if (horizontal_tab_strip_region_insertion_index_) {
++      AddChildViewAt(horizontal_tab_strip_region_view_.get(),
++                     horizontal_tab_strip_region_insertion_index_.value());
++    } else {
++      AddChildView(horizontal_tab_strip_region_view_.get());
++    }
++    horizontal_tab_strip_region_view_->DestroyLayer();
++  }
++
++  if (toolbar_) {
++    toolbar_->UpdateToolbarLayout();
++  }
++
++  UpdateTabSearchBubbleHost();
++  InvalidateLayout();
++}
++
+ ///////////////////////////////////////////////////////////////////////////////
+ // BrowserView, BrowserWindow implementation:
+ 
+@@ -3991,9 +4023,10 @@ void BrowserView::ReparentTabStripAndWeb
+   // The TabStrip must be placed in the same position before the reparenting
+   // to maintain the correct Z-order to ensure it can receive mouse events.
+   // See crbug.com/454852658.
+-  DCHECK(horizontal_tab_strip_region_insertion_index_);
+-  AddChildViewAt(horizontal_tab_strip_region_view_.get(),
+-                 horizontal_tab_strip_region_insertion_index_.value());
++  if (horizontal_tab_strip_region_insertion_index_) {
++    AddChildViewAt(horizontal_tab_strip_region_view_.get(),
++                   horizontal_tab_strip_region_insertion_index_.value());
++  }
+ 
+   // Reparent PWA views that were moved for immersive and ChromeOS tablet
+   // mode.
+@@ -5203,6 +5236,16 @@ void BrowserView::AddedToWidget() {
+         .Then(&OmniboxPopupViewBrowserView::SetBrowserView, this);
+   }
+ 
++  auto* const helium_layout_controller =
++      HeliumLayoutStateController::From(browser_);
++  if (helium_layout_controller) {
++    helium_layout_subscription_ =
++        helium_layout_controller->RegisterOnStateChanged(
++            base::BindRepeating(&BrowserView::OnToolbarTabStripStateChanged,
++                                base::Unretained(this)));
++    OnToolbarTabStripStateChanged(helium_layout_controller);
++  }
++
+   UpdateTabSearchBubbleHost();
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -84,6 +84,7 @@
+ #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
++#include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
+@@ -192,10 +193,12 @@ DEFINE_UI_CLASS_PROPERTY_KEY(bool, kActi
+ 
+ namespace {
+ 
++constexpr int kPreferredCompactWidth = 350;
+ constexpr int kToolbarFlexOrderOffset = 1000;
+ constexpr int kLocationBarFlexOrder = kToolbarFlexOrderOffset + 1;
+ constexpr int kToolbarActionsFlexOrder = kToolbarFlexOrderOffset + 2;
+ constexpr int kExtensionsFlexOrder = kToolbarFlexOrderOffset + 3;
++constexpr int kTabStripFlexOrder = kToolbarFlexOrderOffset + 4;
+ 
+ // Gets the display mode for a given browser.
+ ToolbarView::DisplayMode GetDisplayMode(BrowserWindowInterface* browser) {
+@@ -1391,6 +1394,22 @@ bool ToolbarView::IsRectInWindowCaption(
+     return gfx::ToEnclosingRect(rect_in_target_coords_f);
+   };
+ 
++  // Check the tab strip region first if compact layout is enabled.
++  if (IsCompactLayout() && tab_strip_region_view_) {
++    const gfx::Rect tab_strip_rect = get_target_rect(tab_strip_region_view_);
++    if (tab_strip_region_view_->GetLocalBounds().Intersects(tab_strip_rect)) {
++      // Check if the rect is actually on the tab strip region view.
++      if (tab_strip_region_view_->HitTestRect(tab_strip_rect)) {
++        if (tab_strip_region_view_->IsPositionInWindowCaption(
++                tab_strip_rect.origin())) {
++          return true;
++        }
++
++        return false;
++      }
++    }
++  }
++
+   // Check each child view to see if the rect intersects with
+   // any clickable elements. If it does, check if the click is actually on that
+   // element. False if on a clickable element, true if not on a clickable element.
+@@ -1997,6 +2016,39 @@ bool ToolbarView::ShouldAppMenuApplyFitt
+   return !IsTrailingContextualTasksButtonVisible();
+ }
+ 
++void ToolbarView::AttachTabStripRegionView(TabStripRegionView* view) {
++  if (!view) {
++    return;
++  }
++
++  tab_strip_region_view_ = view;
++
++  if (views::View* parent = tab_strip_region_view_->parent()) {
++    std::unique_ptr<views::View> owned_view =
++        parent->RemoveChildViewT(tab_strip_region_view_);
++    auto location_bar_index =
++        location_bar_view_ ? GetIndexOf(location_bar_view_) : std::nullopt;
++    const size_t insertion_index =
++        location_bar_index ? *location_bar_index + 1 : children().size();
++    AddChildViewAt(std::move(owned_view), insertion_index);
++  }
++
++  // The view may not be visible when attached (vertical -> compact),
++  // so ensure it is.
++  tab_strip_region_view_->SetVisible(true);
++  tab_strip_region_view_->SetPaintToLayer();
++  tab_strip_region_view_->layer()->SetFillsBoundsOpaquely(false);
++  tab_strip_region_view_->layer()->SetMasksToBounds(true);
++  tab_strip_region_view_->SetProperty(
++      views::kFlexBehaviorKey,
++      views::FlexSpecification(views::LayoutOrientation::kHorizontal,
++                               views::MinimumFlexSizeRule::kScaleToZero,
++                               views::MaximumFlexSizeRule::kUnbounded)
++          .WithOrder(kTabStripFlexOrder));
++
++  InvalidateLayout();
++}
++
+ void ToolbarView::UpdateToolbarLayout() {
+   if (!location_bar_) {
+     return;
+@@ -2321,7 +2373,7 @@ void ToolbarView::UpdateLocationBarCente
+ 
+ gfx::Rect ToolbarView::GetCenteredLocationBarBounds(gfx::Rect bounds,
+                                                     int toolbar_width) const {
+-  if (display_mode_ != DisplayMode::kNormal ||
++  if (IsCompactLayout() || display_mode_ != DisplayMode::kNormal ||
+       !location_bar_is_centered_.GetValue()) {
+     return bounds;
+   }
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -66,6 +66,7 @@ class ToolbarController;
+ class ToolbarDivider;
+ class OverflowButton;
+ class PerformanceInterventionButton;
++class TabStripRegionView;
+ 
+ namespace views {
+ class FlexLayout;
+@@ -181,6 +182,9 @@ class ToolbarView : public views::Access
+   // Updates the toolbar for the current browser layout.
+   void UpdateToolbarLayout();
+ 
++  // Attaches the tab strip region view when compact layout is enabled.
++  void AttachTabStripRegionView(TabStripRegionView* view);
++
+   // Accessors.
+   BrowserWindowInterface* browser() const { return browser_; }
+   views::Button* GetChromeLabsButton() const;
+@@ -468,6 +472,7 @@ class ToolbarView : public views::Access
+   raw_ptr<AvatarToolbarButton> avatar_ = nullptr;
+   raw_ptr<MediaToolbarButton> media_button_ = nullptr;
+   raw_ptr<BrowserAppMenuButton> app_menu_button_ = nullptr;
++  raw_ptr<TabStripRegionView> tab_strip_region_view_ = nullptr;
+ 
+   // The button currently holding the lock to be shown/hidden.
+   raw_ptr<glic::GlicButtonInterface> locked_expansion_button_ = nullptr;
+--- a/chrome/browser/ui/views/toolbar/BUILD.gn
++++ b/chrome/browser/ui/views/toolbar/BUILD.gn
+@@ -278,6 +278,7 @@ source_set("impl") {
+     "//chrome/browser/ui/customize_chrome",
+     "//chrome/browser/ui/extensions",
+     "//chrome/browser/ui/hats",
++    "//chrome/browser/ui/helium:helium_layout_state_controller",
+     "//chrome/browser/ui/omnibox",
+     "//chrome/browser/ui/profiles",
+     "//chrome/browser/ui/safety_hub",
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -374,6 +374,9 @@ BrowserViewTabbedLayoutImpl::GetMinimumT
+       }
+       return std::make_pair(result, gfx::Size());
+     }
++    case TabStripType::kToolbar:
++      // In compact layout, tab strip is in the toolbar
++      return std::make_pair(gfx::Size(), gfx::Size());
+     case TabStripType::kNone:
+       return std::make_pair(gfx::Size(), gfx::Size());
+   }
+--- a/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
++++ b/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
+@@ -36,7 +36,7 @@ class BrowserViewLayoutDelegate {
+   };
+ 
+   // The style of tab strip present, if any.
+-  enum class TabStripType { kNone, kVertical, kHorizontal };
++  enum class TabStripType { kNone, kVertical, kHorizontal, kToolbar };
+ 
+   virtual TabStripType GetTabStripType() const = 0;
+   virtual bool IsVerticalTabStripCollapsed() const = 0;
+--- a/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+@@ -77,6 +77,10 @@ BrowserViewLayoutDelegateImpl::GetTabStr
+     }
+   }
+ 
++  if (browser_view_->ShouldDrawToolbarTabStrip()) {
++    return TabStripType::kToolbar;
++  }
++
+   // Default is horizontal tab strip.
+   return TabStripType::kHorizontal;
+ }
+--- a/chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.cc
+@@ -402,8 +402,15 @@ void HorizontalTabStripRegionViewOld::La
+   }
+ 
+   if (new_tab_button_) {
++    const auto* layout_controller =
++        HeliumLayoutStateController::From(browser_view_->browser());
++    const bool fits_in_compact_layout =
++        !layout_controller || !layout_controller->IsCompactLayout() ||
++        width() >= new_tab_button_->GetPreferredSize().width() +
++                       GetLayoutConstant(LayoutConstant::kTabStripPadding);
+     const bool should_show_new_tab_button =
+-        ShouldShowNewTabButton(tab_strip_->GetBrowserWindowInterface());
++        ShouldShowNewTabButton(tab_strip_->GetBrowserWindowInterface()) &&
++        fits_in_compact_layout;
+     if (new_tab_button_->GetVisible() != should_show_new_tab_button) {
+       new_tab_button_->SetVisible(should_show_new_tab_button);
+     }

@@ -1,0 +1,44 @@
+--- a/ui/webui/resources/cr_components/theme_color_picker/theme_color_picker.html.ts
++++ b/ui/webui/resources/cr_components/theme_color_picker/theme_color_picker.html.ts
+@@ -12,17 +12,6 @@ export function getHtml(this: ThemeColor
+ <!-- TODO(crbug.com/40881996): Make grid adaptive. -->
+ <cr-grid columns="${this.columns}" role="radiogroup"
+     aria-label="${this.i18n('colorsContainerLabel')}">
+-  <cr-theme-color id="defaultColor"
+-      .backgroundColor="${this.defaultColor_.background}"
+-      .baseColor="${this.defaultColor_.base}"
+-      .foregroundColor="${this.defaultColor_.foreground}"
+-      title="${this.i18n('defaultColorName')}"
+-      aria-label="${this.i18n('defaultColorName')}" role="radio"
+-      ?checked="${this.isDefaultColorSelected_}"
+-      aria-checked="${this.isDefaultColorSelected_}"
+-      tabindex="${this.tabIndex_(this.isDefaultColorSelected_)}"
+-      @click="${this.onDefaultColorClick_}">
+-  </cr-theme-color>
+   <cr-theme-color id="greyDefaultColor"
+       .backgroundColor="${this.greyDefaultColor_.background}"
+       .baseColor="${this.greyDefaultColor_.base}"
+--- a/chrome/browser/themes/theme_service.cc
++++ b/chrome/browser/themes/theme_service.cc
+@@ -364,6 +364,12 @@ ThemeService::~ThemeService() = default;
+ void ThemeService::Init() {
+   theme_helper_->DCheckCalledOnValidSequence();
+ 
++  if (profile_->IsNewProfile() && !UsingPolicyTheme() &&
++      !profile_->GetPrefs()->HasPrefPath(prefs::kCurrentThemeID) &&
++      !profile_->GetPrefs()->HasPrefPath(prefs::kGrayscaleThemeEnabled)) {
++    profile_->GetPrefs()->SetBoolean(prefs::kGrayscaleThemeEnabled, true);
++  }
++
+   InitFromPrefs();
+ 
+   // ThemeObserver should be constructed before calling
+@@ -491,6 +497,8 @@ void ThemeService::UseDefaultTheme() {
+   }
+ 
+   ClearThemeData(/*reset_all_settings=*/true);
++  profile_->GetPrefs()->SetBoolean(prefs::kGrayscaleThemeEnabled, true);
++
+   NotifyThemeChanged();
+ }
+ 

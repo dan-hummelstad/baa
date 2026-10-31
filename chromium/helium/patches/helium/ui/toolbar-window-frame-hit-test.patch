@@ -1,0 +1,138 @@
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4705,6 +4705,12 @@ views::CloseRequestResult BrowserView::O
+ 
+ int BrowserView::NonClientHitTest(const gfx::Point& point) {
+ #if BUILDFLAG(IS_MAC)
++  // AppKit can re-enter hit testing while the browser widget is being torn
++  // down, either before or after this view has been detached from its widget.
++  if (!browser_widget_ || !GetWidget()) {
++    return HTNOWHERE;
++  }
++
+   // The top container while in immersive fullscreen on macOS lives in another
+   // Widget (OverlayWidgetMac). This means that BrowserView does not need to
+   // consult BrowserViewLayout::NonClientHitTest() to calculate the hit test.
+@@ -4765,6 +4771,18 @@ int BrowserView::NonClientHitTest(const
+     }
+   }
+ 
++  // The empty spaces in toolbar should allow mouse events to fall
++  // through to the caption area.
++  if (toolbar_) {
++    gfx::Point test_point(point);
++    if (ConvertedHitTest(parent(), toolbar_, &test_point)) {
++      if (toolbar_->IsPositionInWindowCaption(test_point)) {
++        return HTCAPTION;
++      }
++      return HTCLIENT;
++    }
++  }
++
+   // Let the frame handle any events that fall within the bounds of the window
+   // controls overlay.
+   if (IsWindowControlsOverlayEnabled() && GetActiveWebContents()) {
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -220,38 +220,6 @@ constexpr int kLargeSpaceBetweenButtons
+ constexpr int kInsideBorderAroundGlicButtons = 2;
+ constexpr int kGlicButtonMargin = 5;
+ 
+-// Returns whether `point` should be treated as part of the caption area in
+-// `view`. Recursively traverses into icon containers to correctly handle
+-// padding between buttons.
+-bool IsPositionInWindowCaptionForView(const views::View* view,
+-                                      const gfx::Point& point) {
+-  for (const views::View* child : view->children()) {
+-    if (!child->GetVisible() || !child->bounds().Contains(point)) {
+-      continue;
+-    }
+-    // Recurse into known icon container types to check their children.
+-    if (views::IsViewClass<ToolbarIconContainerView>(child) ||
+-        views::IsViewClass<page_actions::PageActionContainerView>(child)) {
+-      const gfx::Point point_in_child =
+-          views::View::ConvertPointToTarget(view, child, point);
+-      return IsPositionInWindowCaptionForView(child, point_in_child);
+-    }
+-    // Separators and dividers are non-interactive and should be treated
+-    // as caption area.
+-    if (views::IsViewClass<views::Separator>(child) ||
+-        views::IsViewClass<ToolbarDivider>(child)) {
+-      return true;
+-    }
+-    // The point hit an interactive control (button, location bar, etc.).
+-    return false;
+-  }
+-  // The point is not in any child's bounds — it's in empty space between
+-  // children, padding, or above/below a child. In VTS mode the toolbar is
+-  // at the very top of the window, so all non-interactive areas should be
+-  // draggable regardless of vertical position.
+-  return true;
+-}
+-
+ void SetRefreshMargins(views::View* button, bool expanded) {
+   button->SetProperty(
+       views::kMarginsKey,
+@@ -1282,6 +1250,40 @@ bool ToolbarView::GetAppMenuFocused() co
+   return app_menu_control && app_menu_control->HasFocus();
+ }
+ 
++bool ToolbarView::IsRectInWindowCaption(const gfx::Rect& rect) const {
++  // Clickable elements are child views of the toolbar. If the toolbar is not
++  // visible, then the rect is in the window caption.
++  if (!GetVisible()) {
++    return true;
++  }
++
++  const auto get_target_rect = [&](views::View* target) {
++    gfx::RectF rect_in_target_coords_f(rect);
++    views::View::ConvertRectToTarget(this, target, &rect_in_target_coords_f);
++    return gfx::ToEnclosingRect(rect_in_target_coords_f);
++  };
++
++  // Check each child view to see if the rect intersects with
++  // any clickable elements. If it does, check if the click is actually on that
++  // element. False if on a clickable element, true if not on a clickable element.
++  for (views::View* const child : children()) {
++    if (!child->GetVisible()) {
++      continue;
++    }
++
++    const gfx::Rect target_rect = get_target_rect(child);
++    if (child->GetLocalBounds().Intersects(target_rect)) {
++      // Check if the rect is actually on the child.
++      if (child->HitTestRect(target_rect)) {
++        return false;
++      }
++    }
++  }
++
++  // The rect is not on any clickable element, so it's in the window caption.
++  return true;
++}
++
+ void ToolbarView::ShowIntentPickerBubble(
+     std::vector<apps::IntentPickerAppInfo> app_info,
+     bool show_stay_in_chrome,
+@@ -1315,7 +1317,7 @@ void ToolbarView::ShowBookmarkBubble(con
+ 
+ bool ToolbarView::IsPositionInWindowCaption(
+     const gfx::Point& test_point) const {
+-  return IsPositionInWindowCaptionForView(this, test_point);
++  return IsRectInWindowCaption(gfx::Rect(test_point, gfx::Size(1, 1)));
+ }
+ 
+ void ToolbarView::RecordHitTestMetrics(bool is_caption_area) {
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -150,6 +150,10 @@ class ToolbarView : public views::Access
+ 
+   OverflowButton* overflow_button() { return overflow_button_; }
+ 
++  // Returns true if the specified rect is not on a clickable element,
++  // aka container view children: toolbar buttons, location bar, etc.
++  bool IsRectInWindowCaption(const gfx::Rect& rect) const;
++
+   void ShowIntentPickerBubble(
+       std::vector<apps::IntentPickerAppInfo> app_info,
+       bool show_stay_in_chrome,

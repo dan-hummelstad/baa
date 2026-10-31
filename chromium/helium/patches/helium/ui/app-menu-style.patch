@@ -1,0 +1,60 @@
+--- a/chrome/browser/ui/views/toolbar/app_menu.cc
++++ b/chrome/browser/ui/views/toolbar/app_menu.cc
+@@ -302,7 +302,7 @@ class InMenuButtonBackground : public vi
+       constexpr int kCircularButtonSize = 28;
+       bounds_rect.ClampToCenteredSize(
+           gfx::Size(kCircularButtonSize, kCircularButtonSize));
+-      menu_item.corner_radius = kCircularButtonSize / 2;
++      menu_item.corner_radius = 8;
+     }
+     const auto* const color_provider = view->GetColorProvider();
+     cc::PaintFlags flags;
+@@ -1506,21 +1506,8 @@ void AppMenu::PopulateMenu(MenuItemView*
+       PopulateMenu(item, model->GetSubmenuModelAt(i));
+     }
+ 
+-    // Helper method that adds a background to a menu item.
+-    auto add_menu_row_background = [item](int vertical_margin,
+-                                          ui::ColorId background_color_id) {
+-      constexpr int kBackgroundCornerRadius = 12;
+-      item->set_vertical_margin(vertical_margin);
+-      item->SetMenuItemBackground(MenuItemView::MenuItemBackground(
+-          background_color_id, kBackgroundCornerRadius));
+-      item->SetSelectedColorId(ui::kColorAppMenuRowBackgroundHovered);
+-    };
+-
+     switch (model->GetCommandIdAt(i)) {
+       case AppMenuModel::kProfileMenuPlaceholder: {
+-        add_menu_row_background(ChromeLayoutProvider::Get()->GetDistanceMetric(
+-                                    DISTANCE_CONTENT_LIST_VERTICAL_MULTI),
+-                                ui::kColorAppMenuProfileRowBackground);
+         ProfileAttributesEntry* profile_attributes =
+             GetProfileAttributesFromProfile(browser_->GetProfile());
+         if (profile_attributes &&
+@@ -1534,7 +1521,6 @@ void AppMenu::PopulateMenu(MenuItemView*
+         break;
+       }
+       case IDC_UPGRADE_DIALOG: {
+-        add_menu_row_background(12, ui::kColorAppMenuUpgradeRowBackground);
+         if (const auto upgrade_substring_text =
+                 AppMenuModel::GetUpgradeDialogSubstringText();
+             !upgrade_substring_text.empty()) {
+@@ -1555,18 +1541,6 @@ void AppMenu::PopulateMenu(MenuItemView*
+         break;
+       }
+       case IDC_WEB_APP_UPGRADE_DIALOG: {
+-        add_menu_row_background(12, ui::kColorAppMenuUpgradeRowBackground);
+-        break;
+-      }
+-      case IDC_SET_BROWSER_AS_DEFAULT: {
+-        // Only highlight the default browser item when it is first in the
+-        // AppMenu.
+-        if (i == 0) {
+-          add_menu_row_background(
+-              views::LayoutProvider::Get()->GetDistanceMetric(
+-                  views::DISTANCE_CONTROL_VERTICAL_TEXT_PADDING),
+-              ui::kColorAppMenuUpgradeRowBackground);
+-        }
+         break;
+       }
+       case AppMenuModel::kEditMenuPlaceholder: {
