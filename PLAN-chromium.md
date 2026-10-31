@@ -100,13 +100,14 @@ popover), chrome:// WebUI pages, print preview, autofill dropdown at first (GPUI
 
 ```
 chromium/
-  version                 Chromium version + baa revision
-  helium/                 git submodule: imputnet/helium-chromium at the matching tag (includes ungoogled-chromium)
-  patches/series          baa's own patches (BrowserWindow factory, dialog skins), quilt order, small
+  helium-macos.rev        pinned imputnet/helium-macos commit (it pins helium-chromium + Chromium version)
+  patches/                baa's own patches (BrowserWindow factory, dialog skins), applied after Helium's
   baa/                    //baa: BUILD.gn, baa.h, baa::* layer, baa::ui::Window
-  args.gn                 official, ThinLTO+PGO, no Google API keys
-xtask: chromium sync | patch | build | bundle
 ```
+
+Helium's own scripts do the work (`devutils/shared.sh`: `prepare_sources` downloads Helium's Chromium
+tarball, prunes, applies patches, domain/name substitution; `write_gn_args <arch> dev|release`).
+`chromium.yml` runs them; we add our patch folder and `//baa` on top.
 
 - **Patch base: Helium (GPL-3.0, fine for baa).** Take its de-Googling, privacy and extension patches.
   Skip its views-UI patches, which change code we never create. Helium tracks ungoogled-chromium, so
@@ -117,13 +118,17 @@ xtask: chromium sync | patch | build | bundle
 
 ## Build and CI
 
-- **Dev loop: local** on the M4 (10 cores, 24 GB, ~400 GB free). Component build, `symbol_level=1`.
-  First build estimated 6–10 h (to measure); `//baa` edits rebuild in minutes. Cap link jobs if 24 GB swaps.
-- **Release: chained CI** like Helium. `chromium-feasibility.yml` (committed, needs `main` pushed to run)
-  measures free `macos-latest` runners. Helium uses sponsored Depot runners. Fallbacks: paid runners or
-  this Mac as a self-hosted runner.
-- **Engine bumps:** `chromium-bump.yml` replaces `cef-bump.yml`. It follows Helium's tags, applies
-  `patches/series`, rebuilds and opens a PR; a failing patch stops for a human. The privacy test gates it.
+- **`chromium.yml`** builds the pinned Helium tree in self-chaining ~4.75 h phases on free runners.
+  `mode=release` = Helium's official args (the timing run for the runner decision). `mode=dev` = component
+  build on the `xcode-27` runner with Xcode 27.1 (27A9275, same as the dev Mac); the finished tree is kept
+  7 days to unpack locally (`~/chromium`) and build incrementally (`//baa` edits rebuild in minutes).
+- **Source reference:** Helium's CI publishes its prepared tree (`helium_macos_resources_arm64`); unpacked
+  at `~/chromium/helium-ref` for reading/grepping while builds run.
+- **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
+  backend or a self-hosted runner if chained phases are too slow.
+- **Engine bumps:** `helium-bump.yml` (to write) moves `chromium/helium-macos.rev` to Helium's next
+  release, rebuilds and opens a PR; a failing baa patch stops for a human. The privacy test gates it.
+  `cef-bump.yml` is gone; the app keeps its pinned CEF until phase 5.
 - **Cost to accept:** security-fix latency = Helium's lag + our patch refresh + build time. With CEF it is
   Spotify's problem.
 
@@ -131,13 +136,13 @@ xtask: chromium sync | patch | build | bundle
 
 | # | Phase | Done when |
 |---|---|---|
-| 0 | **Measure** | Feasibility workflow run on GitHub; one Helium build on the M4, timed. Runner decision. |
-| 1 | **Tree tooling** | `xtask chromium sync/patch/build` produce Helium-patched Chromium.app locally. |
+| 0 | **Measure** | `chromium.yml` release run timed on free runners; dev tree downloaded and an incremental build confirmed locally. Runner decision. |
+| 1 | **Tree tooling** | `chromium/patches` + `//baa` applied by `chromium.yml` and by a local script on the unpacked tree. |
 | 2 | **Spike (shape check)** | `BaaCore.framework` with a minimal `//baa`; Rust `main` (GPUI, `CrAppProtocol` NSApp) starts it; one `WebContents` NSView in a GPUI hole; 120 Hz scroll, typing, IME, ⌘ keys to GPUI. |
 | 3 | **ADK core** | `baa::BrowserApplication/Profile/Browser/WebContents` + `baa::ui::Window`; C ABI + Rust wrapper; Spaces as profiles; tabs in a real `TabStripModel`; 1Password signs in and sees tabs with no shim; Chrome-made tabs and `window.open` arrive via `didCreateNewWebContents`. |
 | 4 | **Delegate surface** | The Arc delegate list above, drawn in GPUI; extension toolbar actions + popups; `chrome.tabGroups` ↔ folders; command bar on `AutocompleteController`. |
 | 5 | **Parity + delete CEF** | `baa-web` backend on BaaCore behind `WebHost`; every CEF-build feature works. Remove `vendor/gpui-cef`, tabs shim, `ChromeTabClient`, hidden tab windows, Origin-null fix, hidden chrome://extensions page, ⌘C routing. |
-| 6 | **Ship** | Signed + notarised from CI; `chromium-bump.yml` live; privacy test green. |
+| 6 | **Ship** | Signed + notarised from CI; `helium-bump.yml` live; privacy test green. |
 | — | Windows | Later: same `//baa`, HWND instead of NSView (Arc did this, Swift on Windows). CEF/WebView2 keeps Windows alive until then. |
 
 ## Open questions
@@ -145,4 +150,3 @@ xtask: chromium sync | patch | build | bundle
 1. Release builds: free chained runners, paid runners, or this Mac self-hosted? Decide after phase 0.
 2. Proprietary codecs (H.264/AAC) in our build?
 3. Widevine needs Google's VMP signing agreement (Arc has one). Out of scope unless pursued.
-4. OK to push `main` to `origin` so the feasibility workflow can run?
