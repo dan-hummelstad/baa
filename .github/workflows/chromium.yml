@@ -79,7 +79,7 @@ jobs:
         run: |
           set -eux
           mkdir -p "$ROOT"
-          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$ROOT/"
+          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$ROOT/"
           cd "$ROOT/helium-macos"
           t=$(date +%s)
           source devutils/shared.sh
