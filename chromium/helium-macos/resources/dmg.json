@@ -1,0 +1,21 @@
+{
+    "title": "Helium",
+    "icon": "Helium.app/Contents/Resources/app.icns",
+    "background": "dmg_background.png",
+
+    "icon-size": 90,
+    "contents": [
+        { "x": 175, "y": 130, "type": "file", "path": "Helium.app" },
+        { "x": 175, "y": 370, "type": "link", "path": "/Applications" }
+    ],
+
+    "window": {
+        "size": {
+            "width": 350,
+            "height": 518
+        }
+    },
+
+    "format": "ULMO",
+    "filesystem": "APFS"
+}
