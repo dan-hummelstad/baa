@@ -17,6 +17,12 @@ wrap_client! {
     impl Client {}
 }
 
+/// A client with no handlers, for browsers the app does not track (DevTools
+/// in a window of its own).
+pub(crate) fn plain_client() -> Client {
+    PlainClient::new()
+}
+
 wrap_browser_view_delegate! {
     struct ChromeViewDelegate {}
     impl ViewDelegate {}
@@ -28,6 +34,43 @@ wrap_browser_view_delegate! {
             ChromeToolbarType::NORMAL
         }
     }
+}
+
+wrap_browser_view_delegate! {
+    struct TabViewDelegate {}
+    impl ViewDelegate {}
+    impl BrowserViewDelegate {
+        fn browser_runtime_style(&self) -> RuntimeStyle {
+            RuntimeStyle::CHROME
+        }
+    }
+}
+
+/// A Chrome-style browser in a window of its own: a real Chrome tab, which
+/// extensions see (`chrome.tabs`, `sender.tab`). CEF on macOS makes any page
+/// with a `parent_view` Alloy style, so the app takes this one's view out of
+/// its window instead. The window is shown, unseen, from the pump (see
+/// `Shared::run_tab_window`): Chromium treats a page in a hidden window as hidden.
+pub(crate) fn create_tab(
+    client: &mut Client,
+    url: &str,
+    settings: &BrowserSettings,
+    context: Option<&mut RequestContext>,
+) -> Option<(Window, *mut objc2::runtime::AnyObject)> {
+    let view = browser_view_create(
+        Some(client),
+        Some(&url.into()),
+        Some(settings),
+        None,
+        context,
+        Some(&mut TabViewDelegate::new()),
+    )?;
+    let window = window_create_top_level(Some(&mut HiddenWindowDelegate::new(view)))?;
+    // CEF's handle is the content view, which the app takes; the window
+    // has to be found while the view is still in it.
+    let ns_window = super::native::retained(super::native::window_of(window.window_handle().cast()));
+    super::native::keep_unseen(ns_window);
+    Some((window, ns_window))
 }
 
 wrap_window_delegate! {

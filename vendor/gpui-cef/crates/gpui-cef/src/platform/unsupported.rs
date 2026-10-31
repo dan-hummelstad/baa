@@ -92,7 +92,12 @@ impl Webview {
 
     pub fn set_zoom(&self, _factor: f64) {}
     pub fn find(&self, _text: &str, _forward: bool) {}
-    pub fn show_dev_tools(&self) {}
+    pub fn show_dev_tools(&self, _inspect_at: Option<(i32, i32)>) {}
+
+    /// DevTools docking is macOS-only so far: an empty page.
+    pub fn new_dev_tools(window: &mut Window, cx: &mut Context<Self>, _of: &gpui::Entity<Webview>, _inspect_at: Option<(i32, i32)>, _side: &str) -> Self {
+        Self::new(window, cx, WebviewOptions::default())
+    }
     // ponytail: no back/forward list on this backend yet.
     pub fn history(&self) -> (Vec<crate::HistoryEntry>, usize) {
         (Vec::new(), 0)
@@ -104,6 +109,7 @@ impl Webview {
 
     /// No-op: a native child window has square corners.
     pub fn set_corner_radius(&self, _radius: f32) {}
+    pub fn set_square_corners(&self, _square: u8) {}
 
     /// No-op: child windows stack by creation.
     pub fn set_floating(&self, _floating: bool) {}
@@ -172,3 +178,14 @@ impl ChromePage {
 }
 
 pub fn on_chrome_tab(_open: impl Fn(String) + 'static) {}
+
+/// Native context menus are macOS-only so far: dismissed at once.
+pub fn show_menu(
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+    _at: gpui::Point<gpui::Pixels>,
+    _items: Vec<crate::MenuItem>,
+    done: impl FnOnce(Option<usize>, &mut gpui::Window, &mut gpui::App) + 'static,
+) {
+    window.defer(cx, move |window, cx| done(None, window, cx));
+}

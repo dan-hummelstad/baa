@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use baa_model::{now, DownloadRecord, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
+use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
@@ -61,11 +61,6 @@ const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 
 type MenuAction<H> = Box<dyn Fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>)>;
 
-pub(crate) struct ContextMenu {
-    pub at: Point<Pixels>,
-    pub kind: MenuKind,
-}
-
 pub(crate) enum MenuKind {
     Page {
         tab: TabId,
@@ -91,10 +86,18 @@ pub struct Browser<H: WebHost> {
     pub(crate) session: Session,
     pub(crate) settings: baa_model::Settings,
     pub(crate) pages: HashMap<TabId, (Entity<H::Page>, Subscription)>,
+    /// DevTools docked beside a tab's page (see `Settings::devtools_dock`).
+    pub(crate) devtools: HashMap<TabId, (Entity<H::Page>, Subscription)>,
+    /// How much of the page area docked DevTools takes, and whether its seam is being dragged.
+    devtools_share: f32,
+    devtools_drag: bool,
+    /// The page area's bounds, last frame: the seam drag measures against it.
+    page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     zoom: HashMap<TabId, f64>,
     pub(crate) bar: Option<Bar>,
     pub(crate) find: Option<TextField>,
-    pub(crate) menu: Option<ContextMenu>,
+    /// A native context menu is open (it runs modally).
+    pub(crate) menu_open: bool,
     /// A link previewed over the page (Peek), or an extension's popup.
     pub(crate) peek: Option<PeekPage<H::Page>>,
     /// The Space name being edited in place.
@@ -227,10 +230,14 @@ impl<H: WebHost> Browser<H> {
             session,
             settings,
             pages: HashMap::new(),
+            devtools: HashMap::new(),
+            devtools_share: 0.4,
+            devtools_drag: false,
+            page_area: Default::default(),
             zoom: HashMap::new(),
             bar: None,
             find: None,
-            menu: None,
+            menu_open: false,
             peek: None,
             renaming: None,
             renaming_folder: None,
@@ -299,6 +306,47 @@ impl<H: WebHost> Browser<H> {
         self.pages.get(&self.active_tab()?).map(|(p, _)| p)
     }
 
+    /// DevTools for the active tab where the settings put it; docked ones close
+    /// when asked again, as ⌥⌘I does in Chrome.
+    pub(crate) fn toggle_devtools(&mut self, inspect_at: Option<(i32, i32)>, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(tab), Some(page)) = (self.active_tab(), self.active_page().cloned()) else { return };
+        let Some(side) = self.settings.devtools_dock.side() else {
+            return page.read(cx).open_devtools(inspect_at);
+        };
+        if self.devtools.remove(&tab).is_some() {
+            self.focus_page(window, cx);
+            return cx.notify();
+        }
+        let tools = self.host.create_devtools(&page, inspect_at, side, window, cx);
+        let sub = cx.subscribe_in(&tools, window, move |this, _, event, window, cx| match event {
+            // Its own close button.
+            PageEvent::Closed => {
+                this.devtools.remove(&tab);
+                this.focus_page(window, cx);
+                cx.notify();
+            }
+            // Its own dock-side picker.
+            PageEvent::DevToolsDock(side) => this.set_devtools_dock(DevToolsDock::from_side(side), window, cx),
+            _ => {}
+        });
+        window.focus(&tools.read(cx).focus_handle(cx), cx);
+        self.devtools.insert(tab, (tools, sub));
+        cx.notify();
+    }
+
+    /// Moves DevTools to `dock` and remembers it; the active tab's follows.
+    pub(crate) fn set_devtools_dock(&mut self, dock: baa_model::DevToolsDock, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.devtools_dock = dock;
+        if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_settings(&self.settings)) {
+            log::error!("saving settings: {e}");
+        }
+        // A docked one just moves; one going to a window reopens there.
+        if dock == DevToolsDock::Window && self.active_tab().and_then(|tab| self.devtools.remove(&tab)).is_some() {
+            self.toggle_devtools(None, window, cx);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn with_page(&self, cx: &mut Context<Self>, f: impl FnOnce(&H::Page)) {
         if let Some(page) = self.active_page() {
             f(page.read(cx));
@@ -365,6 +413,7 @@ impl<H: WebHost> Browser<H> {
 
         let session = &self.session;
         self.pages.retain(|id, _| session.tab(*id).is_some());
+        self.devtools.retain(|id, _| session.tab(*id).is_some());
         let pages = &self.pages;
         self.asks.retain(|id, _| pages.contains_key(id));
         self.audible.retain(|id| pages.contains_key(id));
@@ -544,19 +593,19 @@ impl<H: WebHost> Browser<H> {
                 link_url,
                 selection,
             } => {
-                self.menu = Some(ContextMenu {
-                    at: point(px(*x), px(*y)),
-                    kind: MenuKind::Page {
-                        tab: id,
-                        link: link_url.clone(),
-                        selection: selection.clone(),
-                    },
-                });
-                return cx.notify();
+                let kind = MenuKind::Page { tab: id, link: link_url.clone(), selection: selection.clone() };
+                return self.open_menu(kind, point(px(*x), px(*y)), window, cx);
             }
             PageEvent::Closed => self.session.close_tab(id, now()),
             // Only extension popups send it.
             PageEvent::ActiveTabLoad(_) | PageEvent::PreferredSize(_) => return,
+            // Only docked DevTools sends it, to its own subscription.
+            PageEvent::DevToolsDock(_) => return,
+            PageEvent::DevToolsRequested { x, y } => {
+                // Inspect always opens (or moves to) the element, never closes.
+                self.devtools.remove(&id);
+                return self.toggle_devtools(Some((*x, *y)), window, cx);
+            }
             PageEvent::PermissionRequested { .. }
             | PageEvent::PermissionDismissed(_)
             | PageEvent::Dialog { .. }
@@ -633,6 +682,8 @@ impl<H: WebHost> Browser<H> {
             open,
             popup,
             size: None,
+            shown: !popup,
+            settle: 0,
         });
         // ponytail: a popup that never reports a size still shows, at Chrome's default-ish one.
         if popup {
@@ -640,10 +691,9 @@ impl<H: WebHost> Browser<H> {
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
                 this.update(cx, |this, cx| {
-                    let waiting = this.peek.as_ref().filter(|p| Some(p.page.entity_id()) == page && p.size.is_none());
-                    if waiting.is_some() {
-                        this.fit_popup(gpui::size(px(380.), px(520.)), cx)
-                    }
+                    let Some(peek) = this.peek.as_mut().filter(|p| Some(p.page.entity_id()) == page) else { return };
+                    peek.size.get_or_insert((380., 520.));
+                    this.reveal_popup(cx);
                 })
                 .ok();
             })
@@ -691,18 +741,31 @@ impl<H: WebHost> Browser<H> {
     /// (it drops in at that size), later ones animate to it.
     pub(crate) fn fit_popup(&mut self, size: gpui::Size<Pixels>, cx: &mut Context<Self>) {
         let Some(peek) = self.peek.as_mut().filter(|p| p.popup) else { return };
-        let (w, h) = (f32::from(size.width), f32::from(size.height));
-        match &mut peek.size {
-            Some((sw, sh)) => {
-                sw.set_target(w);
-                sh.set_target(h);
-            }
-            None => {
-                peek.size = Some((Spring::new(w), Spring::new(h)));
-                peek.open = Spring::new(0.0);
-                peek.open.set_target(1.0);
-            }
+        peek.size = Some((f32::from(size.width), f32::from(size.height)));
+        cx.notify();
+        if peek.shown {
+            return;
         }
+        peek.settle += 1;
+        let settle = peek.settle;
+        let page = peek.page.entity_id();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(POPUP_SETTLE).await;
+            this.update(cx, |this, cx| {
+                if this.peek.as_ref().is_some_and(|p| p.page.entity_id() == page && p.settle == settle) {
+                    this.reveal_popup(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reveal_popup(&mut self, cx: &mut Context<Self>) {
+        let Some(peek) = self.peek.as_mut().filter(|p| !p.shown) else { return };
+        peek.shown = true;
+        peek.open = Spring::new(0.0);
+        peek.open.set_target(1.0);
         cx.notify();
     }
 
@@ -1168,9 +1231,25 @@ impl<H: WebHost> Browser<H> {
             .set_target(if open { 1.0 } else { 0.0 });
     }
 
-    pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.menu = Some(ContextMenu { at, kind });
-        cx.notify();
+    /// A native menu for `kind` at `at`; its item runs once it closes.
+    pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let actions = match kind {
+            MenuKind::Page { tab, link, selection } => self.page_menu(tab, link, selection),
+            kind => self.sidebar_menu(&kind),
+        };
+        let items = actions.iter().enumerate().map(|(i, (label, _))| baa_web::MenuItem::action(*label, i)).collect();
+        let this = cx.entity().downgrade();
+        self.menu_open = true;
+        self.host.show_menu(at, items, window, cx, Box::new(move |picked, window, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.menu_open = false;
+                // Closed first: a rename started by the item must stay open.
+                this.close_overlays(window, cx);
+                if let Some((_, run)) = picked.and_then(|i| actions.into_iter().nth(i)) {
+                    run(this, window, cx);
+                }
+            });
+        }));
     }
 
     pub(crate) fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1184,7 +1263,6 @@ impl<H: WebHost> Browser<H> {
             bar.scale.set_target(0.0);
             self.closing_bar = Some(bar);
         }
-        self.menu = None;
         self.popover = None;
         self.settings_open = false;
         self.chrome_sheet = None;
@@ -1362,7 +1440,7 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(
-            cx.listener(|this, _: &DevTools, _, cx| this.with_page(cx, |p| p.open_devtools())),
+            cx.listener(|this, _: &DevTools, window, cx| this.toggle_devtools(None, window, cx)),
         )
         .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
         .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
@@ -1428,7 +1506,7 @@ impl<H: WebHost> Browser<H> {
         } else {
             REVEAL_EDGE
         };
-        let inside = x < reach || (self.reveal_hover && self.menu.is_some());
+        let inside = x < reach || (self.reveal_hover && self.menu_open);
         if inside != self.reveal_hover {
             self.set_reveal(inside, cx);
         }
@@ -1506,7 +1584,7 @@ impl<H: WebHost> Browser<H> {
     fn render_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let peek = self.peek.as_ref()?;
         let t = peek.open.value();
-        let size = peek.size.as_ref().map(|(w, h)| (w.value(), h.value()));
+        let size = peek.size;
         let host = SharedString::from(host_of(&peek.url));
         let content = peek.page.update(cx, |p, cx| p.render(window, cx));
         let control = |id: &'static str, name: &'static str| {
@@ -1572,15 +1650,25 @@ impl<H: WebHost> Browser<H> {
                             .mt(px((1.0 - t) * -8.0))
                             .w(px(size.map_or(380., |s| s.0)))
                             .h(px(size.map_or(520., |s| s.1)))
-                            // Laid out but unseen until the content says how big it is.
-                            .opacity(if size.is_some() { t.clamp(0.0, 1.0) } else { 0. })
+                            .opacity(if peek.shown { t.clamp(0.0, 1.0) } else { 0. })
                             .rounded(r(PEEK_RADIUS))
                             .overflow_hidden()
                             .bg(gpui::white())
                             .border_1()
                             .border_color(gpui::rgba(0x0000001F))
                             .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 12., 32.)])
-                            .child(content),
+                            .child(if peek.shown {
+                                content.into_any_element()
+                            } else {
+                                // The page is a native view gpui's opacity cannot hide, and a
+                                // hidden one stops rendering (and reporting its size): it is laid
+                                // out full size behind a one-point clip.
+                                div()
+                                    .size(px(1.))
+                                    .overflow_hidden()
+                                    .child(div().absolute().w(px(size.map_or(380., |s| s.0))).h(px(size.map_or(520., |s| s.1))).child(content))
+                                    .into_any_element()
+                            }),
                     )
                     .into_any_element(),
             );
@@ -1648,9 +1736,6 @@ impl<H: WebHost> Browser<H> {
         }
         if let Some(peek) = &mut self.peek {
             moving |= peek.open.tick(dt, reduce);
-            if let Some((w, h)) = &mut peek.size {
-                moving |= w.tick(dt, reduce) | h.tick(dt, reduce);
-            }
         }
         if let Some(bar) = &mut self.bar {
             moving |= bar.scale.tick(dt, reduce);
@@ -1692,6 +1777,80 @@ impl<H: WebHost> Browser<H> {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
             None => crate::start::render(theme).into_any_element(),
         };
+        // Only the active tab's DevTools shows; the rest keep their state hidden.
+        let active = self.active_tab();
+        for (tab, (tools, _)) in &self.devtools {
+            tools.read(cx).set_visible(Some(*tab) == active);
+        }
+        let dock = self.settings.devtools_dock;
+        let tools = active.and_then(|tab| self.devtools.get(&tab)).map(|(tools, _)| tools.clone());
+        // As in Chrome: one card, the two meeting at a straight seam.
+        let (page_square, tools_square) = match (&tools, dock) {
+            (None, _) | (_, DevToolsDock::Window) => (0, 0),
+            (Some(_), DevToolsDock::Right) => (2 | 8, 1 | 4),
+            (Some(_), DevToolsDock::Left) => (1 | 4, 2 | 8),
+            (Some(_), DevToolsDock::Bottom) => (4 | 8, 1 | 2),
+        };
+        if let Some(page) = self.active_page() {
+            page.read(cx).set_square_corners(page_square);
+        }
+        let across = dock == DevToolsDock::Bottom;
+        let share = self.devtools_share;
+        let tools = tools.map(|tools| {
+            tools.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
+            tools.read(cx).set_square_corners(tools_square);
+            let pane = div()
+                .flex_none()
+                .min_w_0()
+                .min_h_0()
+                .child(tools.update(cx, |p, cx| p.render(window, cx)));
+            if across { pane.w_full().h(relative(share)) } else { pane.h_full().w(relative(share)) }
+        });
+        let resize = if across { gpui::CursorStyle::ResizeUpDown } else { gpui::CursorStyle::ResizeLeftRight };
+        // The seam: a hairline, with a wider grip to drag it by.
+        let seam = tools.is_some().then(|| {
+            let grip = div()
+                .id("devtools-seam")
+                .absolute()
+                .occlude()
+                .cursor(resize)
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.devtools_drag = true;
+                    cx.notify();
+                }));
+            let grip = if across { grip.left_0().right_0().top(px(-3.)).h(px(7.)) } else { grip.top_0().bottom_0().left(px(-3.)).w(px(7.)) };
+            let line = div().flex_none().relative().bg(gpui::rgba(0x0000002E)).child(grip);
+            if across { line.w_full().h(px(1.)) } else { line.h_full().w(px(1.)) }
+        });
+        let area = self.page_area.clone();
+        let measure = gpui::canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().size_full();
+        // While dragging, the whole area follows the pointer (pages are native
+        // views and would take the moves for themselves).
+        let drag = self.devtools_drag.then(|| {
+            let area = self.page_area.clone();
+            div()
+                .id("devtools-drag")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .cursor(resize)
+                .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, _, cx| {
+                    let b = area.get();
+                    let share = match this.settings.devtools_dock {
+                        DevToolsDock::Right => (b.right() - e.position.x) / b.size.width,
+                        DevToolsDock::Left => (e.position.x - b.left()) / b.size.width,
+                        _ => (b.bottom() - e.position.y) / b.size.height,
+                    };
+                    if share.is_finite() {
+                        this.devtools_share = share.clamp(0.15, 0.85);
+                        cx.notify();
+                    }
+                }))
+                .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.devtools_drag = false;
+                    cx.notify();
+                }))
+        });
         let asks = self.render_asks(theme, cx);
         let find = self.find.as_ref().map(|field| {
             drop_in(div()
@@ -1730,14 +1889,22 @@ impl<H: WebHost> Browser<H> {
             .flex_col()
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .flex()
+                    .when(across, |d| d.flex_col())
+                    .when(dock == DevToolsDock::Left, |d| d.flex_row_reverse())
                     .rounded(r(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
-                    .child(content),
+                    .child(measure)
+                    .child(div().flex_1().min_h_0().min_w_0().child(content))
+                    .children(seam)
+                    .children(tools)
+                    .children(drag),
             )
             // ASCII Chrome: the page sits in a box-drawn frame, a few px off its edge.
             .when(crate::theme::ascii(), |d| {
@@ -1968,66 +2135,6 @@ impl<H: WebHost> Browser<H> {
         )))
     }
 
-    fn render_context_menu(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        let menu = self.menu.as_ref()?;
-        let items = match &menu.kind {
-            MenuKind::Page {
-                tab,
-                link,
-                selection,
-            } => self.page_menu(*tab, link.clone(), selection.clone()),
-            kind => self.sidebar_menu(kind),
-        };
-        let rows: Vec<_> = items.into_iter().enumerate().map(|(i, (label, run))| {
-            let key = ("menu", i as u64);
-            let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
-            let row = div()
-                .id(("menu", i))
-                .h(px(32.))
-                .px(px(10.))
-                .mx(px(2. * p))
-                .flex()
-                .items_center()
-                .rounded(r(7.))
-                .bg(fade(theme.accent, h))
-                .text_color(mix(surface::ink().into(), gpui::white(), h))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    // Closed first: a rename started by the item must stay open.
-                    this.close_overlays(window, cx);
-                    run(this, window, cx);
-                }))
-                .child(label);
-            feel(row, key, cx)
-        }).collect();
-        // The backdrop keeps a click on the (native) page from bypassing the
-        // menu's mouse_down_out.
-        Some(deferred(div().absolute().inset_0().occlude().child(
-            anchored().position(menu.at).snap_to_window().child(drop_in(
-                div()
-                    .id("context-menu")
-                    .occlude()
-                    .min_w(px(200.))
-                    .p(px(5.))
-                    .rounded(r(10.))
-                    .bg(surface::bg())
-                    .border_1()
-                    .border_color(surface::border())
-                    .shadow(vec![shadow(gpui::rgba(0x18122C29).into(), 8., 24.)])
-                    .text_size(px(13.))
-                    .text_color(surface::ink())
-                    .on_mouse_down_out(
-                        cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
-                    )
-                    .children(rows),
-                "context-menu",
-            )),
-        )))
-    }
-
     fn sidebar_menu(&self, kind: &MenuKind) -> Vec<(&'static str, MenuAction<H>)> {
         let mut items: Vec<(&'static str, MenuAction<H>)> = Vec::new();
         let space = self.session.active_space();
@@ -2207,7 +2314,7 @@ impl<H: WebHost> Browser<H> {
         ));
         items.push((
             "Inspect",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.open_devtools())),
+            Box::new(|this, window, cx| this.toggle_devtools(None, window, cx)),
         ));
         items
     }
@@ -2275,7 +2382,12 @@ pub(crate) struct PeekPage<P> {
     /// An extension popup rather than a link preview.
     pub(crate) popup: bool,
     /// A popup's card size, following its content; `None` until it reports one.
-    pub(crate) size: Option<(Spring, Spring)>,
+    pub(crate) size: Option<(f32, f32)>,
+    /// Whether a popup is on screen yet: it waits, laid out at its size but
+    /// clipped away, until its size stops changing, so it never shows resizing.
+    pub(crate) shown: bool,
+    /// Bumped by each size a waiting popup reports; only the last one reveals it.
+    settle: u64,
 }
 
 /// Back/forward held down: the history in that direction.
@@ -2284,6 +2396,10 @@ pub(crate) struct HistoryMenu {
     /// (offset from the current entry, title).
     pub entries: Vec<(i32, String)>,
 }
+
+/// How long a popup's size has to hold before it shows. Popups report a few
+/// sizes in quick succession as their content loads.
+const POPUP_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 
 /// How long the header shows the check after copying the URL.
 const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
@@ -2365,7 +2481,6 @@ impl<H: WebHost> Render for Browser<H> {
             (None, Some(bar)) => Some(self.render_command_bar(bar, false, &theme, window, cx)),
             _ => None,
         };
-        let menu = self.render_context_menu(&theme, cx);
         let popover = self.render_popover(&theme, cx);
         let history = self.render_history_menu(cx);
         // The sidebar brings its own padding; collapsed, the page gets the inset.
@@ -2428,7 +2543,6 @@ impl<H: WebHost> Render for Browser<H> {
             .children(self.render_settings(&theme, cx))
             .children(chrome_sheet)
             .children(popover)
-            .children(menu)
             .children(history);
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {

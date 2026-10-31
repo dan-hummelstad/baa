@@ -1,0 +1,174 @@
+# Feasibility test: can free GitHub macOS runners build a stock official
+# Chromium? Each run compiles for up to ~4.75 h, uploads the tree, and
+# re-dispatches itself with phase+1 (Helium's chained-job trick, without
+# writing out N jobs). The final run's summary has the totals.
+name: chromium-feasibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Chromium version (empty = current Mac stable)"
+        default: ""
+      runner:
+        default: macos-latest
+      phase:
+        default: "1"
+      prev_run:
+        description: "internal: run id holding the previous phase's tree"
+        default: ""
+      started:
+        description: "internal: epoch of phase 1"
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency: chromium-feasibility
+
+env:
+  MAX_PHASES: 12
+  DEPOT_TOOLS_UPDATE: "0"
+
+jobs:
+  phase:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+        working-directory: /Users/runner/work/chromium
+    steps:
+      - name: Prepare runner
+        working-directory: /
+        run: |
+          set -eux
+          mkdir -p /Users/runner/work/chromium
+          echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+          S="${{ inputs.started }}"; echo "STARTED=${S:-$(date +%s)}" >> "$GITHUB_ENV"
+          [ "${{ inputs.phase }}" -le "$MAX_PHASES" ] || { echo "gave up after $MAX_PHASES phases"; exit 1; }
+          df -h /
+          # Disk is the first thing to run out: drop everything Chromium doesn't use.
+          sudo mdutil -a -i off || true
+          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet
+          xcrun simctl delete all || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          for x in /Applications/Xcode_*.app; do [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
+          xcodebuild -downloadComponent MetalToolchain || true
+          brew install coreutils zstd
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git /Users/runner/depot_tools
+          echo /Users/runner/depot_tools >> "$GITHUB_PATH"
+          sysctl -n hw.ncpu hw.memsize
+          df -h /
+
+      - name: Fetch source (phase 1)
+        if: inputs.phase == '1'
+        run: |
+          set -eux
+          V="${{ inputs.version }}"
+          [ -n "$V" ] || V=$(curl -fsS 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Mac&num=1' | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["version"])')
+          echo "$V" > version.txt
+          cat > .gclient <<EOF
+          solutions = [{
+            "name": "src",
+            "url": "https://chromium.googlesource.com/chromium/src.git@refs/tags/$V",
+            "managed": False,
+            "custom_vars": {"checkout_pgo_profiles": True},
+          }]
+          EOF
+          t=$(date +%s)
+          gclient sync --no-history --shallow -j 8
+          echo "sync_seconds=$(( $(date +%s) - t ))" >> stats.txt
+          # What we'd ship: official (ThinLTO + PGO), no symbols, no proprietary codecs.
+          mkdir -p src/out/Release
+          cat > src/out/Release/args.gn <<EOF
+          is_official_build = true
+          is_debug = false
+          target_cpu = "arm64"
+          symbol_level = 0
+          blink_symbol_level = 0
+          enable_dsyms = false
+          proprietary_codecs = false
+          ffmpeg_branding = "Chromium"
+          EOF
+          (cd src && gn gen out/Release)
+          du -sh src
+          df -h /
+
+      - name: Restore tree (phase 2+)
+        if: inputs.phase != '1'
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-tree
+          run-id: ${{ inputs.prev_run }}
+          github-token: ${{ github.token }}
+          path: /Users/runner/work/chromium
+
+      - name: Unpack tree (phase 2+)
+        if: inputs.phase != '1'
+        run: |
+          set -eux
+          t=$(date +%s)
+          zstd -dc tree.tar.zst | tar -xf -
+          rm tree.tar.zst
+          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
+          df -h /
+
+      - name: Build
+        id: build
+        run: |
+          set -ux
+          # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
+          left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
+          if [ $left -lt 600 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          t=$(date +%s)
+          (cd src && gtimeout -k 7m -s SIGTERM "${left}s" autoninja -C out/Release chrome)
+          code=$?
+          echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
+          if [ $code -eq 124 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          [ $code -eq 0 ] || exit $code
+          echo "status=finished" >> "$GITHUB_OUTPUT"
+
+      - name: Pack tree
+        if: steps.build.outputs.status == 'running'
+        run: |
+          set -eux
+          tar --exclude='.git' -cf - src version.txt stats.txt | zstd -3 -T0 -o tree.tar.zst
+          ls -lh tree.tar.zst
+          df -h /
+
+      - name: Upload tree
+        if: steps.build.outputs.status == 'running'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-tree
+          path: |
+            /Users/runner/work/chromium/tree.tar.zst
+          retention-days: 2
+          compression-level: 0
+
+      - name: Next phase
+        if: steps.build.outputs.status == 'running'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run chromium-feasibility.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f version="$(cat version.txt)" -f runner="${{ inputs.runner }}" \
+            -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
+
+      - name: Report
+        if: steps.build.outputs.status == 'finished'
+        run: |
+          set -eux
+          ls -lh src/out/Release
+          du -sh src/out/Release/Chromium.app
+          src/out/Release/Chromium.app/Contents/MacOS/Chromium --version || true
+          {
+            echo "## Chromium $(cat version.txt) built on ${{ inputs.runner }}"
+            echo "- phases: ${{ inputs.phase }}"
+            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
+            echo '```'; cat stats.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

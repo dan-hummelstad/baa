@@ -732,17 +732,20 @@ fn an_extension_popup_acts_on_the_tab_it_opened_over(cx: &mut TestAppContext) {
         assert_eq!(*popup.read(cx).url.borrow(), "chrome-extension://ubo/popup.html");
     });
 
-    // The card takes the content's size: the first one at once, later ones by animation.
+    // The card shows once the content's size holds still, already at that size;
+    // later sizes apply at once, as in Chrome, never animating the page.
     let size = |w: f32, h: f32| PageEvent::PreferredSize(gpui::size(gpui::px(w), gpui::px(h)));
+    let shown = |cx: &mut gpui::VisualTestContext| b.read_with(cx, |b, _| (b.peek.as_ref().unwrap().shown, b.peek.as_ref().unwrap().size));
+    popup.update(cx, |_, cx| cx.emit(size(25., 25.)));
+    cx.executor().advance_clock(std::time::Duration::from_millis(30));
     popup.update(cx, |_, cx| cx.emit(size(320., 410.)));
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| {
-        let (w, h) = b.peek.as_ref().unwrap().size.as_ref().unwrap();
-        assert_eq!((w.value(), h.value()), (320., 410.));
-    });
+    cx.executor().advance_clock(std::time::Duration::from_millis(30));
+    assert_eq!(shown(cx), (false, Some((320., 410.))), "still settling");
+    cx.executor().advance_clock(std::time::Duration::from_millis(100));
+    assert_eq!(shown(cx), (true, Some((320., 410.))));
     popup.update(cx, |_, cx| cx.emit(size(320., 300.)));
     cx.run_until_parked();
-    b.read_with(cx, |b, _| assert_eq!(b.peek.as_ref().unwrap().size.as_ref().unwrap().1.target(), 300.));
+    assert_eq!(shown(cx), (true, Some((320., 300.))));
 
     // Its options page (or any page it opens) is a baa tab, and the popup closes.
     popup.update(cx, |_, cx| {
@@ -830,4 +833,103 @@ fn chrome_settings_open_skinned_in_a_sheet(cx: &mut TestAppContext) {
     b.update_in(cx, |b, window, cx| b.close_overlays(window, cx));
     cx.run_until_parked();
     assert!(b.read_with(cx, |b, _| b.host.chrome_sheet.borrow().is_none()), "hidden again");
+}
+
+#[gpui::test]
+fn a_tab_menu_is_native_and_runs_the_picked_item(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    let labels = |b: &Browser<MockHost>| -> Vec<String> {
+        b.host.menus.borrow().last().unwrap().iter().filter_map(|i| match i {
+            baa_web::MenuItem::Action { label, .. } => Some(label.clone()),
+            _ => None,
+        }).collect()
+    };
+    // Dismissed: nothing happens.
+    b.update_in(cx, |b, window, cx| b.open_menu(crate::browser::MenuKind::Tab(tab), gpui::point(gpui::px(10.), gpui::px(10.)), window, cx));
+    cx.run_until_parked();
+    let close = b.read_with(cx, |b, _| labels(b).iter().position(|l| l == "Close Tab").unwrap());
+    assert!(b.read_with(cx, |b, _| b.session.tab(tab).is_some() && !b.menu_open));
+    // Picking "Close Tab" closes it.
+    b.update_in(cx, |b, window, cx| {
+        b.host.menu_pick.set(Some(close));
+        b.open_menu(crate::browser::MenuKind::Tab(tab), gpui::point(gpui::px(10.), gpui::px(10.)), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| b.session.tab(tab).is_none()));
+}
+
+#[gpui::test]
+fn devtools_dock_beside_the_tab_and_go_with_it(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    let docked = |cx: &mut gpui::VisualTestContext| b.read_with(cx, |b, cx| b.devtools.get(&tab).map(|(p, _)| p.read(cx).url.borrow().clone()));
+
+    // Asked once it docks; asked again it closes, as ⌥⌘I toggles in Chrome.
+    b.update_in(cx, |b, window, cx| b.toggle_devtools(None, window, cx));
+    assert_eq!(docked(cx).as_deref(), Some("devtools://https://a.example/"));
+    b.update_in(cx, |b, window, cx| b.toggle_devtools(None, window, cx));
+    assert_eq!(docked(cx), None);
+
+    // The page menu's Inspect always opens it.
+    let page = b.read_with(cx, |b, _| b.active_page().unwrap().clone());
+    for _ in 0..2 {
+        page.update(cx, |_, cx| cx.emit(PageEvent::DevToolsRequested { x: 5, y: 5 }));
+        cx.run_until_parked();
+        assert!(docked(cx).is_some());
+    }
+
+    // DevTools' own dock-side picker moves it (and remembers), without reopening it.
+    let tools = b.read_with(cx, |b, _| b.devtools.get(&tab).unwrap().0.clone());
+    tools.update(cx, |_, cx| cx.emit(PageEvent::DevToolsDock("bottom".into())));
+    cx.run_until_parked();
+    assert_eq!(b.read_with(cx, |b, _| b.settings.devtools_dock), baa_model::DevToolsDock::Bottom);
+    assert_eq!(b.read_with(cx, |b, _| b.devtools.get(&tab).unwrap().0.entity_id()), tools.entity_id());
+    // Where page and DevTools meet, neither rounds its corners.
+    cx.run_until_parked();
+    b.read_with(cx, |b, cx| {
+        assert_eq!(b.active_page().unwrap().read(cx).square.get(), 4 | 8);
+        assert_eq!(tools.read(cx).square.get(), 1 | 2);
+    });
+    // Undocking there takes it to a window.
+    tools.update(cx, |_, cx| cx.emit(PageEvent::DevToolsDock("undocked".into())));
+    cx.run_until_parked();
+    assert_eq!(docked(cx), None);
+    b.update_in(cx, |b, window, cx| {
+        b.set_devtools_dock(baa_model::DevToolsDock::Right, window, cx);
+        b.toggle_devtools(None, window, cx);
+    });
+
+    // Moving it to a window takes it out of the page area, and sticks.
+    b.update_in(cx, |b, window, cx| b.set_devtools_dock(baa_model::DevToolsDock::Window, window, cx));
+    assert_eq!(docked(cx), None);
+    assert_eq!(b.read_with(cx, |b, _| b.settings.devtools_dock), baa_model::DevToolsDock::Window);
+    b.update_in(cx, |b, window, cx| {
+        b.set_devtools_dock(baa_model::DevToolsDock::Right, window, cx);
+        b.toggle_devtools(None, window, cx);
+    });
+    assert!(docked(cx).is_some());
+
+    // It goes with its tab.
+    b.update_in(cx, |b, window, cx| {
+        b.session.close_tab(tab, 0);
+        b.sync(window, cx);
+    });
+    assert_eq!(b.read_with(cx, |b, _| b.devtools.len()), 0);
+
+    // In its own window, nothing docks.
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("b.example");
+    cx.simulate_keystrokes("enter");
+    b.update_in(cx, |b, window, cx| {
+        b.settings.devtools_dock = baa_model::DevToolsDock::Window;
+        b.toggle_devtools(None, window, cx);
+    });
+    assert_eq!(b.read_with(cx, |b, _| b.devtools.len()), 0);
 }

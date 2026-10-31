@@ -80,8 +80,8 @@ impl<H: WebHost> Browser<H> {
             .overflow_y_scroll()
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
-                    this.open_menu(MenuKind::Sidebar, e.position, cx)
+                cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| {
+                    this.open_menu(MenuKind::Sidebar, e.position, window, cx)
                 }),
             )
             .relative()
@@ -465,9 +465,9 @@ impl<H: WebHost> Browser<H> {
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    this.open_menu(MenuKind::Tab(id), e.position, cx);
+                    this.open_menu(MenuKind::Tab(id), e.position, window, cx);
                 }),
             )
             .child(favicon(
@@ -590,8 +590,8 @@ impl<H: WebHost> Browser<H> {
                 .on_click(cx.listener(move |this, _, window, cx| this.activate_tab(id, window, cx)))
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                        this.open_menu(MenuKind::Tab(id), e.position, cx)
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                        this.open_menu(MenuKind::Tab(id), e.position, window, cx)
                     }),
                 )
                 .on_drag(drag, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -695,9 +695,9 @@ impl<H: WebHost> Browser<H> {
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
-                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            this.open_menu(MenuKind::Folder(id), e.position, cx);
+                            this.open_menu(MenuKind::Folder(id), e.position, window, cx);
                         }),
                     )
                     .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass))

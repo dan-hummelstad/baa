@@ -16,6 +16,39 @@ pub enum ChromeStyle {
     Ascii,
 }
 
+/// Where DevTools opens: docked beside or below the page, as Chrome does, or
+/// in a window of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DevToolsDock {
+    #[default]
+    Right,
+    Bottom,
+    Left,
+    Window,
+}
+
+impl DevToolsDock {
+    /// DevTools' own name for a docked side; `None` for a window.
+    pub fn side(self) -> Option<&'static str> {
+        match self {
+            Self::Right => Some("right"),
+            Self::Bottom => Some("bottom"),
+            Self::Left => Some("left"),
+            Self::Window => None,
+        }
+    }
+
+    /// From DevTools' name; "undocked" (or anything else) is a window.
+    pub fn from_side(side: &str) -> Self {
+        match side {
+            "right" => Self::Right,
+            "bottom" => Self::Bottom,
+            "left" => Self::Left,
+            _ => Self::Window,
+        }
+    }
+}
+
 /// `url` holds `%s` where the encoded query goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchEngine {
@@ -57,6 +90,7 @@ pub struct Settings {
     pub chrome: ChromeStyle,
     /// Extension ids kept out of the toolbar; they stay in the extensions menu.
     pub unpinned_extensions: Vec<String>,
+    pub devtools_dock: DevToolsDock,
 }
 
 impl Default for Settings {
@@ -69,6 +103,7 @@ impl Default for Settings {
             archive_after_hours: 12,
             chrome: ChromeStyle::Arc,
             unpinned_extensions: Vec::new(),
+            devtools_dock: DevToolsDock::default(),
         }
     }
 }

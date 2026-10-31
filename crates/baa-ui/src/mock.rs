@@ -20,6 +20,9 @@ pub struct MockHost {
     pub chrome_sheet: RefCell<Option<baa_web::ChromeSheet>>,
     /// (popup url, the tab it was opened for).
     pub popups: RefCell<Vec<(String, String)>>,
+    /// The menus shown, and the item id the next one picks.
+    pub menus: RefCell<Vec<Vec<baa_web::MenuItem>>>,
+    pub menu_pick: Cell<Option<usize>>,
 }
 
 pub struct MockPage {
@@ -27,6 +30,7 @@ pub struct MockPage {
     pub visible: Cell<bool>,
     pub zoom: Cell<f64>,
     pub radius: Cell<f32>,
+    pub square: Cell<u8>,
     pub moved: Cell<u32>,
     pub floating: Cell<bool>,
     pub muted: Cell<bool>,
@@ -69,7 +73,7 @@ impl PageHandle for MockPage {
         self.zoom.set(level);
     }
     fn find(&self, _: &str, _: bool) {}
-    fn open_devtools(&self) {}
+    fn open_devtools(&self, _inspect_at: Option<(i32, i32)>) {}
     fn answer_permission(&self, id: u64, allow: bool) {
         self.answers.borrow_mut().push(format!("permission {id} {allow}"));
     }
@@ -100,6 +104,9 @@ impl PageHandle for MockPage {
     fn set_corner_radius(&self, radius: f32) {
         self.radius.set(radius);
     }
+    fn set_square_corners(&self, square: u8) {
+        self.square.set(square);
+    }
     fn set_floating(&self, floating: bool) {
         self.floating.set(floating);
     }
@@ -123,12 +130,23 @@ impl MockHost {
             extension_changes: RefCell::default(),
             chrome_sheet: RefCell::default(),
             popups: RefCell::default(),
+            menus: RefCell::default(),
+            menu_pick: Cell::default(),
         }
     }
 }
 
 impl WebHost for MockHost {
     type Page = MockPage;
+    fn create_devtools(&self, of: &Entity<MockPage>, _inspect_at: Option<(i32, i32)>, _side: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
+        let url = format!("devtools://{}", of.read(cx).url.borrow());
+        self.create_page(ProfileId(0), &url, window, cx)
+    }
+    fn show_menu(&self, _at: gpui::Point<gpui::Pixels>, items: Vec<baa_web::MenuItem>, window: &mut Window, cx: &mut App, done: baa_web::MenuDone) {
+        self.menus.borrow_mut().push(items);
+        let pick = self.menu_pick.take();
+        window.defer(cx, move |window, cx| done(pick, window, cx));
+    }
     fn create_page(
         &self,
         profile: ProfileId,
@@ -142,6 +160,7 @@ impl WebHost for MockHost {
             visible: Cell::new(true),
             zoom: Cell::new(1.0),
             radius: Cell::new(8.0),
+            square: Cell::new(0),
             moved: Cell::new(0),
             floating: Cell::new(false),
             muted: Cell::new(false),

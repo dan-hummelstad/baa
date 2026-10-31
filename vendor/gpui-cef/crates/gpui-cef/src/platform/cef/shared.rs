@@ -51,6 +51,28 @@ pub(crate) struct Shared {
     /// Permission requests waiting for the user, by request id.
     permissions: RefCell<Vec<(u64, PendingPermission)>>,
     audible: Cell<bool>,
+    /// A Chrome-style tab's own window (see `chrome_window::create_tab`).
+    tab_window: RefCell<Option<cef::Window>>,
+    /// Its NSWindow, retained.
+    tab_ns_window: Cell<*mut objc2::runtime::AnyObject>,
+    /// Its content view once moved into the app's window. CEF's handle for
+    /// the page is the window's content view, which is then gone.
+    tab_view: Cell<*mut objc2::runtime::AnyObject>,
+    /// The size last given to the tab's window, which Chrome lays the page out by.
+    tab_size: Cell<(i32, i32)>,
+    /// Set when the tab should become Chrome's active one on the next pump tick.
+    activate: Cell<bool>,
+    /// Whether the tab's window has been shown yet.
+    tab_shown: Cell<bool>,
+    /// The page lives in a Chrome window of its own whose view the app takes
+    /// (a Chrome-style tab, or DevTools Chrome opened): the "tab" calls below.
+    adopts: Cell<bool>,
+    /// The client for the DevTools this page is about to open, so that it
+    /// reports to the app's DevTools webview.
+    devtools_client: RefCell<Option<cef::Client>>,
+    /// For DevTools docked by the app: the side it starts on ("right",
+    /// "bottom", "left"); see `handlers::dock_script`.
+    devtools_side: RefCell<Option<String>>,
 }
 
 pub(crate) enum PendingPermission {
@@ -90,6 +112,15 @@ impl Shared {
             dialog: RefCell::new(None),
             permissions: RefCell::new(Vec::new()),
             audible: Cell::new(false),
+            tab_window: RefCell::new(None),
+            tab_ns_window: Cell::new(std::ptr::null_mut()),
+            tab_view: Cell::new(std::ptr::null_mut()),
+            tab_size: Cell::new((0, 0)),
+            activate: Cell::new(false),
+            tab_shown: Cell::new(false),
+            adopts: Cell::new(false),
+            devtools_client: RefCell::new(None),
+            devtools_side: RefCell::new(None),
         })
     }
 
@@ -267,12 +298,121 @@ impl Shared {
         }
     }
 
+    pub(crate) fn set_tab_window(&self, window: cef::Window, ns_window: *mut objc2::runtime::AnyObject) {
+        *self.tab_window.borrow_mut() = Some(window);
+        self.tab_ns_window.set(ns_window);
+        self.adopts.set(true);
+    }
+
+    /// The page will come up in a Chrome window that CEF makes (DevTools).
+    pub(crate) fn set_adopts_window(&self) {
+        self.adopts.set(true);
+    }
+
+    pub(crate) fn is_tab(&self) -> bool {
+        self.adopts.get()
+    }
+
+    pub(crate) fn set_devtools_client(&self, client: cef::Client) {
+        *self.devtools_client.borrow_mut() = Some(client);
+    }
+
+    pub(crate) fn set_devtools_side(&self, side: &str) {
+        *self.devtools_side.borrow_mut() = Some(side.to_string());
+    }
+
+    pub(crate) fn devtools_side(&self) -> Option<String> {
+        self.devtools_side.borrow().clone()
+    }
+
+    pub(crate) fn take_devtools_client(&self) -> Option<cef::Client> {
+        self.devtools_client.borrow_mut().take()
+    }
+
+    /// The tab's NSWindow; null for an Alloy page.
+    pub(crate) fn tab_ns_window(&self) -> *mut objc2::runtime::AnyObject {
+        self.tab_ns_window.get()
+    }
+
+    /// Takes the tab's page into `container`, once.
+    pub(crate) fn adopt_tab_view(&self, container: *mut objc2::runtime::AnyObject) {
+        if self.tab_ns_window.get().is_null() && self.adopts.get() {
+            use cef::ImplBrowserHost as _;
+            // CEF made this window: its handle is still in it now.
+            let handle = self.host().map(|h| h.window_handle().cast()).unwrap_or(std::ptr::null_mut());
+            self.tab_ns_window.set(super::native::retained(super::native::window_of(handle)));
+        }
+        if self.tab_view.get().is_null() {
+            self.tab_view.set(super::native::adopt_content_view(self.tab_ns_window(), container));
+        }
+    }
+
+    pub(crate) fn tab_view(&self) -> *mut objc2::runtime::AnyObject {
+        self.tab_view.get()
+    }
+
+    /// Hands the page back to its window ahead of closing.
+    pub(crate) fn restore_tab_view(&self) {
+        super::native::restore_content_view(self.tab_ns_window(), self.tab_view.replace(std::ptr::null_mut()));
+    }
+
+    /// Sizes the tab's window to the page, off screen.
+    pub(crate) fn fit_tab_window(&self, size: (i32, i32)) {
+        use cef::ImplView as _;
+        if self.tab_size.replace(size) == size {
+            return;
+        }
+        match &*self.tab_window.borrow() {
+            Some(window) => window.set_bounds(Some(&cef::Rect { x: -10000, y: -10000, width: size.0.max(1), height: size.1.max(1) })),
+            None => super::native::set_window_size(self.tab_ns_window(), size),
+        }
+    }
+
+    /// Makes Chrome take this tab's window as the last active one, which is
+    /// what extensions read as "the current window" (`chrome.tabs.query`'s
+    /// `currentWindow`/`lastFocusedWindow`, the action's active tab). The
+    /// keyboard stays with the app's window. Done from the pump: activating
+    /// swaps the key window under gpui, which must not happen mid-update.
+    pub(crate) fn activate_tab(&self) {
+        // Only tabs: DevTools is no window extensions should take as current.
+        self.activate.set(self.tab_window.borrow().is_some());
+    }
+
+    /// Pump work for a tab's window, where gpui's state is not borrowed:
+    /// showing it once, keeping it unseen, and activation.
+    pub(crate) fn run_tab_window(&self) {
+        use cef::ImplWindow as _;
+        let ns_window = self.tab_ns_window();
+        if ns_window.is_null() {
+            return;
+        }
+        if !self.tab_shown.replace(true) {
+            if let Some(window) = &*self.tab_window.borrow() {
+                let key = super::native::window_of(self.gpui_view());
+                window.show();
+                super::native::make_key_soon(key);
+            }
+        }
+        super::native::keep_unseen(ns_window);
+        if !self.activate.replace(false) {
+            return;
+        }
+        super::native::announce_key(ns_window);
+    }
+
     pub(crate) fn title(&self) -> String {
         self.title.borrow().clone()
     }
 
     pub(crate) fn url(&self) -> String {
         self.url.borrow().clone()
+    }
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        super::native::forget_unseen(self.tab_ns_window.get());
+        super::native::release(self.tab_ns_window.get());
     }
 }
 

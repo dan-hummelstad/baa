@@ -410,8 +410,8 @@ impl<H: WebHost> Browser<H> {
                     }))
                     .on_mouse_down(
                         gpui::MouseButton::Right,
-                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                            this.open_menu(crate::browser::MenuKind::Extension(menu.clone()), e.position, cx)
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                            this.open_menu(crate::browser::MenuKind::Extension(menu.clone()), e.position, window, cx)
                         }),
                     )
                     .child(match &ext.icon {

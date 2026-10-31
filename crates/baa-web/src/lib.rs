@@ -7,7 +7,7 @@ use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
 pub use cef_host::{CefPage, CefRuntime, CefWebHost};
-pub use gpui_cef::{DialogKind, Download, DownloadState, Error, Permission, PermissionState};
+pub use gpui_cef::{DialogKind, Download, DownloadState, Error, MenuItem, Permission, PermissionState};
 
 /// What a page reports back to the shell.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +38,11 @@ pub enum PageEvent {
     ActiveTabLoad(Option<String>),
     /// An extension popup's content size changed.
     PreferredSize(gpui::Size<gpui::Pixels>),
+    /// The page's menu asked to inspect the element at (x, y), page coordinates.
+    DevToolsRequested { x: i32, y: i32 },
+    /// Docked DevTools' own dock-side picker chose this ("right", "bottom",
+    /// "left", or "undocked").
+    DevToolsDock(String),
 }
 
 /// URLs waiting to be opened as tabs, oldest first.
@@ -80,7 +85,8 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn set_zoom(&self, level: f64);
     /// Repeating the same `text` moves to the next match; empty `text` ends the search.
     fn find(&self, text: &str, forward: bool);
-    fn open_devtools(&self);
+    /// DevTools in a window of its own; `inspect_at` (page coordinates) selects that element.
+    fn open_devtools(&self, inspect_at: Option<(i32, i32)>);
     fn answer_permission(&self, id: u64, allow: bool);
     /// OK (with the prompt's text) or Cancel; for "leave site?", OK leaves.
     fn answer_dialog(&self, ok: bool, text: &str);
@@ -98,6 +104,9 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement;
     /// Match the rounded card the page sits in, in logical pixels.
     fn set_corner_radius(&self, radius: f32);
+    /// Corners left square where the page meets docked DevTools: top left 1,
+    /// top right 2, bottom left 4, bottom right 8.
+    fn set_square_corners(&self, square: u8);
     /// Drawn over other pages (Peek). Pages are native views, which stack by
     /// creation rather than by the UI's paint order.
     fn set_floating(&self, floating: bool);
@@ -111,6 +120,12 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
 /// Creates pages inside isolated storage profiles.
 pub trait WebHost: 'static {
     type Page: PageHandle;
+    /// DevTools for `of` as a page of its own, to dock on `side` ("right",
+    /// "bottom", "left"); dropping it closes DevTools.
+    fn create_devtools(&self, of: &Entity<Self::Page>, inspect_at: Option<(i32, i32)>, side: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
+    /// A native context menu at `at` (window coordinates); returns at once,
+    /// `done` runs when it closes.
+    fn show_menu(&self, at: gpui::Point<gpui::Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone);
     fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
     /// An extension's toolbar popup, acting on the tab at `tab_url`.
     fn create_popup(
@@ -166,6 +181,9 @@ pub struct ChromeSheet {
 
 /// Called once with the answer, on the main thread.
 pub type Callback<T> = Box<dyn FnOnce(T, &mut App)>;
+
+/// What [`WebHost::show_menu`] calls once the menu closes: the picked item's id, or `None`.
+pub type MenuDone = Box<dyn FnOnce(Option<usize>, &mut Window, &mut App)>;
 
 /// An extension as Chrome's extensions page knows it.
 #[derive(Debug, Clone, PartialEq, Default)]

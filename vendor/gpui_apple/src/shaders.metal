@@ -900,12 +900,15 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
 }
 
 // baa: a hole in gpui's layer for a native view underneath. The surface's
-// texture width is the corner radius in device pixels; nothing is sampled.
+// texture width is the corner radius in device pixels, and its height less
+// one marks corners left square (1 top left, 2 top right, 4 bottom left,
+// 8 bottom right); nothing is sampled.
 struct PunchVertexOutput {
   float4 position [[position]];
   float2 local;
   float2 size;
   float radius;
+  uint square;
   float clip_distance [[clip_distance]][4];
 };
 
@@ -914,6 +917,7 @@ struct PunchFragmentInput {
   float2 local;
   float2 size;
   float radius;
+  uint square [[flat]];
 };
 
 vertex PunchVertexOutput punch_vertex(
@@ -934,12 +938,16 @@ vertex PunchVertexOutput punch_vertex(
       unit_vertex * size,
       size,
       float(texture_size->width),
+      uint(max(texture_size->height - 1, 0)),
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
 fragment float4 punch_fragment(PunchFragmentInput input [[stage_in]]) {
   float2 half_size = input.size / 2.0;
-  float radius = min(input.radius, min(half_size.x, half_size.y));
+  bool right = input.local.x > half_size.x;
+  bool bottom = input.local.y > half_size.y;
+  uint corner = bottom ? (right ? 8u : 4u) : (right ? 2u : 1u);
+  float radius = (input.square & corner) != 0u ? 0.0 : min(input.radius, min(half_size.x, half_size.y));
   float2 q = abs(input.local - half_size) - (half_size - radius);
   float distance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
   return float4(0.0, 0.0, 0.0, saturate(0.5 - distance));

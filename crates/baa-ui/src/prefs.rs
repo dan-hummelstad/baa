@@ -2,7 +2,7 @@
 //! change saves at once; there is no Apply.
 
 use crate::theme::r;
-use baa_model::{import, ChromeStyle, SearchEngine, SidebarSide, SEARCH_ENGINES};
+use baa_model::{import, ChromeStyle, DevToolsDock, SearchEngine, SidebarSide, SEARCH_ENGINES};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, SharedString, Window};
 
@@ -251,6 +251,24 @@ impl<H: WebHost> Browser<H> {
                 Some("Also follows the system setting."),
                 self.toggle("pref-motion", s.reduce_motion, |s| s.reduce_motion = !s.reduce_motion, theme, cx)
                     .into_any_element(),
+            ))
+            .child(section("Developer"))
+            .child(row(
+                "Developer tools".into(),
+                Some("Where Inspect and ⌥⌘I open DevTools. DevTools' own Dock side menu changes it too."),
+                self.segments(
+                    "pref-devtools",
+                    vec![
+                        (DevToolsDock::Right, "Right".into()),
+                        (DevToolsDock::Bottom, "Bottom".into()),
+                        (DevToolsDock::Left, "Left".into()),
+                        (DevToolsDock::Window, "Window".into()),
+                    ],
+                    s.devtools_dock,
+                    |s, dock| s.devtools_dock = dock,
+                    cx,
+                )
+                .into_any_element(),
             ))
             .child(section("Passwords & Autofill"))
             .child(row(

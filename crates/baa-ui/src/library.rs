@@ -276,8 +276,8 @@ impl<H: WebHost> Browser<H> {
                     .bg(mix(theme.glass, theme.glass_strong, 0.5 * h))
                     .text_size(px(13.))
                     .text_color(theme.ink)
-                    .on_click(cx.listener(|this, e: &gpui::ClickEvent, _, cx| {
-                        this.open_menu(MenuKind::LibraryFilter, e.position(), cx)
+                    .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
+                        this.open_menu(MenuKind::LibraryFilter, e.position(), window, cx)
                     }))
                     .child(icon("list-filter", 15., theme.ink_muted))
                     .child(label),
@@ -485,9 +485,9 @@ impl<H: WebHost> Browser<H> {
                 }))
                 .on_mouse_down(
                     gpui::MouseButton::Right,
-                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.open_menu(MenuKind::Download { path: menu_path.clone(), url: url.clone() }, e.position, cx);
+                        this.open_menu(MenuKind::Download { path: menu_path.clone(), url: url.clone() }, e.position, window, cx);
                     }),
                 );
             out.push(row.into_any_element());

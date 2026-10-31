@@ -145,6 +145,23 @@ impl Container {
         }
     }
 
+    /// Leaves the `square` corners (top left 1, top right 2, bottom left 4,
+    /// bottom right 8) unrounded.
+    pub(crate) fn set_square_corners(&self, square: u8) {
+        // CACornerMask: the view is not flipped, so "min Y" is the bottom.
+        const ALL: usize = 1 | 2 | 4 | 8;
+        let mut rounded = ALL;
+        for (bit, layer_corner) in [(1u8, 4usize), (2, 8), (4, 1), (8, 2)] {
+            if square & bit != 0 {
+                rounded &= !layer_corner;
+            }
+        }
+        unsafe {
+            let layer: *mut AnyObject = msg_send![self.view, layer];
+            let _: () = msg_send![layer, setMaskedCorners: rounded];
+        }
+    }
+
     /// Re-parents the container (and the page in it) under another window's
     /// gpui view.
     pub(crate) fn move_below(&self, gpui_view: *mut AnyObject) {
@@ -558,19 +575,20 @@ pub(crate) fn has_first_responder(view: *mut AnyObject) -> bool {
 }
 
 /// The marker surface the vendored gpui renderer turns into a transparent hole
-/// with `radius` (device pixels) rounded corners, instead of drawing an image.
-pub(crate) fn punch_buffer(radius: usize) -> Option<CVPixelBuffer> {
+/// with `radius` (device pixels) rounded corners, instead of drawing an image;
+/// `square` corners stay square (bits as in `Webview::set_square_corners`).
+pub(crate) fn punch_buffer(radius: usize, square: u8) -> Option<CVPixelBuffer> {
     thread_local! {
-        static CACHE: RefCell<HashMap<usize, CVPixelBuffer>> = RefCell::new(HashMap::new());
+        static CACHE: RefCell<HashMap<(usize, u8), CVPixelBuffer>> = RefCell::new(HashMap::new());
     }
     let radius = radius.max(1);
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some(buffer) = cache.get(&radius) {
+        if let Some(buffer) = cache.get(&(radius, square)) {
             return Some(buffer.clone());
         }
-        let buffer = CVPixelBuffer::new(kCVPixelFormatType_OneComponent8, radius, 1, None).ok()?;
-        cache.insert(radius, buffer.clone());
+        let buffer = CVPixelBuffer::new(kCVPixelFormatType_OneComponent8, radius, 1 + square as usize, None).ok()?;
+        cache.insert((radius, square), buffer.clone());
         Some(buffer)
     })
 }
@@ -696,3 +714,208 @@ pub(crate) fn detach_window(child: *mut AnyObject) {
     }
 }
 
+
+/// Gives key status back to `window` (no-op for null) on the next run loop
+/// turn: not from inside the activation that took it, which Chromium's
+/// observers and gpui's window state are still handling.
+pub(crate) fn make_key_soon(window: *mut AnyObject) {
+    if !window.is_null() {
+        unsafe {
+            let _: () = msg_send![
+                window,
+                performSelector: sel!(makeKeyWindow),
+                withObject: std::ptr::null_mut::<AnyObject>(),
+                afterDelay: 0f64
+            ];
+        }
+    }
+}
+
+/// A Chrome-style tab's own window: shown, so Chromium keeps the page live,
+/// but never seen or clicked. Views keeps 40pt of any window on screen and
+/// resets its alpha now and then, so the pump re-applies this every tick.
+pub(crate) fn keep_unseen(window: *mut AnyObject) {
+    const OFF_SCREEN: f64 = -30000.;
+    /// NSWindowCollectionBehaviorTransient | IgnoresCycle: out of Mission
+    /// Control and ⌘`.
+    const UNSEEN: usize = (1 << 3) | (1 << 6);
+    if window.is_null() {
+        return;
+    }
+    unsafe {
+        allow_off_screen(window);
+        let frame: CGRect = msg_send![window, frame];
+        if frame.origin.x > OFF_SCREEN + 1. {
+            let _: () = msg_send![window, setFrameOrigin: CGPoint { x: OFF_SCREEN, y: OFF_SCREEN }];
+        }
+        let alpha: f64 = msg_send![window, alphaValue];
+        if alpha != 0. {
+            let _: () = msg_send![window, setAlphaValue: 0f64];
+            let _: () = msg_send![window, setIgnoresMouseEvents: Bool::YES];
+            let _: () = msg_send![window, setExcludedFromWindowsMenu: Bool::YES];
+            let _: () = msg_send![window, setCollectionBehavior: UNSEEN];
+        }
+    }
+}
+
+/// Moves `window`'s content view (Chrome's `BridgedContentView`, which holds
+/// the page) into `container`, and returns it, retained.
+pub(crate) fn adopt_content_view(window: *mut AnyObject, container: *mut AnyObject) -> *mut AnyObject {
+    if window.is_null() || container.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let view: *mut AnyObject = msg_send![window, contentView];
+        if view.is_null() {
+            return view;
+        }
+        let _: *mut AnyObject = msg_send![view, retain];
+        let _: () = msg_send![container, addSubview: view];
+        view
+    }
+}
+
+/// Puts an adopted content view back in its window, so Chrome closes it the
+/// way it opened it, and lets go of it.
+pub(crate) fn restore_content_view(window: *mut AnyObject, view: *mut AnyObject) {
+    if view.is_null() {
+        return;
+    }
+    unsafe {
+        let _: () = msg_send![view, removeFromSuperview];
+        if !window.is_null() {
+            let _: () = msg_send![window, setContentView: view];
+        }
+        let _: () = msg_send![view, release];
+    }
+}
+
+/// The visible `RenderWidgetHostViewCocoa` under `view`: what takes the
+/// page's mouse and keys. Chrome's `BridgedContentView` answers hit tests
+/// itself, so events have to be aimed past it. `view` when there is none.
+pub(crate) fn render_view_in(view: *mut AnyObject) -> *mut AnyObject {
+    unsafe fn find(view: *mut AnyObject) -> Option<*mut AnyObject> {
+        unsafe {
+            let hidden: Bool = msg_send![view, isHidden];
+            if hidden.as_bool() {
+                return None;
+            }
+            if (*view).class().name().to_bytes().starts_with(b"RenderWidgetHostViewCocoa") {
+                return Some(view);
+            }
+            let subviews: *mut AnyObject = msg_send![view, subviews];
+            let count: usize = msg_send![subviews, count];
+            (0..count).rev().find_map(|i| find(msg_send![subviews, objectAtIndex: i]))
+        }
+    }
+    if view.is_null() {
+        return view;
+    }
+    unsafe { find(view) }.unwrap_or(view)
+}
+
+/// `view`'s size in points, rounded.
+pub(crate) fn view_size(view: *mut AnyObject) -> Option<(i32, i32)> {
+    page_frame(view).map(|f| (f.size.width.round() as i32, f.size.height.round() as i32))
+}
+
+pub(crate) fn retained(object: *mut AnyObject) -> *mut AnyObject {
+    if !object.is_null() {
+        unsafe {
+            let _: *mut AnyObject = msg_send![object, retain];
+        }
+    }
+    object
+}
+
+pub(crate) fn release(object: *mut AnyObject) {
+    if !object.is_null() {
+        unsafe {
+            let _: () = msg_send![object, release];
+        }
+    }
+}
+
+thread_local! {
+    static UNSEEN: RefCell<std::collections::HashSet<usize>> = RefCell::default();
+    /// Each window class's own `constrainFrameRect:toScreen:`, before ours.
+    static CONSTRAIN: RefCell<HashMap<usize, Imp>> = RefCell::default();
+}
+
+/// Chrome's windows clamp themselves to keep a corner on screen; the windows
+/// passed here (tabs', DevTools') are let go wholly off it.
+// ponytail: replaces `constrainFrameRect:toScreen:` on each such window's
+// class, skipping it only for those windows. Ceiling: breaks if Chrome clamps
+// somewhere else.
+unsafe fn allow_off_screen(window: *mut AnyObject) {
+    type Constrain = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, CGRect, *mut AnyObject) -> CGRect;
+    unsafe extern "C-unwind" fn constrain(this: *mut AnyObject, cmd: Sel, rect: CGRect, screen: *mut AnyObject) -> CGRect {
+        if UNSEEN.with(|u| u.borrow().contains(&(this as usize))) {
+            return rect;
+        }
+        // The nearest class whose own method this replaced.
+        let mut class = unsafe { objc2::ffi::object_getClass(this) };
+        while !class.is_null() {
+            if let Some(original) = CONSTRAIN.with(|c| c.borrow().get(&(class as usize)).copied()) {
+                return unsafe { std::mem::transmute::<Imp, Constrain>(original)(this, cmd, rect, screen) };
+            }
+            class = unsafe { (*class).superclass() }.map_or(std::ptr::null(), |c| c as *const AnyClass);
+        }
+        rect
+    }
+    if !UNSEEN.with(|u| u.borrow_mut().insert(window as usize)) {
+        return;
+    }
+    unsafe {
+        let mut class = objc2::ffi::object_getClass(window) as *mut AnyClass;
+        // A KVO subclass is AppKit's; the method lives on its parent.
+        if (*class).name().to_bytes().starts_with(b"NSKVONotifying_") {
+            class = (*class).superclass().map_or(class, |c| c as *const AnyClass as *mut AnyClass);
+        }
+        if CONSTRAIN.with(|c| c.borrow().contains_key(&(class as usize))) {
+            return;
+        }
+        let Some(method) = (*class).instance_method(sel!(constrainFrameRect:toScreen:)) else { return };
+        CONSTRAIN.with(|c| c.borrow_mut().insert(class as usize, method.implementation()));
+        objc2::ffi::class_replaceMethod(
+            class,
+            sel!(constrainFrameRect:toScreen:),
+            std::mem::transmute::<Constrain, Imp>(constrain),
+            c"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@".as_ptr(),
+        );
+    }
+}
+
+/// Forgets a tab window passed to [`keep_unseen`], before it is released.
+pub(crate) fn forget_unseen(window: *mut AnyObject) {
+    UNSEEN.with(|u| u.borrow_mut().remove(&(window as usize)));
+}
+
+/// Tells Chrome `window` became key, and then that it stopped, without
+/// AppKit's key window changing: Chrome records it as the last active window
+/// (what extensions read as "current"), and the keyboard and gpui's window
+/// state are left alone.
+pub(crate) fn announce_key(window: *mut AnyObject) {
+    if window.is_null() {
+        return;
+    }
+    unsafe {
+        let center: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+        for name in [c"NSWindowDidBecomeKeyNotification", c"NSWindowDidResignKeyNotification"] {
+            let name: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: name.as_ptr()];
+            let _: () = msg_send![center, postNotificationName: name, object: window];
+        }
+    }
+}
+
+/// Resizes `window`'s content to `size` points.
+pub(crate) fn set_window_size(window: *mut AnyObject, size: (i32, i32)) {
+    if window.is_null() {
+        return;
+    }
+    unsafe {
+        // The content, not the frame: a titled window's frame is a title bar taller.
+        let size = CGSize { width: size.0.max(1) as f64, height: size.1.max(1) as f64 };
+        let _: () = msg_send![window, setContentSize: size];
+    }
+}

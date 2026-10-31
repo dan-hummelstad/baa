@@ -182,6 +182,11 @@ impl CefWebHost {
             ..WebviewOptions::url(url)
         };
         let page = cx.new(|cx| CefPage::new(window, cx, options));
+        self.wire(page, popup, cx)
+    }
+
+    /// Hands the webview's events on as [`PageEvent`]s.
+    fn wire(&self, page: Entity<CefPage>, popup: bool, cx: &mut App) -> Entity<CefPage> {
         let downloads = self.downloads.clone();
         cx.subscribe(&page, move |page, event: &WebviewEvent, cx| {
             let event = match event.clone() {
@@ -240,21 +245,24 @@ impl CefWebHost {
                 WebviewEvent::DialogClosed => PageEvent::DialogClosed,
                 WebviewEvent::AudibleChanged(on) => PageEvent::AudibleChanged(on),
                 WebviewEvent::PreferredSize(size) => PageEvent::PreferredSize(size),
+                WebviewEvent::DevToolsRequested { x, y } => PageEvent::DevToolsRequested { x, y },
                 // Only the tabs shim posts; see `tabs_shim`.
                 WebviewEvent::Message(m) if popup => {
                     let web = |url: &str| url.starts_with("http") || url.starts_with("chrome-extension://");
                     match m.split_once(':') {
-                        Some(("load", url)) if web(url) => PageEvent::ActiveTabLoad(Some(url.into())),
                         Some(("open", url)) if web(url) => PageEvent::OpenRequested {
                             url: url.into(),
                             from_user_gesture: true,
                             background: false,
                         },
-                        _ if m == "reload" => PageEvent::ActiveTabLoad(None),
                         _ => return,
                     }
                 }
-                WebviewEvent::Message(_) => return,
+                // Only docked DevTools posts it; the app acts on it only from those.
+                WebviewEvent::Message(m) => match m.strip_prefix("devtools-dock:") {
+                    Some(side) => PageEvent::DevToolsDock(side.into()),
+                    None => return,
+                },
             };
             page.update(cx, |_, cx| cx.emit(event));
         })
@@ -266,6 +274,15 @@ impl CefWebHost {
 
 impl WebHost for CefWebHost {
     type Page = CefPage;
+
+    fn create_devtools(&self, of: &Entity<CefPage>, inspect_at: Option<(i32, i32)>, side: &str, window: &mut Window, cx: &mut App) -> Entity<CefPage> {
+        let page = cx.new(|cx| CefPage::new_dev_tools(window, cx, of, inspect_at, side));
+        self.wire(page, false, cx)
+    }
+
+    fn show_menu(&self, at: gpui::Point<gpui::Pixels>, items: Vec<crate::MenuItem>, window: &mut Window, cx: &mut App, done: crate::MenuDone) {
+        gpui_cef::show_menu(window, cx, at, items, done);
+    }
 
     fn create_page(
         &self,
@@ -452,8 +469,8 @@ impl PageHandle for CefPage {
     fn find(&self, text: &str, forward: bool) {
         CefPage::find(self, text, forward)
     }
-    fn open_devtools(&self) {
-        self.show_dev_tools()
+    fn open_devtools(&self, inspect_at: Option<(i32, i32)>) {
+        self.show_dev_tools(inspect_at)
     }
     fn answer_permission(&self, id: u64, allow: bool) {
         CefPage::answer_permission(self, id, allow)
@@ -487,6 +504,9 @@ impl PageHandle for CefPage {
     }
     fn set_corner_radius(&self, radius: f32) {
         CefPage::set_corner_radius(self, radius)
+    }
+    fn set_square_corners(&self, square: u8) {
+        CefPage::set_square_corners(self, square)
     }
     fn set_floating(&self, floating: bool) {
         CefPage::set_floating(self, floating)
@@ -640,19 +660,15 @@ fn parse_extension_details(list: &serde_json::Value) -> Vec<ExtensionInfo> {
     out
 }
 
-/// Extensions see only Chrome-style tabs and baa's pages are Alloy-style, so
-/// a popup asking for "the active tab" gets nothing. This answers with the
-/// tab it was opened over, and passes its reloads and navigations of that tab
-/// back as messages.
-// ponytail: query, get, reload, update, create and openOptionsPage only; tabs.sendMessage and
-// scripting into the tab still fail. Ceiling: Chrome-style tabs, which CEF
-// cannot put in a native child view.
+/// A popup is an Alloy page outside any Chrome window, so "the active tab in
+/// the current window" means Chrome's last active window. baa keeps that in
+/// step with the tab on screen; this pins the answer to the tab the popup was
+/// opened over (by URL) should the two disagree. Tabs Chrome would open in a
+/// window of its own are handed to baa as messages.
+// ponytail: matches the tab by URL; two tabs on one URL can swap. Ceiling:
+// Chrome's tab id for a page, which CEF does not expose.
 fn tabs_shim(url: &str, title: &str) -> String {
-    let tab = serde_json::json!({
-        "id": -1, "index": 0, "windowId": -1, "active": true, "highlighted": true,
-        "pinned": false, "incognito": false, "audible": false, "discarded": false,
-        "autoDiscardable": true, "groupId": -1, "status": "complete", "url": url, "title": title,
-    });
+    let tab = serde_json::json!({ "id": -1, "windowId": -1, "active": true, "url": url, "title": title });
     format!(
         r#"(() => {{
   const tabs = globalThis.chrome && chrome.tabs;
@@ -660,25 +676,16 @@ fn tabs_shim(url: &str, title: &str) -> String {
   const tab = {tab};
   const post = m => console.debug({prefix:?} + m);
   const done = (cb, v) => typeof cb === 'function' ? void cb(v) : Promise.resolve(v);
-  const real = {{ query: tabs.query, get: tabs.get, reload: tabs.reload, update: tabs.update }};
+  const query = tabs.query.bind(tabs);
   tabs.query = function (info, cb) {{
-    return info && info.active ? done(cb, [{{ ...tab }}]) : real.query.apply(tabs, arguments);
+    if (!info || !info.active) return query(...arguments);
+    const found = query({{ active: true, lastFocusedWindow: true }}).then(async active => {{
+      if (active.some(t => t.url === tab.url)) return active;
+      const same = (await query({{}})).filter(t => t.url === tab.url);
+      return same.length ? [same[0]] : active;
+    }});
+    return typeof cb === 'function' ? void found.then(cb) : found;
   }};
-  tabs.get = function (id, cb) {{
-    return id === tab.id ? done(cb, {{ ...tab }}) : real.get.apply(tabs, arguments);
-  }};
-  tabs.reload = function (id, props, cb) {{
-    if (typeof id === 'number' && id !== tab.id) return real.reload.apply(tabs, arguments);
-    post('reload');
-    return done([...arguments].find(a => typeof a === 'function'));
-  }};
-  tabs.update = function (id, props, cb) {{
-    if (typeof id !== 'number') [id, props, cb] = [tab.id, id, props];
-    if (id !== tab.id) return real.update.apply(tabs, arguments);
-    if (props && props.url) post('load:' + new URL(props.url, location.href).href);
-    return done(cb, {{ ...tab }});
-  }};
-  // Chrome would open these in a window of its own; they belong in baa's tabs.
   tabs.create = function (props, cb) {{
     if (props && props.url) post('open:' + new URL(props.url, location.href).href);
     return done(cb, {{ ...tab }});

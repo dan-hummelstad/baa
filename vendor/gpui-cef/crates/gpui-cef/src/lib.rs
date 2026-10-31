@@ -51,12 +51,30 @@ pub struct HistoryEntry {
 pub use options::{
     CookieSpec, FilterHook, ProfileOptions, Request, RuntimeOptions, SameSite, WebviewOptions,
 };
-pub use platform::{cancel_download, fetch, init, on_chrome_tab, ChromePage, Profile, Runtime, Webview};
+pub use platform::{cancel_download, fetch, init, on_chrome_tab, show_menu, ChromePage, Profile, Runtime, Webview};
+
+/// An entry of a native context menu (see [`show_menu`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MenuItem {
+    /// `id` is what [`show_menu`] reports when it is picked.
+    Action { label: String, enabled: bool, checked: bool, id: usize },
+    Separator,
+    Submenu { label: String, items: Vec<MenuItem> },
+}
+
+impl MenuItem {
+    pub fn action(label: impl Into<String>, id: usize) -> Self {
+        Self::Action { label: label.into(), enabled: true, checked: false, id }
+    }
+}
 
 /// What a [`Webview`] reports to the application, through
 /// [`gpui::EventEmitter`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum WebviewEvent {
+    /// The page's context menu asked to inspect the element at (x, y), in
+    /// the page's coordinates; DevTools placement is the app's call.
+    DevToolsRequested { x: i32, y: i32 },
     /// A message the page posted with the script [`post_message_script`]
     /// returns.
     ///

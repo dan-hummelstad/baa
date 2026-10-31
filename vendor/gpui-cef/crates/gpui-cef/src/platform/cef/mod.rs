@@ -14,6 +14,7 @@
 mod chrome_window;
 mod fetch;
 mod handlers;
+mod menu;
 mod native;
 mod nsapp;
 mod pump;
@@ -167,6 +168,25 @@ impl Drop for RuntimeInner {
             cef::shutdown();
         }
     }
+}
+
+/// Shows a native context menu at `at` (window coordinates) and calls `done`
+/// with the picked item's id once it closes, `None` if dismissed. The menu
+/// opens on a later run loop turn, so this returns at once.
+pub fn show_menu(
+    window: &mut Window,
+    cx: &mut App,
+    at: gpui::Point<Pixels>,
+    items: Vec<crate::MenuItem>,
+    done: impl FnOnce(Option<usize>, &mut Window, &mut App) + 'static,
+) {
+    let view = native::gpui_view(window);
+    let handle = window.window_handle();
+    let mut cx = cx.to_async();
+    menu::popup_soon(move || {
+        let picked = menu::popup(view, f32::from(at.x), f32::from(at.y), &items);
+        let _ = gpui::AppContext::update_window(&mut cx, handle, |_, window, cx| done(picked, window, cx));
+    });
 }
 
 /// Loads CEF into the process. Call this **at the top of `main`**, before
@@ -344,6 +364,8 @@ pub struct Webview {
     /// gpui's own view, which gets keyboard focus back when the page loses it.
     gpui_view: *mut AnyObject,
     corner_radius: Rc<Cell<f32>>,
+    /// Corners left square, as in `set_square_corners`.
+    square_corners: Rc<Cell<u8>>,
     /// The last find-in-page query, so a repeat goes to the next match.
     find_text: RefCell<String>,
     this: gpui::WeakEntity<Webview>,
@@ -351,8 +373,40 @@ pub struct Webview {
     _focus_subscriptions: [gpui::Subscription; 2],
 }
 
+/// What a [`Webview`] shows: a page, or DevTools for another webview.
+enum Source {
+    Page,
+    DevTools(Rc<Shared>, Option<cef::Point>),
+}
+
 impl Webview {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions) -> Self {
+        Self::build(window, cx, options, Source::Page)
+    }
+
+    /// DevTools for `of` as a webview of its own, to place beside it;
+    /// `inspect_at` (in `of`'s view coordinates) selects that element.
+    /// Dropping it closes DevTools.
+    ///
+    /// DevTools then shows its own dock-side picker and close button, starting
+    /// on `side` ("right", "bottom" or "left"); a change there arrives as
+    /// [`crate::WebviewEvent::Message`] `devtools-dock:<side>` (or
+    /// `devtools-dock:undocked`).
+    pub fn new_dev_tools(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        of: &gpui::Entity<Webview>,
+        inspect_at: Option<(i32, i32)>,
+        side: &str,
+    ) -> Self {
+        let inspected = of.read(cx).shared.clone();
+        let at = inspect_at.map(|(x, y)| cef::Point { x, y });
+        let this = Self::build(window, cx, WebviewOptions::default(), Source::DevTools(inspected, at));
+        this.shared.set_devtools_side(side);
+        this
+    }
+
+    fn build(window: &mut Window, cx: &mut Context<Self>, options: WebviewOptions, source: Source) -> Self {
         let shared = Shared::new(options.url.clone());
         let gpui_view = native::gpui_view(window);
         shared.set_gpui_view(gpui_view);
@@ -401,15 +455,31 @@ impl Webview {
             }
             None => options.url.clone(),
         };
-        let created = browser_host_create_browser(
+        // Pages are Chrome tabs, so extensions see them. Extension popups
+        // size themselves to their content, which only Alloy style does.
+        if let Source::DevTools(inspected, at) = source {
+            // CEF puts a Chrome tab's DevTools only in a Chrome window of its own
+            // ("Parent window handle not supported for this DevTools window"):
+            // the app takes its view, as it does a tab's.
+            shared.set_adopts_window();
+            inspected.set_devtools_client(client.clone());
+            if let Some(host) = inspected.host() {
+                host.show_dev_tools(Some(&WindowInfo::default()), Some(&mut client), Some(&browser_settings), at.as_ref());
+            }
+        } else if options.auto_resize.is_none() {
+            match chrome_window::create_tab(&mut client, &first_url, &browser_settings, context.as_mut()) {
+                Some((window, ns_window)) => shared.set_tab_window(window, ns_window),
+                None => log::error!("creating a Chrome-style tab failed"),
+            }
+        } else if browser_host_create_browser(
             Some(&window_info),
             Some(&mut client),
             Some(&first_url.as_str().into()),
             Some(&browser_settings),
             None,
             context.as_mut(),
-        );
-        if created == 0 {
+        ) == 0
+        {
             log::error!("cef_browser_host_create_browser() failed");
         }
 
@@ -423,6 +493,7 @@ impl Webview {
             pointer: Rc::default(),
             gpui_view,
             corner_radius: Rc::new(Cell::new(options.corner_radius)),
+            square_corners: Rc::default(),
             find_text: RefCell::default(),
             this: cx.weak_entity(),
             _pump: pump,
@@ -434,6 +505,14 @@ impl Webview {
     pub fn set_corner_radius(&self, radius: f32) {
         self.corner_radius.set(radius);
         self.container.set_corner_radius(radius);
+    }
+
+    /// Leaves some corners square, where the page meets another (docked
+    /// DevTools): top left 1, top right 2, bottom left 4, bottom right 8.
+    pub fn set_square_corners(&self, square: u8) {
+        if self.square_corners.replace(square) != square {
+            self.container.set_square_corners(square);
+        }
     }
 
     /// Keeps this page's view above other pages' (an overlay like Peek): native
@@ -454,6 +533,7 @@ impl Webview {
     }
 
     pub(crate) fn browser_created(&self) {
+        self.shared.adopt_tab_view(self.container.as_ptr());
         self.container.page_created(page_view(&self.shared));
     }
 
@@ -463,6 +543,12 @@ impl Webview {
         self.shared.set_wants_focus(focused);
         if let Some(host) = self.host() {
             host.set_focus(focused as i32);
+        }
+        if focused && self.shared.is_tab() {
+            // Chrome focuses the page within its own window; in the app's
+            // window the page's view has to be made first responder here.
+            native::make_first_responder(input_view(&self.shared));
+            self.shared.activate_tab();
         }
         if !focused && native::has_first_responder(page_view(&self.shared)) {
             native::make_first_responder(self.gpui_view);
@@ -570,13 +656,16 @@ impl Webview {
     }
 
     /// Opens Chrome DevTools for this page in a separate native window.
-    pub fn show_dev_tools(&self) {
+    /// Opens Chrome DevTools for this page in a window of its own;
+    /// `inspect_at` (view coordinates) selects that element.
+    pub fn show_dev_tools(&self, inspect_at: Option<(i32, i32)>) {
         if let Some(host) = self.host() {
             host.show_dev_tools(
                 Some(&WindowInfo::default()),
-                None,
+                // Its own client: the page's would take its closing for the page's.
+                Some(&mut chrome_window::plain_client()),
                 Some(&BrowserSettings::default()),
-                None,
+                inspect_at.map(|(x, y)| cef::Point { x, y }).as_ref(),
             );
         }
     }
@@ -660,6 +749,10 @@ impl Webview {
     /// Chromium watches its view's visibility.
     pub fn set_visible(&self, visible: bool) {
         self.container.set_visible(visible, page_view(&self.shared));
+        // The tab on show is the one the user is on, focused or not.
+        if visible {
+            self.shared.activate_tab();
+        }
     }
 
     fn host(&self) -> Option<BrowserHost> {
@@ -699,6 +792,7 @@ impl Render for Webview {
                 focus_handle: self.focus_handle.clone(),
                 pointer: self.pointer.clone(),
                 corner_radius: self.corner_radius.get(),
+                square_corners: self.square_corners.get(),
             })
     }
 }
@@ -728,10 +822,21 @@ fn attach(
 
 /// Chromium's view for this page, once the browser exists.
 fn page_view(shared: &Shared) -> *mut AnyObject {
+    if shared.is_tab() {
+        return shared.tab_view();
+    }
     shared
         .host()
         .map(|host| host.window_handle().cast())
         .unwrap_or(std::ptr::null_mut())
+}
+
+/// The view that takes the page's mouse and keys.
+fn input_view(shared: &Shared) -> *mut AnyObject {
+    match shared.is_tab() {
+        true => native::render_view_in(shared.tab_view()),
+        false => page_view(shared),
+    }
 }
 
 /// Where the page goes: moves the native view to the laid-out rect and makes
@@ -742,6 +847,7 @@ struct PageSlot {
     focus_handle: gpui::FocusHandle,
     pointer: Rc<Pointer>,
     corner_radius: f32,
+    square_corners: u8,
 }
 
 #[derive(Default)]
@@ -787,8 +893,12 @@ impl Element for PageSlot {
         self.shared.set_bounds(bounds);
         let visible = bounds.intersect(&window.content_mask().bounds);
         if visible.size.width > Pixels::ZERO && visible.size.height > Pixels::ZERO {
-            if self.container.place(page_view(&self.shared), bounds, visible) {
+            let page = page_view(&self.shared);
+            if self.container.place(page, bounds, visible) {
                 window.request_animation_frame();
+            }
+            if let Some(size) = native::view_size(page).filter(|_| self.shared.is_tab()) {
+                self.shared.fit_tab_window(size);
             }
         } else {
             self.container.set_hidden(true);
@@ -807,7 +917,7 @@ impl Element for PageSlot {
         _cx: &mut App,
     ) {
         let radius = (self.corner_radius * window.scale_factor()).round() as usize;
-        if let Some(hole) = native::punch_buffer(radius) {
+        if let Some(hole) = native::punch_buffer(radius, self.square_corners) {
             window.paint_surface(bounds, hole);
         }
         // gpui sets the cursor for the hitbox under the mouse, so the page's
@@ -825,7 +935,7 @@ impl Element for PageSlot {
             if phase == DispatchPhase::Bubble && hit.is_hovered(window) {
                 pointer
                     .drag
-                    .set(native::forward_current_event(page_view(&shared), None));
+                    .set(native::forward_current_event(input_view(&shared), None));
                 window.focus(&focus, cx);
             }
         });
@@ -837,14 +947,14 @@ impl Element for PageSlot {
                 return;
             }
             if let Some(view) = pointer.drag.get().filter(|_| event.pressed_button.is_some()) {
-                native::forward_current_event(page_view(&shared), Some(view));
+                native::forward_current_event(input_view(&shared), Some(view));
                 return;
             }
             // Moves over the page, and the first one off it so hover ends.
             let over = hit.is_hovered(window);
             if over || pointer.inside.get() {
                 pointer.inside.set(over);
-                native::forward_current_event(page_view(&shared), None);
+                native::forward_current_event(input_view(&shared), None);
             }
         });
         let shared = self.shared.clone();
@@ -852,7 +962,7 @@ impl Element for PageSlot {
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
             if phase == DispatchPhase::Bubble {
                 if let Some(view) = pointer.drag.take() {
-                    native::forward_current_event(page_view(&shared), Some(view));
+                    native::forward_current_event(input_view(&shared), Some(view));
                 }
             }
         });
@@ -860,7 +970,7 @@ impl Element for PageSlot {
         let hit = hitbox.clone();
         window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, _| {
             if phase == DispatchPhase::Bubble && hit.should_handle_scroll(window) {
-                native::forward_current_event(page_view(&shared), None);
+                native::forward_current_event(input_view(&shared), None);
             }
         });
     }

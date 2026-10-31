@@ -319,7 +319,11 @@ wrap_load_handler! {
             _http_status_code: ::std::os::raw::c_int,
         ) {
             if let Some(frame) = frame.filter(|f| f.is_main() != 0) {
-                frame.execute_java_script(Some(&AUDIO_WATCHER.into()), None, 0);
+                let url = CefString::from(&frame.url()).to_string();
+                match self.shared.devtools_side().filter(|_| url.starts_with("devtools://")) {
+                    Some(side) => frame.execute_java_script(Some(&dock_script(&url, &side).as_str().into()), None, 0),
+                    None => frame.execute_java_script(Some(&AUDIO_WATCHER.into()), None, 0),
+                }
             }
         }
 
@@ -375,6 +379,22 @@ wrap_life_span_handler! {
             request_open(&self.shared, target_url, user_gesture, target_disposition)
         }
 
+        // DevTools that Chrome opens itself must not report to the page's
+        // handlers: its closing would read as the page closing.
+        fn on_before_dev_tools_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _window_info: Option<&mut WindowInfo>,
+            client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _use_default_window: Option<&mut ::std::os::raw::c_int>,
+        ) {
+            if let Some(client) = client {
+                *client = Some(self.shared.take_devtools_client().unwrap_or_else(super::chrome_window::plain_client));
+            }
+        }
+
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(browser) = browser {
                 self.shared.set_browser(browser.clone());
@@ -386,6 +406,12 @@ wrap_life_span_handler! {
         /// Instead only the page's own view leaves the window, which is the
         /// tear-down CEF waits for before it destroys the browser.
         fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            // A Chrome tab's window is its own: its page goes home and CEF
+            // closes the window with it.
+            if self.shared.is_tab() {
+                self.shared.restore_tab_view();
+                return 0;
+            }
             if let Some(host) = browser.and_then(|b| b.host()) {
                 super::native::detach(host.window_handle().cast());
             }
@@ -418,6 +444,43 @@ const AUDIO_WATCHER: &str = r#"(() => {
   addEventListener('pagehide', () => { if (last) console.debug('gpui-cef:audible:0'); });
   check();
 })()"#;
+
+/// DevTools' frontend shows its dock-side picker and docked close button only
+/// when Chrome opened it with `can_dock=true`, which Chrome does only for
+/// DevTools docked into its own window. The app docks it itself, so the first
+/// load comes back with that set and `side` preselected; after that, a change
+/// in the picker is posted to the app (`devtools-dock:<side>`). Chrome is told
+/// too, and lets it pass: the window it would dock into is not its to use.
+fn dock_script(url: &str, side: &str) -> String {
+    let prefix = crate::MESSAGE_PREFIX;
+    if !url.contains("can_dock=true") {
+        return format!(
+            r#"(() => {{
+  InspectorFrontendHost.setPreference('currentDockState', JSON.stringify({side:?}));
+  const url = new URL(location.href);
+  url.searchParams.delete('dockSide');
+  url.searchParams.set('can_dock', 'true');
+  location.replace(url.href);
+}})()"#
+        );
+    }
+    format!(
+        r#"(() => {{
+  const host = InspectorFrontendHost;
+  if (host.__appDock) return;
+  host.__appDock = true;
+  const setIsDocked = host.setIsDocked.bind(host);
+  host.setIsDocked = (docked, done) => {{
+    setIsDocked(docked, done);
+    host.getPreferences(prefs => {{
+      let side = 'right';
+      try {{ side = JSON.parse(prefs.currentDockState); }} catch {{}}
+      console.debug({prefix:?} + 'devtools-dock:' + (docked ? side : 'undocked'));
+    }});
+  }};
+}})()"#
+    )
+}
 
 /// `text` as a JSON string literal.
 pub(crate) fn json_string(text: &str) -> String {
@@ -489,6 +552,11 @@ wrap_context_menu_handler! {
             params: Option<&mut ContextMenuParams>,
             model: Option<&mut MenuModel>,
         ) {
+            // A Chrome tab keeps Chrome's menu (extensions' items and all);
+            // `run_context_menu` shows it natively in the app's window.
+            if self.shared.is_tab() {
+                return;
+            }
             if let Some(model) = model {
                 model.clear();
             }
@@ -503,6 +571,34 @@ wrap_context_menu_handler! {
                 link_url: non_empty(params.link_url()),
                 selection: non_empty(params.selection_text()),
             });
+        }
+
+        // Chrome would pop its menu up over the tab's own window, which is
+        // off screen: it goes up over the app's instead.
+        fn run_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+            callback: Option<&mut RunContextMenuCallback>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(params), Some(model), Some(callback)) = (params, model, callback) else { return 0 };
+            if !self.shared.is_tab() {
+                return 0;
+            }
+            let origin = self.shared.bounds().origin;
+            let (x, y) = (params.xcoord(), params.ycoord());
+            let shared = self.shared.clone();
+            super::menu::run_page_menu(
+                self.shared.gpui_view(),
+                f32::from(origin.x) + x as f32,
+                f32::from(origin.y) + y as f32,
+                model,
+                callback.clone(),
+                move || shared.push_event(WebviewEvent::DevToolsRequested { x, y }),
+            );
+            1
         }
     }
 }
@@ -656,11 +752,11 @@ wrap_request_context_handler! {
                 baa_privacy::ResourceType::SubFrame => frame
                     .and_then(|f| f.parent())
                     .map(|p| CefString::from(&p.url()).to_string())
-                    .unwrap_or(initiator),
+                    .unwrap_or_else(|| initiator.clone()),
                 _ => frame
                     .map(|f| CefString::from(&f.url()).to_string())
                     .filter(|u| !u.is_empty())
-                    .unwrap_or(initiator),
+                    .unwrap_or_else(|| initiator.clone()),
             };
             let block = (self.filter)(&crate::Request {
                 url: &url,
@@ -668,8 +764,59 @@ wrap_request_context_handler! {
                 resource_type: kind,
                 page_initiated,
             });
+            if block {
+                return Some(CancelHandler::new());
+            }
+            if initiator.starts_with("chrome-extension://") {
+                return Some(ExtensionOrigin::new(initiator));
+            }
             // None means CEF's default handling, so allowed requests cost nothing.
-            block.then(CancelHandler::new)
+            None
+        }
+    }
+}
+
+// CEF's network proxy loses an extension's initiator, so its requests go out
+// with `Origin: null` (measured against stock Chromium, which sends none on a
+// GET and the extension's origin otherwise); 1Password's servers then answer
+// every authenticated call with a 500.
+// ponytail: a page's own `Origin: null` (a sandboxed frame) is never touched,
+// only requests whose initiator is an extension; a DNR rule that sets null on
+// purpose for an extension's own request is undone. Ceiling: fix it in CEF.
+wrap_resource_request_handler! {
+    pub(crate) struct ExtensionOrigin {
+        initiator: String,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let Some(request) = request else { return ReturnValue::CONTINUE };
+            let name = CefString::from("Origin");
+            if CefString::from(&request.header_by_name(Some(&name))).to_string() != "null" {
+                return ReturnValue::CONTINUE;
+            }
+            // As Chrome: no Origin on a GET or HEAD, the extension's on the rest.
+            let method = CefString::from(&request.method()).to_string();
+            if method == "GET" || method == "HEAD" {
+                let mut headers = CefStringMultimap::new();
+                request.header_map(Some(&mut headers));
+                let mut kept = CefStringMultimap::new();
+                for (key, values) in headers.into_iter().filter(|(k, _)| !k.eq_ignore_ascii_case("origin")) {
+                    for value in values {
+                        kept.append(&key, &value);
+                    }
+                }
+                request.set_header_map(Some(&mut kept));
+            } else {
+                request.set_header_by_name(Some(&name), Some(&self.initiator.as_str().into()), 1);
+            }
+            ReturnValue::CONTINUE
         }
     }
 }
@@ -932,7 +1079,7 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         fn on_pre_key_event(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
             os_event: *mut u8,
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
@@ -947,9 +1094,41 @@ wrap_keyboard_handler! {
             if event.type_ != KeyEventType::RAWKEYDOWN || !offered {
                 return 0;
             }
-            super::native::offer_key_equivalent(self.shared.gpui_view(), os_event.cast()) as _
+            if super::native::offer_key_equivalent(self.shared.gpui_view(), os_event.cast()) {
+                return 1;
+            }
+            // Chrome style sends unhandled editing shortcuts to its own
+            // (hidden) window's menu, where they reach nothing; Alloy's go to
+            // the app's menu and on to the page.
+            if !self.shared.is_tab() {
+                return 0;
+            }
+            edit_command(browser, event) as _
         }
     }
+}
+
+/// Runs ⌘C/⌘X/⌘V/⌘A/⌘Z/⇧⌘Z on the focused frame; whether `event` was one.
+fn edit_command(browser: Option<&mut Browser>, event: &KeyEvent) -> bool {
+    // cef_event_flags_t: shift, control, alt, command.
+    const SHIFT: u32 = 1 << 1;
+    const OTHERS: u32 = (1 << 2) | (1 << 3);
+    const COMMAND: u32 = 1 << 7;
+    if event.modifiers & COMMAND == 0 || event.modifiers & OTHERS != 0 {
+        return false;
+    }
+    let Some(frame) = browser.and_then(|b| b.focused_frame()) else { return false };
+    let shift = event.modifiers & SHIFT != 0;
+    match (event.windows_key_code as u8, shift) {
+        (b'C', false) => frame.copy(),
+        (b'X', false) => frame.cut(),
+        (b'V', false) => frame.paste(),
+        (b'A', false) => frame.select_all(),
+        (b'Z', false) => frame.undo(),
+        (b'Z', true) => frame.redo(),
+        _ => return false,
+    }
+    true
 }
 
 wrap_client! {

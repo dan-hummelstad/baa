@@ -250,6 +250,7 @@ fn tick_all(state: &PumpState) {
 
 /// Hands queued page events to gpui.
 fn tick_view(view: &View) {
+    view.shared.run_tab_window();
     if view.shared.take_focused_natively() {
         let mut cx = view.cx.clone();
         let focus = view.focus.clone();

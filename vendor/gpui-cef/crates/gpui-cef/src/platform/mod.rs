@@ -12,4 +12,4 @@ mod imp;
 #[path = "unsupported.rs"]
 mod imp;
 
-pub use imp::{cancel_download, fetch, init, on_chrome_tab, ChromePage, Profile, Runtime, Webview};
+pub use imp::{cancel_download, fetch, init, on_chrome_tab, show_menu, ChromePage, Profile, Runtime, Webview};
