@@ -65,9 +65,10 @@ jobs:
           xcrun simctl delete all || true
           sudo rm -rf ~/Library/Developer/CoreSimulator
           X="${{ inputs.xcode }}"
-          XCODE=$(ls -d /Applications/Xcode_${X:-*}.app | sort -V | tail -1)
+          # Images list each Xcode under symlinked aliases too; keep the real one.
+          XCODE=$(realpath "$(ls -d /Applications/Xcode_${X:-*}.app | sort -V | tail -1)")
           sudo xcode-select -s "$XCODE"
-          for x in /Applications/Xcode_*.app; do [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
+          for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
           xcodebuild -downloadComponent MetalToolchain || true
           brew install coreutils zstd
           git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git /Users/runner/depot_tools
