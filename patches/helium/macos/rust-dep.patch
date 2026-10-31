@@ -1,0 +1,21 @@
+--- a/services/webnn/BUILD.gn
++++ b/services/webnn/BUILD.gn
+@@ -162,6 +162,7 @@ component("webnn_service") {
+     deps += [
+       "//third_party/coremltools:modelformat_proto",
+       "//third_party/fp16",
++      "//build/rust/allocator",
+     ]
+   }
+ 
+--- a/media/midi/BUILD.gn
++++ b/media/midi/BUILD.gn
+@@ -140,6 +140,8 @@ component("midi") {
+         "CoreMIDI.framework",
+       ]
+     }
++
++    deps += ["//build/rust/allocator"]
+   }
+ 
+   if (is_win) {
