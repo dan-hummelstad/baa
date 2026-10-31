@@ -18,6 +18,8 @@ pub struct RuntimeOptions {
     pub log_file: Option<std::path::PathBuf>,
 }
 
+// Derivable only in release builds, where cfg!(debug_assertions) is false.
+#[allow(clippy::derivable_impls)]
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {

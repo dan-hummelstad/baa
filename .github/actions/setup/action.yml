@@ -12,6 +12,10 @@ runs:
       shell: bash
     - uses: ilammy/msvc-dev-cmd@v1
       if: runner.os == 'Windows'
+    # Git Bash's coreutils `link` sits ahead of MSVC's link.exe on PATH.
+    - run: rm -f /usr/bin/link.exe
+      if: runner.os == 'Windows'
+      shell: bash
     - uses: mozilla-actions/sccache-action@v0.0.11
     - run: rustup toolchain install
       shell: bash
