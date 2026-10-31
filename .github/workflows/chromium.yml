@@ -6,6 +6,7 @@
 # unpack locally and build incrementally from; it runs on the runner and Xcode
 # matching the local Mac, or the SDK headers' mtimes force a full rebuild.
 name: chromium
+run-name: chromium ${{ inputs.mode }} phase ${{ inputs.phase }}${{ inputs.budget_minutes && format(' (test, {0} min)', inputs.budget_minutes) || '' }}
 
 on:
   workflow_dispatch:
