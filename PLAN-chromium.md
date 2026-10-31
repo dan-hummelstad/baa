@@ -108,14 +108,23 @@ chromium/
 We own the vendored copies and edit them directly. baa's changes so far (2026-10-31):
 - **Branding:** `BRANDING` → baa / `me.baa.browser` / no team ID (`helium/core/change-chromium-branding.patch`);
   name substitution rewrites Chrome/Chromium/Helium → baa and `chrome://`/`helium://` → `baa://` in
-  user-visible strings, except "Helium services", which are Helium's servers;
+  user-visible strings, except "Helium services";
   `kHeliumUIScheme` = "baa" (`override-chrome-protocol.patch`); data folder `me.baa.browser`, Keychain item
   "baa Storage Key" (macOS patches). Helium's logo and app icon are not applied: Chromium's stock art until
   baa has its own.
 - **Dropped:** 9 `helium/ui/*` patches that only touch views code and that nothing else depends on. The
   other 95 UI patches are tangled with prefs, strings and the WebUI pages baa still shows, so they stay.
-- **Still Helium's:** services at `services.helium.imput.net` (user-toggleable), opt-in crash upload to
-  `crash.helium.computer`; Sparkle updates are off (no `enable_sparkle`).
+- **Dropped too:** `helium/ui/crash-dialog.patch` (offers to send a report; nothing is sent).
+- **baa's own patches** live in `chromium/patches/` (applied after both Helium series, by
+  `prepare_sources`), so Helium merges never touch them:
+  - `baa/remove-helium-services.patch`: Helium's servers are never contacted. `ShouldAccessServices` is
+    false and the default origin is the dummy host, so every service takes its built-in "off" path
+    (component updates, spellcheck dictionaries, bangs list, uBO asset config, browser updates);
+    extension installs and updates go straight to the Chrome Web Store, as in stock Chromium; the
+    settings entry and the services onboarding are gone. When baa runs its own services, point
+    `kHeliumDefaultOrigin`/`ShouldAccessServices` in `components/helium_services` there.
+  - `baa/no-crash-uploads.patch`: no upload URL and uploads forced off; crashpad keeps reports in
+    `<user data>/Crashpad/`. The crash-reporting toggle in settings now does nothing (still to remove).
 
 Taking a Helium release: `git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git
 <commit> --squash`, same for `helium-macos` (then `git rm` its `helium-chromium` gitlink and `.gitmodules`

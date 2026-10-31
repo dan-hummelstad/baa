@@ -46,12 +46,19 @@ fetch_sources() {
 
 prepare_sources() {
   rm -rf "$_src_dir/out"
-  fetch_sources "${1:-true}" || return
+  # baa: unpacking the Chromium tarball fails now and then on CI runners
+  # ("tar: Child process exited with status 1") although the hashes check out;
+  # say what the archive and disk look like, then try once more.
+  fetch_sources "${1:-true}" || {
+    df -h / && ls -l "$_download_cache" && zstd -t "$_download_cache"/*.tar.zst
+    rm -rf "$_src_dir"
+    fetch_sources "${1:-true}"
+  } || return
 
   mkdir -p "$_out_dir"
   python3 "$_main_repo/utils/prune_binaries.py" --keep-build-dependencies "$_src_dir" "$_main_repo/pruning.list"
 
-  python3 "$_main_repo/utils/patches.py" apply "$_src_dir" "$_main_repo/patches" "$_root_dir/patches"
+  python3 "$_main_repo/utils/patches.py" apply "$_src_dir" "$_main_repo/patches" "$_root_dir/patches" "$_root_dir/../patches"
   python3 "$_main_repo/utils/domain_substitution.py" apply -r "$_main_repo/domain_regex.list" -f "$_main_repo/domain_substitution.list" "$_src_dir"
   python3 "$_main_repo/utils/name_substitution.py" --sub -t "$_src_dir"
   python3 "$_main_repo/utils/i18n_apply.py" -t "$_src_dir"

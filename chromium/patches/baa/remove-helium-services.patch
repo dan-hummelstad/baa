@@ -1,0 +1,87 @@
+--- a/components/helium_services/helium_services_helpers.h
++++ b/components/helium_services/helium_services_helpers.h
+@@ -12,8 +12,10 @@
+ 
+ namespace helium {
+ 
++// baa: Helium's servers are not used. Every service takes its "off" path until
++// baa runs its own; point this (and ShouldAccessServices) there when it does.
+ const char kHeliumDefaultOrigin[] =
+-    "https://services.helium.imput.net";
++    "https://helium-services-are-disabled.qjz9zk";
+ 
+ const char kHeliumDummyOrigin[] =
+     "https://helium-services-are-disabled.qjz9zk";
+--- a/components/helium_services/helium_services_helpers.cc
++++ b/components/helium_services/helium_services_helpers.cc
+@@ -77,14 +77,15 @@
+     return GURL(kHeliumDummyOrigin);
+ }
+ 
++// baa: no Helium services (see kHeliumDefaultOrigin), whatever the prefs say.
+ bool ShouldAccessServices(const PrefService& prefs) {
+-    return prefs.GetBoolean(prefs::kHeliumServicesEnabled) &&
+-           prefs.GetBoolean(prefs::kHeliumServicesConsented);
++    return false;
+ }
+ 
++// baa: extensions come straight from the Chrome Web Store, as in stock
++// Chromium, instead of through Helium's proxy.
+ bool ShouldAccessExtensionService(const PrefService& prefs) {
+-    return ShouldAccessServices(prefs) &&
+-            prefs.GetBoolean(prefs::kHeliumExtProxyEnabled);
++    return true;
+ }
+ 
+ bool ShouldAccessDictionaryService(const PrefService& prefs) {
+@@ -114,20 +115,13 @@
+ }
+ 
+ GURL GetExtensionUpdateURL(const PrefService& prefs) {
+-    if (!ShouldAccessExtensionService(prefs)) {
+-        return GetDummyURL();
+-    }
+-
+-    return GetServicesBaseURL(prefs).Resolve("/ext");
++    return GURL("https://clients2.google.com/service/update2/crx");
+ }
+ 
+ GURL GetWebstoreSnippetURL(const PrefService& prefs, std::string_view id) {
+-    if (!ShouldAccessExtensionService(prefs)) {
+-        return GetDummyURL();
+-    }
+-
+-    return GetServicesBaseURL(prefs).Resolve(
+-        base::StringPrintf("/ext/cws_snippet?id=%s", id));
++    return GURL(base::StringPrintf(
++        "https://chromewebstore.googleapis.com/v2/items/%s:fetchItemSnippet",
++        std::string(id).c_str()));
+ }
+ 
+ GURL GetSpellcheckURL(const PrefService& prefs) {
+--- a/chrome/browser/resources/settings/privacy_page/privacy_page.html
++++ b/chrome/browser/resources/settings/privacy_page/privacy_page.html
+@@ -46,11 +46,6 @@
+         sub-label="$i18n{siteSettingsSublabel}"
+         on-click="onSiteSettingsLinkRowClick_"
+         role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
+-    <cr-link-row id="heliumServicesLinkRow" start-icon="cr:chrome-product"
+-        class="hr" label="$i18n{heliumServicesTitle}"
+-        sub-label="$i18n{heliumServicesDescription}"
+-        on-click="onHeliumServicesPageClick_"
+-        role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
+     <cr-toast id="deleteBrowsingDataToast" duration="5000">
+       <div>[[dbdDeletionConfirmationToastLabel_]]</div>
+     </cr-toast>
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -266,7 +266,8 @@
+     registry->RegisterBooleanPref(prefs::kHeliumExtProxyEnabled, true);
+     registry->RegisterBooleanPref(prefs::kHeliumSpellcheckEnabled, true);
+     registry->RegisterStringPref(prefs::kHeliumServicesOrigin, "");
+-    registry->RegisterBooleanPref(prefs::kHeliumDidOnboarding, false);
++    // baa: Helium's onboarding is about Helium services, which baa removed.
++    registry->RegisterBooleanPref(prefs::kHeliumDidOnboarding, true);
+     registry->RegisterBooleanPref(prefs::kHeliumServicesConsented, false);
+     registry->RegisterBooleanPref(prefs::kHeliumUpdateFetchingEnabled, true);
+     registry->RegisterBooleanPref(prefs::kHeliumUBlockAssetsEnabled, true);

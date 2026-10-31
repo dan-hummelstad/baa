@@ -1,0 +1,48 @@
+--- a/components/crash/core/app/crash_reporter_client.cc
++++ b/components/crash/core/app/crash_reporter_client.cc
+@@ -145,19 +145,10 @@
+ }
+ #endif
+ 
++// baa: crash reports are never uploaded; crashpad keeps them in the user data
++// folder's Crashpad/ directory.
+ std::string CrashReporterClient::GetUploadUrl() {
+-#if !BUILDFLAG(IS_WIN)
+-  const auto* command_line = base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(kCrashServerUrlCommandLine)) {
+-    return command_line->GetSwitchValueASCII(kCrashServerUrlCommandLine);
+-  }
+-#endif
+-
+-#if defined(OFFICIAL_BUILD)
+-  return "https://crash.helium.computer/crash";
+-#else
+   return std::string();
+-#endif
+ }
+ 
+ bool CrashReporterClient::ShouldRateLimitUploads() {
+--- a/components/crash/core/app/crashpad.cc
++++ b/components/crash/core/app/crashpad.cc
+@@ -249,19 +249,11 @@
+ #if !BUILDFLAG(IS_CHROMEOS)
+ namespace {
+ 
++// baa: never upload, whatever the consent; reports stay on disk.
+ void ApplyUploadConsent(bool consent) {
+   if (!g_database)
+     return;
+-
+-  bool policy_enabled = true;
+-  CrashReporterClient* crash_reporter_client = GetCrashReporterClient();
+-  const bool reporting_disabled_by_policy =
+-      crash_reporter_client->ReportingIsEnforcedByPolicy(&policy_enabled) &&
+-      !policy_enabled;
+-
+-  crashpad::Settings* settings = g_database->GetSettings();
+-  settings->SetUploadsEnabled(consent && !reporting_disabled_by_policy &&
+-                              !crash_reporter_client->IsRunningUnattended());
++  g_database->GetSettings()->SetUploadsEnabled(false);
+ }
+ 
+ }  // namespace
