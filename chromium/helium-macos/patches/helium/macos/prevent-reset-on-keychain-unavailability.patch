@@ -245,7 +245,7 @@
  
        <if expr="is_macosx">
 +        <message name="IDS_KEYCHAIN_STARTUP_ERROR" desc="Startup error shown when the browser cannot access its macOS Keychain encryption key.">
-+          Helium couldn't access the macOS Keychain. To protect your data, the browser will close. If prompted by macOS, allow access to Helium's encryption key. Quit any other copies of Helium, then reopen it.
++          baa couldn't access the macOS Keychain. To protect your data, the browser will close. If prompted by macOS, allow access to baa's encryption key. Quit any other copies of baa, then reopen it.
 +        </message>
          <!-- Confirm to quit panel -->
          <message name="IDS_CONFIRM_TO_QUIT_DESCRIPTION" desc="Instructions for how the user should confirm quitting.">

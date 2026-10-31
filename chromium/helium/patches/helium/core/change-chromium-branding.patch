@@ -9,17 +9,17 @@
 -PRODUCT_INSTALLER_SHORTNAME=Chromium Installer
 -COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Chromium Authors. All rights reserved.
 -MAC_BUNDLE_ID=org.chromium.Chromium
-+COMPANY_FULLNAME=The Helium Authors
-+COMPANY_SHORTNAME=The Helium Authors
-+PRODUCT_FULLNAME=Helium
-+PRODUCT_SHORTNAME=Helium
-+PRODUCT_INSTALLER_FULLNAME=Helium Installer
-+PRODUCT_INSTALLER_SHORTNAME=Helium Installer
-+COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Helium Authors. All rights reserved.
-+MAC_BUNDLE_ID=net.imput.helium
++COMPANY_FULLNAME=The baa Authors
++COMPANY_SHORTNAME=The baa Authors
++PRODUCT_FULLNAME=baa
++PRODUCT_SHORTNAME=baa
++PRODUCT_INSTALLER_FULLNAME=baa Installer
++PRODUCT_INSTALLER_SHORTNAME=baa Installer
++COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The baa Authors. All rights reserved.
++MAC_BUNDLE_ID=me.baa.browser
  MAC_CREATOR_CODE=Cr24
 -MAC_TEAM_ID=
-+MAC_TEAM_ID=S4Q33XPHB4
++MAC_TEAM_ID=
 --- a/chrome/app/chrome_crash_reporter_client.cc
 +++ b/chrome/app/chrome_crash_reporter_client.cc
 @@ -134,24 +134,7 @@ bool ChromeCrashReporterClient::GetCrash

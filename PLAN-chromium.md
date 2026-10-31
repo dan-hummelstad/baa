@@ -100,14 +100,27 @@ popover), chrome:// WebUI pages, print preview, autofill dropdown at first (GPUI
 
 ```
 chromium/
-  helium-macos.rev        pinned imputnet/helium-macos commit (it pins helium-chromium + Chromium version)
-  patches/                baa's own patches (BrowserWindow factory, dialog skins), applied after Helium's
-  baa/                    //baa: BUILD.gn, baa.h, baa::* layer, baa::ui::Window
+  helium/                 vendored imputnet/helium (git subtree --squash): patches, utils, flags, resources
+  helium-macos/           vendored imputnet/helium-macos: macOS patches, flags, build scripts
+  baa/                    //baa (to write): BUILD.gn, baa.h, baa::* layer, baa::ui::Window
 ```
 
-Helium's own scripts do the work (`devutils/shared.sh`: `prepare_sources` downloads Helium's Chromium
-tarball, prunes, applies patches, domain/name substitution; `write_gn_args <arch> dev|release`).
-`chromium.yml` runs them; we add our patch folder and `//baa` on top.
+We own the vendored copies and edit them directly. baa's changes so far (2026-10-31):
+- **Branding:** `BRANDING` → baa / `me.baa.browser` / no team ID (`helium/core/change-chromium-branding.patch`);
+  name substitution rewrites Chrome/Chromium/Helium → baa and `chrome://`/`helium://` → `baa://` in
+  user-visible strings, except "Helium services", which are Helium's servers;
+  `kHeliumUIScheme` = "baa" (`override-chrome-protocol.patch`); data folder `me.baa.browser`, Keychain item
+  "baa Storage Key" (macOS patches). Helium's logo and app icon are not applied: Chromium's stock art until
+  baa has its own.
+- **Dropped:** 9 `helium/ui/*` patches that only touch views code and that nothing else depends on. The
+  other 95 UI patches are tangled with prefs, strings and the WebUI pages baa still shows, so they stay.
+- **Still Helium's:** services at `services.helium.imput.net` (user-toggleable), opt-in crash upload to
+  `crash.helium.computer`; Sparkle updates are off (no `enable_sparkle`).
+
+Taking a Helium release: `git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git
+<commit> --squash`, same for `helium-macos` (then `git rm` its `helium-chromium` gitlink and `.gitmodules`
+again), resolve conflicts with the edits above, and validate: `helium/devutils/validate_patches.py -l
+<unmodified tree>` over both series (remote mode `-r` is broken for sub-DEPS).
 
 - **Patch base: Helium (GPL-3.0, fine for baa).** Take its de-Googling, privacy and extension patches.
   Skip its views-UI patches, which change code we never create. Helium tracks ungoogled-chromium, so
@@ -126,8 +139,8 @@ tarball, prunes, applies patches, domain/name substitution; `write_gn_args <arch
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
   backend or a self-hosted runner if chained phases are too slow.
-- **Engine bumps:** `helium-bump.yml` (to write) moves `chromium/helium-macos.rev` to Helium's next
-  release, rebuilds and opens a PR; a failing baa patch stops for a human. The privacy test gates it.
+- **Engine bumps:** `helium-bump.yml` (to write) subtree-pulls Helium's next release, rebuilds and
+  opens a PR; a failing baa patch stops for a human. The privacy test gates it.
   `cef-bump.yml` is gone; the app keeps its pinned CEF until phase 5.
 - **Cost to accept:** security-fix latency = Helium's lag + our patch refresh + build time. With CEF it is
   Spotify's problem.

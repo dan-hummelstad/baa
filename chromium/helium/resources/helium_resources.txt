@@ -25,26 +25,9 @@ favicons/favicon_history_48.png components/resources/default_300_percent/favicon
 favicons/favicon_plugins_16.png extensions/browser/resources/default_100_percent/favicon_extensions.png
 favicons/favicon_plugins_32.png extensions/browser/resources/default_200_percent/favicon_extensions.png
 
-branding/product_logo.png components/resources/default_100_percent/chromium/product_logo.png
-branding/product_logo_white.png components/resources/default_100_percent/chromium/product_logo_white.png
-branding/product_logo_200.png components/resources/default_200_percent/chromium/product_logo.png
-branding/product_logo_white_200.png components/resources/default_200_percent/chromium/product_logo_white.png
 
-branding/product_logo_22_mono.png chrome/app/theme/chromium/product_logo_22_mono.png
 
-branding/product_logo.svg chrome/app/theme/chromium/product_logo.svg
 
-branding/product_logo.icon chrome/app/vector_icons/browser_logo.icon
-branding/product_logo.icon chrome/app/vector_icons/browser_logo_old.icon
-branding/product_logo.icon chrome/app/vector_icons/chrome_product.icon
-branding/product_logo.icon components/omnibox/browser/vector_icons/chrome_product.icon
-branding/product_logo.icon components/omnibox/browser/vector_icons/product_chrome_refresh.icon
-branding/product_logo.icon components/omnibox/browser/vector_icons/product_chrome_refresh_old.icon
-branding/product_logo.icon components/omnibox/browser/vector_icons/product_old.icon
-branding/product_logo.icon components/vector_icons/chromium/product.icon
-branding/product_logo_color.icon components/vector_icons/chromium/product_refresh.icon
-branding/product_logo.icon ui/message_center/vector_icons/chrome_product.icon
-branding/product_logo.icon ui/message_center/vector_icons/product_old.icon
 
 # generated resources
 generated/product_icon/16x16.png chrome/app/theme/chromium/product_logo_16.png

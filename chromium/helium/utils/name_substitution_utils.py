@@ -12,10 +12,13 @@ REPLACEMENT_REGEXES_STR = [
     (r'(\w+) Root Program', r'\1_unreplace Root Program'),
     (r'(\w+) Web( S|s)tore', r'\1_unreplace Web Store'),
     (r'(\w+) Remote Desktop', r'\1_unreplace Remote Desktop'),
+    # baa: Helium's services are run by Helium, so they keep its name.
+    (r'Helium( [Ss]ervice)', r'Helium_unreplace\1'),
 
     # main replacement(s)
-    (r'(\b)chrome://', r'\1helium://'),
-    (r'(?:Google )?Chrom(e|ium)(?!\w)', r'Helium'),
+    (r'(\b)(chrome|helium)://', r'\1baa://'),
+    (r'(?:Google )?Chrom(e|ium)(?!\w)', r'baa'),
+    (r'\bHelium\b', r'baa'),
 
     # post-replacement cleanup
     (r'((?:Google )?Chrom(e|ium))_unreplace', r'\1'),

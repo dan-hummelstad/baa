@@ -1,5 +1,6 @@
-# baa's Chromium: Helium's macOS tree (pinned in chromium/helium-macos.rev,
-# prepared by Helium's own scripts) built in self-chaining phases: each run
+# baa's Chromium: the vendored, baa-branded Helium patch set (chromium/helium,
+# chromium/helium-macos), prepared by Helium's own scripts and built in
+# self-chaining phases: each run
 # compiles for up to ~4.75 h, uploads the tree, and dispatches phase+1.
 # mode=dev is a component build whose finished tree is kept for 7 days, to
 # unpack locally and build incrementally from; it runs on the runner and Xcode
@@ -77,15 +78,14 @@ jobs:
         if: inputs.phase == '1'
         run: |
           set -eux
-          git clone https://github.com/imputnet/helium-macos.git "$ROOT"
-          cd "$ROOT"
-          git checkout "$(cat "$GITHUB_WORKSPACE/baa/chromium/helium-macos.rev")"
-          git submodule update --init --depth 1
+          mkdir -p "$ROOT"
+          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$ROOT/"
+          cd "$ROOT/helium-macos"
           t=$(date +%s)
           source devutils/shared.sh
           prepare_sources true
           rm -rf "$_download_cache"
-          echo "prepare_seconds=$(( $(date +%s) - t ))" > stats.txt
+          echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
           write_gn_args arm64 "${{ inputs.mode }}"
           # No cache backend here, and a downloaded dev tree must not need one.
           sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
@@ -129,7 +129,7 @@ jobs:
         working-directory: /Users/runner/work/hb
         run: |
           set -ux
-          source devutils/shared.sh
+          source helium-macos/devutils/shared.sh
           # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
           left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
           B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
@@ -148,10 +148,10 @@ jobs:
         working-directory: /Users/runner/work/hb
         run: |
           set -eux
-          source devutils/shared.sh
-          du -sh "$_out_dir/Helium.app"
+          source helium-macos/devutils/shared.sh
+          du -sh "$_out_dir/baa.app"
           {
-            echo "## Helium $(cat helium-chromium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "## baa Chromium $(cat helium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
             echo "- phases: ${{ inputs.phase }}"
             echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
             echo '```'; cat stats.txt; echo '```'

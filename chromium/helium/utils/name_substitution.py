@@ -21,16 +21,19 @@ IGNORE_DIRS = ['.pc', 'chromeos', 'remoting', 'ash', 'testdata']
 def replacement_sanity():
     """Sanity check to ensure replacement regexes are working as intended"""
     before_after = [
-        ('chrome://about', 'helium://about'),
+        ('chrome://about', 'baa://about'),
+        ('helium://settings', 'baa://settings'),
         ('Chrome Root Program', 'Chrome Root Program'),
-        (' Chrome  ', ' Helium  '),
+        (' Chrome  ', ' baa  '),
         ('Chrome Web Store', 'Chrome Web Store'),
         ('Chromium Web Store', 'Chromium Web Store'),
         ('Chrome Remote Desktop', 'Chrome Remote Desktop'),
-        ('Google Chrome', 'Helium'),
-        ('Chrome Google Chrome Chrome Chromium', 'Helium Helium Helium Helium'),
-        ('Chrome', 'Helium'),
-        ('Chromium', 'Helium'),
+        ('Google Chrome', 'baa'),
+        ('Chrome Google Chrome Chrome Chromium', 'baa baa baa baa'),
+        ('Chrome', 'baa'),
+        ('Chromium', 'baa'),
+        ('Helium', 'baa'),
+        ('Helium services are off', 'Helium services are off'),
     ]
 
     for source, expected in before_after:

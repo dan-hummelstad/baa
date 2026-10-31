@@ -4,7 +4,7 @@
  inline constexpr char kChromeDevToolsScheme[] = "devtools";
  inline constexpr char kChromeErrorScheme[] = "chrome-error";
  inline constexpr char kChromeUIScheme[] = "chrome";  // Used for WebUIs.
-+inline constexpr char kHeliumUIScheme[] = "helium";  // also used for webuis :3
++inline constexpr char kHeliumUIScheme[] = "baa";  // also used for webuis :3
  inline constexpr char kChromeNativeScheme[] = "chrome-native";
  inline constexpr char kChromeUIUntrustedScheme[] = "chrome-untrusted";
  inline constexpr char kViewSourceScheme[] = "view-source";
@@ -255,7 +255,7 @@
  
  // Hardcode these constants to avoid dependences on //chrome and //content.
  const char kChromeUIScheme[] = "chrome";
-+const char kHeliumUIScheme[] = "helium";
++const char kHeliumUIScheme[] = "baa";
  const char kDevToolsScheme[] = "devtools";
  const char kChromeUIDefaultHost[] = "version";
  const char kViewSourceScheme[] = "view-source";
@@ -322,7 +322,7 @@
           client_->GetBuiltinsToProvideAsUserTypes()) {
 -      AddBuiltinMatch(url, std::u16string(), styles);
 +      DCHECK(url.starts_with(u"chrome://"));
-+      AddBuiltinMatch(std::u16string(url).replace(0, 6, u"helium"),
++      AddBuiltinMatch(std::u16string(url).replace(0, 6, u"baa"),
 +                      std::u16string(), styles);
      }
    } else {
@@ -372,7 +372,7 @@
 -    if (protocol === 'chrome:') {
 -      this.$.secondaryTextInner.prepend(document.createTextNode('chrome://'));
 +    if (protocol === 'chrome:' || protocol === 'helium:') {
-+      this.$.secondaryTextInner.prepend(document.createTextNode('helium://'));
++      this.$.secondaryTextInner.prepend(document.createTextNode('baa://'));
      }
    }
  

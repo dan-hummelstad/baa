@@ -37,8 +37,8 @@ else
 fi
 
 if [ -z "${OUT_DMG_PATH:-}" ]; then
-  _chromium_version=$(cat "$_root_dir/helium-chromium/chromium_version.txt")
-  _helium_revision=$(cat "$_root_dir/helium-chromium/revision.txt")
+  _chromium_version=$(cat "$_root_dir/../helium/chromium_version.txt")
+  _helium_revision=$(cat "$_root_dir/../helium/revision.txt")
   _platform_revision=$(cat "$_root_dir/revision.txt")
   OUT_DMG_PATH="$_root_dir/build/helium_${_chromium_version}-${_helium_revision}.${_platform_revision}_macos.dmg"
 fi

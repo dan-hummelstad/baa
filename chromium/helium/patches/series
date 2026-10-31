@@ -263,7 +263,6 @@ helium/settings/network-and-security-page.patch
 helium/settings/sync-setup-contract.patch
 
 helium/ui/layout-constants.patch
-helium/ui/layout-provider.patch
 helium/ui/update-cr-components.patch
 helium/ui/always-use-better-ntp.patch
 helium/ui/clean-new-tab-page.patch
@@ -282,7 +281,6 @@ helium/ui/tab-search-in-toolbar.patch
 helium/ui/omnibox.patch
 helium/ui/app-menu-style.patch
 helium/ui/app-menu-model.patch
-helium/ui/app-menu-button.patch
 helium/ui/remove-reading-list-from-app-menu.patch
 helium/ui/remove-split-view-mini-toolbar.patch
 helium/ui/split-view.patch
@@ -298,7 +296,6 @@ helium/ui/remove-dead-profile-actions.patch
 helium/ui/clean-up-installed-extension-bubble.patch
 helium/ui/add-specific-error-for-disabled-extension-downloads.patch
 helium/ui/selected-keyword-view.patch
-helium/ui/bookmark-button-bg-fix.patch
 helium/ui/restyle-ntp-tiles.patch
 helium/ui/side-panel-webui-general.patch
 helium/ui/side-panel-webui-customize.patch
@@ -310,17 +307,12 @@ helium/ui/square-interstitial-buttons.patch
 helium/ui/center-window-on-launch.patch
 helium/ui/remove-devtools-annoyances.patch
 helium/ui/remove-google-promotional-resources.patch
-helium/ui/bookmarks-bar-padding.patch
 helium/ui/profile-picker-cleanup.patch
-helium/ui/disable-tab-group-editor-footer.patch
 helium/ui/profile-customization-cleanup.patch
 helium/ui/bangs-ui.patch
 helium/ui/infobar.patch
-helium/ui/reduce-text-button-height.patch
-helium/ui/pwa-toolbar.patch
 helium/ui/helium-color-mixers.patch
 helium/ui/frame-background.patch
-helium/ui/status-bubble.patch
 helium/ui/clean-incognito-guest-ntp.patch
 helium/ui/enable-fluent-scrollbar.patch
 helium/ui/helium-color-scheme.patch
@@ -355,7 +347,6 @@ helium/ui/layout/min-window-width.patch
 
 helium/ui/generate-standard-qr-codes.patch
 helium/ui/pdf-viewer.patch
-helium/ui/hide-pip-live-caption-button.patch
 helium/ui/disable-ink-ripple-effect.patch
 helium/ui/dont-antialias-rects.patch
 helium/ui/fix-windows-ui-position.patch

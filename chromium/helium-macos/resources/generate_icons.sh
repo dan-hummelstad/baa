@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 _root_dir="$(dirname "$(dirname "$(greadlink -f "$0")")")"
-_main_repo="$_root_dir/helium-chromium"
+_main_repo="$_root_dir/../helium"
 _resources_dir="$_main_repo/resources"
 _platform_resources="$_root_dir/resources"
 
