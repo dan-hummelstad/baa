@@ -192,6 +192,7 @@ pub enum DownloadState {
 pub const MESSAGE_PREFIX: &str = "gpui-cef:message:";
 
 /// Console lines the page-side audio watcher reports with.
+#[cfg(target_os = "macos")]
 pub(crate) const AUDIBLE_PREFIX: &str = "gpui-cef:audible:";
 
 /// JavaScript that evaluates `expression`, turns it into a string, and posts
