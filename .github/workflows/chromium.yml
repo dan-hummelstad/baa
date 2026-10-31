@@ -82,6 +82,9 @@ jobs:
           write_gn_args arm64 "${{ inputs.mode }}"
           # No cache backend here, and a downloaded dev tree must not need one.
           sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
+          # Component builds compile PCHs with -fmodule-name, which this clang then
+          # rejects as a module interface; official (Helium's) builds use no PCHs.
+          [ "${{ inputs.mode }}" = dev ] && echo 'enable_precompiled_headers = false' >> "$_out_dir/args.gn"
           cat "$_out_dir/args.gn"
           gn_gen
           du -sh "$_src_dir"
