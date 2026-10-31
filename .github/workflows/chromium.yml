@@ -16,6 +16,9 @@ on:
         default: xcode-27
       xcode:
         default: "27.1"
+      budget_minutes:
+        description: "test the phase hand-off: compile only this long per phase"
+        default: ""
       phase:
         default: "1"
       prev_run:
@@ -29,7 +32,7 @@ permissions:
   contents: read
   actions: write
 
-concurrency: chromium-${{ inputs.mode }}
+concurrency: chromium-${{ inputs.mode }}${{ inputs.budget_minutes }}
 
 env:
   MAX_PHASES: 12
@@ -129,7 +132,8 @@ jobs:
           source devutils/shared.sh
           # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
           left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
-          if [ $left -lt 600 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
+          if [ $left -lt 60 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
           t=$(date +%s)
           # The step shell runs with -e: capture the timeout's 124 instead of dying on it.
           code=0
@@ -179,5 +183,6 @@ jobs:
         run: |
           gh workflow run chromium.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
             -f mode="${{ inputs.mode }}" -f runner="${{ inputs.runner }}" -f xcode="${{ inputs.xcode }}" \
+            -f budget_minutes="${{ inputs.budget_minutes }}" \
             -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
 
