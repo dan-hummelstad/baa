@@ -131,8 +131,9 @@ jobs:
         run: |
           set -eux
           t=$(date +%s)
-          zstd -dc tree.tar.zst | tar -xf -
+          zstd -dc tree.tar.zst | gtar -xf -
           rm tree.tar.zst
+          gls -la --time-style=full-iso hb/helium-macos/build/src/out/Default/.siso_* || true
           echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
           df -h /
 
@@ -175,8 +176,11 @@ jobs:
         working-directory: /Users/runner/work
         run: |
           set -eux
+          gls -la --time-style=full-iso hb/helium-macos/build/src/out/Default/.siso_* || true
           # --remove-files: the archive never sits beside the whole tree on disk.
-          gtar --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          # posix (pax) keeps nanosecond mtimes; the default gnu format rounds to
+          # seconds, which siso's .siso_fs_state then sees as every file changed.
+          gtar --format=posix --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
           ls -lh tree.tar.zst
           df -h /
 
