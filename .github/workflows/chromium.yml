@@ -152,6 +152,9 @@ jobs:
           code=0
           (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome) || code=$?
           echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
+          # Why siso ran steps: a resumed phase should not be all "doesn't exist"/"changed".
+          E="$_out_dir/siso_explain"
+          [ ! -f "$E" ] || { head -15 "$E" | cut -c1-240; sed -E 's/^(output|deps for) [^ ]+/\1 _/; s/ for [^ ]+$//; s/input .*/input/' "$E" | sort | uniq -c | sort -rn | head; }
           if [ $code -eq 124 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
           [ $code -eq 0 ] || exit $code
           echo "status=finished" >> "$GITHUB_OUTPUT"
