@@ -144,7 +144,9 @@ def replace_grit_tree(text):
             if old_fp != new_fp:
                 fp_map[old_fp] = new_fp
 
-    return xml.tostring(xml_tree, encoding='unicode', xml_declaration=True), fp_map
+    # baa: Helium's onboarding .grdp has no declaration and its parser rejects one.
+    declaration = text.lstrip().startswith('<?xml')
+    return xml.tostring(xml_tree, encoding='unicode', xml_declaration=declaration), fp_map
 
 
 def dedup_translations_in_place(translation, seen):
