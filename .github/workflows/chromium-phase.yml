@@ -1,0 +1,174 @@
+# One phase of chromium.yml: compile for up to ~4.75 h, then hand the tree to
+# the next phase through the run's chromium-tree artifact.
+name: chromium-phase
+
+on:
+  workflow_call:
+    inputs:
+      phase:
+        type: number
+        required: true
+      last:
+        type: boolean
+        default: false
+      mode:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      xcode:
+        type: string
+        required: true
+      budget_minutes:
+        type: string
+        default: ""
+    outputs:
+      status:
+        value: ${{ jobs.phase.outputs.status }}
+
+env:
+  ROOT: /Users/runner/work/hb
+
+jobs:
+  phase:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    outputs:
+      status: ${{ steps.build.outputs.status }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: baa
+
+      - name: Prepare runner
+        run: |
+          set -eux
+          echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+          sudo mdutil -a -i off || true
+          df -h /
+          # Disk is the limit by the last phases (tree + build output + archive): drop what Chromium doesn't use.
+          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet \
+            ~/Library/Android ~/.dotnet ~/.ghcup ~/.rustup ~/.cargo /usr/local/lib/node_modules \
+            /opt/homebrew/Caskroom "$(brew --cache)" || true
+          xcrun simctl delete all || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator
+          # Images list each Xcode under symlinked aliases too; keep the real one.
+          XCODE=$(realpath /Applications/Xcode_${{ inputs.xcode }}.app)
+          sudo xcode-select -s "$XCODE"
+          for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
+          xcodebuild -downloadComponent MetalToolchain || true
+          brew install coreutils zstd gnu-tar
+          pip3 install requests pillow --break-system-packages
+          df -h /
+
+      - name: Prepare Helium sources (phase 1)
+        if: inputs.phase == 1
+        run: |
+          set -eux
+          mkdir -p "$ROOT"
+          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$ROOT/"
+          cd "$ROOT/helium-macos"
+          t=$(date +%s)
+          source devutils/shared.sh
+          prepare_sources true
+          rm -rf "$_download_cache"
+          echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
+          write_gn_args arm64 "${{ inputs.mode }}"
+          # No cache backend here, and a downloaded dev tree must not need one.
+          sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
+          # Component builds compile PCHs with -fmodule-name, which this clang then
+          # rejects as a module interface; official (Helium's) builds use no PCHs.
+          # No debug info either: it is most of a build folder, and the runner disk and
+          # the downloadable tree are the limits. ponytail: set symbol_level=1 locally
+          # (one full rebuild) if C++ backtraces matter.
+          if [ "${{ inputs.mode }}" = dev ]; then
+            sed -i '' '/symbol_level/d' "$_out_dir/args.gn"
+            printf '%s\n' 'enable_precompiled_headers = false' 'symbol_level = 0' \
+              'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$_out_dir/args.gn"
+          fi
+          cat "$_out_dir/args.gn"
+          gn_gen
+          du -sh "$_src_dir"
+          df -h /
+
+      - name: Restore tree (phase 2+)
+        if: inputs.phase != 1
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-tree
+          path: /Users/runner/work
+
+      - name: Unpack tree (phase 2+)
+        if: inputs.phase != 1
+        working-directory: /Users/runner/work
+        run: |
+          set -eux
+          t=$(date +%s)
+          zstd -dc tree.tar.zst | tar -xf -
+          rm tree.tar.zst
+          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
+          df -h /
+
+      - name: Build
+        id: build
+        working-directory: /Users/runner/work/hb
+        run: |
+          set -ux
+          source helium-macos/devutils/shared.sh
+          # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
+          left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
+          B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
+          if [ $left -lt 60 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
+          t=$(date +%s)
+          # The step shell runs with -e: capture the timeout's 124 instead of dying on it.
+          code=0
+          (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome) || code=$?
+          echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
+          if [ $code -eq 124 ]; then
+            [ "${{ inputs.last }}" = false ] || { echo "gave up after phase ${{ inputs.phase }}"; exit 1; }
+            echo "status=running" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ $code -eq 0 ] || exit $code
+          echo "status=finished" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        if: steps.build.outputs.status == 'finished'
+        working-directory: /Users/runner/work/hb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          source helium-macos/devutils/shared.sh
+          du -sh "$_out_dir/baa.app"
+          STARTED=$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -q .run_started_at)" +%s)
+          {
+            echo "## baa Chromium $(cat helium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "- phases: ${{ inputs.phase }}"
+            echo "- commit: $GITHUB_SHA"
+            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
+            echo '```'; cat stats.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pack tree
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        working-directory: /Users/runner/work
+        run: |
+          set -eux
+          # --remove-files: the archive never sits beside the whole tree on disk.
+          gtar --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          ls -lh tree.tar.zst
+          df -h /
+
+      - name: Upload tree
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-tree
+          path: /Users/runner/work/tree.tar.zst
+          overwrite: true
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
+          compression-level: 0

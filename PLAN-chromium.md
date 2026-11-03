@@ -140,7 +140,7 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
 
 ## Build and CI
 
-- **`chromium.yml`** builds the pinned Helium tree in self-chaining ~4.75 h phases on free runners.
+- **`chromium.yml`** builds the pinned Helium tree in one run of chained ~4.75 h phases on free runners, like Helium's `building.yml`.
   `mode=release` = Helium's official args (the timing run for the runner decision). `mode=dev` = component
   build on the `xcode-27` runner with Xcode 27.1 (27A9275, same as the dev Mac); the finished tree is kept
   7 days to unpack locally (`~/chromium`) and build incrementally (`//baa` edits rebuild in minutes).

@@ -1,16 +1,14 @@
 # baa's Chromium: the vendored, baa-branded Helium patch set (chromium/helium,
-# chromium/helium-macos), prepared by Helium's own scripts and built in
-# self-chaining phases: each run
-# compiles for up to ~4.75 h, uploads the tree, and dispatches phase+1.
+# chromium/helium-macos), prepared by Helium's own scripts and built the way
+# Helium's building.yml does: one run of chained phases (chromium-phase.yml),
+# each compiling for up to ~4.75 h of its 6 h job limit; a phase only runs if
+# the one before it is still compiling, so the rest show as skipped.
+# One run stays on its commit, and phases share the chromium-tree artifact.
 # mode=dev is a component build whose finished tree is kept for 7 days, to
 # unpack locally and build incrementally from; it runs on the runner and Xcode
 # matching the local Mac, or the SDK headers' mtimes force a full rebuild.
-#
-# Each chain is pinned to its commit: phase 1 tags it chromium/<kind>/<run id>
-# and every later phase runs from that tag, so a push mid-chain changes nothing
-# in it. Chains run in parallel; the last run of a chain deletes its tag.
 name: chromium
-run-name: chromium ${{ inputs.mode }} phase ${{ inputs.phase }}${{ inputs.budget_minutes && format(' (test, {0} min)', inputs.budget_minutes) || '' }}
+run-name: chromium ${{ inputs.mode }}${{ inputs.budget_minutes && format(' (test, {0} min)', inputs.budget_minutes) || '' }}
 
 on:
   workflow_dispatch:
@@ -25,185 +23,138 @@ on:
       budget_minutes:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""
-      phase:
-        default: "1"
-      prev_run:
-        description: "internal: run id holding the previous phase's tree"
-        default: ""
-      started:
-        description: "internal: epoch of phase 1"
-        default: ""
-      chain:
-        description: "internal: run id of phase 1, naming the chain's tag"
-        default: ""
 
-# contents: write for the chain tags. No concurrency group: GitHub keeps one
-# pending run per group and would cancel a chain's next phase.
 permissions:
-  contents: write
-  actions: write
-
-env:
-  MAX_PHASES: 12
-  ROOT: /Users/runner/work/hb
-  KIND: ${{ inputs.mode }}${{ inputs.budget_minutes && '-test' || '' }}
-  GH_TOKEN: ${{ github.token }}
+  contents: read
 
 jobs:
-  phase:
-    env:
-      CHAIN: ${{ inputs.chain }}
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          path: baa
+  phase_01:
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 1
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Prepare runner
-        run: |
-          set -eux
-          echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-          S="${{ inputs.started }}"; echo "STARTED=${S:-$(date +%s)}" >> "$GITHUB_ENV"
-          [ "${{ inputs.phase }}" -le "$MAX_PHASES" ] || { echo "gave up after $MAX_PHASES phases"; exit 1; }
-          sudo mdutil -a -i off || true
-          df -h /
-          # Disk is the limit by the last phases (tree + build output + archive): drop what Chromium doesn't use.
-          sudo rm -rf "${ANDROID_HOME:-/nonexistent}" /Users/runner/hostedtoolcache /usr/local/share/dotnet \
-            ~/Library/Android ~/.dotnet ~/.ghcup ~/.rustup ~/.cargo /usr/local/lib/node_modules \
-            /opt/homebrew/Caskroom "$(brew --cache)" || true
-          xcrun simctl delete all || true
-          sudo rm -rf ~/Library/Developer/CoreSimulator
-          # Images list each Xcode under symlinked aliases too; keep the real one.
-          XCODE=$(realpath /Applications/Xcode_${{ inputs.xcode }}.app)
-          sudo xcode-select -s "$XCODE"
-          for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
-          xcodebuild -downloadComponent MetalToolchain || true
-          brew install coreutils zstd gnu-tar
-          pip3 install requests pillow --break-system-packages
-          df -h /
+  phase_02:
+    needs: phase_01
+    if: needs.phase_01.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 2
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Prepare Helium sources (phase 1)
-        if: inputs.phase == '1'
-        run: |
-          set -eux
-          mkdir -p "$ROOT"
-          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$ROOT/"
-          cd "$ROOT/helium-macos"
-          t=$(date +%s)
-          source devutils/shared.sh
-          prepare_sources true
-          rm -rf "$_download_cache"
-          echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
-          write_gn_args arm64 "${{ inputs.mode }}"
-          # No cache backend here, and a downloaded dev tree must not need one.
-          sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
-          # Component builds compile PCHs with -fmodule-name, which this clang then
-          # rejects as a module interface; official (Helium's) builds use no PCHs.
-          # No debug info either: it is most of a build folder, and the runner disk and
-          # the downloadable tree are the limits. ponytail: set symbol_level=1 locally
-          # (one full rebuild) if C++ backtraces matter.
-          if [ "${{ inputs.mode }}" = dev ]; then
-            sed -i '' '/symbol_level/d' "$_out_dir/args.gn"
-            printf '%s\n' 'enable_precompiled_headers = false' 'symbol_level = 0' \
-              'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$_out_dir/args.gn"
-          fi
-          cat "$_out_dir/args.gn"
-          gn_gen
-          du -sh "$_src_dir"
-          df -h /
+  phase_03:
+    needs: phase_02
+    if: needs.phase_02.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 3
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Restore tree (phase 2+)
-        if: inputs.phase != '1'
-        uses: actions/download-artifact@v4
-        with:
-          name: chromium-tree
-          run-id: ${{ inputs.prev_run }}
-          github-token: ${{ github.token }}
-          path: /Users/runner/work
+  phase_04:
+    needs: phase_03
+    if: needs.phase_03.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 4
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Unpack tree (phase 2+)
-        if: inputs.phase != '1'
-        working-directory: /Users/runner/work
-        run: |
-          set -eux
-          t=$(date +%s)
-          zstd -dc tree.tar.zst | tar -xf -
-          rm tree.tar.zst
-          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
-          df -h /
+  phase_05:
+    needs: phase_04
+    if: needs.phase_04.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 5
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Build
-        id: build
-        working-directory: /Users/runner/work/hb
-        run: |
-          set -ux
-          source helium-macos/devutils/shared.sh
-          # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
-          left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
-          B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
-          if [ $left -lt 60 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
-          t=$(date +%s)
-          # The step shell runs with -e: capture the timeout's 124 instead of dying on it.
-          code=0
-          (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome) || code=$?
-          echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
-          if [ $code -eq 124 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
-          [ $code -eq 0 ] || exit $code
-          echo "status=finished" >> "$GITHUB_OUTPUT"
+  phase_06:
+    needs: phase_05
+    if: needs.phase_05.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 6
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Report
-        if: steps.build.outputs.status == 'finished'
-        working-directory: /Users/runner/work/hb
-        run: |
-          set -eux
-          source helium-macos/devutils/shared.sh
-          du -sh "$_out_dir/baa.app"
-          {
-            echo "## baa Chromium $(cat helium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
-            echo "- phases: ${{ inputs.phase }}"
-            echo "- commit: $GITHUB_SHA"
-            echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
-            echo '```'; cat stats.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+  phase_07:
+    needs: phase_06
+    if: needs.phase_06.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 7
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Pack tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
-        working-directory: /Users/runner/work
-        run: |
-          set -eux
-          # --remove-files: the archive never sits beside the whole tree on disk.
-          gtar --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
-          ls -lh tree.tar.zst
-          df -h /
+  phase_08:
+    needs: phase_07
+    if: needs.phase_07.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 8
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Upload tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
-        uses: actions/upload-artifact@v4
-        with:
-          name: chromium-tree
-          path: /Users/runner/work/tree.tar.zst
-          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
-          compression-level: 0
+  phase_09:
+    needs: phase_08
+    if: needs.phase_08.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 9
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: Next phase
-        if: steps.build.outputs.status == 'running'
-        run: |
-          # The chain's tag, so it keeps running this commit. Phase 1 makes it;
-          # chains started before tags existed (phase 2+, no chain) follow their branch.
-          if [ "${{ inputs.phase }}" = 1 ]; then
-            CHAIN=$GITHUB_RUN_ID
-            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/chromium/$KIND/$CHAIN" -f sha="$GITHUB_SHA"
-          fi
-          ref="$GITHUB_REF_NAME"; [ -z "$CHAIN" ] || ref="chromium/$KIND/$CHAIN"
-          gh workflow run chromium.yml -R "$GITHUB_REPOSITORY" --ref "$ref" -f chain="$CHAIN" \
-            -f mode="${{ inputs.mode }}" -f runner="${{ inputs.runner }}" -f xcode="${{ inputs.xcode }}" \
-            -f budget_minutes="${{ inputs.budget_minutes }}" \
-            -f phase="$(( ${{ inputs.phase }} + 1 ))" -f prev_run="$GITHUB_RUN_ID" -f started="$STARTED"
+  phase_10:
+    needs: phase_09
+    if: needs.phase_09.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 10
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
 
-      - name: End chain
-        if: always() && steps.build.outputs.status != 'running' && env.CHAIN != ''
-        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/chromium/$KIND/$CHAIN" || true
+  phase_11:
+    needs: phase_10
+    if: needs.phase_10.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 11
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
+
+  phase_12:
+    needs: phase_11
+    if: needs.phase_11.outputs.status == 'running'
+    uses: ./.github/workflows/chromium-phase.yml
+    with:
+      phase: 12
+      last: true
+      mode: ${{ inputs.mode }}
+      runner: ${{ inputs.runner }}
+      xcode: ${{ inputs.xcode }}
+      budget_minutes: ${{ inputs.budget_minutes }}
