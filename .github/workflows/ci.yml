@@ -86,4 +86,9 @@ jobs:
           path: bundle
       - if: runner.os == 'macOS'
         run: ditto -x -k bundle/baa.zip bundle
-      - run: python3 xtask/privacy_test.py ${{ matrix.app }} bundle/proxy-allowlist.txt --seconds 60
+      - run: python3 xtask/privacy_test.py ${{ matrix.app }} bundle/proxy-allowlist.txt --seconds 60 --netlog netlog.json
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: privacy-netlog-${{ matrix.artifact }}
+          path: netlog.json

@@ -90,6 +90,8 @@ def main():
     parser.add_argument("app")
     parser.add_argument("allowlist", type=pathlib.Path)
     parser.add_argument("--seconds", default=60, type=int)
+    # Hosts alone do not say which part of Chromium made a connection; the net-log does.
+    parser.add_argument("--netlog", type=pathlib.Path)
     args = parser.parse_args()
 
     allowlist = args.allowlist.read_text()
@@ -112,7 +114,8 @@ def main():
     )
     try:
         wait_for_port(port)
-        app = subprocess.Popen([str(executable(args.app)), f"--proxy-server=http://127.0.0.1:{port}", page_url])
+        extra = [f"--log-net-log={args.netlog.resolve()}"] if args.netlog else []
+        app = subprocess.Popen([str(executable(args.app)), f"--proxy-server=http://127.0.0.1:{port}", *extra, page_url])
         time.sleep(args.seconds)
         crashed = app.poll()
         stop(app)
