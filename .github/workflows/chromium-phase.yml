@@ -112,6 +112,13 @@ jobs:
           rm tree.tar.zst
           echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
           df -h /
+          # Siso rebuilds every output whose mtime is older than its depslog entry,
+          # so whole-second mtimes (a non-pax tar) silently restart the build.
+          out=hb/helium-macos/build/src/out/Default
+          [ -f "$out/.siso_fs_state" ] || { echo "::error::tree has no .siso_fs_state; the build would start over"; exit 1; }
+          case $(stat -f %Fm "$out/.siso_deps") in
+            *.000000000) echo "::error::mtimes lost their sub-second part; siso would rebuild everything"; exit 1 ;;
+          esac
 
       - name: Build
         id: build
@@ -124,12 +131,23 @@ jobs:
           B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
           if [ $left -lt 60 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
           t=$(date +%s)
-          # The step shell runs with -e: capture the timeout's 124 instead of dying on it.
-          code=0
-          (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome) || code=$?
+          # The step shell runs with -e -o pipefail: capture the timeout's 124 instead of dying on it.
+          set +e
+          (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" chrome) 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          set -e
           echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
           if [ $code -eq 124 ]; then
             [ "${{ inputs.last }}" = false ] || { echo "gave up after phase ${{ inputs.phase }}"; exit 1; }
+            # A phase that kept the last one's work ends with far fewer steps left.
+            # Without this, a lost hand-off only shows as a chain that never ends.
+            read -r done remaining < <(grep -oE '[0-9]+ done, [0-9]+ failed, [0-9]+ remaining' build.log | tail -1 | awk '{print $1, $5}')
+            [ -n "${remaining:-}" ] || { echo "::error::no siso step summary in build.log"; exit 1; }
+            echo "remaining_phase${{ inputs.phase }}=$remaining" >> stats.txt
+            if [ -f remaining.txt ] && [ "$remaining" -gt $(( $(cat remaining.txt) - done / 2 )) ]; then
+              echo "::error::no progress kept: $remaining steps left after $done done; the last phase left $(cat remaining.txt)"; exit 1
+            fi
+            echo "$remaining" > remaining.txt
             echo "status=running" >> "$GITHUB_OUTPUT"; exit 0
           fi
           [ $code -eq 0 ] || exit $code
@@ -159,7 +177,8 @@ jobs:
         run: |
           set -eux
           # --remove-files: the archive never sits beside the whole tree on disk.
-          gtar --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          # posix (pax) keeps sub-second mtimes, which siso compares; the default format drops them.
+          gtar --format=posix --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
           ls -lh tree.tar.zst
           df -h /
 
