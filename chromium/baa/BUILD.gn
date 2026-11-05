@@ -1,0 +1,9 @@
+# //baa: baa's ADK-style layer (PLAN-chromium.md). Reached from
+# //chrome:dependencies by chromium/patches/baa/add-baa-layer.patch.
+# ponytail: a source_set linked into the framework; becomes a component (BaaCore) in phase 2.
+source_set("baa") {
+  sources = [
+    "baa.cc",
+    "baa.h",
+  ]
+}

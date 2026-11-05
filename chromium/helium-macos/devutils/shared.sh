@@ -66,6 +66,8 @@ prepare_sources() {
     --tree "$_main_repo" --platform-tree "$_root_dir" --chromium-tree "$_src_dir"
 
   helium_resources
+  # baa: //baa goes in last, so name substitution never rewrites baa's own code.
+  cp -R "$_root_dir/../baa" "$_src_dir/"
 }
 
 write_gn_args() {

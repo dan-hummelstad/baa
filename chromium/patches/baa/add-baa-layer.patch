@@ -1,0 +1,10 @@
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1654,6 +1654,7 @@
+ 
+ group("dependencies") {
+   public_deps = [
++    "//baa",
+     "//build:branding_buildflags",
+     "//build:chromeos_buildflags",
+     "//chrome/browser",

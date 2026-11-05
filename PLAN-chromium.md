@@ -67,7 +67,7 @@ baa.app/Contents/
 
 | Arc | baa | Change and why |
 |---|---|---|
-| `//arc` in Chromium tree | `//baa` (repo `chromium/baa`, symlinked into `src/baa`) | same |
+| `//arc` in Chromium tree | `//baa` (repo `chromium/baa`, copied into `src/baa` last by `prepare_sources`; reached from `//chrome:dependencies` by `patches/baa/add-baa-layer.patch`) | same |
 | `arc::` C++ layer, `shared_ptr<Impl>` handles, `…Delegate` interfaces | `baa::` C++ layer, same shape | same |
 | `arc::browser::ui::Window : BrowserWindow`, `LocationBar` | `baa::ui::Window`, `baa::ui::LocationBar` | same; one patch makes `BrowserWindow::CreateBrowserWindow` build ours |
 | ObjC wrappers + `DelegateBridge` for Swift | **C ABI** (`baa.h`: opaque handles, `extern "C"` calls, one struct of callback fn pointers per delegate) | Rust has no ObjC/C++ interop worth using; a C ABI is the stable boundary. Rust side hand-written in `baa-web`, not bindgen. |
@@ -144,6 +144,10 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
   `mode=release` = Helium's official args (the timing run for the runner decision). `mode=dev` = component
   build on the `xcode-27` runner with Xcode 27.2 (same as the dev Mac) at `/Users/Shared/hb`, a path that exists on both, since siso keys its records by absolute path; the finished tree is kept
   7 days to unpack locally (at `/Users/Shared/hb`) and build incrementally (`//baa` edits rebuild in minutes).
+- **Local:** `chromium/local-build.sh` syncs the checkout's `chromium/` into `/Users/Shared/hb` by content
+  (unchanged files keep their mtimes) and builds `chrome`. Only `//baa` changed: copied straight in. Any
+  Helium/patch change: a fresh `prepare_sources` in `/Users/Shared/hb-new` (tarball cached in
+  `/Users/Shared/hb-downloads`), synced over the tree like CI does.
 - **Source reference:** Helium's CI publishes its prepared tree (`helium_macos_resources_arm64`); unpacked
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
