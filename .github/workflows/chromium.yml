@@ -3,7 +3,7 @@
 # Helium's building.yml does: one run of chained phases (chromium-phase.yml),
 # each compiling for up to ~4.75 h of its 6 h job limit; a phase only runs if
 # the one before it is still compiling, so the rest show as skipped.
-# One run stays on its commit, and phases share the chromium-tree artifact.
+# One run stays on its commit, and phases share the chromium-tree-xcode<version> artifact.
 # mode=dev is a component build whose finished tree is kept for 7 days, to
 # unpack locally and build incrementally from; it runs on the runner and Xcode
 # matching the local Mac, or the SDK headers' mtimes force a full rebuild.
@@ -19,7 +19,8 @@ on:
       runner:
         default: xcode-27
       xcode:
-        default: "27.1"
+        description: "match the dev Mac (xcodebuild -version), or its downloaded tree rebuilds"
+        default: "27.2"
       budget_minutes:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""

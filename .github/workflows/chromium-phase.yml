@@ -1,5 +1,5 @@
 # One phase of chromium.yml: compile for up to ~4.75 h, then hand the tree to
-# the next phase through the run's chromium-tree artifact.
+# the next phase through the run's chromium-tree-xcode<version> artifact.
 name: chromium-phase
 
 on:
@@ -30,8 +30,14 @@ on:
       status:
         value: ${{ jobs.phase.outputs.status }}
 
+# Siso keys its records by absolute path, so a tree only builds incrementally at
+# the path it was built at. /Users/Shared exists and is writable on every Mac,
+# so a downloaded dev tree unpacks to the same /Users/Shared/hb locally.
+# The artifact name carries the Xcode version: other SDK headers mean a rebuild.
+# Bump TREE if ROOT ever moves, so no base from the old path is picked.
 env:
-  ROOT: /Users/runner/work/hb
+  ROOT: /Users/Shared/hb
+  TREE: chromium-tree-xcode${{ inputs.xcode }}
 
 jobs:
   phase:
@@ -84,7 +90,7 @@ jobs:
             local sha
             sha=$(gh api "repos/$R/actions/runs/$1" -q 'select(.conclusion == "success" and .display_title == "chromium dev") | .head_sha')
             [ -n "$sha" ] || return 1
-            [ -n "$(gh api "repos/$R/actions/runs/$1/artifacts" -q '.artifacts[] | select(.name == "chromium-tree" and (.expired | not)) | .id')" ] || return 1
+            [ -n "$(gh api "repos/$R/actions/runs/$1/artifacts" -q '.artifacts[] | select(.name == env.TREE and (.expired | not)) | .id')" ] || return 1
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
           B="${{ inputs.base_run }}"
@@ -102,14 +108,14 @@ jobs:
         if: inputs.phase != 1 || steps.base.outputs.run != ''
         uses: actions/download-artifact@v4
         with:
-          name: chromium-tree
+          name: ${{ env.TREE }}
           run-id: ${{ steps.base.outputs.run || github.run_id }}
           github-token: ${{ github.token }}
-          path: /Users/runner/work
+          path: /Users/Shared
 
       - name: Unpack tree
         if: inputs.phase != 1 || steps.base.outputs.run != ''
-        working-directory: /Users/runner/work
+        working-directory: /Users/Shared
         run: |
           set -eux
           t=$(date +%s)
@@ -133,7 +139,7 @@ jobs:
           set -eux
           # On a base tree, prepare beside it: Helium's steps rewrite files in place
           # and cannot be undone, so a fresh tree is the only correct source.
-          PREP=$ROOT; [ -z "$BASE" ] || PREP=/Users/runner/work/hb-new
+          PREP=$ROOT; [ -z "$BASE" ] || PREP=/Users/Shared/hb-new
           mkdir -p "$PREP"
           cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$PREP/"
           cd "$PREP/helium-macos"
@@ -171,7 +177,7 @@ jobs:
 
       - name: Build
         id: build
-        working-directory: /Users/runner/work/hb
+        working-directory: /Users/Shared/hb
         run: |
           set -ux
           source helium-macos/devutils/shared.sh
@@ -204,7 +210,7 @@ jobs:
 
       - name: Report
         if: steps.build.outputs.status == 'finished'
-        working-directory: /Users/runner/work/hb
+        working-directory: /Users/Shared/hb
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -222,7 +228,7 @@ jobs:
 
       - name: Pack tree
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
-        working-directory: /Users/runner/work
+        working-directory: /Users/Shared
         run: |
           set -eux
           # --remove-files: the archive never sits beside the whole tree on disk.
@@ -235,8 +241,8 @@ jobs:
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
         uses: actions/upload-artifact@v4
         with:
-          name: chromium-tree
-          path: /Users/runner/work/tree.tar.zst
+          name: ${{ env.TREE }}
+          path: /Users/Shared/tree.tar.zst
           overwrite: true
           retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
           compression-level: 0

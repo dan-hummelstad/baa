@@ -142,8 +142,8 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
 
 - **`chromium.yml`** builds the pinned Helium tree in one run of chained ~4.75 h phases on free runners, like Helium's `building.yml`.
   `mode=release` = Helium's official args (the timing run for the runner decision). `mode=dev` = component
-  build on the `xcode-27` runner with Xcode 27.1 (27A9275, same as the dev Mac); the finished tree is kept
-  7 days to unpack locally (`~/chromium`) and build incrementally (`//baa` edits rebuild in minutes).
+  build on the `xcode-27` runner with Xcode 27.2 (same as the dev Mac) at `/Users/Shared/hb`, a path that exists on both, since siso keys its records by absolute path; the finished tree is kept
+  7 days to unpack locally (at `/Users/Shared/hb`) and build incrementally (`//baa` edits rebuild in minutes).
 - **Source reference:** Helium's CI publishes its prepared tree (`helium_macos_resources_arm64`); unpacked
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
