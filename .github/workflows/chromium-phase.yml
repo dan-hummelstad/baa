@@ -23,6 +23,9 @@ on:
       budget_minutes:
         type: string
         default: ""
+      base_run:
+        type: string
+        default: ""
     outputs:
       status:
         value: ${{ jobs.phase.outputs.status }}
@@ -61,22 +64,93 @@ jobs:
           sudo xcode-select -s "$XCODE"
           for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
           xcodebuild -downloadComponent MetalToolchain || true
-          brew install coreutils zstd gnu-tar
+          brew install coreutils zstd gnu-tar rsync
           pip3 install requests pillow --break-system-packages
           df -h /
 
-      - name: Prepare Helium sources (phase 1)
-        if: inputs.phase == 1
+      # A dev chain builds on the newest finished dev tree of the same Chromium
+      # version, so it only recompiles what changed since. base_run: "" picks one,
+      # a run id names one, "none" builds from scratch. Release builds always do.
+      - name: Pick base tree (phase 1)
+        id: base
+        if: inputs.phase == 1 && inputs.mode == 'dev' && inputs.base_run != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          R=$GITHUB_REPOSITORY
+          want=$(cat baa/chromium/helium/chromium_version.txt)
+          usable() {
+            local sha
+            sha=$(gh api "repos/$R/actions/runs/$1" -q 'select(.conclusion == "success" and .display_title == "chromium dev") | .head_sha')
+            [ -n "$sha" ] || return 1
+            [ -n "$(gh api "repos/$R/actions/runs/$1/artifacts" -q '.artifacts[] | select(.name == "chromium-tree" and (.expired | not)) | .id')" ] || return 1
+            [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
+          }
+          B="${{ inputs.base_run }}"
+          if [ -n "$B" ]; then
+            usable "$B" || { echo "::error::run $B has no finished, unexpired Chromium $want dev tree"; exit 1; }
+          else
+            for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=success&per_page=50" -q '.workflow_runs[].id'); do
+              if usable "$r"; then B=$r; break; fi
+            done
+          fi
+          echo "run=$B" >> "$GITHUB_OUTPUT"
+          echo "- base tree: ${B:-none, building from scratch}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore tree
+        if: inputs.phase != 1 || steps.base.outputs.run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-tree
+          run-id: ${{ steps.base.outputs.run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: /Users/runner/work
+
+      - name: Unpack tree
+        if: inputs.phase != 1 || steps.base.outputs.run != ''
+        working-directory: /Users/runner/work
         run: |
           set -eux
-          mkdir -p "$ROOT"
-          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$ROOT/"
-          cd "$ROOT/helium-macos"
+          t=$(date +%s)
+          zstd -dc tree.tar.zst | tar -xf -
+          rm tree.tar.zst
+          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
+          df -h /
+          # Siso rebuilds every output whose mtime is older than its depslog entry,
+          # so whole-second mtimes (a non-pax tar) silently restart the build.
+          out=hb/helium-macos/build/src/out/Default
+          [ -f "$out/.siso_fs_state" ] || { echo "::error::tree has no .siso_fs_state; the build would start over"; exit 1; }
+          case $(stat -f %Fm "$out/.siso_deps") in
+            *.000000000) echo "::error::mtimes lost their sub-second part; siso would rebuild everything"; exit 1 ;;
+          esac
+
+      - name: Prepare Helium sources (phase 1)
+        if: inputs.phase == 1
+        env:
+          BASE: ${{ steps.base.outputs.run }}
+        run: |
+          set -eux
+          # On a base tree, prepare beside it: Helium's steps rewrite files in place
+          # and cannot be undone, so a fresh tree is the only correct source.
+          PREP=$ROOT; [ -z "$BASE" ] || PREP=/Users/runner/work/hb-new
+          mkdir -p "$PREP"
+          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$PREP/"
+          cd "$PREP/helium-macos"
           t=$(date +%s)
           source devutils/shared.sh
           prepare_sources true
           rm -rf "$_download_cache"
+          if [ -n "$BASE" ]; then
+            # No -t: a file whose content is unchanged keeps the base tree's mtime, so
+            # siso skips it; a changed one is rewritten with a new mtime and rebuilt.
+            "$(brew --prefix)/bin/rsync" -rlpc --delete --stats --exclude=/helium-macos/build/src/out "$PREP/" "$ROOT/"
+            cd "$ROOT/helium-macos" && rm -rf "$PREP"
+            source devutils/shared.sh
+            rm -f "$ROOT/remaining.txt"
+          fi
           echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
+          [ -z "$BASE" ] || echo "base_run=$BASE" >> "$ROOT/stats.txt"
           write_gn_args arm64 "${{ inputs.mode }}"
           # No cache backend here, and a downloaded dev tree must not need one.
           sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
@@ -94,31 +168,6 @@ jobs:
           gn_gen
           du -sh "$_src_dir"
           df -h /
-
-      - name: Restore tree (phase 2+)
-        if: inputs.phase != 1
-        uses: actions/download-artifact@v4
-        with:
-          name: chromium-tree
-          path: /Users/runner/work
-
-      - name: Unpack tree (phase 2+)
-        if: inputs.phase != 1
-        working-directory: /Users/runner/work
-        run: |
-          set -eux
-          t=$(date +%s)
-          zstd -dc tree.tar.zst | tar -xf -
-          rm tree.tar.zst
-          echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
-          df -h /
-          # Siso rebuilds every output whose mtime is older than its depslog entry,
-          # so whole-second mtimes (a non-pax tar) silently restart the build.
-          out=hb/helium-macos/build/src/out/Default
-          [ -f "$out/.siso_fs_state" ] || { echo "::error::tree has no .siso_fs_state; the build would start over"; exit 1; }
-          case $(stat -f %Fm "$out/.siso_deps") in
-            *.000000000) echo "::error::mtimes lost their sub-second part; siso would rebuild everything"; exit 1 ;;
-          esac
 
       - name: Build
         id: build

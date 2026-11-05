@@ -23,15 +23,21 @@ on:
       budget_minutes:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""
+      base_run:
+        description: "dev: build on this finished run's tree; empty picks the newest, none builds from scratch"
+        default: ""
 
+# actions: read lets phase 1 find and download an earlier run's tree.
 permissions:
   contents: read
+  actions: read
 
 jobs:
   phase_01:
     uses: ./.github/workflows/chromium-phase.yml
     with:
       phase: 1
+      base_run: ${{ inputs.base_run }}
       mode: ${{ inputs.mode }}
       runner: ${{ inputs.runner }}
       xcode: ${{ inputs.xcode }}
