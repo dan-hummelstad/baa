@@ -80,11 +80,13 @@ baa.app/Contents/
 | ObjC data classes | `#[repr(C)]` structs + borrowed UTF-8 strings | — |
 
 **Threading:** every call and callback runs on the main thread (Chromium's UI thread on macOS).
-**Start-up:** GPUI starts the app and owns `[NSApp run]`. In `applicationDidFinishLaunching`, Rust calls
-`baa_application_start(argv, &delegate)`, which runs `ContentMainRunner` initialisation and
-`BrowserMainRunner::Initialize` without calling its `Run`. Chromium's tasks then fire from the shared
-run loop. Arc's exact entry function is not visible in the binary, so phase 2 confirms this; CEF's
-`CefInitialize` already does the same thing inside baa today.
+**Start-up (revised 2026-11-06, see `PLAN-chromium-phase2.md`):** Chromium owns `[NSApp run]`, as in
+Arc (`-[ArcBrowserApplication run]` returns the exit code) and in Chrome. NSApp is `BaaApplication :
+BrowserCrApplication` from `//baa`, created before gpui. gpui's `[NSApp run]` lands in its `-run`
+override, which calls `ChromeMain`. Chromium's `RunLoop::Run` then calls `[NSApp run]` again, which goes
+to `[super run]`, and gpui's `didFinishLaunching` fires from there. "Initialize without Run" does not
+work on Mac: the pump runs tasks only while `RunLoop::Run` is on the stack
+(`base/message_loop/message_pump_apple.mm`).
 
 ### Who draws what
 
@@ -160,7 +162,7 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
 |---|---|---|
 | 0 | **Measure** | `chromium.yml` release run timed on free runners; dev tree downloaded and an incremental build confirmed locally. Runner decision. |
 | 1 | **Tree tooling** | `chromium/patches` + `//baa` applied by `chromium.yml` and by a local script on the unpacked tree. |
-| 2 | **Spike (shape check)** | `BaaCore.framework` with a minimal `//baa`; Rust `main` (GPUI, `CrAppProtocol` NSApp) starts it; one `WebContents` NSView in a GPUI hole; 120 Hz scroll, typing, IME, ⌘ keys to GPUI. |
+| 2 | **Spike (shape check)** | `BaaCore.framework` with a minimal `//baa`; Rust `main` (GPUI, `CrAppProtocol` NSApp) starts it; one `WebContents` NSView in a GPUI hole; 120 Hz scroll, typing, IME, ⌘ keys to GPUI. Plan: `PLAN-chromium-phase2.md`. |
 | 3 | **ADK core** | `baa::BrowserApplication/Profile/Browser/WebContents` + `baa::ui::Window`; C ABI + Rust wrapper; Spaces as profiles; tabs in a real `TabStripModel`; 1Password signs in and sees tabs with no shim; Chrome-made tabs and `window.open` arrive via `didCreateNewWebContents`. |
 | 4 | **Delegate surface** | The Arc delegate list above, drawn in GPUI; extension toolbar actions + popups; `chrome.tabGroups` ↔ folders; command bar on `AutocompleteController`. |
 | 5 | **Parity + delete CEF** | `baa-web` backend on BaaCore behind `WebHost`; every CEF-build feature works. Remove `vendor/gpui-cef`, tabs shim, `ChromeTabClient`, hidden tab windows, Origin-null fix, hidden chrome://extensions page, ⌘C routing. |
