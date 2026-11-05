@@ -13,6 +13,10 @@ pub const SWITCHES: &[&str] = &[
     // CEF registers components regardless of the switch above (seen in the CEF log), so the
     // update check is pointed at a dead local port instead. 127.0.0.1 is on PROXY_ALLOWLIST.
     "component-updater=url-source=http://127.0.0.1:9/,disable-pings",
+    // Chrome's own sign-in (GaiaUrls) POSTs accounts.google.com/ListAccounts at startup, outside
+    // the request filter; baa never signs Chrome in, so its Gaia origin is a dead local port too.
+    // Pages that log in to Google are untouched.
+    "gaia-url=http://127.0.0.1:9/",
     "disable-field-trial-config",
     "disable-domain-reliability",
     "disable-breakpad",
@@ -39,6 +43,8 @@ const DISABLED_FEATURES: &[&str] = &[
     "BrowsingTopics",
     "Fledge",
     "InterestGroupStorage",
+    // AI Mode: its eligibility service fetches www.google.com/async/folae at startup.
+    "AimEnabled",
 ];
 
 /// Value for `--disable-features`: the current value (empty if unset) plus ours, deduped.
