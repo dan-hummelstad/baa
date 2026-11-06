@@ -467,7 +467,7 @@ void baa::CloseTabsOf(Profile* chrome_profile) {
   for (bool bare : {false, true}) {
     for (auto& value : Registry()) {
       content::WebContents* wc = value->web_contents();
-      if (!value->tab == bare && wc &&
+      if ((value->tab == nullptr) == bare && wc &&
           Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
         doomed.push_back(value.get());
       }
@@ -488,12 +488,13 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
   if (!browser) {
     return nullptr;
   }
-  BaaTab* tab;
+  BaaTab* unused;  // only the DevTools front needs the out-pointer
   content::WebContents* wc;
   {
-    baa::ScopedInsertion insertion(baa::InsertionKind::kBaa, &tab);
+    baa::ScopedInsertion insertion(baa::InsertionKind::kBaa, &unused);
     wc = chrome::AddAndReturnTabAt(browser, GURL(url), -1, /*foreground=*/false);
   }
+  BaaTab* tab = baa::TabFor(wc);
   // Navigate sends a URL for an OTR profile to the parent's Browser; a tab
   // in another profile than asked for is not ours to hand out.
   if (wc && tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != baa::ChromeProfileOf(profile)) {

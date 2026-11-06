@@ -79,7 +79,6 @@ void EnsureStarted() {
   PinRegistrar().Init(local_state);
   PinRegistrar().Add(prefs::kProfileLastUsed, base::BindRepeating(reset, local_state));
   reset(local_state);
-  g_baa_create_browser_window = &Window::Create;
   InstallContextMenuHook();
   InstallAppModalFactory();
 }
@@ -110,6 +109,8 @@ void EnsureStarted() {
   // Process-wide, and meant for embedders (WebView, Cast): without it
   // RenderFrameHost::ExecuteJavaScript CHECKs outside WebUI. baa_tab_eval needs it.
   content::RenderFrameHost::AllowInjectingJavaScript();
+  // Before ChromeMain: every Browser Chrome makes gets a baa::Window.
+  g_baa_create_browser_window = &baa::Window::Create;
   g_exit_code = ChromeMain(static_cast<int>(g_argv->size()), g_argv->data());
 }
 
