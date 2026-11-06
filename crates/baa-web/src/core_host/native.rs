@@ -569,8 +569,20 @@ pub fn forward_current_event(page: *mut AnyObject, target: Option<*mut AnyObject
 }
 
 /// Offers a ⌘/⌃/Escape key-down to gpui's view in the event's window.
-pub fn offer_key_equivalent(event: *mut AnyObject) -> bool {
+/// NSEventTypeKeyDown. Chromium also reports a modifier pressed on its own (⌘,
+/// ⌃) as a key event whose NSEvent is flagsChanged; AppKit throws on asking
+/// that for its characters, and an ObjC exception through these callbacks
+/// aborts the app.
+fn is_key_down(event: *mut AnyObject) -> bool {
     if event.is_null() {
+        return false;
+    }
+    let kind: usize = unsafe { msg_send![event, type] };
+    kind == 10
+}
+
+pub fn offer_key_equivalent(event: *mut AnyObject) -> bool {
+    if !is_key_down(event) {
         return false;
     }
     unsafe {
@@ -622,6 +634,9 @@ pub fn edit_action(event: *mut AnyObject) -> Option<Sel> {
     const SHIFT: usize = 1 << 17;
     const OTHERS: usize = (1 << 18) | (1 << 19);
     const COMMAND: usize = 1 << 20;
+    if !is_key_down(event) {
+        return None;
+    }
     unsafe {
         let flags: usize = msg_send![event, modifierFlags];
         if flags & COMMAND == 0 || flags & OTHERS != 0 {
@@ -677,4 +692,34 @@ pub fn punch_buffer(radius: usize, square: u8) -> Option<CVPixelBuffer> {
         cache.insert((radius, square), buffer.clone());
         Some(buffer)
     })
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    /// ⌘ pressed on its own: a flagsChanged event, which throws if asked for
+    /// its characters (that abort once took the app down).
+    #[test]
+    fn modifier_only_key_events_are_left_alone() {
+        unsafe {
+            let empty: *mut AnyObject = msg_send![class!(NSString), string];
+            let event: *mut AnyObject = msg_send![
+                class!(NSEvent),
+                keyEventWithType: 12usize,
+                location: CGPoint { x: 0., y: 0. },
+                modifierFlags: 1usize << 20,
+                timestamp: 0f64,
+                windowNumber: 0isize,
+                context: std::ptr::null_mut::<AnyObject>(),
+                characters: empty,
+                charactersIgnoringModifiers: empty,
+                isARepeat: Bool::NO,
+                keyCode: 55u16
+            ];
+            assert!(!event.is_null());
+            assert_eq!(edit_action(event), None);
+            assert!(!offer_key_equivalent(event));
+        }
+    }
 }
