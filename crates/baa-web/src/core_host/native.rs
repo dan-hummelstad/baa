@@ -23,23 +23,23 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CGPoint {
-    x: f64,
-    y: f64,
+pub struct CGPoint {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CGSize {
-    width: f64,
-    height: f64,
+pub struct CGSize {
+    pub width: f64,
+    pub height: f64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CGRect {
-    origin: CGPoint,
-    size: CGSize,
+pub struct CGRect {
+    pub origin: CGPoint,
+    pub size: CGSize,
 }
 
 unsafe impl Encode for CGPoint {

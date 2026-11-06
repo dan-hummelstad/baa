@@ -848,15 +848,7 @@ impl WebHost for CoreWebHost {
         cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))
     }
 
-    fn create_popup(
-        &self,
-        profile: ProfileId,
-        url: &str,
-        _tab_url: &str,
-        _tab_title: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<CorePage> {
+    fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
         // The action runs on the profile's real active tab (no tabs shim).
         let handle = self.profile_handle(profile);
         let id = extensions::id_of(url).filter(|_| !handle.is_null());

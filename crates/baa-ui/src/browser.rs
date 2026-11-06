@@ -62,11 +62,6 @@ const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 type MenuAction<H> = Box<dyn Fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>)>;
 
 pub(crate) enum MenuKind {
-    Page {
-        tab: TabId,
-        link: Option<String>,
-        selection: Option<String>,
-    },
     /// Right-clicks in the sidebar.
     Tab(TabId),
     /// A finished download in the Library.
@@ -587,18 +582,9 @@ impl<H: WebHost> Browser<H> {
                     return self.open_peek(space, &url, window, cx);
                 }
             }
-            PageEvent::ContextMenu {
-                x,
-                y,
-                link_url,
-                selection,
-            } => {
-                let kind = MenuKind::Page { tab: id, link: link_url.clone(), selection: selection.clone() };
-                return self.open_menu(kind, point(px(*x), px(*y)), window, cx);
-            }
             PageEvent::Closed => self.session.close_tab(id, now()),
             // Only extension popups send it.
-            PageEvent::ActiveTabLoad(_) | PageEvent::PreferredSize(_) => return,
+            PageEvent::PreferredSize(_) => return,
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::DevToolsRequested { x, y } => {
@@ -657,12 +643,7 @@ impl<H: WebHost> Browser<H> {
         };
         self.close_peek(window, cx);
         let page = if popup {
-            let (tab_url, title) = self
-                .active_tab()
-                .and_then(|id| self.session.tab(id))
-                .map(|t| (t.url.clone(), t.title.clone()))
-                .unwrap_or_default();
-            self.host.create_popup(profile, url, &tab_url, &title, window, cx)
+            self.host.create_popup(profile, url, window, cx)
         } else {
             self.host.create_page(profile, url, window, cx)
         };
@@ -724,10 +705,6 @@ impl<H: WebHost> Browser<H> {
             }
             PageEvent::Closed => return self.close_peek(window, cx),
             PageEvent::PreferredSize(size) => return self.fit_popup(*size, cx),
-            PageEvent::ActiveTabLoad(url) => match url {
-                Some(url) => self.with_page(cx, |p| p.load_url(url)),
-                None => self.with_page(cx, |p| p.reload()),
-            },
             // ponytail: Peek has no room for prompts and an unanswered one
             // freezes the page; opening it as a tab gets them.
             PageEvent::Dialog { .. } => peek.page.read(cx).answer_dialog(false, ""),
@@ -1233,10 +1210,7 @@ impl<H: WebHost> Browser<H> {
 
     /// A native menu for `kind` at `at`; its item runs once it closes.
     pub(crate) fn open_menu(&mut self, kind: MenuKind, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let actions = match kind {
-            MenuKind::Page { tab, link, selection } => self.page_menu(tab, link, selection),
-            kind => self.sidebar_menu(&kind),
-        };
+        let actions = self.sidebar_menu(&kind);
         let items = actions.iter().enumerate().map(|(i, (label, _))| baa_web::MenuItem::action(*label, i)).collect();
         let this = cx.entity().downgrade();
         self.menu_open = true;
@@ -2254,7 +2228,7 @@ impl<H: WebHost> Browser<H> {
                     }),
                 ));
             }
-            MenuKind::Sidebar | MenuKind::Page { .. } => {
+            MenuKind::Sidebar => {
                 items.push((
                     "New Folder",
                     Box::new(|this, window, cx| this.new_folder(None, window, cx)),
@@ -2265,59 +2239,6 @@ impl<H: WebHost> Browser<H> {
                 ));
             }
         }
-        items
-    }
-
-    fn page_menu(
-        &self,
-        tab: TabId,
-        link: Option<String>,
-        selection: Option<String>,
-    ) -> Vec<(&'static str, MenuAction<H>)> {
-        let mut items: Vec<(&'static str, MenuAction<H>)> = Vec::new();
-        if let Some(link) = link {
-            let space = self.session.tab(tab).map(|t| t.space);
-            let open = link.clone();
-            items.push((
-                "Open Link in New Tab",
-                Box::new(move |this, window, cx| {
-                    if let Some(space) = space {
-                        this.session.open_tab(space, &open, now());
-                        this.sync(window, cx);
-                    }
-                }),
-            ));
-            items.push((
-                "Copy Link",
-                Box::new(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
-                }),
-            ));
-        }
-        if let Some(text) = selection.filter(|s| !s.is_empty()) {
-            items.push((
-                "Copy",
-                Box::new(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                }),
-            ));
-        }
-        items.push((
-            "Back",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_back())),
-        ));
-        items.push((
-            "Forward",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.go_forward())),
-        ));
-        items.push((
-            "Reload",
-            Box::new(|this, _, cx| this.with_page(cx, |p| p.reload())),
-        ));
-        items.push((
-            "Inspect",
-            Box::new(|this, window, cx| this.toggle_devtools(None, window, cx)),
-        ));
         items
     }
 }

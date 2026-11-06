@@ -19,7 +19,7 @@ pub struct MockHost {
     /// What the Chrome settings sheet last showed.
     pub chrome_sheet: RefCell<Option<baa_web::ChromeSheet>>,
     /// (popup url, the tab it was opened for).
-    pub popups: RefCell<Vec<(String, String)>>,
+    pub popups: RefCell<Vec<String>>,
     /// The menus shown, and the item id the next one picks.
     pub menus: RefCell<Vec<Vec<baa_web::MenuItem>>>,
     pub menu_pick: Cell<Option<usize>>,
@@ -168,16 +168,8 @@ impl WebHost for MockHost {
             focus: cx.focus_handle(),
         })
     }
-    fn create_popup(
-        &self,
-        profile: ProfileId,
-        url: &str,
-        tab_url: &str,
-        _: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<MockPage> {
-        self.popups.borrow_mut().push((url.into(), tab_url.into()));
+    fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
+        self.popups.borrow_mut().push(url.into());
         self.create_page(profile, url, window, cx)
     }
     fn ephemeral_profile(&self) -> ProfileId {

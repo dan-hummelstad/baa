@@ -703,7 +703,7 @@ fn clicking_away_keeps_the_name_being_typed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn an_extension_popup_acts_on_the_tab_it_opened_over(cx: &mut TestAppContext) {
+fn an_extension_popup_opens_as_a_card_and_sizes_to_its_content(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let ext = baa_web::Extension {
         id: "ubo".into(),
@@ -718,19 +718,9 @@ fn an_extension_popup_acts_on_the_tab_it_opened_over(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     b.update_in(cx, |b, window, cx| b.open_extension(&ext, window, cx));
     b.read_with(cx, |b, _| {
-        assert_eq!(
-            *b.host.popups.borrow(),
-            [("chrome-extension://ubo/popup.html".to_string(), "https://a.example/".to_string())]
-        );
+        assert_eq!(*b.host.popups.borrow(), ["chrome-extension://ubo/popup.html".to_string()]);
     });
-    // The popup's tabs.update on that tab lands on the tab, not in the popup.
     let popup = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
-    popup.update(cx, |_, cx| cx.emit(PageEvent::ActiveTabLoad(Some("https://b.example/".into()))));
-    cx.run_until_parked();
-    b.read_with(cx, |b, cx| {
-        assert_eq!(*b.active_page().unwrap().read(cx).url.borrow(), "https://b.example/");
-        assert_eq!(*popup.read(cx).url.borrow(), "chrome-extension://ubo/popup.html");
-    });
 
     // The card shows once the content's size holds still, already at that size;
     // later sizes apply at once, as in Chrome, never animating the page.

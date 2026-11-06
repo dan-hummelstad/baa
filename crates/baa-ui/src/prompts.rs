@@ -57,7 +57,6 @@ fn permission_icon(kind: Permission) -> &'static str {
     match kind {
         Permission::Camera => "camera",
         Permission::Microphone => "mic",
-        Permission::ScreenShare => "maximize-2",
         Permission::Location => "map-pin",
         Permission::Notifications => "bell",
         Permission::Clipboard => "clipboard",
@@ -69,7 +68,6 @@ fn permission_name(kind: Permission) -> &'static str {
     match kind {
         Permission::Camera => "Camera",
         Permission::Microphone => "Microphone",
-        Permission::ScreenShare => "Screen Sharing",
         Permission::Location => "Location",
         Permission::Notifications => "Notifications",
         Permission::Clipboard => "Clipboard",
@@ -83,7 +81,6 @@ pub(crate) fn permission_sentence(kinds: &[Permission]) -> String {
     let phrase = |k: &Permission| match k {
         Permission::Camera => "use your camera",
         Permission::Microphone => "use your microphone",
-        Permission::ScreenShare => "share your screen",
         Permission::Location => "know your location",
         Permission::Notifications => "show notifications",
         Permission::Clipboard => "see what you copy",

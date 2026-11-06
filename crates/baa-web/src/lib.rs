@@ -33,7 +33,6 @@ impl MenuItem {
 pub enum Permission {
     Camera,
     Microphone,
-    ScreenShare,
     Location,
     Notifications,
     Clipboard,
@@ -92,8 +91,6 @@ pub enum PageEvent {
     /// Page asked to open a new window/tab (window.open, target=_blank, shift- or
     /// middle-click). `background`: cmd- or middle-click, a tab for later.
     OpenRequested { url: String, from_user_gesture: bool, background: bool },
-    /// Page requested a context menu at window-local coordinates.
-    ContextMenu { x: f32, y: f32, link_url: Option<String>, selection: Option<String> },
     Closed,
     /// The site waits until [`PageHandle::answer_permission`].
     PermissionRequested { id: u64, origin: String, kinds: Vec<Permission> },
@@ -104,8 +101,6 @@ pub enum PageEvent {
     AudibleChanged(bool),
     /// This page started a download (it lands in the host's [`Downloads`]).
     DownloadStarted,
-    /// An extension popup asked to load `url` in the tab it is for; `None` reloads it.
-    ActiveTabLoad(Option<String>),
     /// An extension popup's content size changed.
     PreferredSize(gpui::Size<gpui::Pixels>),
     /// The page's menu asked to inspect the element at (x, y), page coordinates.
@@ -197,16 +192,8 @@ pub trait WebHost: 'static {
     /// `done` runs when it closes.
     fn show_menu(&self, at: gpui::Point<gpui::Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone);
     fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
-    /// An extension's toolbar popup, acting on the tab at `tab_url`.
-    fn create_popup(
-        &self,
-        profile: ProfileId,
-        url: &str,
-        tab_url: &str,
-        tab_title: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self::Page>;
+    /// An extension's toolbar popup, acting on the profile's active tab.
+    fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
     /// In-memory profile; nothing persisted (incognito Space).
     fn ephemeral_profile(&self) -> ProfileId;
     /// Drop a profile's on-disk data once all its pages are closed.

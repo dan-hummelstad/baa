@@ -14,34 +14,8 @@ use objc2::{
     sel,
 };
 
-use super::native;
+use super::native::{self, CGPoint, CGRect};
 use crate::{MenuDone, MenuItem};
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CGPoint {
-    x: f64,
-    y: f64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CGRect {
-    origin: CGPoint,
-    size: CGPoint,
-}
-
-unsafe impl objc2::encode::Encode for CGPoint {
-    const ENCODING: objc2::encode::Encoding =
-        objc2::encode::Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
-}
-
-unsafe impl objc2::encode::Encode for CGRect {
-    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
-        "CGRect",
-        &[CGPoint::ENCODING, objc2::encode::Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING])],
-    );
-}
 
 thread_local! {
     /// The tag of the item picked in the menu that is open, if any.
@@ -153,7 +127,7 @@ fn popup(view: *mut AnyObject, x: f32, y: f32, items: &[MenuItem]) -> Option<usi
     unsafe {
         let flipped: Bool = msg_send![view, isFlipped];
         let bounds: CGRect = msg_send![view, bounds];
-        let at = CGPoint { x: x as f64, y: if flipped.as_bool() { y as f64 } else { bounds.size.y - y as f64 } };
+        let at = CGPoint { x: x as f64, y: if flipped.as_bool() { y as f64 } else { bounds.size.height - y as f64 } };
         let _: Bool = msg_send![menu, popUpMenuPositioningItem: std::ptr::null_mut::<AnyObject>(), atLocation: at, inView: view];
     }
     PICKED.with(|p| p.take()).and_then(|tag| tags.get(tag as usize).copied())

@@ -763,7 +763,7 @@ fn site_permissions_go_through_the_profile(cx: &mut TestAppContext) {
     assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Camera), PermissionState::Allow);
 
     env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Notifications, PermissionState::Ask);
-    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::ScreenShare, PermissionState::Block);
+    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Other, PermissionState::Block);
     assert_eq!(calls("profile_set_site_permission"), ["profile_set_site_permission https://a.test 8 0"]);
     assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Other), PermissionState::Ask);
 }
@@ -988,7 +988,7 @@ fn a_popup_is_a_page_that_reports_its_size_and_a_missing_one_closes(cx: &mut Tes
     let env = Env::new(cx);
     let popup = env
         .window
-        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", "", "", window, cx))
+        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", window, cx))
         .unwrap();
     assert_eq!(calls("extension_popup"), ["extension_popup bbb"]);
     let seen = events(&popup, cx);
@@ -999,7 +999,7 @@ fn a_popup_is_a_page_that_reports_its_size_and_a_missing_one_closes(cx: &mut Tes
     POPUP_NULL.with(|p| p.set(true));
     let none = env
         .window
-        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", "", "", window, cx))
+        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", window, cx))
         .unwrap();
     let seen = events(&none, cx);
     cx.run_until_parked();
@@ -1097,7 +1097,7 @@ fn only_tabs_are_activated(cx: &mut TestAppContext) {
 
     let popup = env
         .window
-        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", "", "", window, cx))
+        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", window, cx))
         .unwrap();
     popup.read_with(cx, |page, _| page.set_visible(true));
     assert_eq!(calls("tab_activate").len(), 1, "a popup has no strip");
