@@ -3,6 +3,7 @@
 //! NSView sits under gpui's view, seen through the hole each page element punches.
 
 mod devtools;
+mod extensions;
 mod ffi;
 mod menu;
 mod native;
@@ -29,7 +30,7 @@ use objc2::runtime::AnyObject;
 
 use self::ffi::{Callbacks, Core, Profile, Tab, TabState};
 use crate::{
-    cef_host::{installed_extensions, is_ephemeral, profile_dir, queue_delete},
+    cef_host::{is_ephemeral, queue_delete},
     Callback, ChromeSheet, ChromeTabs, DialogKind, Downloads, DownloadState, Extension, ExtensionChange, ExtensionInfo, MenuDone,
     MenuItem, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost,
 };
@@ -594,7 +595,10 @@ fn callbacks() -> Callbacks {
         };
         unsafe { dispatch(ctx) }.download(tab, download);
     }
-    extern "C" fn resized(_: *mut c_void, _: *mut Tab, _: c_int, _: c_int) {}
+    extern "C" fn resized(ctx: *mut c_void, tab: *mut Tab, width: c_int, height: c_int) {
+        let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PreferredSize(size)));
+    }
     extern "C" fn page_message(ctx: *mut c_void, tab: *mut Tab, message: *const c_char) {
         let message = unsafe { from_c(message) };
         unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| {
@@ -670,6 +674,15 @@ impl CoreWebHost {
             downloads,
             chrome_tabs,
         }
+    }
+
+    /// Ephemeral profiles have no extensions.
+    fn read_extensions(&self, profile: ProfileId) -> Vec<(Extension, ExtensionInfo)> {
+        let handle = self.profile_handle(profile);
+        if is_ephemeral(profile) || handle.is_null() {
+            return Vec::new();
+        }
+        extensions::read(self.core, handle)
     }
 
     fn profile_handle(&self, id: ProfileId) -> *mut Profile {
@@ -748,9 +761,20 @@ impl WebHost for CoreWebHost {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<CorePage> {
-        // ponytail: a background tab; chrome.tabs.query({active}) still answers
-        // the shown tab because baa activates it. Ceiling: popups sized to content (M2).
-        self.create_page(profile, url, window, cx)
+        // The action runs on the profile's real active tab (no tabs shim).
+        let handle = self.profile_handle(profile);
+        let id = extensions::id_of(url).filter(|_| !handle.is_null());
+        // NULL: no popup (the click was all the action did); the Peek card closes.
+        let tab = id.map_or(std::ptr::null_mut(), |id| (self.core.extension_popup)(handle, c_string(id).as_ptr()));
+        let dispatch = self.dispatch;
+        cx.new(|cx| {
+            let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Popup, window, cx);
+            page.set_corner_radius(8.);
+            if tab.is_null() {
+                page.close_soon(cx);
+            }
+            page
+        })
     }
 
     fn ephemeral_profile(&self) -> ProfileId {
@@ -770,8 +794,10 @@ impl WebHost for CoreWebHost {
         }
     }
 
-    fn extension_details(&self, _profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>) {
-        done(Some(Vec::new()), cx);
+    fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>) {
+        let mut infos: Vec<ExtensionInfo> = self.read_extensions(profile).into_iter().map(|(_, info)| info).collect();
+        infos.sort_by_key(|info| info.name.to_lowercase());
+        done(Some(infos), cx);
     }
 
     fn show_chrome_page(&self, _profile: ProfileId, _sheet: Option<ChromeSheet>, _window: &mut Window) -> bool {
@@ -780,15 +806,20 @@ impl WebHost for CoreWebHost {
         true
     }
 
-    fn change_extension(&self, _profile: ProfileId, _id: &str, _change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
-        done(false, cx);
+    fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
+        let handle = self.profile_handle(profile);
+        let (change, value) = extensions::change_code(change);
+        let done_ok = !is_ephemeral(profile)
+            && !handle.is_null()
+            && (self.core.profile_extension_change)(handle, c_string(id).as_ptr(), change, value);
+        done(done_ok, cx);
     }
 
     fn extensions(&self, profile: ProfileId) -> Vec<Extension> {
-        if is_ephemeral(profile) {
-            return Vec::new();
-        }
-        installed_extensions(&profile_dir(&self.root, profile))
+        let mut list: Vec<Extension> =
+            self.read_extensions(profile).into_iter().filter(|(_, info)| info.enabled).map(|(e, _)| e).collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
     }
 
     fn fetch(&self, _profile: ProfileId, _url: &str, done: Box<dyn FnOnce(Option<String>)>) {
