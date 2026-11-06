@@ -187,3 +187,18 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           artifact: ${{ steps.engine.outputs.name }}
+
+  # The //baa harness tests (crates/baa-chromium/tests) on the same engine.
+  harness:
+    needs: [phase_01, phase_02, phase_03, phase_04, phase_05, phase_06, phase_07, phase_08, phase_09, phase_10, phase_11, phase_12]
+    if: always() && inputs.mode != 'dev' && contains(needs.*.outputs.status, 'finished')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - id: engine
+        run: echo "name=baa-engine-$(git rev-parse HEAD:chromium)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/harness
+        with:
+          run-id: ${{ github.run_id }}
+          artifact: ${{ steps.engine.outputs.name }}

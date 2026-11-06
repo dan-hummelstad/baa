@@ -1,0 +1,31 @@
+# Runs the BaaCore harness tests (crates/baa-chromium/tests/*.expect) against a
+# baa-engine artifact: permissions, dialogs, menus, downloads, DevTools, extensions,
+# window/tab events, key routing. Needs a checkout and the setup action first, on macOS.
+name: harness
+description: Run the BaaCore harness tests on a baa-engine artifact
+inputs:
+  run-id:
+    description: workflow run that holds the engine artifact
+    required: true
+  artifact:
+    description: engine artifact name (baa-engine-<tree>)
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
+        path: target/engine
+    - shell: bash
+      run: |
+        zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
+        # A runner has no signing identity: "-" signs ad hoc.
+        BAA_SIGN_IDENTITY=- crates/baa-chromium/ci.sh --engine target/engine
+    - if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: harness-logs
+        path: ${{ runner.temp }}/baa-ci-*/log

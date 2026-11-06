@@ -36,8 +36,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: cargo test --release --workspace
-      # baa-chromium (the C++ test harness) is not clippy-clean yet.
-      - run: cargo clippy --release --workspace --exclude baa-chromium --all-targets -- -D warnings
+      - run: cargo clippy --release --workspace --all-targets -- -D warnings
       - id: engine
         uses: ./.github/actions/engine
       - if: steps.engine.outputs.run != ''
@@ -46,4 +45,21 @@ jobs:
           run-id: ${{ steps.engine.outputs.run }}
           artifact: ${{ steps.engine.outputs.name }}
       - if: steps.engine.outputs.run == ''
-        run: echo "::notice::no release engine for chromium/ tree ${{ steps.engine.outputs.tree }} yet; the privacy test runs in that chromium.yml run"
+        run: echo "::notice::no release engine for chromium/ tree ${{ steps.engine.outputs.tree }} yet; the privacy and harness tests run in that chromium.yml run"
+
+  # The //baa harness tests (crates/baa-chromium/tests): real windows, so macOS, and only when an
+  # engine for this commit's chromium/ tree exists.
+  harness:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - id: engine
+        uses: ./.github/actions/engine
+      - if: steps.engine.outputs.run != ''
+        uses: ./.github/actions/harness
+        with:
+          run-id: ${{ steps.engine.outputs.run }}
+          artifact: ${{ steps.engine.outputs.name }}
+      - if: steps.engine.outputs.run == ''
+        run: echo "::notice::no release engine for chromium/ tree ${{ steps.engine.outputs.tree }} yet; the harness tests run in that chromium.yml run"
