@@ -419,7 +419,7 @@ fn typing_asks_chrome_for_matches_once_it_pauses(cx: &mut TestAppContext) {
     let m = |text: &str, search| baa_web::Suggestion { url: String::new(), text: text.into(), description: String::new(), search };
     b.update(cx, |b, cx| b.host.suggest(vec![m("gh cli", true), m("github.com", false), m("gh pages", true)], cx));
     cx.run_until_parked();
-    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().suggestions, ["gh cli", "gh pages"]));
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().matches.len(), 3));
     cx.simulate_keystrokes("down enter");
     assert_eq!(urls(&b, Zone::Today, cx), ["https://www.google.com/search?q=gh+cli"]);
 }

@@ -23,6 +23,8 @@ pub struct TextField {
     pub text: String,
     /// Prefilled text is selected so the first keystroke replaces it, like an omnibox.
     pub all_selected: bool,
+    /// Draws bullets for the text (passwords).
+    pub masked: bool,
 }
 
 impl TextField {
@@ -30,6 +32,7 @@ impl TextField {
         Self {
             text,
             all_selected: true,
+            masked: false,
         }
     }
 
@@ -109,6 +112,8 @@ impl TextField {
                     .text_color(if empty { dim } else { text })
                     .child(SharedString::from(if empty {
                         placeholder.to_string()
+                    } else if self.masked {
+                        "\u{2022}".repeat(self.text.chars().count())
                     } else {
                         self.text.clone()
                     })),

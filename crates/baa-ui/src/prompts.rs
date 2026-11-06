@@ -6,14 +6,16 @@
 use crate::theme::r;
 use std::path::Path;
 
+mod dialog;
+pub(crate) use dialog::DialogAsk;
+
 use baa_model::TabId;
-use baa_web::{DialogKind, Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
-use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEvent, SharedString, Window};
+use baa_web::{Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
+use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
 
 use crate::{
     browser::{drop_in, feel, host_of, shadow, Browser, HEADER_H, INSET},
     icons::icon,
-    input::{Key, TextField},
     motion::Feel,
     theme::{fade, mix, surface, Theme},
 };
@@ -29,14 +31,6 @@ pub(crate) struct PermissionAsk {
     pub id: u64,
     pub origin: String,
     pub kinds: Vec<Permission>,
-}
-
-pub(crate) struct DialogAsk {
-    pub id: u64,
-    pub kind: DialogKind,
-    pub message: String,
-    /// The prompt's answer; unused (but still taking Enter/Escape) otherwise.
-    pub field: TextField,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -145,7 +139,7 @@ fn download_status(d: &Download) -> String {
 /// A plain or accent button on a light surface.
 fn button<H: WebHost>(
     id: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     primary: bool,
     theme: &Theme,
     browser: &Browser<H>,
@@ -170,7 +164,7 @@ fn button<H: WebHost>(
         .text_size(px(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(if primary { gpui::white() } else { surface::ink().into() })
-        .child(label);
+        .child(label.into() as SharedString);
     feel(el, key, cx)
 }
 
@@ -187,19 +181,14 @@ impl<H: WebHost> Browser<H> {
                 self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
             }
             PageEvent::Dialog(d) => {
-                asks.dialog = Some(DialogAsk {
-                    id: d.id,
-                    kind: d.kind,
-                    message: d.message.clone(),
-                    field: TextField::selected(d.default_text.clone()),
-                });
+                asks.dialog = Some(DialogAsk::new(d));
                 if Some(tab) == self.active_tab() && self.bar.is_none() {
                     window.focus(&self.input_focus, cx);
                 }
             }
             PageEvent::AskClosed(id) => {
                 asks.permissions.retain(|a| a.id != *id);
-                if asks.dialog.as_ref().is_some_and(|d| d.id == *id) {
+                if asks.dialog.as_ref().is_some_and(|a| a.dialog.id == *id) {
                     asks.dialog = None;
                     if Some(tab) == self.active_tab() {
                         self.close_overlays(window, cx);
@@ -216,39 +205,6 @@ impl<H: WebHost> Browser<H> {
             _ => {}
         }
         cx.notify();
-    }
-
-    pub(crate) fn active_dialog(&self) -> Option<&DialogAsk> {
-        self.asks.get(&self.active_tab()?)?.dialog.as_ref()
-    }
-
-    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = self
-            .active_tab()
-            .and_then(|id| self.asks.get_mut(&id))
-            .and_then(|a| a.dialog.as_mut())
-        else {
-            return;
-        };
-        let prompt = dialog.kind == DialogKind::Prompt;
-        let mut scratch = TextField::default();
-        let field = if prompt { &mut dialog.field } else { &mut scratch };
-        match field.handle(&event.keystroke, cx) {
-            Key::Submit => self.answer_dialog(true, window, cx),
-            Key::Cancel => self.answer_dialog(false, window, cx),
-            _ => {}
-        }
-    }
-
-    pub(crate) fn answer_dialog(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab() else { return };
-        let Some(dialog) = self.asks.get_mut(&tab).and_then(|a| a.dialog.take()) else {
-            return;
-        };
-        if let Some((page, _)) = self.pages.get(&tab) {
-            page.read(cx).answer_dialog(dialog.id, baa_web::DialogAnswer { ok, text: dialog.field.text, ..Default::default() });
-        }
-        self.close_overlays(window, cx);
     }
 
     pub(crate) fn answer_permission(&mut self, allow: bool, cx: &mut Context<Self>) {
@@ -512,106 +468,7 @@ impl<H: WebHost> Browser<H> {
         let mut any = false;
         if let Some(dialog) = &asks.dialog {
             any = true;
-            let (title, message, ok, cancel): (String, String, &'static str, Option<&'static str>) = match dialog.kind {
-                DialogKind::BeforeUnload { is_reload } => (
-                    if is_reload { "Reload site?" } else { "Leave site?" }.into(),
-                    "Changes you made may not be saved.".into(),
-                    if is_reload { "Reload" } else { "Leave" },
-                    Some("Stay"),
-                ),
-                DialogKind::Alert => (format!("{} says", site_name(&url)), dialog.message.clone(), "OK", None),
-                // ponytail: WP-U1 gives Chrome's own dialogs their sheets.
-                DialogKind::Confirm
-                | DialogKind::Prompt
-                | DialogKind::Auth
-                | DialogKind::ExternalProtocol
-                | DialogKind::Unresponsive
-                | DialogKind::ExtensionInstall => {
-                    (format!("{} says", site_name(&url)), dialog.message.clone(), "OK", Some("Cancel"))
-                }
-            };
-            let field = (dialog.kind == DialogKind::Prompt).then(|| {
-                div()
-                    .h(px(32.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(r(7.))
-                    .border_1()
-                    .border_color(theme.accent)
-                    .bg(gpui::white())
-                    .text_size(px(13.))
-                    .child(dialog.field.render(
-                        "",
-                        surface::ink().into(),
-                        surface::muted().into(),
-                        Hsla { a: 0.25, ..theme.accent },
-                    ))
-            });
-            let card = div()
-                .id("page-dialog")
-                .occlude()
-                .mt(px(16.))
-                .w(px(420.))
-                .max_w(relative(0.9))
-                .p(px(18.))
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .rounded(r(12.))
-                .bg(surface::bg())
-                .border_1()
-                .border_color(surface::border())
-                .shadow(vec![
-                    shadow(gpui::rgba(0x0A08143D).into(), 16., 40.),
-                    shadow(gpui::rgba(0x0A08141F).into(), 2., 8.),
-                ])
-                .track_focus(&self.input_focus)
-                .on_key_down(cx.listener(Self::on_input_key))
-                .child(
-                    div()
-                        .text_size(px(14.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(surface::ink())
-                        .child(SharedString::from(title)),
-                )
-                .when(!message.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .id("page-dialog-message")
-                            .max_h(px(240.))
-                            .overflow_y_scroll()
-                            .text_size(px(13.))
-                            .text_color(surface::ink())
-                            .child(SharedString::from(message)),
-                    )
-                })
-                .children(field)
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .children(cancel.map(|label| {
-                            button("dialog-cancel", label, false, theme, self, cx)
-                                .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(false, window, cx)))
-                        }))
-                        .child(
-                            button("dialog-ok", ok, true, theme, self, cx)
-                                .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(true, window, cx))),
-                        ),
-                );
-            layer = layer
-                .child(
-                    div()
-                        .id("page-dialog-scrim")
-                        .absolute()
-                        .inset_0()
-                        .occlude()
-                        .rounded(r(crate::browser::PAGE_RADIUS))
-                        .bg(surface::scrim()),
-                )
-                .child(drop_in(card, "page-dialog"));
+            layer = layer.children(self.render_dialog(dialog, &url, theme, cx));
         }
         if let Some(ask) = asks.permissions.first().filter(|_| asks.dialog.is_none()) {
             any = true;

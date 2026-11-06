@@ -93,6 +93,8 @@ impl<H: WebHost> Browser<H> {
                 }))
         });
         let asks = self.render_asks(theme, cx);
+        let crashed = self.crash_overlay(cx);
+        let count = self.page_state.find_result;
         let find = self.find.as_ref().map(|field| {
             drop_in(div()
                 .id("find")
@@ -119,7 +121,11 @@ impl<H: WebHost> Browser<H> {
                     surface::ink().into(),
                     surface::muted().into(),
                     Hsla { a: 0.25, ..theme.accent },
-                )), "find")
+                ))
+                .child(div().ml_auto().pl(px(8.)).text_size(px(12.)).text_color(match count {
+                    Some((_, 0)) | None => surface::muted(),
+                    Some(_) => surface::ink(),
+                }).children(count.map(|(a, t)| format!("{a}/{t}")))), "find")
         });
         div()
             .relative()
@@ -151,6 +157,7 @@ impl<H: WebHost> Browser<H> {
             .when(crate::theme::ascii(), |d| {
                 d.p(px(4.)).border_1().border_color(crate::theme::ascii::frame()).rounded(px(5.))
             })
+            .children(crashed)
             .children(asks)
             .children(find)
     }

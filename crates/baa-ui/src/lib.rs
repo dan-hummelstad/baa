@@ -23,6 +23,10 @@ mod mock;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_dialogs;
+#[cfg(test)]
+mod tests_m3_bar;
+#[cfg(test)]
 mod tests_settings;
 
 pub use browser::Browser;

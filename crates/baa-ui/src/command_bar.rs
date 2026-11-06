@@ -8,7 +8,7 @@ use crate::{
     settings::Row as SettingRow,
 };
 use baa_model::{HistoryItem, Session, Settings, SpaceId, TabId};
-use baa_web::WebHost;
+use baa_web::{Suggestion, WebHost};
 use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
 
 use crate::{
@@ -188,9 +188,9 @@ pub struct Bar {
     pub field: TextField,
     pub selected: usize,
     pub scale: Spring,
-    /// The engine's suggestions for `field`, once they arrive.
-    pub suggestions: Vec<String>,
-    /// Visited pages matching `field`.
+    /// Chrome's omnibox matches for `field`, once they arrive (history, searches, calculator).
+    pub matches: Vec<Suggestion>,
+    /// History mode: visited pages matching `field`, from baa-model.
     pub history: Vec<HistoryItem>,
     /// Bumped per edit, so a late answer for older text is dropped.
     seq: u64,
@@ -205,7 +205,7 @@ impl Bar {
             field,
             selected: 0,
             scale,
-            suggestions: Vec::new(),
+            matches: Vec::new(),
             history: Vec::new(),
             seq: 0,
         }
@@ -215,7 +215,7 @@ impl Bar {
         if self.mode == Mode::History {
             return self.history.iter().take(MAX_ROWS).map(history_row).collect();
         }
-        rows(&self.field.text, session, settings, &self.suggestions, &self.history)
+        rows(&self.field.text, session, settings, &self.matches)
     }
 }
 
@@ -238,14 +238,13 @@ fn row(item: Item, label: impl Into<String>, detail: impl Into<String>) -> Row {
 }
 
 /// What the bar lists. Empty: recent tabs, then quick commands. Typed: the
-/// URL or search first, the engine's suggestions, then the best fuzzy matches
-/// across tabs (all Spaces), Spaces and commands.
+/// URL or search first, Chrome's search matches, then the best fuzzy matches
+/// across tabs (all Spaces), Spaces and commands, then Chrome's page matches.
 pub(crate) fn rows(
     query: &str,
     session: &Session,
     settings: &Settings,
-    suggestions: &[String],
-    history: &[HistoryItem],
+    matches: &[Suggestion],
 ) -> Vec<Row> {
     let query = query.trim();
     let active = session.active_space();
@@ -286,10 +285,23 @@ pub(crate) fn rows(
     } else {
         out.push(row(Item::Open(url.clone()), url, "— Open"));
     }
-    out.extend(suggestions.iter().take(MAX_SUGGESTIONS).map(|s| Row {
-        suggestion: true,
-        ..row(Item::Open(settings.resolve_input(s)), s.clone(), "")
-    }));
+    let typed = out[0].item.clone();
+    let (searches, pages): (Vec<&Suggestion>, Vec<&Suggestion>) = matches.iter().partition(|m| m.search);
+    out.extend(
+        searches
+            .into_iter()
+            .filter(|m| !m.text.eq_ignore_ascii_case(query))
+            .take(MAX_SUGGESTIONS)
+            .map(|m| Row {
+                suggestion: true,
+                // A calculator result carries no URL: searching it is the best Chrome offers.
+                ..row(
+                    Item::Open(if m.url.is_empty() { settings.resolve_input(&m.text) } else { m.url.clone() }),
+                    m.text.clone(),
+                    m.description.clone(),
+                )
+            }),
+    );
     let mut scored: Vec<(u32, Row)> = Vec::new();
     for space in session.spaces() {
         for tab in session.space_tabs(space.id) {
@@ -335,23 +347,24 @@ pub(crate) fn rows(
     // Stable sort keeps sidebar order among equal scores.
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     // Visited pages come after open tabs and commands: those are one step away.
-    let room = MAX_ROWS.saturating_sub(out.len() + MAX_HISTORY.min(history.len()));
-    out.extend(scored.into_iter().map(|(_, row)| row).take(room));
-    // Visited pages, unless already open as a tab (listed above) or typed.
+    let same = |a: &str, b: &str| a.trim_end_matches('/') == b.trim_end_matches('/');
     let open: Vec<&str> = session
         .spaces()
         .iter()
         .flat_map(|s| session.space_tabs(s.id))
         .map(|t| t.url.as_str())
         .collect();
-    let typed = out[0].item.clone();
-    out.extend(
-        history
-            .iter()
-            .filter(|h| !open.contains(&h.url.as_str()) && Item::Open(h.url.clone()) != typed)
-            .take(MAX_HISTORY)
-            .map(history_row),
-    );
+    let pages: Vec<&Suggestion> = pages
+        .into_iter()
+        .filter(|m| !open.iter().any(|u| same(u, &m.url)) && !matches!(&typed, Item::Open(t) if same(t, &m.url)))
+        .take(MAX_HISTORY)
+        .collect();
+    let room = MAX_ROWS.saturating_sub(out.len() + pages.len());
+    out.extend(scored.into_iter().map(|(_, row)| row).take(room));
+    out.extend(pages.into_iter().map(|m| {
+        let label = if m.description.is_empty() { &m.url } else { &m.description };
+        Row { history: true, ..row(Item::Open(m.url.clone()), label.clone(), host_of(&m.url)) }
+    }));
     out.truncate(MAX_ROWS);
     out
 }
@@ -369,14 +382,14 @@ pub(crate) fn on_key<H: WebHost>(
             bar.selected = 0;
             refresh_history(this);
             if this.bar.as_ref().is_some_and(|b| b.mode != Mode::History) {
-                request_suggestions(this, cx);
+                request_matches(this, cx);
             }
         }
         Key::Complete => {
             // The autofill: the selected page's address replaces what was typed.
             let rows = bar.rows(&this.session, &this.settings);
             if let Some(Item::Page(page)) = rows.get(bar.selected).map(|r| &r.item) {
-                bar.field = TextField { text: page.url.into(), all_selected: false };
+                bar.field = TextField { text: page.url.into(), all_selected: false, masked: false };
                 bar.selected = 0;
             }
         }
@@ -388,14 +401,13 @@ pub(crate) fn on_key<H: WebHost>(
     }
 }
 
-/// History for what is typed (or, in History mode, the latest visits).
+/// History mode's list: what is typed, or the latest visits.
 pub(crate) fn refresh_history<H: WebHost>(this: &mut Browser<H>) {
     let Some(bar) = &this.bar else { return };
     let query = bar.field.text.trim().to_string();
     let found = match (this.store(), bar.mode) {
         (Some(store), Mode::History) if query.is_empty() => store.recent_history(MAX_ROWS),
         (Some(store), Mode::History) => store.search_history(&query, MAX_ROWS),
-        (Some(store), _) if !query.is_empty() => store.search_history(&query, MAX_HISTORY + 4),
         _ => Ok(Vec::new()),
     };
     if let Some(bar) = &mut this.bar {
@@ -406,19 +418,17 @@ pub(crate) fn refresh_history<H: WebHost>(this: &mut Browser<H>) {
     }
 }
 
-/// Asks Chrome's omnibox for suggestions once typing pauses; answers for
-/// text that has since changed are dropped.
-fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Browser<H>>) {
+/// Asks Chrome's omnibox once typing pauses; answers for text that has since
+/// changed are dropped. Empty text asks too, which stops Chrome's last query.
+/// No gate on `settings.search_suggest`: Chrome's `search.suggest_enabled` follows it
+/// (PLAN-m3 WP-R2), and without it the omnibox only reads local history.
+fn request_matches<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Browser<H>>) {
     let profile = this.active_space().map(|s| s.profile);
     let Some(bar) = &mut this.bar else { return };
     bar.seq += 1;
     let seq = bar.seq;
     let query = bar.field.text.trim().to_string();
-    let wanted = this.settings.search_suggest && !query.is_empty() && !query.contains("://") && !pages::looks_like_page(&query);
-    let (true, Some(profile)) = (wanted, profile) else {
-        bar.suggestions.clear();
-        return;
-    };
+    let Some(profile) = profile else { return };
     cx.spawn(async move |this, cx| {
         cx.background_executor().timer(SUGGEST_DELAY).await;
         let weak = this.clone();
@@ -426,20 +436,13 @@ fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Brows
             if browser.bar.as_ref().is_none_or(|bar| bar.seq != seq) {
                 return;
             }
-            let typed = query.clone();
             browser.host.autocomplete(
                 profile,
                 &query,
                 Box::new(move |matches, cx| {
-                    let found: Vec<String> = matches
-                        .into_iter()
-                        .filter(|m| m.search && !m.text.eq_ignore_ascii_case(&typed))
-                        .take(MAX_SUGGESTIONS)
-                        .map(|m| m.text)
-                        .collect();
                     let _ = weak.update(cx, |browser, cx| {
                         if let Some(bar) = browser.bar.as_mut().filter(|bar| bar.seq == seq) {
-                            bar.suggestions = found;
+                            bar.matches = matches;
                             cx.notify();
                         }
                     });
@@ -778,10 +781,18 @@ mod tests {
         (s, gh, ls)
     }
 
+    fn search(text: &str) -> Suggestion {
+        Suggestion { url: String::new(), text: text.into(), description: String::new(), search: true }
+    }
+
+    fn page(url: &str, title: &str) -> Suggestion {
+        Suggestion { url: url.into(), text: url.into(), description: title.into(), search: false }
+    }
+
     #[test]
     fn empty_query_lists_recent_tabs_then_quick_commands() {
         let (s, gh, ls) = session();
-        let r = rows("", &s, &Settings::default(), &[], &[]);
+        let r = rows("", &s, &Settings::default(), &[]);
         assert_eq!(r[0].item, Item::Tab(ls), "most recent first");
         assert_eq!(r[1].item, Item::Tab(gh));
         assert_eq!(r[2].item, Item::Command(Command::NewSpace));
@@ -791,8 +802,8 @@ mod tests {
     #[test]
     fn typed_search_then_suggestions_then_best_tab() {
         let (s, gh, _) = session();
-        let suggestions = ["gh cli".to_string(), "gh".to_string()];
-        let r = rows("gh", &s, &Settings::default(), &suggestions, &[]);
+        let matches = [search("gh cli"), search("gh")];
+        let r = rows("gh", &s, &Settings::default(), &matches);
         assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
         assert_eq!((r[0].label.as_str(), r[0].detail.as_str()), ("gh", "— Search Google"));
         assert!(r[1].suggestion);
@@ -803,21 +814,23 @@ mod tests {
     #[test]
     fn urls_spaces_and_commands() {
         let (s, ..) = session();
-        assert_eq!(rows("example.com", &s, &Settings::default(), &[], &[])[0].label, "https://example.com/");
-        let r = rows("new space", &s, &Settings::default(), &[], &[]);
+        assert_eq!(rows("example.com", &s, &Settings::default(), &[])[0].label, "https://example.com/");
+        let r = rows("new space", &s, &Settings::default(), &[]);
         assert!(r.iter().any(|r| r.item == Item::Command(Command::NewSpace)));
-        let r = rows("personal", &s, &Settings::default(), &[], &[]);
+        let r = rows("personal", &s, &Settings::default(), &[]);
         assert!(r.iter().any(|r| matches!(r.item, Item::Space(_, 0))));
     }
 
     #[test]
-    fn history_lists_visited_pages_that_are_not_open() {
+    fn page_matches_become_history_rows_unless_open() {
         let (s, ..) = session();
-        let visit = |url: &str, title: &str| HistoryItem { url: url.into(), title: title.into(), visits: 1, last_visit: 0 };
-        let history = [visit("https://github.com", "GitHub"), visit("https://docs.rs/gpui", "gpui docs")];
-        let r = rows("g", &s, &Settings::default(), &[], &history);
+        let matches = [search("gh cli"), page("https://github.com/", "GitHub"), page("https://docs.rs/gpui", "gpui docs")];
+        let r = rows("gh", &s, &Settings::default(), &matches);
+        assert!(r[0].detail.starts_with("— Search"));
+        assert!(r[1].suggestion);
         let from_history: Vec<&str> = r.iter().filter(|r| r.history).map(|r| r.label.as_str()).collect();
         assert_eq!(from_history, ["gpui docs"], "GitHub is open as a tab already");
+        assert!(r.last().unwrap().history);
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub struct MockPage {
     /// Each `set_group`.
     pub groups: RefCell<Vec<Option<(u64, String)>>>,
     pub exited_fullscreen: Cell<u32>,
+    pub reloads: Cell<u32>,
     pub focus: FocusHandle,
 }
 
@@ -66,7 +67,9 @@ impl PageHandle for MockPage {
     fn load_url(&self, url: &str) {
         *self.url.borrow_mut() = url.into();
     }
-    fn reload(&self) {}
+    fn reload(&self) {
+        self.reloads.set(self.reloads.get() + 1);
+    }
     fn stop(&self) {}
     fn go_back(&self) {}
     fn go_forward(&self) {}
@@ -218,6 +221,7 @@ impl WebHost for MockHost {
             answered: RefCell::default(),
             groups: RefCell::default(),
             exited_fullscreen: Cell::default(),
+            reloads: Cell::default(),
             focus: cx.focus_handle(),
         })
     }

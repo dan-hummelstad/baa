@@ -325,7 +325,7 @@ fn the_command_bar_completes_baa_addresses_and_finds_settings(cx: &mut TestAppCo
     vcx.simulate_input("baa://se");
     let rows = b.read_with(vcx, |b, _| {
         let bar = b.bar.as_ref().unwrap();
-        crate::command_bar::rows(&bar.field.text, b.session(), &b.settings, &[], &[])
+        crate::command_bar::rows(&bar.field.text, b.session(), &b.settings, &[])
     });
     match &rows[0].item {
         crate::command_bar::Item::Page(p) => assert_eq!(p.url, "baa://settings"),
@@ -348,7 +348,7 @@ fn the_command_bar_completes_baa_addresses_and_finds_settings(cx: &mut TestAppCo
     vcx.simulate_keystrokes("secondary-t");
     vcx.simulate_input("cookies");
     let rows = b.read_with(vcx, |b, _| {
-        crate::command_bar::rows("cookies", b.session(), &b.settings, &[], &[])
+        crate::command_bar::rows("cookies", b.session(), &b.settings, &[])
     });
     let at = rows.iter().position(|r| matches!(&r.item, crate::command_bar::Item::Setting(s) if s.id == "cookies")).expect("the Cookies row is listed");
     assert_eq!(rows[at].detail, "Settings › Privacy & Security");

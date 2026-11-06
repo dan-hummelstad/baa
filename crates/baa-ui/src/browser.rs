@@ -33,6 +33,10 @@ mod spaces;
 mod actions;
 mod page_area;
 mod header;
+mod groups;
+mod page_state;
+#[cfg(test)]
+mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
 pub(crate) use peek::PeekPage;
 
@@ -101,6 +105,9 @@ pub struct Browser<H: WebHost> {
     zoom: HashMap<TabId, f64>,
     pub(crate) bar: Option<Bar>,
     pub(crate) find: Option<TextField>,
+    /// The tab whose page is fullscreen: it fills the window.
+    pub(crate) fullscreen: Option<TabId>,
+    pub(crate) page_state: page_state::PageState,
     /// A native context menu is open (it runs modally).
     pub(crate) menu_open: bool,
     /// A link previewed over the page (Peek), or an extension's popup.
@@ -245,6 +252,8 @@ impl<H: WebHost> Browser<H> {
             zoom: HashMap::new(),
             bar: None,
             find: None,
+            fullscreen: None,
+            page_state: Default::default(),
             menu_open: false,
             peek: None,
             renaming: None,
@@ -395,6 +404,9 @@ impl<H: WebHost> Browser<H> {
             }
             self.shown_tab = active;
         }
+        if self.fullscreen.is_some_and(|t| Some(t) != active) {
+            self.end_fullscreen(true, window, cx);
+        }
         self.track_rows();
         if let Some(id) = active.filter(|id| !self.pages.contains_key(id)) {
             self.create_page(id, window, cx);
@@ -414,6 +426,7 @@ impl<H: WebHost> Browser<H> {
             .active_space()
             .map(|s| self.host.extensions(s.profile))
             .unwrap_or_default();
+        self.sync_groups(cx);
         self.save();
         cx.notify();
     }
@@ -515,8 +528,10 @@ impl<H: WebHost> Browser<H> {
             | PageEvent::AskClosed(_)
             | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
-            // ponytail: WP-U3/U4 handle these.
-            PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) | PageEvent::GroupChanged { .. } => return,
+            PageEvent::GroupChanged { group, title } => return self.on_group_changed(id, *group, title, window, cx),
+            PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) => {
+                return self.on_page_state_event(id, event, window, cx)
+            }
             // A tab opened only to fetch a file has nothing to show: it goes.
             PageEvent::DownloadStarted => {
                 let blank = tab.title.is_empty()
@@ -868,6 +883,9 @@ impl<H: WebHost> Render for Browser<H> {
         self.tick_motion(window, cx);
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         self.push_webui_skin();
+        if let Some(view) = self.fullscreen_view(window, cx) {
+            return self.register_actions(view, cx);
+        }
         let theme = self.theme();
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);

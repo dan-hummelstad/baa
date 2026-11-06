@@ -67,6 +67,7 @@ impl<H: WebHost> Browser<H> {
             if this.active_page().is_some() {
                 this.bar = None;
                 this.find = Some(TextField::default());
+                this.page_state.find_result = None;
                 window.focus(&this.input_focus, cx);
                 cx.notify();
             }
