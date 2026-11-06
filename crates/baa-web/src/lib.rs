@@ -2,11 +2,17 @@
 //! CEF types never cross this crate's boundary.
 
 mod cef_host;
+#[cfg(all(feature = "core", target_os = "macos"))]
+mod core_host;
 
 use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
 pub use cef_host::{CefPage, CefRuntime, CefWebHost};
+#[cfg(all(feature = "core", target_os = "macos"))]
+pub use core_host::{chrome_argv, CorePage, CoreRuntime, CoreWebHost};
+#[cfg(all(feature = "core", target_os = "macos"))]
+pub use cef_host::{purge_deleted_profiles, share_native_messaging_hosts};
 pub use gpui_cef::{DialogKind, Download, DownloadState, Error, MenuItem, Permission, PermissionState};
 
 /// What a page reports back to the shell.

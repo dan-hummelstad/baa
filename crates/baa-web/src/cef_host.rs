@@ -705,7 +705,7 @@ fn tabs_shim(url: &str, title: &str) -> String {
 /// newest version's manifest (and `_locales` for a `__MSG_name__` name).
 // ponytail: lists what is on disk, so an extension disabled in
 // chrome://extensions still shows. Ceiling: read Preferences for its state.
-fn installed_extensions(profile: &Path) -> Vec<Extension> {
+pub(crate) fn installed_extensions(profile: &Path) -> Vec<Extension> {
     let Ok(ids) = std::fs::read_dir(profile.join("Extensions")) else {
         return Vec::new();
     };
@@ -769,12 +769,12 @@ fn localized(dir: &Path, manifest: &serde_json::Value, name: &str) -> Option<Str
 }
 
 // Ids count down from u64::MAX; baa-model's count up from 1.
-fn is_ephemeral(id: ProfileId) -> bool {
+pub(crate) fn is_ephemeral(id: ProfileId) -> bool {
     id.0 > u64::MAX / 2
 }
 
 
-fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
+pub(crate) fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
     // Chrome rejects nested profile paths ("Cannot create profile"), so no spaces/ subdir.
     root.join(format!("space-{}", id.0))
 }
@@ -785,7 +785,7 @@ fn profile_dir(root: &Path, id: ProfileId) -> PathBuf {
 /// registrations are copied there and the extensions work as in Chrome.
 /// (Apple's iCloud Passwords host cannot: macOS only lets Chrome and Edge
 /// start it.)
-fn share_native_messaging_hosts(root: &Path) {
+pub fn share_native_messaging_hosts(root: &Path) {
     #[cfg(target_os = "macos")]
     let sources: Vec<PathBuf> = {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
@@ -828,7 +828,7 @@ fn share_native_messaging_hosts(root: &Path) {
 
 const PENDING_DELETES: &str = "pending-deletes";
 
-fn queue_delete(root: &Path, id: ProfileId) {
+pub(crate) fn queue_delete(root: &Path, id: ProfileId) {
     use std::io::Write as _;
     let line = format!("{}\n", id.0);
     let written = std::fs::create_dir_all(root).and_then(|()| {
@@ -844,7 +844,7 @@ fn queue_delete(root: &Path, id: ProfileId) {
 }
 
 /// Runs before CEF opens anything in `root`, so nothing holds the files.
-fn purge_deleted_profiles(root: &Path) {
+pub fn purge_deleted_profiles(root: &Path) {
     let list = root.join(PENDING_DELETES);
     let Ok(text) = std::fs::read_to_string(&list) else {
         return;

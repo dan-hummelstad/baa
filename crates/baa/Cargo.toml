@@ -18,6 +18,10 @@ helper_name = "baa_helper"
 identifier = "me.baa.browser"
 display-name = "baa"
 
+[features]
+# BaaCore (own Chromium) instead of CEF; PLAN-chromium-phase3.md.
+core = ["baa-web/core"]
+
 [dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true

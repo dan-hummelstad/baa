@@ -637,9 +637,14 @@ version = "0.1.0"
 dependencies = [
  "baa-model",
  "baa-privacy",
+ "core-foundation 0.10.1",
+ "core-video",
  "gpui",
  "gpui-cef",
+ "libc",
  "log",
+ "objc2 0.6.5",
+ "raw-window-handle",
  "serde_json",
 ]
 
