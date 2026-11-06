@@ -39,6 +39,14 @@ fn main() {
     if let Err(e) = std::fs::create_dir_all(&chromium) {
         fail("creating the Chromium directory", e);
     }
+    // Chromium puts the disk cache of a user data dir under Application Support
+    // at the same path under Caches, and its sandbox setup fails (logged) when
+    // that folder does not exist yet.
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Ok(rest) = chromium.strip_prefix(home.join("Library/Application Support")) {
+            let _ = std::fs::create_dir_all(home.join("Library/Caches").join(rest));
+        }
+    }
     baa_web::migrate_cef_profiles(&dir);
     baa_web::purge_deleted_profiles(&chromium);
     baa_web::share_native_messaging_hosts(&chromium);
