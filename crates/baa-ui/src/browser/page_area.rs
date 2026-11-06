@@ -291,7 +291,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(super) fn tick_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = cx.background_executor().now(); // the fake clock under test, so motion is deterministic there
         // Capped: the first frame after an idle stretch would otherwise carry the
         // whole idle time and finish every spring in one step (no animation).
         let dt = (now - self.last_frame).as_secs_f32().min(1. / 30.);

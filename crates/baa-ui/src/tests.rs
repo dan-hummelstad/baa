@@ -493,12 +493,12 @@ fn copying_the_url_flashes_a_check(cx: &mut TestAppContext) {
         Some("https://a.example/")
     );
     let copied = |cx: &mut VisualTestContext| {
-        b.read_with(cx, |b, _| b.motion.target(("copied", 0), crate::motion::Feel::Glide))
+        b.read_with(cx, |b, _| b.motion.target(("copied", 0), crate::motion::Feel::Glide).unwrap_or(0.0))
     };
-    assert_eq!(copied(cx), Some(1.0));
+    assert_eq!(copied(cx), 1.0);
     cx.executor().advance_clock(std::time::Duration::from_millis(1300));
     cx.run_until_parked();
-    assert_eq!(copied(cx), Some(0.0), "the check goes away on its own");
+    assert_eq!(copied(cx), 0.0, "the check goes away on its own");
 }
 
 fn open_page(b: &Entity<Browser<MockHost>>, url: &str, cx: &mut VisualTestContext) -> Entity<crate::mock::MockPage> {

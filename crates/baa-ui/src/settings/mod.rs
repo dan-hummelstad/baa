@@ -175,7 +175,7 @@ impl<H: WebHost> SettingsView<H> {
             active: Field::Search,
             selected: 0,
             motion,
-            last_frame: Instant::now(),
+            last_frame: cx.background_executor().now(),
             focus,
             scroll: ScrollHandle::new(),
             jump: None,
@@ -428,7 +428,7 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let now = cx.background_executor().now(); // the fake clock under test, so motion is deterministic there
         let dt = (now - self.last_frame).as_secs_f32().min(1. / 30.);
         self.last_frame = now;
         if self.motion.tick(dt, cx.reduce_motion()) {

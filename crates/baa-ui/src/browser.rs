@@ -290,7 +290,7 @@ impl<H: WebHost> Browser<H> {
             fade: Spring::new(1.0),
             gradient_from: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
             gradient_to: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
-            last_frame: Instant::now(),
+            last_frame: cx.background_executor().now(),
         };
         this.sync(window, cx);
         // Launch shows the Space's colour, not a crossfade from the placeholder.
