@@ -193,7 +193,6 @@ impl<H: WebHost> SettingsView<H> {
         let confirming = page.confirm_remove.as_deref() == Some(e.id.as_str());
         let pinned = !b.settings.unpinned_extensions.contains(&e.id);
         let icon_path = b.extensions.iter().find(|x| x.id == e.id).and_then(|x| x.icon.clone());
-        let n = i as u64;
         let (id, on) = (e.id.clone(), e.enabled);
         let switch = self.switch("ext-on", on).on_click(cx.listener(move |this, _, _, cx| {
             this.browser.update(cx, |b, cx| b.change_extension(space, &id, ExtensionChange::Enable(!on), cx))
@@ -267,7 +266,7 @@ impl<H: WebHost> SettingsView<H> {
                 }))
                 .into_any_element(),
         );
-        let details = open.then(|| self.render_details(n, e, space, cx));
+        let details = open.then(|| self.render_details(e, space, cx));
         let ext_id = e.id.clone();
         div()
             .id(("extension", i))
@@ -322,7 +321,7 @@ impl<H: WebHost> SettingsView<H> {
             .into_any_element()
     }
 
-    fn render_details(&self, n: u64, e: &ExtensionInfo, space: SpaceId, cx: &mut Context<Self>) -> AnyElement {
+    fn render_details(&self, e: &ExtensionInfo, space: SpaceId, cx: &mut Context<Self>) -> AnyElement {
         let heading = |text: &'static str| div().text_size(px(12.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(surface::muted()).child(text);
         let permissions: Vec<AnyElement> = if e.permissions.is_empty() {
             vec![div().text_size(px(13.)).child("No special permissions").into_any_element()]
@@ -335,7 +334,6 @@ impl<H: WebHost> SettingsView<H> {
             if current == SiteAccess::OnSpecificSites {
                 options.insert(1, (SiteAccess::OnSpecificSites, "On Specific Sites"));
             }
-            let _ = n;
             let id = e.id.clone();
             let segments = self.segments_with(
                 "ext-access",
