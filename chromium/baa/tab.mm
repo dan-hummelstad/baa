@@ -16,6 +16,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/timer/elapsed_timer.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/favicon/favicon_utils.h"
@@ -595,6 +596,11 @@ BaaProfile* baa_profile_open(const char* dir_name) {
       return p.get();
     }
   }
+  // Loading a profile reads its directory; Chrome's UI thread forbids that
+  // by default (DisallowUnresponsiveTasks) because it never loads one here.
+  // ponytail: the ForTesting scope is the only public one; the real fix is
+  // ProfileManager::CreateProfileAsync (an ABI change; risk 5).
+  base::ScopedAllowBlockingForTesting allow_blocking;
   base::ElapsedTimer timer;
   ProfileManager* manager = g_browser_process->profile_manager();
   Profile* profile =
@@ -615,6 +621,7 @@ BaaProfile* baa_profile_open_ephemeral(void) {
   if (baa::Terminating()) {
     return nullptr;
   }
+  base::ScopedAllowBlockingForTesting allow_blocking;
   Profile* base = ProfileManager::GetLastUsedProfile();
   if (!base) {
     return nullptr;

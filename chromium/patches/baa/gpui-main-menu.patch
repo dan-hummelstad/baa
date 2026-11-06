@@ -1,0 +1,16 @@
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -1153,7 +1153,13 @@
+       GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(
+           gfx::NativeWindow([notify object]));
+   if (!browser)
++    return;
++
++  // baa: gpui's menu bar has none of Chrome's menus for the tab, bookmark and
++  // history menu bridges below to attach to (and gpui owns what it has).
++  if (![[NSApp mainMenu] itemWithTag:IDC_TAB_MENU]) {
+     return;
++  }
+ 
+   // Since we may have different windows with different profiles, we clear the
+   // subscription each time a window becomes the main.

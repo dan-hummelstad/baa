@@ -6,3 +6,4 @@ baa/embed-in-gpui.patch
 baa/browser-window-hook.patch
 baa/no-views-guards.patch
 baa/baa-otr-browsers.patch
+baa/gpui-main-menu.patch
