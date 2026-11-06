@@ -8,7 +8,9 @@
 #include "baa/baa.h"
 #include "baa/internal.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -46,11 +48,18 @@ class EngineApplier : public TemplateURLServiceObserver {
     service->Load();
   }
 
+  // Chrome forbids changing the default from inside its own change notification (its
+  // observer list CHECKs against re-entry), so the apply runs on the next task.
   void OnTemplateURLServiceChanged() override {
-    if (service_->loaded()) {
-      Apply(service_, data_);
-      delete this;
+    if (service_->loaded() && !posted_) {
+      posted_ = true;
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&EngineApplier::ApplyAndGo, weak_.GetWeakPtr()));
     }
+  }
+  void ApplyAndGo() {
+    Apply(service_, data_);
+    delete this;
   }
   // The service goes first at shutdown; nothing to apply to.
   void OnTemplateURLServiceShuttingDown() override { delete this; }
@@ -87,6 +96,8 @@ class EngineApplier : public TemplateURLServiceObserver {
   raw_ptr<TemplateURLService> service_;
   TemplateURLData data_;
   base::ScopedObservation<TemplateURLService, TemplateURLServiceObserver> observation_{this};
+  bool posted_ = false;
+  base::WeakPtrFactory<EngineApplier> weak_{this};
 };
 
 // One removal; answers the app and deletes itself.

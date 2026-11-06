@@ -338,8 +338,6 @@ pub fn detach(view: *mut AnyObject) {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        // try_with: a container may outlive the thread-locals at thread exit.
-        let _ = OVERLAYS.try_with(|o| o.borrow_mut().retain(|v| *v != self.view));
         unsafe {
             let _: () = msg_send![self.view, removeFromSuperview];
             let _: () = msg_send![self.view, release];
@@ -368,8 +366,6 @@ thread_local! {
     /// While an event is handed to the page, gpui's view steps out of hit tests.
     static FORWARDING: Cell<bool> = const { Cell::new(false) };
     static GPUI_VIEW_CLASS: Cell<*const AnyClass> = const { Cell::new(std::ptr::null()) };
-    /// Containers above gpui's view (the settings sheet): the page there takes the mouse itself.
-    static OVERLAYS: RefCell<Vec<*mut AnyObject>> = const { RefCell::new(Vec::new()) };
     static WINDOW_SEND_EVENT: Cell<Option<Imp>> = const { Cell::new(None) };
 }
 
@@ -420,7 +416,7 @@ unsafe fn route_mouse_moves(window_class: *mut AnyClass) {
     unsafe extern "C-unwind" fn send_event(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
         unsafe {
             let kind: usize = msg_send![event, type];
-            if kind == 5 && !over_overlay(this, event) {
+            if kind == 5 {
                 if let Some(view) = find_gpui_view(this) {
                     let _: () = msg_send![view, mouseMoved: event];
                     return;
@@ -444,29 +440,6 @@ unsafe fn route_mouse_moves(window_class: *mut AnyClass) {
     }
 }
 
-/// Whether the pointer is over a visible overlay container (or something in it).
-unsafe fn over_overlay(window: *mut AnyObject, event: *mut AnyObject) -> bool {
-    if OVERLAYS.with(|o| o.borrow().is_empty()) {
-        return false;
-    }
-    unsafe {
-        let content: *mut AnyObject = msg_send![window, contentView];
-        if content.is_null() {
-            return false;
-        }
-        let parent: *mut AnyObject = msg_send![content, superview];
-        let at: CGPoint = msg_send![event, locationInWindow];
-        let point: CGPoint = msg_send![parent, convertPoint: at, fromView: std::ptr::null_mut::<AnyObject>()];
-        let mut view: *mut AnyObject = msg_send![content, hitTest: point];
-        while !view.is_null() {
-            if OVERLAYS.with(|o| o.borrow().contains(&view)) {
-                return true;
-            }
-            view = msg_send![view, superview];
-        }
-        false
-    }
-}
 
 unsafe fn find_gpui_view(window: *mut AnyObject) -> Option<*mut AnyObject> {
     let class = GPUI_VIEW_CLASS.with(Cell::get);

@@ -71,7 +71,7 @@ pub fn writes(settings: &Settings) -> Writes {
     // Every kind, so one the user stopped overriding is restored. Block wins over
     // session-only, and either over a default set in site settings.
     for kind in Permission::SITE_KINDS {
-        let chosen = web.site_defaults.iter().find(|(k, _)| *k == kind).map(|(_, s)| *s).filter(|s| kind.takes(*s));
+        let chosen = web.site_defaults.iter().find(|(k, _)| *k == kind).map(|(_, s)| *s).filter(|s| kind.takes_default(*s));
         let state = match (kind, web.cookies, web.clear_cookies_on_quit) {
             (Permission::Cookies, Cookies::BlockAll, _) => Some(PermissionState::Block),
             (Permission::Cookies, _, true) => Some(PermissionState::SessionOnly),
