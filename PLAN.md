@@ -1,33 +1,35 @@
 # baa — plan
 
 An Arc-like browser. Chromium engine, de-Googled, with a GPUI shell written in Rust.
-Domain: baa.me. Targets: **macOS + Windows** (committed). iOS/Android later (noted, not committed, see §12).
+Domain: baa.me. Targets: **macOS** (Windows later, via the same `//baa`). iOS/Android later (noted, not committed, see §12).
 
 Researched 2026-10-22. Versions quoted are the ones live that day.
+
+The engine is specified in `PLAN-chromium.md`. Sections marked *superseded* are kept for history.
 
 ---
 
 ## 1. One-paragraph architecture
 
-The whole UI (sidebar, spaces, command bar, peek, animations) is a GPUI app. Every tab is a Chromium
-page hosted by CEF (Chromium Embedded Framework) as a **native child view placed under GPUI's layer**
-(macOS; decision 2026-10-22, see §2 Engine host). The page element punches a rounded transparent hole in
-GPUI's frame and moves the view to its rect, so GPUI still draws chrome, popovers and the command bar over
-it, while Chromium renders and scrolls natively at the display's refresh rate.
-Each Space owns a CEF **request context** with its own `cache_path`, which is what gives you
-per-space cookies / localStorage / IndexedDB / service workers for free. Chromium is never patched or
-compiled by us: we take Spotify's official CEF binaries and strip Google at runtime (switches, prefs,
-request blocking). A scheduled GitHub Action bumps the CEF pin whenever a new stable appears, with no
-code changes required. No baa.me backend exists in v1.
+The whole UI (sidebar, spaces, command bar, peek, animations) is a GPUI app. The engine is baa's own
+Chromium build: Helium's patch set (de-Googled) plus `//baa`, a layer that exposes real Chrome
+browsers, profiles and tabs through a C ABI (`BaaCore.framework`, loaded by the Rust binary with
+`dlopen`). Every tab is a Chrome tab whose page `WebContents` NSView sits **under GPUI's layer**. The
+page element punches a rounded transparent hole in GPUI's frame and moves the view to its rect, so GPUI
+still draws chrome, popovers and the command bar over it, while Chromium renders and scrolls natively at
+the display's refresh rate. Each Space is one Chrome `Profile` under `--user-data-dir`, which gives
+per-space cookies / localStorage / IndexedDB / service workers and a real extension system. A weekly
+bot PR takes new Helium releases; a release chain builds the engine in CI. No baa.me backend exists in v1.
 
 ```
 ┌───────────────────────────── baa (GPUI, Rust) ─────────────────────────────┐
 │  sidebar · spaces · command bar · peek · little baa · animations · keymap  │
 │                                                                            │
-│   Tab = gpui element: rect + hole  ──►  CEF NSView below gpui's layer       │
-│   mouse/keys/IME/scroll: native to Chromium  ──►  per-Space RequestContext │
+│   Tab = gpui element: rect + hole  ──►  page WebContents NSView under gpui │
+│   mouse/keys/IME/scroll: native to Chromium  ──►  one Chrome Profile/Space │
 └────────────────────────────────────────────────────────────────────────────┘
-         libcef (Spotify binary, pinned in Cargo.toml)   ← GH Action auto-bumps
+  baa.app/Contents/MacOS/baa  +  Frameworks/BaaCore.framework (Helium + //baa)
+                              ← Helium releases: weekly bump PR
 ```
 
 ---
@@ -36,14 +38,13 @@ code changes required. No baa.me backend exists in v1.
 
 | Decision | Choice | Rejected | Why |
 |---|---|---|---|
-| Engine host | **CEF via `cef` crate (tauri-apps/cef-rs)**, Alloy style, **native child view under GPUI's layer** (macOS) | OSR (used until 2026-10-22); wry/WKWebView | OSR caps input-driven frames at 60 Hz: viz's FrameIntervalDecider pins the interval during input to the begin-frame source's minimum, which for a display-less OSR compositor is the 16.67 ms default, and no stock-CEF switch changes it (external BeginFrames avoid it but hit cef#4311). A native view gets Chromium's own display link (120 Hz scroll, momentum, native IME). GPUI keeps drawing over it: the page element punches a hole (vendored `gpui_apple`), GPUI's view passes hit tests through where the page hitbox is not occluded, shortcuts are offered to GPUI first via `OnPreKeyEvent`. Overlays over a page must `.occlude()`. |
-| UI | **GPUI from the Zed git repo** (pin a rev, as gpui-cef / gpui-component do) | `gpui` 0.2.2 on crates.io (stale, Oct 2025), gpui-ce 0.3.0 | Zed paused community GPUI publishing in Feb 2026; the crates.io version lags a year. Git pin of mainline keeps Windows (Win32 + DirectX) and macOS (Metal) backends current. gpui-ce is a fallback if mainline breaks us; its API is a superset. |
-| Prior art to fork | **bokuweb/gpui-cef** (CEF 151 OSR → GPUI element, IME via `EntityInputHandler`, MIT/Apache) | start from scratch | It already solves OSR→element, resize, IME, cursor forwarding. 3 stars, one author; we vendor it into our workspace and own it. |
-| Frame path | Native: Chromium presents its own layer; nothing is copied. (OSR's CPU-copy and IOSurface paths are gone on macOS.) | — | Windows still uses WebView2 child windows. |
-| De-Googling | **Runtime stripping** of stock CEF (§5) | Building CEF against ungoogled-chromium / Helium patches | Building Chromium is 4–8 h on a 32-core box, not viable on hosted runners per release, and the ungoogled-on-CEF path is undocumented folklore (forum thread, "not all patches apply"). CEF Alloy already has no sign-in, sync, Chrome UI, or account machinery. What is left is switchable or blockable. Keep a source build as a documented v2 option. |
-| Storage isolation | One `CefRequestContext` per Space with `cache_path = <profile>/spaces/<id>` | Chromium profiles | Context = Chromium `BrowserContext`/`StoragePartition`: cookies, localStorage, IDB, cache, SW, permissions all isolated. Exactly what Arc "profiles" do. Several Spaces may share one context (Arc allows that too). |
-| Updates | **GitHub Actions cron** bumps CEF pin from `cef-builds.spotifycdn.com/index.json` and the `cef` crate, opens a PR, CI builds, auto-merge on green, release | Sparkle/own update server | No code change needed for an engine bump. App self-update is v1.1. |
-| Extensions | **Chrome Web Store extensions, verified 2026-10-22.** CEF runs on the Chrome bootstrap, so every Space's request context is a real Chrome profile with the extension system. MV3 content scripts, declarativeNetRequest and service workers run inside our Alloy-style OSR pages. Chrome's own extension UI (install prompt, chrome://extensions, action popups) cannot be hosted in OSR, so it opens in a native Chrome-style window on the same profile (`WebHost::open_extensions`). Ad blocking = user installs uBO Lite. | Bundled adblock engine (removed: list licensing); custom Chromium build like Arc (rejected in de-Googling row) | Arc compiles Chromium and draws extension icons and popups in its own UI. Next step toward that: read each extension's `action` from its manifest, show icons in the sidebar, and render `default_popup` in an OSR page inside a GPUI popover. |
+| Engine host | **Own Chromium build (BaaCore)**, native page view under GPUI's layer | CEF; WKWebView | See `PLAN-chromium.md`. |
+| UI | **GPUI from the Zed git repo** (pin a rev, as gpui-component does) | `gpui` 0.2.2 on crates.io (stale, Oct 2025), gpui-ce 0.3.0 | Zed paused community GPUI publishing in Feb 2026; the crates.io version lags a year. Git pin of mainline keeps Windows (Win32 + DirectX) and macOS (Metal) backends current. gpui-ce is a fallback if mainline breaks us; its API is a superset. |
+| Frame path | Native: Chromium presents its own layer; nothing is copied. | — | See `PLAN-chromium.md`. |
+| De-Googling | Helium's patch set in the build, plus baa's switches | Runtime stripping of stock CEF | See `PLAN-chromium.md`. |
+| Storage isolation | One Chrome `Profile` per Space (`space-<id>`) | — | See `PLAN-chromium.md` and §6. |
+| Updates | Weekly Helium bump PR, release chain builds the engine, `release.yml` ships a signed DMG; no in-app updater yet | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
+| Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. |
 
 ---
 
@@ -91,29 +92,34 @@ extensions UI, password manager, Picture-in-Picture auto-pop.
 
 ```
 baa/
-├─ Cargo.toml                     workspace; pins gpui rev + cef version (single source of truth)
+├─ Cargo.toml                     workspace; pins the gpui rev (single source of truth)
 ├─ crates/
 │  ├─ baa/                        bin: app entry, window, keymap, settings
 │  ├─ baa-ui/                     GPUI views: sidebar, spaces, command bar, peek, split, theme
-│  ├─ baa-web/                    CEF host: runtime init, OSR browser element, input/IME bridge,
-│  │                              request-context manager, per-platform texture import
+│  ├─ baa-web/                    WebHost contract + BaaCore host: dlopen of BaaCore, page views,
+│  │                              input/IME bridge, profile manager
 │  ├─ baa-model/                  Space/Tab/Session structs, persistence (SQLite via rusqlite,
 │  │                              bundled), archive policy
-│  └─ baa-privacy/                switch list, pref overrides, host blocklist, tests that assert
+│  └─ baa-privacy/                switches, pref overrides, proxy allowlist; the CI test asserts
 │                                 nothing outside the allowlist is contacted
-├─ xtask/                         bundle (mac .app with helpers, win dir), sign, notarize, cef bump
-├─ .github/workflows/             ci.yml · cef-bump.yml · release.yml
+├─ chromium/                      vendored Helium + helium-macos, baa's patches, //baa, local-build.sh
+├─ vendor/gpui_apple/             gpui's macOS backend with the punch-hole surface
+├─ xtask/                         cargo bundle, sign the DMG, notarize, privacy_test.py
+├─ .github/workflows/             ci.yml · chromium.yml · chromium-phase.yml · helium-bump.yml · release.yml
 ├─ assets/                        icons, fonts, default themes
 └─ PLAN.md
 ```
 
-Rust edition 2021 (2024 once the pinned gpui rev compiles under it), MSRV = stable (1.99.1 on the dev box). Keep dependency count low: gpui, cef, rusqlite, serde, parking_lot,
-log, anyhow, url. No async runtime; CEF and GPUI both pump their own loops (CEF via
-`external_message_pump` + `do_message_loop_work` scheduled on GPUI's foreground executor, as gpui-cef does).
+Rust edition 2021 (2024 once the pinned gpui rev compiles under it), MSRV = stable (1.99.1 on the dev box). Keep dependency count low: gpui, rusqlite, serde, parking_lot,
+log, anyhow, url. No async runtime; Chromium runs its main loop inside gpui's `[NSApp run]`.
 
 ---
 
-## 5. De-Googling: what Helium removes, and what we do about each
+---
+
+## 5. De-Googling: what Helium removes, and what we do about each (*superseded*)
+
+Kept for history. Today: Helium's patches, `chromium/patches/baa/*`, `baa_privacy::CORE_SWITCHES`, checked by the privacy test.
 
 Helium = ungoogled-chromium (source patches + domain substitution) + Helium patches + bits of Brave/Bromite/Debian/Inox.
 Mapping each item to what a *binary* CEF Alloy build lets us do:
@@ -151,18 +157,18 @@ risk is a code path we didn't list. The CI network test is the control.
 
 ## 6. Per-Space storage isolation
 
-- `CefSettings.root_cache_path = <app data>/baa/profile`.
-- Each **storage profile** (user-visible: "Personal", "Work", …) = `CefRequestContextSettings { cache_path: root/space-<id> (must be a direct child of root; Chrome rejects deeper paths), persist_session_cookies: true }`.
+- One Chrome `Profile` per Space under `--user-data-dir=<app data>/baa/chromium` (`space-<id>`; Chrome rejects deeper paths). Ephemeral (incognito) Space = off-the-record profile `baa::<id>`.
 - A Space references exactly one storage profile; many Spaces may share one. Default: new Space gets a new profile (true Arc behaviour is "same profile unless you choose"; make it a toggle in the Space creator).
-- Incognito Space = empty `cache_path` (in-memory context).
-- Downloads, permissions, zoom per context via `CefRequestContextHandler`.
-- Peek and Little baa inherit the context of the originating Space.
-- Deleting a profile: shut its browsers, `cef_shutdown` is not needed, just `rm -rf` the directory after all browsers close (CEF holds files open until then; queue the delete on next launch if locked).
-- Known CEF constraint: one executable instance per `root_cache_path`. Single-instance lock + IPC "open URL" to the running process (mac: `application:openURLs:` via GPUI's `on_open_urls`; win: named pipe).
+- Downloads, permissions, zoom per profile.
+- Peek and Little baa inherit the profile of the originating Space.
+- Deleting a profile: close its pages, then `rm -rf` the directory (queued for the next launch, before Chromium opens anything).
+- Single-instance lock + IPC "open URL" to the running process (mac: `application:openURLs:` via GPUI's `on_open_urls`).
 
 ---
 
-## 7. Rendering and input pipeline (baa-web)
+## 7. Rendering and input pipeline (baa-web) (*superseded* except Input)
+
+The OSR phases below are history: pages are native views (§1). Input still describes the UI side.
 
 **Phase 1 (works today in gpui-cef):**
 `CefRenderHandler::OnPaint(BGRA, dirty rects)` → copy into `gpui::RenderImage` → `img()` element sized to the tab's layout bounds. `GetViewRect` returns the element's bounds × scale factor; `GetScreenInfo` the display DPI. Resize = `WasResized()` from `prepaint`.
@@ -184,8 +190,8 @@ risk is a code path we didn't list. The CI network test is the control.
 - Find in page, zoom, print, dev tools (`ShowDevTools` into a separate CEF window, windowed mode is fine there), downloads via `CefDownloadHandler` with a GPUI download tray.
 
 **Process model**
-- mac: `baa.app/Contents/Frameworks/Chromium Embedded Framework.framework` + 5 helper bundles (`baa Helper`, `(GPU)`, `(Renderer)`, `(Plugin)`, `(Alerts)`). `cef-rs`'s `bundle-cef-app` + `Cargo.toml [package.metadata.cef.bundle]` generates these. Hardened runtime entitlements: `allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`. Sign inside-out, notarize with `notarytool`.
-- win: single exe + `libcef.dll` + resources next to it; subprocess = same exe (`CefExecuteProcess` early in `main`). Code-sign with an OV/EV cert (Azure Trusted Signing is the cheap GH-Actions-friendly option).
+- mac: `baa.app/Contents/MacOS/baa` (the Rust binary) + `Contents/Frameworks/BaaCore.framework` (`BaaCore`, `Helpers/` renderer, GPU and plain helper apps, `Libraries/*.dylib`). Chromium's own signer (`sign_chrome.py`) signs inside-out with the entitlements in `PLAN-chromium-phase5.md`; the DMG is notarised with `notarytool`.
+- Windows: later, with the `//baa` HWND port.
 
 ---
 
@@ -212,7 +218,7 @@ risk is a code path we didn't list. The CI network test is the control.
 | Archive view | ⌘⇧A | Ctrl+Shift+A |
 
 Browser-standard keys (⌘R, ⌘+/-/0, ⌘P, ⌘⇧N incognito space) included. Keys the page should get first
-(text fields) are dispatched to CEF first; unhandled keys bubble to GPUI actions, using CEF's
+(text fields) are dispatched to Chromium first; unhandled keys bubble to GPUI actions, using Chromium's
 `OnPreKeyEvent`/`OnKeyEvent` return values.
 
 ---
@@ -252,7 +258,7 @@ Each milestone ends with something runnable. Estimates are solo-dev, full-time.
 | 2 | **Spaces + isolation** | Spaces CRUD, theme tint, per-space request context, incognito space, switcher + keybinds, single-instance + open-URL. Login to two Google accounts in two Spaces proves isolation. | 2 |
 | 3 | **Privacy + extensions** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI; Web Store installs via the Chrome-style window; extension icons + popups in the sidebar. | 2 |
 | 4 | **Arc feel** | Spring/FLIP motion, sidebar collapse + hover reveal, space swipe, page back/forward swipe, Peek, Little baa, command bar with fuzzy search over tabs/history, auto-archive. | 4 |
-| 5 | **Ship** | mac bundle signed+notarized, win signed; `release.yml`; `cef-bump.yml` live; split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
+| 5 | **Ship** | Engine move and release: see `PLAN-chromium.md` phases 5–6 (`PLAN-chromium-phase5.md`). Then split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
 | 6 | **Zero-copy** | IOSurface path on mac, D3D11 shared-texture path on win, GPUI BGRA patch upstreamed. | 2 |
 
 Total ≈ 15 weeks to a shippable v0.1 with zero-copy. Milestones 0–3 are the de-risking spine; if 0 fails on Windows OSR (unlikely, cef-rs supports it) the fallback is windowed CEF child HWNDs on Windows only, accepting that overlays/clip break there, as gpui-cef does with WebView2.
@@ -264,70 +270,38 @@ Total ≈ 15 weeks to a shippable v0.1 with zero-copy. Milestones 0–3 are the 
 You said "macOS & Android" for later; I read that as **iOS & Android**, since macOS is already in v1.
 - **iOS**: App Store rules require WebKit; the page host becomes `WKWebView`. GPUI has an iOS backend in progress (zed PR #63068). The shell (`baa-ui`, `baa-model`) ports; `baa-web` gets a `wk` backend behind the same `WebHost` trait. No per-space storage isolation beyond `WKWebsiteDataStore(forIdentifier:)` (iOS 17+), which does map onto our profile model.
 - **Android**: system WebView is Chromium, so a `WebHost` backend on `android.webkit.WebView` (or CEF's experimental Android support if it matures). GPUI has no Android backend; that is the real blocker.
-- **What to do now**: keep all CEF types behind `baa-web::WebHost` (one trait, two methods groups: lifecycle/navigation and frame/input). Do not let `cef::*` leak into `baa-ui`. That is the only concession v1 makes; it costs nothing.
+- **What to do now**: keep all engine types behind `baa-web::WebHost` (one trait, two methods groups: lifecycle/navigation and frame/input). Do not let `cef::*` leak into `baa-ui`. That is the only concession v1 makes; it costs nothing.
 
 ---
 
 ## 13. GitHub Actions
 
-### `ci.yml` (push/PR)
-- matrix: `macos-15` (arm64), `windows-2025`; `cargo build --release`, `cargo test`, `cargo clippy -D warnings`.
-- cache: `~/.local/share/cef` (download-cef output, ~300 MB per platform) keyed on CEF version; `sccache` for Rust.
-- privacy proxy test (§5.3) runs on both.
-- uploads unsigned bundles as artifacts.
-
-### `cef-bump.yml` (the "always current Chromium" requirement)
-```yaml
-on:
-  schedule: [{cron: "17 6 * * *"}]   # daily
-  workflow_dispatch:
-jobs:
-  bump:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Find newest stable CEF common to all targets
-        run: |
-          curl -s https://cef-builds.spotifycdn.com/index.json -o cef.json
-          # newest 'stable' cef_version present for macosarm64, macosx64, windows64, windowsarm64
-          NEW=$(python3 xtask/cef_latest.py cef.json macosarm64 macosx64 windows64 windowsarm64)
-          CUR=$(python3 xtask/cef_current.py Cargo.toml)
-          echo "new=$NEW cur=$CUR" >> $GITHUB_OUTPUT
-      - name: Resolve matching `cef` crate version      # crate is versioned MAJOR.x.y+CEF (e.g. 154.5.0+154.0.34)
-        run: python3 xtask/cef_crate_for.py "$NEW"      # crates.io API; fail if no crate for that major yet
-      - name: Update pins
-        run: python3 xtask/cef_bump.py "$NEW" "$CRATE"  # edits workspace Cargo.toml + lock, Info.plist CFBundleVersion suffix
-      - uses: peter-evans/create-pull-request@v7
-        with:
-          branch: bot/cef-${{ steps.ver.outputs.new }}
-          title: "cef: bump to ${{ steps.ver.outputs.new }}"
-          labels: cef-bump
-      - run: gh pr merge --auto --squash   # merges when ci.yml (incl. privacy test) is green
-```
-- Rule: bump only when **all four** target platforms have the same stable `cef_version` in `index.json` (on 2026-10-22 mac is on 154.0.34 / Chromium 154.0.8037.98 while Windows is still 152.0.14, so the bump would wait). Option flag to allow per-platform skew if Windows lags more than 14 days.
-- The `cef` crate tracks CEF majors within days (154.5.0+154.0.34 shipped 2026-10-07). If the crate lags, the PR is opened as draft with a note; `cef-dll-sys` can also be pointed at the raw binary via `CEF_PATH` as an escape hatch.
-- After auto-merge, `release.yml` runs.
-
-### `release.yml` (on merge to `main` touching `Cargo.toml` CEF pin, or tag)
-- build both platforms, sign (mac: Developer ID + notarize; win: Azure Trusted Signing), produce `baa-<ver>-macos-arm64.dmg`, `baa-<ver>-windows-x64.msix`/zip, GitHub Release, upload to `https://baa.me/dl/` (Cloudflare R2 or GH Pages redirect).
-- Version = `<app semver>+cef<cef_version>` so an engine-only release is visible.
+Details: `PLAN-chromium-phase5.md` §6.
+- `ci.yml` (push/PR, manual): `scripts` (python tests) and `build` on `macos-15`: `cargo test --release --workspace`, `cargo clippy ... -D warnings`, then the privacy test (§5.3) on the release engine for this commit's `chromium/` tree, if one exists (else a notice). No Chromium tree is needed: `baa-web` loads BaaCore at run time.
+- `chromium.yml` (manual; `mode=dev` component build with the tree kept for 7 days, `mode=release` official build): chained phases (`chromium-phase.yml`), each compiling up to about 4.75 h. A release run uploads `baa-engine-<tree>` (`baa.app`, `baa Packaging`, `engine.json`, 90 days) and runs the `privacy` job on it.
+- `helium-bump.yml` (weekly): a newer `imputnet/helium-macos` release is subtree-pulled onto a bot branch, a PR is opened, and `chromium.yml` (release) and `ci.yml` start on it. No auto-merge.
+- `release.yml` (tag `vX.Y.Z` = `Cargo.toml` version): takes `baa-engine-<tree>` of the tagged commit (fails with the command to run if none), adds the Rust binary, signs with Chromium's signer, runs the privacy test on the signed app, builds and notarises `baa-<ver>-macos-arm64.dmg`, writes `rust-credits.html` with `cargo about`, publishes a GitHub Release. Engine versions go in the release notes, not in the version.
 
 ---
 
 ## 14. Risks (ordered) and the control for each
 
 1. **GPUI git churn** breaks the build between pins. Control: pin rev, bump monthly in a separate bot PR, keep a `gpui-ce` adapter branch alive.
-2. **Windows OSR accelerated path flaky** (CEF #4057). Control: Phase 1 copy path is always available; Windows ships on it if needed.
-3. **Residual Google traffic** after an engine bump. Control: proxy test gates every bump PR.
-4. **cef-rs API breaks on major bumps** (bindings are generated per CEF major). Control: `baa-web` is the only crate touching `cef::*`; bump PRs that fail CI stay open for a human.
-5. **IME / dead keys** unverified on real hardware in gpui-cef. Control: milestone 1 manual checklist (JP, DE, US-intl layouts).
+2. (removed with the Windows build)
+3. **Residual Google traffic** after an engine bump. Control: the privacy test gates every release engine and every release.
+4. (removed with the CEF bindings)
+5. **IME / dead keys** unverified on real hardware. Control: manual checklist (JP, DE, US-intl layouts).
 6. **No Widevine** → no DRM video. Control: documented; v2 could fetch the CDM via a user-initiated download.
-7. **Binary size**: CEF ≈ 200 MB installed per platform. Accepted; same as every CEF app.
-8. **Licensing**: CEF BSD-3, Chromium BSD + third-party notices → ship `CREDITS.html`; GPUI Apache-2.0 (Zed's gpui crate); gpui-cef MIT/Apache.
+7. **Binary size**: the app is about 350 MB (an official build; Helium is 342 MB, Arc 871 MB). Accepted.
+8. **Licensing**: GPL-3.0-only (Helium is GPL-3.0). Chromium and Helium notices ship as `chrome://credits`, Rust crates' as `rust-credits.html` (`cargo about`); GPUI is Apache-2.0.
+9. **Release chain length**: an official build on the free runners takes days across chained phases; it is not measured yet. Control: record it per run; paid runners if it matters.
+10. **Security-fix latency**: Helium lag + weekly bump + one to two days of build. Control: dispatch `chromium.yml` on the bump branch at once.
 
 ---
 
-## 15. First commands (milestone 0, day 1)
+## 15. First commands (milestone 0, day 1) (*superseded*)
+
+Milestone 0's day-1 CEF commands, kept for history. Today: README "Build".
 
 ```sh
 cargo new --bin baa && cd baa
@@ -341,15 +315,8 @@ cargo run -p browser   # gpui-cef demo renders; then start replacing its toolbar
 
 ## Sources
 
-- cef-rs / `cef` crate: https://github.com/tauri-apps/cef-rs , https://crates.io/crates/cef (154.5.0+154.0.34, 2026-10-07)
-- CEF builds index: https://cef-builds.spotifycdn.com/index.json (stable: mac 154.0.34 / Chromium 154.0.8037.98; win 152.0.14 / 152.0.7977.167 on 2026-10-22)
-- gpui-cef (CEF OSR inside GPUI, IME, IOSurface notes): https://github.com/bokuweb/gpui-cef
 - GPUI window composition PR (native-view layering, still open): https://github.com/zed-industries/zed/pull/62379
 - GPUI swipe events: https://github.com/zed-industries/zed/pull/23332 ; ScrollEvent rename: https://github.com/zed-industries/zed/pull/65805 ; iOS backend: https://github.com/zed-industries/zed/pull/63068
 - gpui crates.io 0.2.2 (stale) https://crates.io/crates/gpui ; gpui-ce 0.3.0 https://crates.io/crates/gpui-ce ; gpui-kit webview limits https://gpui-kit.com/docs/webview/
 - Helium / ungoogled-chromium: https://github.com/imputnet/helium-chromium , https://deepwiki.com/imputnet/helium/4.1-de-googling-and-privacy-modifications
-- CEF on ungoogled-chromium (folklore, not reproducible): https://www.magpcss.org/ceforum/viewtopic.php?f=6&t=19804
-- CEF request context settings: https://cef-builds.spotifycdn.com/docs/113.3/structcef__request__context__settings__t.html
-- CEF accelerated OSR issues: https://github.com/chromiumembedded/cef/issues/4057
-- CEF mac signing/notarization: https://github.com/chromiumembedded/cef/issues/2744
 - Arc feature references: https://keyshortcuts.net/arc-shortcuts , https://resources.arc.net/hc/en-us/articles/20498377604887-Arc-for-macOS-2023-Release-Notes , https://supasidebar.com/blog/what-is-arc-browser-sidebar-2026

@@ -1,5 +1,7 @@
 # Phases 5–6: delete CEF, build the release, ship
 
+Status: implemented 2026-11-06 (code, workflows, docs). Not yet run: the parity checklist (5.0), a release chain, a tag, notarisation. The Windows build is removed, the push trigger on `chromium/**` is not added (release engines start by hand and from `helium-bump.yml`), the licence is GPL-3.0-only, Helium's codec setting is kept; the `cef-final` tag is made by the manager.
+
 Plan for phases 5 and 6 of `PLAN-chromium.md`, written 2026-11-06. Phase 5 starts when M1
 (`PLAN-chromium-phase3.md`) and M2 (the delegate surface) are done and the core build
 (`cargo build -p baa --features core`) has every feature the CEF build has (the parity list in step 5.0).

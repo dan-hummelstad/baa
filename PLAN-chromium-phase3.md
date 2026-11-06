@@ -1,5 +1,7 @@
 # Phase 3, milestone M1: the baa app on BaaCore
 
+Status: done 2026-11-06; the CEF deletions in "Later deletions" happened in phase 5 (`PLAN-chromium-phase5.md`).
+
 Plan for phase 3 of `PLAN-chromium.md`, written 2026-11-06 from Chromium 156 (Helium tree at
 `/Users/Shared/hb/helium-macos/build/src`; paths starting with `chrome/`, `content/`, `components/`
 are in that tree) and the phase 2 results (`PLAN-chromium-phase2.md`). The C ABI is

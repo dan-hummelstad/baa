@@ -1,5 +1,7 @@
 # Phase 4, milestone M2: the delegate surface (parity with the CEF build)
 
+Status: done 2026-11-06 (checked end to end on the existing UI); the CEF deletions happened in phase 5 (`PLAN-chromium-phase5.md`).
+
 Plan for phase 4 of `PLAN-chromium.md`, written 2026-11-06 against Chromium 156 (Helium tree at
 `/Users/Shared/hb/helium-macos/build/src`; paths starting `chrome/`, `content/`, `components/`,
 `extensions/`, `services/` are in that tree) and M1 (`PLAN-chromium-phase3.md`, `chromium/baa/baa.h`

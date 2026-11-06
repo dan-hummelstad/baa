@@ -4,16 +4,18 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 
 ## Build
 - `. ~/.cargo/env` if cargo is missing from PATH.
-- `cargo check -p <crate>` for your crate. Full `cargo build -p baa` is slow (CEF wrapper + gpui); run it once at the end, not per edit.
-- macOS app only starts bundled: `cargo bundle` then `open target/bundle/baa.app`.
-- CEF binaries: `CEF_PATH` is set in `.cargo/config.toml` (populated by `export-cef-dir`). Never commit them.
+- `cargo check -p <crate>` for your crate. Full `cargo build -p baa` is slow (gpui); run it once at the end, not per edit.
+- macOS app only starts bundled: `cargo bundle --run` (needs an engine, README "Build").
+- Never run two Chromium builds (`pgrep -x siso`); never remove the hand-off guards in `chromium-phase.yml`.
 - Tests: `cargo test -p <crate>`.
 
 ## Ownership (one crate per orchestrator; do not edit outside yours)
 - `crates/baa-model`   data + SQLite + settings
 - `crates/baa-privacy` switches, host blocklist
-- `crates/baa-web`     CEF host (`WebHost` trait in lib.rs is the contract; UI codes against it) + `vendor/gpui-cef`
-- `crates/baa-chromium` gpui shell on our own Chromium (`BaaCore.framework`, `chromium/baa`); baa-web orchestrator; becomes baa-web's backend in phase 5 (PLAN-chromium.md)
+- `crates/baa-web`     BaaCore host (`WebHost` in lib.rs is the contract; UI codes against it)
+- `crates/baa-chromium` test harness for `//baa` (spike binary), engine orchestrator; delete when the C++ tests no longer need it
+- `chromium/baa`, `chromium/patches`: engine orchestrator; `chromium/helium*`: changes only through a Helium bump or the engine orchestrator
+- `vendor/gpui_apple`  baa-web orchestrator
 - `crates/baa-ui`      GPUI views, theme, motion
 - `crates/baa`         app shell wiring (integration orchestrator only)
 - `.github/`, `xtask/` CI/release orchestrator only

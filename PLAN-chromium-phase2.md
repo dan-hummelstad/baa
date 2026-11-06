@@ -1,5 +1,7 @@
 # Phase 2: spike (shape check)
 
+Status: done 2026-11-06; the CEF deletions in "Later deletions" happened in phase 5 (`PLAN-chromium-phase5.md`).
+
 Plan for phase 2 of `PLAN-chromium.md`, written 2026-11-06 from Chromium 156 (Helium tree at
 `/Users/Shared/hb/helium-macos/build/src`), gpui at the pinned Zed rev, and `/Applications/Arc.app`.
 Paths starting with `chrome/`, `content/` or `base/` are in the Chromium tree. `gpui_macos/` is
