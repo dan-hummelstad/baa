@@ -595,7 +595,8 @@ fn callbacks() -> Callbacks {
     ) {
         let (message, default_text) = unsafe { (from_c(message), from_c(default_text)) };
         let d = unsafe { dispatch(ctx) };
-        let quitting = kind >= 3 && (d.core.is_quitting)();
+        let kind = dialog_kind(kind);
+        let quitting = matches!(kind, DialogKind::BeforeUnload { .. }) && (d.core.is_quitting)();
         if quitting || !d.pages.borrow().contains_key(&tab) {
             // ⌘Q waits on a leave-site question nobody would answer for a hidden
             // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
@@ -604,13 +605,6 @@ fn callbacks() -> Callbacks {
             d.queue(move |_| (d.core.dialog_answer)(id, quitting, c"".as_ptr()));
             return;
         }
-        let kind = match kind {
-            1 => DialogKind::Confirm,
-            2 => DialogKind::Prompt,
-            3 => DialogKind::BeforeUnload { is_reload: false },
-            4 => DialogKind::BeforeUnload { is_reload: true },
-            _ => DialogKind::Alert,
-        };
         d.on_page(tab, move |page, cx| {
             page.shared.dialog.set(Some(id));
             cx.emit(PageEvent::Dialog { kind, message, default_text });
@@ -660,8 +654,8 @@ fn callbacks() -> Callbacks {
             received_bytes: download.received_bytes,
             total_bytes: download.total_bytes,
             state: match download.state {
-                0 => DownloadState::InProgress,
-                1 => DownloadState::Complete,
+                ffi::DOWNLOAD_IN_PROGRESS => DownloadState::InProgress,
+                ffi::DOWNLOAD_COMPLETE => DownloadState::Complete,
                 _ => DownloadState::Canceled,
             },
         };
@@ -711,14 +705,24 @@ fn callbacks() -> Callbacks {
 
 /// `BAA_PERMISSION_*` bits, in bit order.
 const PERMISSION_BITS: [(u32, Permission); 7] = [
-    (1 << 0, Permission::Camera),
-    (1 << 1, Permission::Microphone),
-    (1 << 2, Permission::Location),
-    (1 << 3, Permission::Notifications),
-    (1 << 4, Permission::Clipboard),
-    (1 << 5, Permission::Midi),
-    (1 << 6, Permission::Other),
+    (ffi::PERMISSION_CAMERA, Permission::Camera),
+    (ffi::PERMISSION_MICROPHONE, Permission::Microphone),
+    (ffi::PERMISSION_LOCATION, Permission::Location),
+    (ffi::PERMISSION_NOTIFICATIONS, Permission::Notifications),
+    (ffi::PERMISSION_CLIPBOARD, Permission::Clipboard),
+    (ffi::PERMISSION_MIDI, Permission::Midi),
+    (ffi::PERMISSION_OTHER, Permission::Other),
 ];
+
+fn dialog_kind(raw: c_int) -> DialogKind {
+    match raw {
+        ffi::DIALOG_CONFIRM => DialogKind::Confirm,
+        ffi::DIALOG_PROMPT => DialogKind::Prompt,
+        ffi::DIALOG_BEFOREUNLOAD => DialogKind::BeforeUnload { is_reload: false },
+        ffi::DIALOG_BEFOREUNLOAD_RELOAD => DialogKind::BeforeUnload { is_reload: true },
+        _ => DialogKind::Alert,
+    }
+}
 
 fn permissions_of(kinds: u32) -> Vec<Permission> {
     PERMISSION_BITS.iter().filter(|(bit, _)| kinds & bit != 0).map(|(_, kind)| *kind).collect()
@@ -957,8 +961,8 @@ impl WebHost for CoreWebHost {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return PermissionState::Ask };
         match (self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit) {
-            1 => PermissionState::Allow,
-            2 => PermissionState::Block,
+            ffi::SITE_ALLOW => PermissionState::Allow,
+            ffi::SITE_BLOCK => PermissionState::Block,
             _ => PermissionState::Ask,
         }
     }
@@ -967,9 +971,9 @@ impl WebHost for CoreWebHost {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
         let state = match state {
-            PermissionState::Ask => 0,
-            PermissionState::Allow => 1,
-            PermissionState::Block => 2,
+            PermissionState::Ask => ffi::SITE_ASK,
+            PermissionState::Allow => ffi::SITE_ALLOW,
+            PermissionState::Block => ffi::SITE_BLOCK,
         };
         (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state);
     }

@@ -41,9 +41,9 @@ fn convert(raw: &ffi::Extension) -> (Extension, ExtensionInfo) {
             enabled: raw.enabled,
             permissions: text(raw.permissions).lines().filter(|l| !l.is_empty()).map(String::from).collect(),
             site_access: match raw.site_access {
-                1 => Some(SiteAccess::OnClick),
-                2 => Some(SiteAccess::OnSpecificSites),
-                3 => Some(SiteAccess::OnAllSites),
+                ffi::SITE_ACCESS_ON_CLICK => Some(SiteAccess::OnClick),
+                ffi::SITE_ACCESS_ON_SPECIFIC_SITES => Some(SiteAccess::OnSpecificSites),
+                ffi::SITE_ACCESS_ON_ALL_SITES => Some(SiteAccess::OnAllSites),
                 _ => None,
             },
             options: some(raw.options_url),
@@ -54,14 +54,14 @@ fn convert(raw: &ffi::Extension) -> (Extension, ExtensionInfo) {
 /// `BAA_EXTENSION_*` change kind and value.
 pub fn change_code(change: ExtensionChange) -> (i32, i32) {
     match change {
-        ExtensionChange::Enable(on) => (0, on as i32),
-        ExtensionChange::Remove => (1, 0),
+        ExtensionChange::Enable(on) => (ffi::EXTENSION_ENABLE, on as i32),
+        ExtensionChange::Remove => (ffi::EXTENSION_REMOVE, 0),
         ExtensionChange::SiteAccess(access) => (
-            2,
+            ffi::EXTENSION_SITE_ACCESS,
             match access {
-                SiteAccess::OnClick => 1,
-                SiteAccess::OnSpecificSites => 2,
-                SiteAccess::OnAllSites => 3,
+                SiteAccess::OnClick => ffi::SITE_ACCESS_ON_CLICK,
+                SiteAccess::OnSpecificSites => ffi::SITE_ACCESS_ON_SPECIFIC_SITES,
+                SiteAccess::OnAllSites => ffi::SITE_ACCESS_ON_ALL_SITES,
             },
         ),
     }

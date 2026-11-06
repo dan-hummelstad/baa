@@ -39,9 +39,47 @@ pub struct MenuItem {
     pub checked: bool,
 }
 
+// The BAA_* enums of baa.h, one constant each (prefix dropped); the test at
+// the bottom checks them against the header itself.
+#[allow(dead_code)] // the rest of the enum are mirrored too, for header_matches
+pub const MENU_COMMAND: u8 = 0;
 pub const MENU_SEPARATOR: u8 = 1;
 pub const MENU_SUBMENU: u8 = 2;
 pub const MENU_INSPECT: u8 = 3;
+
+pub const PERMISSION_CAMERA: u32 = 1 << 0;
+pub const PERMISSION_MICROPHONE: u32 = 1 << 1;
+pub const PERMISSION_LOCATION: u32 = 1 << 2;
+pub const PERMISSION_NOTIFICATIONS: u32 = 1 << 3;
+pub const PERMISSION_CLIPBOARD: u32 = 1 << 4;
+pub const PERMISSION_MIDI: u32 = 1 << 5;
+pub const PERMISSION_OTHER: u32 = 1 << 6;
+
+pub const SITE_ASK: c_int = 0;
+pub const SITE_ALLOW: c_int = 1;
+pub const SITE_BLOCK: c_int = 2;
+
+#[allow(dead_code)]
+pub const SITE_ACCESS_NONE: c_int = 0;
+pub const SITE_ACCESS_ON_CLICK: c_int = 1;
+pub const SITE_ACCESS_ON_SPECIFIC_SITES: c_int = 2;
+pub const SITE_ACCESS_ON_ALL_SITES: c_int = 3;
+
+pub const EXTENSION_ENABLE: c_int = 0;
+pub const EXTENSION_REMOVE: c_int = 1;
+pub const EXTENSION_SITE_ACCESS: c_int = 2;
+
+#[allow(dead_code)]
+pub const DIALOG_ALERT: c_int = 0;
+pub const DIALOG_CONFIRM: c_int = 1;
+pub const DIALOG_PROMPT: c_int = 2;
+pub const DIALOG_BEFOREUNLOAD: c_int = 3;
+pub const DIALOG_BEFOREUNLOAD_RELOAD: c_int = 4;
+
+pub const DOWNLOAD_IN_PROGRESS: c_int = 0;
+pub const DOWNLOAD_COMPLETE: c_int = 1;
+#[allow(dead_code)]
+pub const DOWNLOAD_CANCELED: c_int = 2;
 
 #[repr(C)]
 pub struct Download {
@@ -227,5 +265,81 @@ pub fn load() -> &'static Core {
             download_cancel,
             dialog_answer,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `NAME = value` pairs of the header's enums; values are numbers or `1 << n`.
+    fn header_constants(header: &str) -> Vec<(String, i64)> {
+        let code: Vec<&str> = header.lines().map(|l| l.split("//").next().unwrap_or("")).collect();
+        code.join("\n")
+            .split(['{', '}', ',', ';'])
+            .filter_map(|part| {
+                let (name, value) = part.trim().split_once('=')?;
+                let name = name.trim();
+                if !name.starts_with("BAA_") || name.contains(char::is_whitespace) {
+                    return None;
+                }
+                let value = value.trim();
+                let value = match value.split_once("<<") {
+                    Some((a, b)) => a.trim().parse::<i64>().ok()? << b.trim().parse::<u32>().ok()?,
+                    None => value.parse().ok()?,
+                };
+                Some((name.to_string(), value))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn header_matches() {
+        let header = include_str!("../../../../chromium/baa/baa.h");
+        let version: c_int = header
+            .lines()
+            .find_map(|l| l.strip_prefix("#define BAA_ABI_VERSION "))
+            .and_then(|v| v.trim().parse().ok())
+            .expect("BAA_ABI_VERSION in baa.h");
+        assert_eq!(version, ABI_VERSION);
+
+        let ours: &[(&str, i64)] = &[
+            ("BAA_MENU_COMMAND", MENU_COMMAND as i64),
+            ("BAA_MENU_SEPARATOR", MENU_SEPARATOR as i64),
+            ("BAA_MENU_SUBMENU", MENU_SUBMENU as i64),
+            ("BAA_MENU_INSPECT", MENU_INSPECT as i64),
+            ("BAA_PERMISSION_CAMERA", PERMISSION_CAMERA as i64),
+            ("BAA_PERMISSION_MICROPHONE", PERMISSION_MICROPHONE as i64),
+            ("BAA_PERMISSION_LOCATION", PERMISSION_LOCATION as i64),
+            ("BAA_PERMISSION_NOTIFICATIONS", PERMISSION_NOTIFICATIONS as i64),
+            ("BAA_PERMISSION_CLIPBOARD", PERMISSION_CLIPBOARD as i64),
+            ("BAA_PERMISSION_MIDI", PERMISSION_MIDI as i64),
+            ("BAA_PERMISSION_OTHER", PERMISSION_OTHER as i64),
+            ("BAA_SITE_ASK", SITE_ASK as i64),
+            ("BAA_SITE_ALLOW", SITE_ALLOW as i64),
+            ("BAA_SITE_BLOCK", SITE_BLOCK as i64),
+            ("BAA_SITE_ACCESS_NONE", SITE_ACCESS_NONE as i64),
+            ("BAA_SITE_ACCESS_ON_CLICK", SITE_ACCESS_ON_CLICK as i64),
+            ("BAA_SITE_ACCESS_ON_SPECIFIC_SITES", SITE_ACCESS_ON_SPECIFIC_SITES as i64),
+            ("BAA_SITE_ACCESS_ON_ALL_SITES", SITE_ACCESS_ON_ALL_SITES as i64),
+            ("BAA_EXTENSION_ENABLE", EXTENSION_ENABLE as i64),
+            ("BAA_EXTENSION_REMOVE", EXTENSION_REMOVE as i64),
+            ("BAA_EXTENSION_SITE_ACCESS", EXTENSION_SITE_ACCESS as i64),
+            ("BAA_DIALOG_ALERT", DIALOG_ALERT as i64),
+            ("BAA_DIALOG_CONFIRM", DIALOG_CONFIRM as i64),
+            ("BAA_DIALOG_PROMPT", DIALOG_PROMPT as i64),
+            ("BAA_DIALOG_BEFOREUNLOAD", DIALOG_BEFOREUNLOAD as i64),
+            ("BAA_DIALOG_BEFOREUNLOAD_RELOAD", DIALOG_BEFOREUNLOAD_RELOAD as i64),
+            ("BAA_DOWNLOAD_IN_PROGRESS", DOWNLOAD_IN_PROGRESS as i64),
+            ("BAA_DOWNLOAD_COMPLETE", DOWNLOAD_COMPLETE as i64),
+            ("BAA_DOWNLOAD_CANCELED", DOWNLOAD_CANCELED as i64),
+        ];
+        let theirs = header_constants(header);
+        // A constant added to the header without a mirror here fails the test.
+        for (name, value) in &theirs {
+            let mine = ours.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("{name} is not in ffi.rs"));
+            assert_eq!(mine.1, *value, "{name}");
+        }
+        assert_eq!(theirs.len(), ours.len(), "a constant in ffi.rs is gone from baa.h");
     }
 }
