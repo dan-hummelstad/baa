@@ -1,0 +1,50 @@
+# Weekly: if imputnet/helium-macos has a newer release than chromium/HELIUM_RELEASE,
+# subtree-pull Helium and helium-macos onto a bot branch, open a PR and start the
+# chromium (release) and ci runs on it. No auto-merge: an engine bump gets a human look.
+name: helium-bump
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          NEW=$(gh api repos/imputnet/helium-macos/releases/latest -q .tag_name)
+          if [ "$NEW" = "$(cat chromium/HELIUM_RELEASE)" ]; then echo "Helium $NEW is already vendored"; exit 0; fi
+          B=bot/helium-$NEW
+          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "$B exists; a PR is open already"; exit 0; fi
+          HELIUM=$(gh api "repos/imputnet/helium-macos/contents/helium-chromium?ref=$NEW" -q .sha)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$B"
+          fail() { echo "::error::$1. Take the release by hand: see 'Taking a Helium release' in PLAN-chromium.md (branch $B is not pushed)"; exit 1; }
+          git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git "$HELIUM" --squash -m "chromium: vendor imputnet/helium $HELIUM (for $NEW)" \
+            || fail "helium subtree pull conflicted"
+          git subtree pull --prefix chromium/helium-macos https://github.com/imputnet/helium-macos.git "$NEW" --squash -m "chromium: vendor imputnet/helium-macos $NEW" \
+            || fail "helium-macos subtree pull conflicted"
+          git rm -q --cached chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules 2>/dev/null || true
+          echo "$NEW" > chromium/HELIUM_RELEASE
+          git add chromium/HELIUM_RELEASE
+          git commit -q -m "chromium: Helium $NEW"
+          git push origin "$B"
+          gh pr create --base "$GITHUB_REF_NAME" --head "$B" --title "chromium: Helium $NEW" \
+            --body "https://github.com/imputnet/helium-macos/releases/tag/$NEW. Merge when chromium.yml (release) and ci.yml are green on this branch."
+          # PRs opened by GITHUB_TOKEN start no workflows, so start both here.
+          gh workflow run chromium.yml --ref "$B" -f mode=release
+          gh workflow run ci.yml --ref "$B"
