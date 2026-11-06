@@ -7,7 +7,7 @@ use crate::{
     pages::{self, Page},
     settings::Row as SettingRow,
 };
-use baa_model::{parse_suggestions, HistoryItem, Session, Settings, SpaceId, TabId};
+use baa_model::{HistoryItem, Session, Settings, SpaceId, TabId};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
 
@@ -406,7 +406,7 @@ pub(crate) fn refresh_history<H: WebHost>(this: &mut Browser<H>) {
     }
 }
 
-/// Asks the search engine for suggestions once typing pauses; answers for
+/// Asks Chrome's omnibox for suggestions once typing pauses; answers for
 /// text that has since changed are dropped.
 fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Browser<H>>) {
     let profile = this.active_space().map(|s| s.profile);
@@ -414,39 +414,35 @@ fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Brows
     bar.seq += 1;
     let seq = bar.seq;
     let query = bar.field.text.trim().to_string();
-    let url = (this.settings.search_suggest && !query.is_empty() && !query.contains("://") && !pages::looks_like_page(&query))
-        .then(|| this.settings.suggest_url(&query))
-        .flatten();
-    let (Some(url), Some(profile)) = (url, profile) else {
+    let wanted = this.settings.search_suggest && !query.is_empty() && !query.contains("://") && !pages::looks_like_page(&query);
+    let (true, Some(profile)) = (wanted, profile) else {
         bar.suggestions.clear();
         return;
     };
     cx.spawn(async move |this, cx| {
         cx.background_executor().timer(SUGGEST_DELAY).await;
-        let async_cx = cx.clone();
         let weak = this.clone();
         let _ = this.update(cx, |browser, _| {
             if browser.bar.as_ref().is_none_or(|bar| bar.seq != seq) {
                 return;
             }
-            browser.host.fetch(
+            let typed = query.clone();
+            browser.host.autocomplete(
                 profile,
-                &url,
-                Box::new(move |body| {
-                    let found = body
-                        .map(|body| parse_suggestions(&body, &query, MAX_SUGGESTIONS))
-                        .unwrap_or_default();
-                    // Later, not inside whatever update called us back.
-                    async_cx
-                        .spawn(async move |cx| {
-                            let _ = weak.update(cx, |browser, cx| {
-                                if let Some(bar) = browser.bar.as_mut().filter(|bar| bar.seq == seq) {
-                                    bar.suggestions = found;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .detach();
+                &query,
+                Box::new(move |matches, cx| {
+                    let found: Vec<String> = matches
+                        .into_iter()
+                        .filter(|m| m.search && !m.text.eq_ignore_ascii_case(&typed))
+                        .take(MAX_SUGGESTIONS)
+                        .map(|m| m.text)
+                        .collect();
+                    let _ = weak.update(cx, |browser, cx| {
+                        if let Some(bar) = browser.bar.as_mut().filter(|bar| bar.seq == seq) {
+                            bar.suggestions = found;
+                            cx.notify();
+                        }
+                    });
                 }),
             );
         });

@@ -79,7 +79,6 @@ pub(super) struct Dispatch {
     pending: RefCell<Vec<Pending>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
-    pub(super) fetches: Waiting<Box<dyn FnOnce(Option<String>)>>,
     pub(super) clears: Waiting<Callback<()>>,
     pub(super) unpacked: Waiting<Callback<Result<String, String>>>,
     next_seq: Cell<u64>,
@@ -96,7 +95,6 @@ impl Dispatch {
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
-            fetches: Waiting::new(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
             next_seq: Cell::new(0),
@@ -346,18 +344,21 @@ pub(super) fn callbacks() -> Callbacks {
             d.queue(move |_| (d.core.dialog_answer)(id, quitting, c"".as_ptr()));
             return;
         }
-        d.on_page(tab, move |page, cx| {
-            page.shared.dialog.set(Some(id));
-            cx.emit(PageEvent::Dialog { kind, message, default_text });
+        d.on_page(tab, move |_, cx| {
+            cx.emit(PageEvent::Dialog(crate::Dialog {
+                id,
+                kind,
+                message,
+                default_text,
+                title: String::new(),
+                ok_label: String::new(),
+                cancel_label: String::new(),
+                check_label: String::new(),
+            }));
         });
     }
     extern "C" fn dialog_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
-        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| {
-            if page.shared.dialog.get() == Some(id) {
-                page.shared.dialog.set(None);
-            }
-            cx.emit(PageEvent::DialogClosed);
-        });
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
     }
     extern "C" fn tab_closed(ctx: *mut c_void, tab: *mut Tab) {
         unsafe { dispatch(ctx) }.tab_closed(tab);
@@ -373,7 +374,7 @@ pub(super) fn callbacks() -> Callbacks {
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
     }
     extern "C" fn permission_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionDismissed(id)));
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
     }
     extern "C" fn context_menu(
         ctx: *mut c_void,
@@ -389,7 +390,7 @@ pub(super) fn callbacks() -> Callbacks {
     extern "C" fn download(ctx: *mut c_void, tab: *mut Tab, download: *const ffi::Download) {
         let download = unsafe { &*download };
         let download = crate::Download {
-            id: download.id,
+            id: u64::from(download.id),
             url: unsafe { from_c(download.url) },
             path: unsafe { from_c(download.path) },
             received_bytes: download.received_bytes,
@@ -415,17 +416,8 @@ pub(super) fn callbacks() -> Callbacks {
             }
         });
     }
-    extern "C" fn fetch_done(ctx: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize) {
-        let body = (ok && !body.is_null())
-            .then(|| String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(body.cast::<u8>(), len) }).into_owned());
-        let d = unsafe { dispatch(ctx) };
-        d.queue(move |_| {
-            let done = d.fetches.take(id);
-            if let Some(done) = done {
-                done(body);
-            }
-        });
-    }
+    // ABI 5 still has the slot; nothing calls it once `fetch` is gone.
+    extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
     extern "C" fn clear_done(ctx: *mut c_void, id: u64) {
         unsafe { dispatch(ctx) }.finish_clear(id);
     }

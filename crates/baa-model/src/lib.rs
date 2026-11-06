@@ -11,7 +11,7 @@ mod store;
 
 pub use permission::{Permission, PermissionState};
 pub use settings::{
-    parse_suggestions, ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
+    ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
     SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
 };
 pub use store::{DownloadRecord, HistoryItem, Store};

@@ -12,7 +12,6 @@ pub const PREFS_OFF: &[&str] = &[
     "alternate_error_pages.enabled",
     "enable_a_ping",
     "safebrowsing.enabled",
-    "search.suggest_enabled",
     "spellcheck.use_spelling_service",
     "translate.enabled",
     "url_keyed_anonymized_data_collection.enabled",

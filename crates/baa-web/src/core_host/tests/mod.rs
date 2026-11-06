@@ -26,7 +26,7 @@ use super::{
     *,
 };
 use crate::{
-    DialogKind, DownloadState, ExtensionChange, MenuItem, PageEvent, PageHandle, Permission, PermissionState,
+    Dialog, DialogAnswer, DialogKind, DownloadState, ExtensionChange, MenuItem, PageEvent, PageHandle, Permission, PermissionState,
     ProfileId, SiteAccess, WebHost,
 };
 
@@ -330,8 +330,6 @@ impl FakeExtension {
         (raw, strings)
     }
 }
-
-type Fetched = (u32, Option<String>);
 
 struct Root;
 

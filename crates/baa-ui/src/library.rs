@@ -413,7 +413,7 @@ impl<H: WebHost> Browser<H> {
             let (_, _, icon_name) = file_kind(&d.path);
             let row = self
                 .library_row(
-                    ("library-running", id as u64),
+                    ("library-running", id),
                     icon(icon_name, 24., theme.ink_muted).into_any_element(),
                     (file_name(&d.path), crate::prompts::bytes(d.received_bytes)),
                     false,
@@ -422,7 +422,7 @@ impl<H: WebHost> Browser<H> {
                 )
                 .child(
                     div()
-                        .id(("library-cancel", id as u64))
+                        .id(("library-cancel", id))
                         .size(px(22.))
                         .flex()
                         .items_center()

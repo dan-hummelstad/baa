@@ -274,11 +274,12 @@ impl PageHandle for CorePage {
         // Ids are global; one Chrome no longer waits on does nothing.
         (self.dispatch.core.permission_answer)(id, allow);
     }
-    fn answer_dialog(&self, ok: bool, text: &str) {
-        if let Some(id) = self.shared.dialog.take() {
-            (self.dispatch.core.dialog_answer)(id, ok, c_string(text).as_ptr());
-        }
+    fn answer_dialog(&self, id: u64, answer: crate::DialogAnswer) {
+        (self.dispatch.core.dialog_answer)(id, answer.ok, c_string(&answer.text).as_ptr());
     }
+    // ponytail: ABI 5 has neither; WP-R2 fills them.
+    fn exit_fullscreen(&self) {}
+    fn set_group(&self, _group: Option<(u64, &str)>) {}
     fn print(&self) {
         self.shared.run(|core, tab| (core.tab_print)(tab));
     }

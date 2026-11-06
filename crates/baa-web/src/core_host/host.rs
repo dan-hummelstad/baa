@@ -268,14 +268,8 @@ impl WebHost for CoreWebHost {
         list
     }
 
-    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
-        let handle = self.profile_handle(profile);
-        if handle.is_null() {
-            return done(None);
-        }
-        let id = self.dispatch.fetches.add(done);
-        (self.core.profile_fetch)(handle, c_string(url).as_ptr(), id);
-    }
+    // ponytail: ABI 5 has no omnibox entry point; WP-R2 wires `update` to baa_profile_autocomplete.
+    fn autocomplete(&self, _profile: ProfileId, _text: &str, _update: crate::SuggestUpdate) {}
 
     fn downloads(&self) -> Entity<Downloads> {
         self.downloads.clone()
@@ -285,8 +279,8 @@ impl WebHost for CoreWebHost {
         self.chrome_tabs.clone()
     }
 
-    fn cancel_download(&self, id: u32) {
-        (self.core.download_cancel)(id);
+    fn cancel_download(&self, id: u64) {
+        (self.core.download_cancel)(id as u32);
     }
 
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {

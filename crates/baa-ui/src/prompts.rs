@@ -32,6 +32,7 @@ pub(crate) struct PermissionAsk {
 }
 
 pub(crate) struct DialogAsk {
+    pub id: u64,
     pub kind: DialogKind,
     pub message: String,
     /// The prompt's answer; unused (but still taking Enter/Escape) otherwise.
@@ -185,21 +186,24 @@ impl<H: WebHost> Browser<H> {
                 });
                 self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
             }
-            PageEvent::PermissionDismissed(id) => asks.permissions.retain(|a| a.id != *id),
-            PageEvent::Dialog { kind, message, default_text } => {
+            PageEvent::Dialog(d) => {
                 asks.dialog = Some(DialogAsk {
-                    kind: *kind,
-                    message: message.clone(),
-                    field: TextField::selected(default_text.clone()),
+                    id: d.id,
+                    kind: d.kind,
+                    message: d.message.clone(),
+                    field: TextField::selected(d.default_text.clone()),
                 });
                 if Some(tab) == self.active_tab() && self.bar.is_none() {
                     window.focus(&self.input_focus, cx);
                 }
             }
-            PageEvent::DialogClosed => {
-                asks.dialog = None;
-                if Some(tab) == self.active_tab() {
-                    self.close_overlays(window, cx);
+            PageEvent::AskClosed(id) => {
+                asks.permissions.retain(|a| a.id != *id);
+                if asks.dialog.as_ref().is_some_and(|d| d.id == *id) {
+                    asks.dialog = None;
+                    if Some(tab) == self.active_tab() {
+                        self.close_overlays(window, cx);
+                    }
                 }
             }
             PageEvent::AudibleChanged(on) => {
@@ -242,7 +246,7 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         if let Some((page, _)) = self.pages.get(&tab) {
-            page.read(cx).answer_dialog(ok, &dialog.field.text);
+            page.read(cx).answer_dialog(dialog.id, baa_web::DialogAnswer { ok, text: dialog.field.text, ..Default::default() });
         }
         self.close_overlays(window, cx);
     }
@@ -516,7 +520,13 @@ impl<H: WebHost> Browser<H> {
                     Some("Stay"),
                 ),
                 DialogKind::Alert => (format!("{} says", site_name(&url)), dialog.message.clone(), "OK", None),
-                DialogKind::Confirm | DialogKind::Prompt => {
+                // ponytail: WP-U1 gives Chrome's own dialogs their sheets.
+                DialogKind::Confirm
+                | DialogKind::Prompt
+                | DialogKind::Auth
+                | DialogKind::ExternalProtocol
+                | DialogKind::Unresponsive
+                | DialogKind::ExtensionInstall => {
                     (format!("{} says", site_name(&url)), dialog.message.clone(), "OK", Some("Cancel"))
                 }
             };
@@ -722,7 +732,7 @@ impl<H: WebHost> Browser<H> {
             .rev()
             .map(|d| {
                 let id = d.id;
-                let key = ("download-row", id as u64);
+                let key = ("download-row", id);
                 let h = self.motion.get(key, Feel::Hover);
                 let path = std::path::PathBuf::from(&d.path);
                 let done = d.state == DownloadState::Complete;
@@ -731,7 +741,7 @@ impl<H: WebHost> Browser<H> {
                 let open_path = path.clone();
                 let trailing = if running {
                     div()
-                        .id(("download-cancel", id as u64))
+                        .id(("download-cancel", id))
                         .size(px(24.))
                         .flex()
                         .items_center()
@@ -747,7 +757,7 @@ impl<H: WebHost> Browser<H> {
                 } else if done {
                     let reveal = path.clone();
                     div()
-                        .id(("download-reveal", id as u64))
+                        .id(("download-reveal", id))
                         .size(px(24.))
                         .flex()
                         .items_center()
@@ -764,7 +774,7 @@ impl<H: WebHost> Browser<H> {
                     div().into_any_element()
                 };
                 let row = div()
-                    .id(("download", id as u64))
+                    .id(("download", id))
                     .h(px(46.))
                     .px(px(8.))
                     .flex()
@@ -821,7 +831,7 @@ impl<H: WebHost> Browser<H> {
             )
             .child(button("downloads-clear", "Clear", false, theme, self, cx).on_click(cx.listener(
                 |this, _, window, cx| {
-                    let done: Vec<u32> = this
+                    let done: Vec<u64> = this
                         .visible_downloads(cx)
                         .iter()
                         .filter(|d| d.state != DownloadState::InProgress)

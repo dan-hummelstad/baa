@@ -198,7 +198,6 @@ struct Shared {
     container: native::Container,
     /// Null once the tab is gone (Chrome closed it, or baa did).
     tab: Cell<*mut Tab>,
-    dialog: Cell<Option<u64>>,
     /// The view a mouse drag started on, and whether the pointer is over the
     /// page; across frames, so a repaint mid-click loses nothing.
     drag: Cell<Option<*mut AnyObject>>,
@@ -229,7 +228,6 @@ impl Shared {
             profile,
             container: native::Container::new(gpui_view, state.view, corner_radius),
             tab: Cell::new(tab),
-            dialog: Cell::new(None),
             drag: Cell::new(None),
             inside: Cell::new(false),
         });

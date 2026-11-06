@@ -134,7 +134,7 @@ pub struct Browser<H: WebHost> {
     /// Header popovers: the download list, the site's settings.
     pub(crate) popover: Option<crate::prompts::Popover>,
     /// Downloads the user cleared from the list.
-    pub(crate) cleared_downloads: HashSet<u32>,
+    pub(crate) cleared_downloads: HashSet<u64>,
     pub(crate) downloads_seen: usize,
     /// The settings window, once opened (it may since have been closed).
     pub(crate) settings_window: Option<WindowHandle<crate::settings::SettingsView<H>>>,
@@ -144,7 +144,7 @@ pub struct Browser<H: WebHost> {
     /// Finished downloads, newest first, kept across launches.
     pub(crate) saved_downloads: Vec<DownloadRecord>,
     /// This session's downloads already saved.
-    pub(crate) recorded_downloads: HashSet<u32>,
+    pub(crate) recorded_downloads: HashSet<u64>,
     /// A short confirmation at the bottom of the window, and how many so far.
     pub(crate) toast: Option<SharedString>,
     pub(crate) toasts: u64,
@@ -512,10 +512,11 @@ impl<H: WebHost> Browser<H> {
                 return self.toggle_devtools(Some((*x, *y)), window, cx);
             }
             PageEvent::PermissionRequested { .. }
-            | PageEvent::PermissionDismissed(_)
-            | PageEvent::Dialog { .. }
-            | PageEvent::DialogClosed
+            | PageEvent::AskClosed(_)
+            | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
+            // ponytail: WP-U3/U4 handle these.
+            PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) | PageEvent::GroupChanged { .. } => return,
             // A tab opened only to fetch a file has nothing to show: it goes.
             PageEvent::DownloadStarted => {
                 let blank = tab.title.is_empty()

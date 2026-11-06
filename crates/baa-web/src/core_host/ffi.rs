@@ -199,6 +199,7 @@ pub struct Core {
     pub profile_site_rules: extern "C" fn(*mut Profile, u32, SiteRuleVisitor, *mut c_void) -> c_int,
     pub profile_set_site_rule: extern "C" fn(*mut Profile, u32, *const c_char, c_int) -> bool,
     pub profile_clear_data: extern "C" fn(*mut Profile, u64, i64, u32),
+    #[allow(dead_code)] // ABI 5 slot; WP-R1 drops it with the header
     pub profile_fetch: extern "C" fn(*mut Profile, *const c_char, u64),
     pub profile_extensions: extern "C" fn(*mut Profile, ExtensionVisitor, *mut c_void) -> c_int,
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,

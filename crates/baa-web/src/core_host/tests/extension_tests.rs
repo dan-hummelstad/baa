@@ -80,21 +80,3 @@ fn a_popup_url_names_its_extension() {
     assert_eq!(extensions::id_of("https://abc/popup.html"), None);
     assert_eq!(extensions::id_of("chrome-extension:///x"), None);
 }
-
-#[gpui::test]
-fn each_fetch_answers_its_own_closure_once(cx: &mut TestAppContext) {
-    let env = Env::new(cx);
-    let got: Rc<RefCell<Vec<Fetched>>> = Rc::default();
-    for n in 0..2u32 {
-        let sink = got.clone();
-        env.host.fetch(ProfileId(1), &format!("https://s.test/{n}"), Box::new(move |body| sink.borrow_mut().push((n, body))));
-    }
-    assert_eq!(calls("profile_fetch"), ["profile_fetch https://s.test/0 1", "profile_fetch https://s.test/1 2"]);
-
-    (env.callbacks.fetch_done)(env.ctx(), 2, false, std::ptr::null(), 0);
-    (env.callbacks.fetch_done)(env.ctx(), 1, true, c"[1,2]".as_ptr(), 5);
-    (env.callbacks.fetch_done)(env.ctx(), 1, true, c"again".as_ptr(), 5);
-    assert!(got.borrow().is_empty(), "not inside the callback");
-    cx.run_until_parked();
-    assert_eq!(*got.borrow(), [(1, None), (0, Some("[1,2]".to_string()))], "id 2 was fetch 1; a repeated id does nothing");
-}

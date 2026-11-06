@@ -35,13 +35,55 @@ pub enum DialogKind {
     Confirm,
     Prompt,
     BeforeUnload { is_reload: bool },
+    /// HTTP auth: a username and a password field.
+    Auth,
+    /// A link wants an app (mailto:, zoommtg:).
+    ExternalProtocol,
+    /// The page stopped responding: OK ends it, Cancel waits.
+    Unresponsive,
+    /// An extension asks to be added, re-enabled, or for more permissions.
+    ExtensionInstall,
+}
+
+/// A question the page or Chrome waits on, until [`PageHandle::answer_dialog`]
+/// or [`PageEvent::AskClosed`]. JS dialogs leave `title` and the labels empty.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dialog {
+    pub id: u64,
+    pub kind: DialogKind,
+    pub message: String,
+    pub default_text: String,
+    pub title: String,
+    pub ok_label: String,
+    pub cancel_label: String,
+    /// Empty: no checkbox.
+    pub check_label: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DialogAnswer {
+    pub ok: bool,
+    /// A prompt's text, or the username.
+    pub text: String,
+    pub password: String,
+    pub checked: bool,
+}
+
+/// One of Chrome's omnibox matches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    pub url: String,
+    pub text: String,
+    pub description: String,
+    /// A search or calculator result, not a page.
+    pub search: bool,
 }
 
 /// A snapshot of one download.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Download {
     /// Stable across updates of the same download for the life of the process.
-    pub id: u32,
+    pub id: u64,
     pub url: String,
     /// Empty until the destination is chosen.
     pub path: String,
@@ -74,10 +116,18 @@ pub enum PageEvent {
     Closed,
     /// The site waits until [`PageHandle::answer_permission`].
     PermissionRequested { id: u64, origin: String, kinds: Vec<Permission> },
-    PermissionDismissed(u64),
-    /// The page is paused until [`PageHandle::answer_dialog`].
-    Dialog { kind: DialogKind, message: String, default_text: String },
-    DialogClosed,
+    Dialog(Dialog),
+    /// The permission ask or dialog `id` went away unanswered.
+    AskClosed(u64),
+    /// The page went fullscreen, or left it. While on, the UI shows the page alone.
+    Fullscreen(bool),
+    /// Find in page: the active match (1-based, 0 for none) and the count so far.
+    FindResult { active: u32, total: u32 },
+    /// The renderer is gone; `reload` brings it back.
+    Crashed(bool),
+    /// An extension put the tab in group `group` (a key from `set_group`, or a
+    /// new one) titled `title`, or took it out (`None`).
+    GroupChanged { group: Option<u64>, title: String },
     AudibleChanged(bool),
     /// This page started a download (it lands in the host's [`Downloads`]).
     DownloadStarted,
@@ -134,7 +184,12 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn open_devtools(&self, inspect_at: Option<(i32, i32)>);
     fn answer_permission(&self, id: u64, allow: bool);
     /// OK (with the prompt's text) or Cancel; for "leave site?", OK leaves.
-    fn answer_dialog(&self, ok: bool, text: &str);
+    fn answer_dialog(&self, id: u64, answer: DialogAnswer);
+    /// The user left page fullscreen through the app (window left macOS fullscreen, Space switch).
+    fn exit_fullscreen(&self);
+    /// Chrome's tab group for this tab, so extensions see its folder; `None`
+    /// takes it out. The UI's keys keep the top bit clear.
+    fn set_group(&self, group: Option<(u64, &str)>);
     fn print(&self);
     fn set_muted(&self, muted: bool);
     /// Arrived over valid TLS.
@@ -185,15 +240,16 @@ pub trait WebHost: 'static {
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>);
     /// Extensions installed in `profile`, for the toolbar.
     fn extensions(&self, profile: ProfileId) -> Vec<Extension>;
-    /// GETs `url` through `profile`'s network stack (search suggestions);
-    /// `done` gets the body, or `None`. Called on the main thread.
-    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>);
+    /// Chrome's omnibox matches for `text` in `profile`, best first. `update`
+    /// runs each time the list improves; the next call (or empty `text`) ends
+    /// the previous one, whose `update` is dropped.
+    fn autocomplete(&self, profile: ProfileId, text: &str, update: SuggestUpdate);
     /// The download tray's data; observe it for updates.
     fn downloads(&self) -> Entity<Downloads>;
     /// Pages Chrome itself wanted open (an extension's `chrome.tabs.create`);
     /// observe it and take them as tabs.
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
-    fn cancel_download(&self, id: u32);
+    fn cancel_download(&self, id: u64);
     /// What `profile` remembers about `kind` for `url`'s site.
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState;
     fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState);
@@ -246,6 +302,9 @@ pub struct ClearData {
     pub site_data: bool,
     pub cache: bool,
 }
+
+/// What [`WebHost::autocomplete`] calls with each better list, on the main thread.
+pub type SuggestUpdate = Box<dyn FnMut(Vec<Suggestion>, &mut App)>;
 
 /// Called once with the answer, on the main thread.
 pub type Callback<T> = Box<dyn FnOnce(T, &mut App)>;

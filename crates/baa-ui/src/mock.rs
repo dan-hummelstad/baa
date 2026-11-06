@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use baa_web::{Downloads, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
+use baa_web::{DialogAnswer, Downloads, Suggestion, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
 use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
 
 pub type RuleSet = (ProfileId, Permission, String, Option<PermissionState>);
@@ -12,8 +12,9 @@ pub struct MockHost {
     pub downloads: Entity<Downloads>,
     pub permissions: RefCell<Vec<(String, Permission, PermissionState)>>,
     pub deleted: RefCell<Vec<ProfileId>>,
-    pub fetched: RefCell<Vec<String>>,
-    pub suggest_body: RefCell<Option<String>>,
+    /// The text of each `autocomplete`; `suggest` runs the last one's `update`.
+    pub autocompletes: RefCell<Vec<String>>,
+    update: std::rc::Rc<RefCell<Option<baa_web::SuggestUpdate>>>,
     pub extensions: RefCell<Vec<baa_web::Extension>>,
     pub chrome_tabs: Entity<baa_web::ChromeTabs>,
     pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
@@ -52,6 +53,10 @@ pub struct MockPage {
     pub muted: Cell<bool>,
     /// What the UI answered the page, in order.
     pub answers: RefCell<Vec<String>>,
+    pub answered: RefCell<Vec<(u64, DialogAnswer)>>,
+    /// Each `set_group`.
+    pub groups: RefCell<Vec<Option<(u64, String)>>>,
+    pub exited_fullscreen: Cell<u32>,
     pub focus: FocusHandle,
 }
 
@@ -93,8 +98,14 @@ impl PageHandle for MockPage {
     fn answer_permission(&self, id: u64, allow: bool) {
         self.answers.borrow_mut().push(format!("permission {id} {allow}"));
     }
-    fn answer_dialog(&self, ok: bool, text: &str) {
-        self.answers.borrow_mut().push(format!("dialog {ok} {text}"));
+    fn answer_dialog(&self, id: u64, answer: DialogAnswer) {
+        self.answered.borrow_mut().push((id, answer));
+    }
+    fn exit_fullscreen(&self) {
+        self.exited_fullscreen.set(self.exited_fullscreen.get() + 1);
+    }
+    fn set_group(&self, group: Option<(u64, &str)>) {
+        self.groups.borrow_mut().push(group.map(|(key, title)| (key, title.into())));
     }
     fn print(&self) {}
     fn set_muted(&self, muted: bool) {
@@ -132,14 +143,28 @@ impl PageHandle for MockPage {
 }
 
 impl MockHost {
+    /// Chrome improves the list of the last `autocomplete`. Deferred: the browser
+    /// that owns this host is being updated when a test calls it.
+    pub fn suggest(&self, list: Vec<Suggestion>, cx: &mut App) {
+        let slot = self.update.clone();
+        cx.defer(move |cx| {
+            let update = slot.borrow_mut().take();
+            if let Some(mut update) = update {
+                update(list, cx);
+                // Unless `update` itself started a newer query.
+                slot.borrow_mut().get_or_insert(update);
+            }
+        });
+    }
+
     pub fn new(cx: &mut App) -> Self {
         Self {
             created: RefCell::default(),
             downloads: cx.new(|_| Downloads::default()),
             permissions: RefCell::default(),
             deleted: RefCell::default(),
-            fetched: RefCell::default(),
-            suggest_body: RefCell::default(),
+            autocompletes: RefCell::default(),
+            update: Default::default(),
             extensions: RefCell::default(),
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
             extension_details: RefCell::default(),
@@ -190,6 +215,9 @@ impl WebHost for MockHost {
             floating: Cell::new(false),
             muted: Cell::new(false),
             answers: RefCell::default(),
+            answered: RefCell::default(),
+            groups: RefCell::default(),
+            exited_fullscreen: Cell::default(),
             focus: cx.focus_handle(),
         })
     }
@@ -235,9 +263,9 @@ impl WebHost for MockHost {
     fn extensions(&self, _: ProfileId) -> Vec<baa_web::Extension> {
         self.extensions.borrow().clone()
     }
-    fn fetch(&self, _: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
-        self.fetched.borrow_mut().push(url.into());
-        done(self.suggest_body.borrow().clone())
+    fn autocomplete(&self, _: ProfileId, text: &str, update: baa_web::SuggestUpdate) {
+        self.autocompletes.borrow_mut().push(text.into());
+        *self.update.borrow_mut() = Some(update);
     }
     fn downloads(&self) -> Entity<Downloads> {
         self.downloads.clone()
@@ -245,7 +273,7 @@ impl WebHost for MockHost {
     fn chrome_tabs(&self) -> Entity<baa_web::ChromeTabs> {
         self.chrome_tabs.clone()
     }
-    fn cancel_download(&self, _: u32) {}
+    fn cancel_download(&self, _: u64) {}
     fn site_permission(&self, _: ProfileId, url: &str, kind: Permission) -> PermissionState {
         self.permissions
             .borrow()

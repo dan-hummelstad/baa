@@ -122,7 +122,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::PreferredSize(size) => return self.fit_popup(*size, cx),
             // ponytail: Peek has no room for prompts and an unanswered one
             // freezes the page; opening it as a tab gets them.
-            PageEvent::Dialog { .. } => peek.page.read(cx).answer_dialog(false, ""),
+            PageEvent::Dialog(d) => peek.page.read(cx).answer_dialog(d.id, Default::default()),
             PageEvent::PermissionRequested { id, .. } => peek.page.read(cx).answer_permission(*id, false),
             _ => {}
         }

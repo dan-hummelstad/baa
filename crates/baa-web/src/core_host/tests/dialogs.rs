@@ -1,7 +1,7 @@
 use super::*;
 
 #[gpui::test]
-fn dialogs_are_answered_once(cx: &mut TestAppContext) {
+fn dialogs_carry_their_id_to_answer_and_close(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let page = env.page(1, "https://a.test", cx);
     let tab = env.tab_of(&page, cx);
@@ -11,20 +11,24 @@ fn dialogs_are_answered_once(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         *seen.borrow(),
-        [PageEvent::Dialog { kind: DialogKind::Confirm, message: "Sure?".into(), default_text: String::new() }]
+        [PageEvent::Dialog(Dialog {
+            id: 7,
+            kind: DialogKind::Confirm,
+            message: "Sure?".into(),
+            default_text: String::new(),
+            title: String::new(),
+            ok_label: String::new(),
+            cancel_label: String::new(),
+            check_label: String::new(),
+        })]
     );
-    page.read_with(cx, |page, _| {
-        page.answer_dialog(true, "yes");
-        page.answer_dialog(false, "");
-    });
+    page.read_with(cx, |page, _| page.answer_dialog(7, DialogAnswer { ok: true, text: "yes".into(), ..Default::default() }));
     assert_eq!(calls("dialog_answer"), ["dialog_answer 7 true yes"]);
 
     (env.callbacks.dialog)(env.ctx(), tab, 8, 0, c"Hi".as_ptr(), c"".as_ptr());
     (env.callbacks.dialog_closed)(env.ctx(), tab, 8);
     cx.run_until_parked();
-    assert_eq!(seen.borrow().last(), Some(&PageEvent::DialogClosed));
-    page.read_with(cx, |page, _| page.answer_dialog(true, ""));
-    assert_eq!(calls("dialog_answer").len(), 1, "the page went away first");
+    assert_eq!(seen.borrow().last(), Some(&PageEvent::AskClosed(8)));
 }
 
 #[gpui::test]
@@ -45,7 +49,7 @@ fn permissions_arrive_in_bit_order_and_are_answered_through_chrome(cx: &mut Test
                 origin: "https://a.test".into(),
                 kinds: vec![Permission::Camera, Permission::Microphone, Permission::Other],
             },
-            PageEvent::PermissionDismissed(5),
+            PageEvent::AskClosed(5),
         ]
     );
     page.read_with(cx, |page, _| page.answer_permission(6, true));
@@ -66,7 +70,7 @@ fn beforeunload_kinds_and_the_quit_fallback(cx: &mut TestAppContext) {
         .borrow()
         .iter()
         .map(|e| match e {
-            PageEvent::Dialog { kind, .. } => *kind,
+            PageEvent::Dialog(d) => d.kind,
             _ => unreachable!(),
         })
         .collect();

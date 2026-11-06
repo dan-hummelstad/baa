@@ -408,21 +408,18 @@ fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn typing_fetches_suggestions_once_it_pauses(cx: &mut TestAppContext) {
+fn typing_asks_chrome_for_matches_once_it_pauses(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
-    b.read_with(cx, |b, _| {
-        *b.host.suggest_body.borrow_mut() = Some(r#"["gh",["gh cli","gh pages"]]"#.into())
-    });
     cx.simulate_keystrokes("secondary-t");
     cx.simulate_input("gh");
     cx.executor().advance_clock(std::time::Duration::from_millis(200));
     cx.run_until_parked();
-    b.read_with(cx, |b, _| {
-        // One request for the settled text, not one per keystroke.
-        assert_eq!(b.host.fetched.borrow().len(), 1);
-        assert!(b.host.fetched.borrow()[0].contains("q=gh"));
-        assert_eq!(b.bar.as_ref().unwrap().suggestions, ["gh cli", "gh pages"]);
-    });
+    // One request for the settled text, not one per keystroke.
+    b.read_with(cx, |b, _| assert_eq!(*b.host.autocompletes.borrow(), ["gh"]));
+    let m = |text: &str, search| baa_web::Suggestion { url: String::new(), text: text.into(), description: String::new(), search };
+    b.update(cx, |b, cx| b.host.suggest(vec![m("gh cli", true), m("github.com", false), m("gh pages", true)], cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().suggestions, ["gh cli", "gh pages"]));
     cx.simulate_keystrokes("down enter");
     assert_eq!(urls(&b, Zone::Today, cx), ["https://www.google.com/search?q=gh+cli"]);
 }
@@ -513,26 +510,39 @@ fn page_dialogs_take_the_keyboard_and_answer_the_page(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let page = open_page(&b, "a.example", cx);
     page.update(cx, |_, cx| {
-        cx.emit(PageEvent::Dialog {
+        cx.emit(PageEvent::Dialog(baa_web::Dialog {
+            id: 3,
             kind: baa_web::DialogKind::Prompt,
             message: "Name?".into(),
             default_text: "old".into(),
-        })
+            title: String::new(),
+            ok_label: String::new(),
+            cancel_label: String::new(),
+            check_label: String::new(),
+        }))
     });
     cx.run_until_parked();
     // The default text is selected, so typing replaces it.
     cx.simulate_input("sam");
     cx.simulate_keystrokes("enter");
     page.update(cx, |_, cx| {
-        cx.emit(PageEvent::Dialog {
+        cx.emit(PageEvent::Dialog(baa_web::Dialog {
+            id: 4,
             kind: baa_web::DialogKind::Confirm,
             message: "Sure?".into(),
             default_text: String::new(),
-        })
+            title: String::new(),
+            ok_label: String::new(),
+            cancel_label: String::new(),
+            check_label: String::new(),
+        }))
     });
     cx.run_until_parked();
     cx.simulate_keystrokes("escape");
-    page.read_with(cx, |p, _| assert_eq!(*p.answers.borrow(), ["dialog true sam", "dialog false "]));
+    page.read_with(cx, |p, _| {
+        let answer = |ok, text: &str| baa_web::DialogAnswer { ok, text: text.into(), ..Default::default() };
+        assert_eq!(*p.answered.borrow(), [(3, answer(true, "sam")), (4, answer(false, ""))]);
+    });
     b.read_with(cx, |b, _| assert!(b.active_dialog().is_none()));
 }
 
@@ -548,7 +558,7 @@ fn permission_requests_wait_for_an_answer(cx: &mut TestAppContext) {
                 kinds: vec![baa_web::Permission::Camera],
             })
         }
-        cx.emit(PageEvent::PermissionDismissed(8));
+        cx.emit(PageEvent::AskClosed(8));
     });
     cx.run_until_parked();
     b.update(cx, |b, cx| b.answer_permission(true, cx));

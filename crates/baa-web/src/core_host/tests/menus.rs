@@ -100,6 +100,6 @@ fn a_download_is_listed_in_place_and_announced_once(cx: &mut TestAppContext) {
     assert_eq!((items[0].id, items[0].received_bytes, items[0].state), (4, 10, DownloadState::Complete));
     assert_eq!(items[1].state, DownloadState::InProgress);
 
-    env.host.cancel_download(5);
+    env.host.cancel_download(5u64);
     assert_eq!(calls("download_cancel"), ["download_cancel 5"]);
 }
