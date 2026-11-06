@@ -1720,7 +1720,9 @@ impl<H: WebHost> Browser<H> {
 
     fn tick_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32();
+        // Capped: the first frame after an idle stretch would otherwise carry the
+        // whole idle time and finish every spring in one step (no animation).
+        let dt = (now - self.last_frame).as_secs_f32().min(1. / 30.);
         self.last_frame = now;
         let reduce = cx.reduce_motion();
         let mut moving = false;
