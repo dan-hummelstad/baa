@@ -142,7 +142,7 @@ pub struct Browser<H: WebHost> {
     _chrome_tabs: Subscription,
     pub(crate) extensions_page: crate::settings::ExtensionsPage,
     /// The skin last sent to the engine: Space profile and the colours it was made from.
-    skin_sent: Option<(baa_model::ProfileId, u64)>,
+    pub(crate) skin_sent: Option<(baa_model::ProfileId, u64)>,
     /// Back/forward pressed and held: which way, and when.
     pub(crate) nav_press: Option<(bool, Instant)>,
     pub(crate) history_menu: Option<HistoryMenu>,
@@ -165,7 +165,7 @@ pub struct Browser<H: WebHost> {
     pub(crate) slide: Spring,
     fade: Spring,
     gradient_from: (Rgba, Rgba),
-    gradient_to: (Rgba, Rgba),
+    pub(crate) gradient_to: (Rgba, Rgba),
     shown_space: Option<SpaceId>,
     last_frame: Instant,
 }
@@ -184,12 +184,8 @@ impl<H: WebHost> Browser<H> {
             }
         };
         // The extensions page is the settings window's tab now; a restored tab for it has no page.
-        session.drop_tabs(|t| crate::pages::normalize(&t.url).starts_with("baa://extensions"));
         // ponytail: auto-archive runs at launch and on Space switch only; a timer comes with milestone 4.
-        session.archive_expired(now(), settings.archive_after_hours);
-        if !settings.restore_today {
-            session.archive_today(now());
-        }
+        session.on_launch(&settings, now(), |t| crate::pages::route(&t.url) == Some(crate::pages::Route::Extensions));
         host.apply_settings(&settings);
         // Spaces from before gradient themes get the palette, in order.
         let ids: Vec<SpaceId> = session.spaces().iter().map(|s| s.id).collect();
@@ -803,7 +799,9 @@ impl<H: WebHost> Browser<H> {
         };
         match &extension.popup {
             Some(popup) => self.open_preview(space, popup, true, window, cx),
-            None => self.open_extensions(&format!("chrome://extensions/?id={}", extension.id), window, cx),
+            None => {
+                self.open_own_page(&format!("baa://extensions/?id={}", extension.id), window, cx);
+            }
         }
     }
 
@@ -914,7 +912,13 @@ impl<H: WebHost> Browser<H> {
         if self.settings.external_links == baa_model::ExternalLinks::Tab {
             let (url, window, browser) = (url.to_string(), self.window, cx.entity());
             cx.defer(move |cx| {
-                window.update(cx, |_, window, cx| browser.update(cx, |b, cx| b.open_url_in(space, &url, window, cx))).ok();
+                window
+                    .update(cx, |_, window, cx| {
+                        browser.update(cx, |b, cx| b.open_url_in(space, &url, window, cx));
+                        window.activate_window();
+                    })
+                    .ok();
+                cx.activate(true);
             });
             return;
         }
@@ -944,19 +948,6 @@ impl<H: WebHost> Browser<H> {
         if let Err(e) = opened {
             log::error!("opening lil-baa: {e}");
         }
-    }
-
-    /// Tells the engine the skin for the active Space's Chrome pages when it changed.
-    fn push_webui_skin(&mut self) {
-        let Some(profile) = self.active_space().map(|s| s.profile) else { return };
-        let ((top, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
-        let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(ascii as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
-        if self.skin_sent == Some((profile, key)) {
-            return;
-        }
-        self.skin_sent = Some((profile, key));
-        let css = crate::skin::chrome_skin(&Theme::from_gradient(top, bottom));
-        self.host.set_webui_skin(profile, css, ascii);
     }
 
     pub(crate) fn window_handle(&self) -> AnyWindowHandle {
@@ -1057,12 +1048,6 @@ impl<H: WebHost> Browser<H> {
         self.open_bar(Mode::NewTab, window, cx);
     }
 
-    pub(crate) fn delete_active_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.session.active_space() {
-            self.delete_space(id, window, cx);
-        }
-    }
-
     pub(crate) fn delete_space(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.spaces().len() < 2 {
             return;
@@ -1076,12 +1061,6 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// "🐑 Work" sets icon and name; plain "Work" keeps the icon.
-    pub(crate) fn rename_active_space(&mut self, text: &str) {
-        if let Some(id) = self.session.active_space() {
-            self.rename_space(id, text);
-        }
-    }
-
     pub(crate) fn rename_space(&mut self, id: SpaceId, text: &str) {
         let Some(space) = self.session.space_mut(id) else {
             return;
@@ -1100,12 +1079,6 @@ impl<H: WebHost> Browser<H> {
             space.name = name.into();
         }
         self.save();
-    }
-
-    pub(crate) fn cycle_space_color(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.session.active_space() {
-            self.cycle_color_of(id, window, cx);
-        }
     }
 
     pub(crate) fn cycle_color_of(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
@@ -1131,11 +1104,6 @@ impl<H: WebHost> Browser<H> {
             None => unpinned.push(id.into()),
         }
         self.save_settings(cx);
-    }
-
-    /// Chrome's extensions page at `url` (maybe `?id=`), drawn by baa.
-    pub(crate) fn open_extensions(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_own_page(url, window, cx);
     }
 
     pub(crate) fn swap_sidebar_side(&mut self, cx: &mut Context<Self>) {
@@ -1288,7 +1256,11 @@ impl<H: WebHost> Browser<H> {
         match self.renaming_folder.and_then(|id| self.session.folder_mut(id)) {
             Some(folder) if !text.is_empty() => folder.name = text,
             Some(_) => {}
-            None => self.rename_active_space(&text),
+            None => {
+                if let Some(id) = self.session.active_space() {
+                    self.rename_space(id, &text);
+                }
+            }
         }
         self.save();
         self.close_overlays(window, cx);
@@ -2244,14 +2216,14 @@ impl<H: WebHost> Browser<H> {
                 items.push((
                     "Manage Extension",
                     Box::new(move |this, window, cx| {
-                        this.open_extensions(&format!("chrome://extensions/?id={manage}"), window, cx)
+                        this.open_own_page(&format!("baa://extensions/?id={manage}"), window, cx);
                     }),
                 ));
-                // ponytail: no uninstall call; Chrome's page for it has the button.
+                // The settings tab has the Remove button, which asks first.
                 items.push((
                     "Remove…",
                     Box::new(move |this, window, cx| {
-                        this.open_extensions(&format!("chrome://extensions/?id={remove}"), window, cx)
+                        this.open_own_page(&format!("baa://extensions/?id={remove}"), window, cx);
                     }),
                 ));
             }

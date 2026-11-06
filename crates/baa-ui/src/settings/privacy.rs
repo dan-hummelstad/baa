@@ -9,11 +9,8 @@ use gpui::{div, prelude::*, px, AnyElement, Context, SharedString};
 use super::{rows::site_row, Field, Item, SettingsView};
 use crate::{
     browser::{shadow, Browser},
-    theme::{ascii, fade, mix, r, surface},
+    theme::{ascii, fade, r, surface},
 };
-
-const CLOUDFLARE: &str = "https://chrome.cloudflare-dns.com/dns-query";
-const QUAD9: &str = "https://dns.quad9.net/dns-query";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Dns {
@@ -28,8 +25,8 @@ fn dns_of(d: &SecureDns) -> Dns {
     match d {
         SecureDns::Off => Dns::Off,
         SecureDns::Automatic => Dns::Automatic,
-        SecureDns::Custom(t) if t == CLOUDFLARE => Dns::Cloudflare,
-        SecureDns::Custom(t) if t == QUAD9 => Dns::Quad9,
+        SecureDns::Custom(t) if t == SecureDns::CLOUDFLARE => Dns::Cloudflare,
+        SecureDns::Custom(t) if t == SecureDns::QUAD9 => Dns::Quad9,
         SecureDns::Custom(_) => Dns::Custom,
     }
 }
@@ -90,20 +87,10 @@ fn states(kind: Permission) -> Vec<PermissionState> {
         .collect()
 }
 
-/// "example.com" covers its subdomains too; anything with its own syntax stays as typed.
-fn pattern_of(text: &str) -> String {
-    let t = text.trim();
-    if t.is_empty() || t.contains(['[', '*', '/']) {
-        t.to_string()
-    } else {
-        format!("[*.]{t}")
-    }
-}
-
 impl<H: WebHost> SettingsView<H> {
     pub(super) fn privacy(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<Item> {
         let dns = dns_of(&s.web.secure_dns);
-        let template = self.text(Field::DnsTemplate).to_string();
+        let shown = if self.dns_pending { Dns::Custom } else { dns };
         let mut out = vec![
             self.section("Tracking"),
             self.row(
@@ -145,8 +132,8 @@ impl<H: WebHost> SettingsView<H> {
             ),
             self.row(
                 "dns",
-                "",
-                self.segments(
+                "Custom keeps the current mode until its address is valid.",
+                self.segments_with(
                     "pref-dns",
                     vec![
                         (Dns::Off, "Off".into()),
@@ -155,22 +142,30 @@ impl<H: WebHost> SettingsView<H> {
                         (Dns::Quad9, "Quad9".into()),
                         (Dns::Custom, "Custom".into()),
                     ],
-                    dns,
-                    move |v, s| {
-                        s.web.secure_dns = match v {
-                            Dns::Off => SecureDns::Off,
-                            Dns::Automatic => SecureDns::Automatic,
-                            Dns::Cloudflare => SecureDns::Custom(CLOUDFLARE.into()),
-                            Dns::Quad9 => SecureDns::Custom(QUAD9.into()),
-                            Dns::Custom => SecureDns::Custom(template.clone()),
+                    shown,
+                    |this, v, cx| {
+                        this.dns_pending = v == Dns::Custom;
+                        match v {
+                            Dns::Off => this.change(cx, |s| s.web.secure_dns = SecureDns::Off),
+                            Dns::Automatic => this.change(cx, |s| s.web.secure_dns = SecureDns::Automatic),
+                            Dns::Cloudflare => this.change(cx, |s| s.web.secure_dns = SecureDns::Custom(SecureDns::CLOUDFLARE.into())),
+                            Dns::Quad9 => this.change(cx, |s| s.web.secure_dns = SecureDns::Custom(SecureDns::QUAD9.into())),
+                            // Never Custom(""): the address is written when it is valid.
+                            Dns::Custom => {
+                                this.focus_field(Field::DnsTemplate, cx);
+                                this.commit_dns(cx);
+                            }
                         }
+                        cx.notify();
                     },
                     cx,
                 ),
             ),
         ];
-        if dns == Dns::Custom {
-            out.push(self.sub_row("dns-template".into(), "Server address".into_any_element(), self.field(Field::DnsTemplate, "dns-field", "https://…/dns-query", 260., cx)));
+        if shown == Dns::Custom {
+            let text = self.text(Field::DnsTemplate);
+            let hint = if text.is_empty() || SecureDns::valid_template(text) { "Server address" } else { "Needs an https:// address with a host" };
+            out.push(self.sub_row("dns-template".into(), hint.into_any_element(), self.field(Field::DnsTemplate, "dns-field", "https://…/dns-query", 260., cx)));
         }
         out.push(self.section("Data"));
         out.push(self.row(
@@ -247,7 +242,9 @@ impl<H: WebHost> SettingsView<H> {
             out.push(self.row(id, "", control));
             for (m, (pattern, state)) in rules.iter().filter(|(p, _)| p != "*").enumerate() {
                 let (p, p2) = (pattern.clone(), pattern.clone());
-                let buttons = self.state_buttons(kind, Some(*state), "rule", n as u64 * 64 + m as u64, cx, move |this, st, cx| this.set_rule(kind, &p, Some(st), cx));
+                let buttons = self.state_buttons(kind, Some(*state), "rule", n as u64 * 64 + m as u64, cx, move |this, st, cx| {
+                    this.set_rule(kind, &p, Some(st), cx);
+                });
                 let remove = div()
                     .id(("rule-remove", n as u64 * 64 + m as u64))
                     .debug_selector(|| format!("rule-remove:{id}:{p2}"))
@@ -259,7 +256,9 @@ impl<H: WebHost> SettingsView<H> {
                     .hover(|d| d.bg(surface::key()))
                     .on_click({
                         let p = pattern.clone();
-                        cx.listener(move |this, _, _, cx| this.set_rule(kind, &p, None, cx))
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_rule(kind, &p, None, cx);
+                        })
                     })
                     .child(crate::icons::icon("x", 13., surface::icon().into()))
                     .into_any_element();
@@ -270,30 +269,38 @@ impl<H: WebHost> SettingsView<H> {
                 ));
             }
             if self.adding == Some(kind) {
-                let pattern = self.text(Field::SitePattern).to_string();
                 let buttons = self.state_buttons(kind, None, "add-state", n as u64 * 64 + 63, cx, move |this, st, cx| {
-                    let pattern = pattern_of(this.text(Field::SitePattern));
-                    if !pattern.is_empty() {
-                        this.set_rule(kind, &pattern, Some(st), cx);
+                    let pattern = this.text(Field::SitePattern).trim().to_string();
+                    if pattern.is_empty() {
+                        return;
+                    }
+                    if this.set_rule(kind, &pattern, Some(st), cx) {
                         this.field_mut(Field::SitePattern).text.clear();
                         this.adding = None;
+                        this.add_error = None;
+                    } else {
+                        this.add_error = Some(format!("Chrome did not accept \"{pattern}\" as a site."));
                     }
                 });
-                let _ = pattern;
                 out.push(self.sub_row(
                     format!("add-form:{id}"),
                     self.field(Field::SitePattern, "site-pattern", "example.com", 220., cx),
                     buttons,
                 ));
+                if let Some(error) = &self.add_error {
+                    out.push(self.sub_row(format!("add-error:{id}"), SharedString::from(error.clone()).into_any_element(), div().into_any_element()));
+                }
             } else {
                 out.push(self.sub_row(
                     format!("add-rule-row:{id}"),
                     div().into_any_element(),
-                    self.button(add_id(kind), "Add exception", false, cx)
+                    self.button("add-rule", "Add exception", false, cx)
+                        .id(("add-rule", n))
+                        .debug_selector(|| format!("add-rule:{id}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.adding = Some(kind);
-                            this.active = Field::SitePattern;
-                            cx.notify();
+                            this.add_error = None;
+                            this.focus_field(Field::SitePattern, cx);
                         }))
                         .into_any_element(),
                 ));
@@ -303,18 +310,24 @@ impl<H: WebHost> SettingsView<H> {
             "all_sites",
             "Sites that stored data, with how much.",
             self.button("all-sites", "Open", false, cx)
-                .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, |b, w, cx| b.open_url("baa://settings/content/all", w, cx))))
+                .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, true, |b, w, cx| b.open_url("baa://settings/content/all", w, cx))))
                 .into_any_element(),
         ));
         out
     }
 
     /// Writes one rule into the chosen Space's profile, or removes it.
-    pub(crate) fn set_rule(&mut self, kind: Permission, pattern: &str, state: Option<PermissionState>, cx: &mut Context<Self>) {
-        let Some(profile) = self.browser.read(cx).session.space(self.space).map(|s| s.profile) else { return };
-        self.browser.read(cx).host.set_site_rule(profile, kind, pattern, state);
+    pub(crate) fn set_rule(&mut self, kind: Permission, pattern: &str, state: Option<PermissionState>, cx: &mut Context<Self>) -> bool {
+        let Some(profile) = self.browser.read(cx).session.space(self.space).map(|s| s.profile) else { return false };
+        let done = self.browser.read(cx).host.set_site_rule(profile, kind, pattern, state);
         self.rules = self.read_rules(cx);
         cx.notify();
+        done
+    }
+
+    /// Applies the DNS address typed so far, if it is valid.
+    pub(super) fn commit_dns(&mut self, cx: &mut Context<Self>) {
+        self.commit(Field::DnsTemplate, cx);
     }
 
     pub(super) fn render_clear_sheet(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -400,7 +413,7 @@ impl<H: WebHost> SettingsView<H> {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(mix(surface::scrim().into(), surface::scrim().into(), 1.))
+                .bg(surface::scrim())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.clear = None;
                     cx.notify();
@@ -422,34 +435,37 @@ impl<H: WebHost> SettingsView<H> {
     }
 }
 
-fn add_id(kind: Permission) -> &'static str {
-    match kind {
-        Permission::Location => "add-rule:site.location",
-        Permission::Camera => "add-rule:site.camera",
-        Permission::Microphone => "add-rule:site.microphone",
-        Permission::Notifications => "add-rule:site.notifications",
-        Permission::Clipboard => "add-rule:site.clipboard",
-        Permission::Midi => "add-rule:site.midi",
-        Permission::Popups => "add-rule:site.popups",
-        Permission::Sound => "add-rule:site.sound",
-        Permission::JavaScript => "add-rule:site.javascript",
-        Permission::Cookies => "add-rule:site.cookies",
-        Permission::AutomaticDownloads => "add-rule:site.downloads",
-        Permission::InsecureContent => "add-rule:site.insecure",
-        Permission::Sensors => "add-rule:site.sensors",
-        Permission::WindowManagement => "add-rule:site.windows",
-        Permission::Other => "add-rule",
-    }
-}
-
 impl<H: WebHost> Browser<H> {
     /// Clears Chrome's stores for the Spaces' profiles (incognito ones keep nothing) and baa's own records.
+    /// baa's history and download records are not per Space or per profile, so they go once, by
+    /// their last-visit / finish time, whichever Spaces were chosen. The toast waits for Chrome.
     pub(crate) fn clear_browsing_data(&mut self, spaces: &[SpaceId], sheet: ClearSheet, cx: &mut Context<Self>) {
-        let since = sheet.range.duration().map(|d| SystemTime::now() - d);
         let what = ClearData { history: sheet.history, downloads: sheet.downloads, site_data: sheet.site_data, cache: sheet.cache };
+        if what == ClearData::default() {
+            return;
+        }
+        let since = sheet.range.duration().map(|d| SystemTime::now() - d);
         let profiles = self.profiles_of(spaces);
+        let waiting = std::rc::Rc::new(std::cell::Cell::new(profiles.len()));
+        if profiles.is_empty() {
+            self.show_toast("Browsing data cleared", cx);
+        }
         for profile in profiles {
-            self.host.clear_data(profile, since, what, cx, Box::new(|_, _| {}));
+            let (waiting, this) = (waiting.clone(), cx.weak_entity());
+            self.host.clear_data(
+                profile,
+                since,
+                what,
+                cx,
+                Box::new(move |_, cx| {
+                    waiting.set(waiting.get() - 1);
+                    if waiting.get() == 0 {
+                        cx.defer(move |cx| {
+                            this.update(cx, |b, cx| b.show_toast("Browsing data cleared", cx)).ok();
+                        });
+                    }
+                }),
+            );
         }
         let secs = since.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
         if let Some(store) = self.store() {
@@ -463,7 +479,6 @@ impl<H: WebHost> Browser<H> {
         if what.downloads {
             self.saved_downloads = self.store().and_then(|s| s.downloads().ok()).unwrap_or_default();
         }
-        self.show_toast("Browsing data cleared", cx);
     }
 
     /// The profiles of the stored (non-incognito) Spaces among `spaces`, each once.
@@ -493,7 +508,12 @@ impl<H: WebHost> Browser<H> {
                 }
             }
         }
-        self.settings = Settings::default();
+        // The engines and toolbar choices the user made by hand are theirs, not a setting to reset.
+        self.settings = Settings {
+            search_engines: std::mem::take(&mut self.settings.search_engines),
+            unpinned_extensions: std::mem::take(&mut self.settings.unpinned_extensions),
+            ..Settings::default()
+        };
         self.save_settings(cx);
         self.show_toast("Settings reset", cx);
     }

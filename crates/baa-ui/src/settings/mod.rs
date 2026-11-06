@@ -78,6 +78,13 @@ pub(crate) struct SettingsView<H: WebHost> {
     reset: Option<bool>,
     confirm_delete: Option<SpaceId>,
     renaming: bool,
+    /// `is_default_browser`, read when the window opens or regains focus.
+    pub(crate) default_browser: bool,
+    /// Custom DNS chosen, its address not valid yet: the engine keeps the old mode meanwhile.
+    dns_pending: bool,
+    /// Why the exception form could not add its rule.
+    add_error: Option<String>,
+    _activation: Subscription,
 }
 
 pub(crate) fn window_options(cx: &App) -> WindowOptions {
@@ -121,6 +128,7 @@ impl<H: WebHost> Browser<H> {
 
 impl<H: WebHost> SettingsView<H> {
     fn new(browser: Entity<Browser<H>>, tab: Tab, row: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let default_browser = browser.read(cx).host.is_default_browser();
         let (space, theme) = {
             let b = browser.read(cx);
             let first = b.session.spaces().iter().find(|s| !s.ephemeral).map(|s| s.id);
@@ -155,6 +163,10 @@ impl<H: WebHost> SettingsView<H> {
             reset: None,
             confirm_delete: None,
             renaming: false,
+            default_browser,
+            dns_pending: false,
+            add_error: None,
+            _activation: cx.observe_window_activation(window, |this, _, cx| this.on_activate(cx)),
         };
         view.seed_fields(cx);
         view.go_to(Some(tab), row, cx);
@@ -195,6 +207,13 @@ impl<H: WebHost> SettingsView<H> {
         if let Some(tab) = tab {
             self.select_tab(tab, cx);
         }
+        // Routed to Extensions (the toolbar's Manage…): the Space in front is the one meant.
+        if tab == Some(Tab::Extensions) {
+            let b = self.browser.read(cx);
+            if let Some(id) = b.session.active_space().filter(|id| b.session.space(*id).is_some_and(|s| !s.ephemeral)) {
+                self.space = id;
+            }
+        }
         self.jump = row;
         self.flash = None;
         // The clear-data page of Chrome's settings is a sheet here.
@@ -205,15 +224,52 @@ impl<H: WebHost> SettingsView<H> {
         cx.notify();
     }
 
+    /// Regaining focus: the default browser, Chrome's rules and its extensions may have changed meanwhile.
+    pub(crate) fn on_activate(&mut self, cx: &mut Context<Self>) {
+        self.default_browser = self.browser.read(cx).host.is_default_browser();
+        self.refresh(cx);
+        cx.notify();
+    }
+
+    /// Moves the keys to `field`; what was typed in a box that applies on leaving applies now.
+    pub(crate) fn focus_field(&mut self, field: Field, cx: &mut Context<Self>) {
+        let left = self.active;
+        self.active = field;
+        if left != field {
+            self.commit(left, cx);
+        }
+        cx.notify();
+    }
+
+    /// Writes a text box that is not applied per keystroke: languages and the DNS address.
+    fn commit(&mut self, field: Field, cx: &mut Context<Self>) {
+        let text = self.text(field).trim().to_string();
+        match field {
+            Field::Languages => {
+                let new = (!text.is_empty()).then_some(text);
+                if self.browser.read(cx).settings.web.languages != new {
+                    self.change(cx, |s| s.web.languages = new);
+                }
+            }
+            Field::DnsTemplate if baa_model::SecureDns::valid_template(&text) => {
+                self.dns_pending = false;
+                self.change(cx, |s| s.web.secure_dns = baa_model::SecureDns::Custom(text));
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.field_mut(Field::Search).text.clear();
-        self.active = Field::Search;
+        self.focus_field(Field::Search, cx);
+        self.add_error = None;
         self.adding = None;
         self.reset = None;
         self.confirm_delete = None;
         self.renaming = false;
         if tab != self.tab {
             self.tab = tab;
+            self.scroll.set_offset(gpui::point(px(0.), px(0.)));
             self.motion.from(("settings-tab", 0), Feel::Glide, 0., 1.);
             self.motion.to(("settings-pill", 0), Feel::Glide, tab.index() as f32);
         }
@@ -256,9 +312,11 @@ impl<H: WebHost> SettingsView<H> {
 
     /// Runs `f` in the browser window, after this update: it needs that
     /// window (new tabs, Space changes), and the browser may be mid-update.
+    /// `show` brings the browser window forward, for actions that open a page.
     pub(crate) fn in_browser(
         &mut self,
         cx: &mut Context<Self>,
+        show: bool,
         f: impl FnOnce(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>) + 'static,
     ) {
         let browser = self.browser.clone();
@@ -267,13 +325,16 @@ impl<H: WebHost> SettingsView<H> {
             window
                 .update(cx, |_, window, cx| {
                     browser.update(cx, |b, cx| f(b, window, cx));
-                    window.activate_window();
+                    if show {
+                        window.activate_window();
+                    }
                 })
                 .ok();
         });
     }
 
-    pub(crate) fn close(&mut self, window: &mut Window) {
+    pub(crate) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit(self.active, cx);
         window.remove_window();
     }
 
@@ -282,7 +343,7 @@ impl<H: WebHost> SettingsView<H> {
         let ks = &event.keystroke;
         let m = &ks.modifiers;
         if m.secondary() && ks.key == "w" {
-            return self.close(window);
+            return self.close(window, cx);
         }
         if m.control && ks.key == "tab" {
             let n = Tab::ALL.len() as isize;
@@ -292,7 +353,7 @@ impl<H: WebHost> SettingsView<H> {
         let active = self.active;
         let key = self.field_mut(active).handle(ks, cx);
         match key {
-            Key::Edited => self.edited(active, cx),
+            Key::Edited => self.edited(active),
             Key::Cancel => self.escape(window, cx),
             Key::Submit => self.submitted(active, cx),
             Key::Up if active == Field::Search => self.selected = self.selected.saturating_sub(1),
@@ -313,21 +374,17 @@ impl<H: WebHost> SettingsView<H> {
             return;
         }
         if self.active != Field::Search {
-            self.active = Field::Search;
+            self.focus_field(Field::Search, cx);
             return;
         }
-        let _ = cx;
-        self.close(window);
+        self.close(window, cx);
     }
 
-    fn edited(&mut self, field: Field, cx: &mut Context<Self>) {
-        let text = self.text(field).trim().to_string();
-        match field {
-            Field::Search => self.selected = 0,
-            Field::Languages => self.change(cx, |s| s.web.languages = (!text.is_empty()).then_some(text)),
-            Field::DnsTemplate => self.change(cx, |s| s.web.secure_dns = baa_model::SecureDns::Custom(text)),
-            _ => {}
+    fn edited(&mut self, field: Field) {
+        if field == Field::Search {
+            self.selected = 0;
         }
+        self.add_error = None;
     }
 
     fn submitted(&mut self, field: Field, cx: &mut Context<Self>) {
@@ -339,6 +396,7 @@ impl<H: WebHost> SettingsView<H> {
             }
             Field::SpaceName(id) => self.finish_rename(id, cx),
             Field::EngineName | Field::EngineUrl => self.add_engine(cx),
+            Field::Languages | Field::DnsTemplate => self.commit(field, cx),
             _ => {}
         }
     }
@@ -520,10 +578,7 @@ impl<H: WebHost> SettingsView<H> {
             .border_color(if active { accent } else { surface::border().into() })
             .bg(surface::key())
             .text_size(px(12.5))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.active = field;
-                cx.notify();
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.focus_field(field, cx)))
             .child(shown)
             .into_any_element()
     }
@@ -577,6 +632,7 @@ impl<H: WebHost> SettingsView<H> {
     /// A line under a row (an exception, a shortcut); not in the index.
     pub(crate) fn sub_row(&self, selector: String, left: AnyElement, right: AnyElement) -> Item {
         let el = div()
+            .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector)
             .py(px(5.))
             .pl(px(26.))
@@ -687,6 +743,7 @@ impl<H: WebHost> SettingsView<H> {
                 .child(div().text_size(px(11.)).child(tab.label()));
             self.feel(el, key, cx)
         }).collect::<Vec<_>>();
+        let empty = TextField::default();
         let search = div()
             .w(px(170.))
             .h(px(28.))
@@ -701,15 +758,12 @@ impl<H: WebHost> SettingsView<H> {
             .id("settings-search")
             .debug_selector(|| "search".to_string())
             .text_size(px(12.5))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.active = Field::Search;
-                cx.notify();
-            }))
+            .on_click(cx.listener(|this, _, _, cx| this.focus_field(Field::Search, cx)))
             .child(icon("search", 13., surface::icon().into()))
             .child(
                 self.fields
                     .get(&Field::Search)
-                    .map_or_else(TextField::default, |f| TextField { text: f.text.clone(), all_selected: f.all_selected })
+                    .unwrap_or(&empty)
                     .render("Search", surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..self.theme.accent }),
             );
         div()
@@ -763,7 +817,8 @@ impl<H: WebHost> Render for SettingsView<H> {
         let items = if self.searching() { self.render_results(cx) } else { self.tabs_for(cx) };
         if let Some(id) = self.jump.take() {
             if let Some(i) = items.iter().position(|(row, _)| *row == Some(id)) {
-                self.scroll.scroll_to_item(i);
+                // The title is the body's first child.
+                self.scroll.scroll_to_item(i + 1);
                 self.flash = Some(id);
                 self.motion.from(("settings-flash", 0), Feel::Glide, 1., 0.);
                 window.request_animation_frame();

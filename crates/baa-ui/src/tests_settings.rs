@@ -367,7 +367,8 @@ fn the_default_browser_row_asks_macos_only_when_baa_is_not_it(cx: &mut TestAppCo
     click(&mut s, "make-default");
     b.read_with(&s, |b, _| assert_eq!(b.host.made_default.get(), 1));
     b.read_with(&s, |b, _| b.host.default_browser.set(true));
-    h.update(&mut s, |_, _, cx| cx.notify()).unwrap();
+    // macOS answered while the window was behind; the next time it is in front the row is read again.
+    h.update(&mut s, |v, _, cx| v.on_activate(cx)).unwrap();
     assert!(!drawn(&mut s, "make-default"));
 }
 
@@ -437,12 +438,18 @@ fn launch_settings_shape_the_session_and_links(cx: &mut TestAppContext) {
     let sp = session.active_space().unwrap();
     session.open_tab(sp, "https://a.example", 1);
     session.open_tab(sp, "baa://extensions", 2);
+    session.open_tab(sp, "baa://extensions-internals", 2);
+    let internals = session.tabs(sp, Zone::Today).find(|t| t.url.ends_with("internals")).unwrap().id;
+    session.toggle_pin(internals);
     let kept = session.open_tab(sp, "https://b.example", 3);
     session.activate_tab(kept, 3);
     store.save_session(&session).unwrap();
     store.save_settings(&baa_model::Settings { restore_today: false, ..Default::default() }).unwrap();
     let (b, vcx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), store, window, cx));
     assert_eq!(urls(&b, vcx), ["https://b.example"], "extensions page dropped, Today archived but the active tab");
+    assert_eq!(urls(&b, vcx).len(), 1);
+    let pinned: Vec<String> = b.read_with(vcx, |b, _| b.session().tabs(b.session().active_space().unwrap(), Zone::Pinned).map(|t| t.url.clone()).collect());
+    assert_eq!(pinned, ["baa://extensions-internals"], "a Chrome page that only starts with the same letters stays");
     b.read_with(vcx, |b, _| assert_eq!(b.session().archived().len(), 1));
 
     // "Links that open a new tab: New tab" skips Peek.
@@ -457,4 +464,74 @@ fn launch_settings_shape_the_session_and_links(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert!(b.read_with(vcx, |b, _| b.peek.is_none()));
     assert_eq!(urls(&b, vcx)[0], "https://c.example");
+}
+
+#[gpui::test]
+fn a_jump_scrolls_the_row_into_the_body_at_the_real_window_size(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = VisualTestContext::from_window(h.into(), cx);
+    h.update(&mut s, |v, _, cx| v.go_to(Some(Tab::Sites), Some("site.windows"), cx)).unwrap();
+    for _ in 0..4 {
+        s.run_until_parked();
+        h.update(&mut s, |_, window, cx| {
+            window.refresh();
+            cx.notify();
+        })
+        .unwrap();
+    }
+    s.run_until_parked();
+    let body = s.debug_bounds("body").expect("body");
+    let row = s.debug_bounds("row:site.windows").expect("the row is drawn");
+    assert!(row.top() >= body.top() && row.bottom() <= body.bottom(), "{row:?} is outside {body:?}");
+}
+
+#[gpui::test]
+fn languages_and_dns_apply_on_enter_and_dns_must_be_valid(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "languages-field");
+    s.simulate_input("sv");
+    assert_eq!(b.read_with(&s, |b, _| b.settings.web.languages.clone()), None, "not per keystroke");
+    s.simulate_keystrokes("enter");
+    assert_eq!(b.read_with(&s, |b, _| b.settings.web.languages.clone()).as_deref(), Some("sv"));
+
+    click(&mut s, "tab:Privacy");
+    click(&mut s, "pref-dns:4"); // Custom, nothing typed yet
+    assert_eq!(b.read_with(&s, |b, _| b.settings.web.secure_dns.clone()), baa_model::SecureDns::Automatic, "never Custom(\"\")");
+    s.simulate_input("not a url");
+    s.simulate_keystrokes("enter");
+    assert_eq!(b.read_with(&s, |b, _| b.settings.web.secure_dns.clone()), baa_model::SecureDns::Automatic);
+    s.simulate_keystrokes("cmd-a");
+    s.simulate_input("https://dns.example/q");
+    s.simulate_keystrokes("enter");
+    assert_eq!(b.read_with(&s, |b, _| b.settings.web.secure_dns.clone()), baa_model::SecureDns::Custom("https://dns.example/q".into()));
+}
+
+#[gpui::test]
+fn a_refused_exception_keeps_the_form_open_with_a_reason(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    b.read_with(vcx, |b, _| b.host.refuse_rules.set(true));
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Sites");
+    click(&mut s, "add-rule:site.camera");
+    s.simulate_input("x.org");
+    click(&mut s, "add-state:site.camera:Allow");
+    assert!(drawn(&mut s, "add-error:site.camera") && drawn(&mut s, "add-form:site.camera"));
+}
+
+#[gpui::test]
+fn clearing_nothing_calls_nothing(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Privacy");
+    click(&mut s, "clear-open");
+    for id in ["clear-history", "clear-site-data", "clear-cache"] {
+        click(&mut s, id);
+    }
+    click(&mut s, "clear-confirm");
+    b.read_with(&s, |b, _| assert!(b.host.clears.borrow().is_empty()));
 }

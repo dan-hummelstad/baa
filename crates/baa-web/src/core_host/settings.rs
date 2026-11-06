@@ -177,7 +177,7 @@ mod tests {
                 Write::Str("dns_over_https.templates", String::new()),
                 Write::Str("dns_over_https.mode", "automatic".into()),
                 Write::Bool("hardware_acceleration_mode.enabled", true),
-                Write::Int("performance_tuning.high_efficiency_mode.state", 2),
+                Write::Int("performance_tuning.high_efficiency_mode.state", 0),
             ]
         );
     }

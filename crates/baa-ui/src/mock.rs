@@ -33,6 +33,8 @@ pub struct MockHost {
     pub unpacked: RefCell<Vec<(ProfileId, std::path::PathBuf)>>,
     /// What `load_unpacked` answers.
     pub unpacked_result: RefCell<Result<String, String>>,
+    /// Chrome refuses every rule.
+    pub refuse_rules: Cell<bool>,
     pub default_browser: Cell<bool>,
     pub made_default: Cell<u32>,
     /// (profile, css, dark) of each `set_webui_skin`.
@@ -151,6 +153,7 @@ impl MockHost {
             clears: RefCell::default(),
             unpacked: RefCell::default(),
             unpacked_result: RefCell::new(Ok("unpacked-id".into())),
+            refuse_rules: Cell::default(),
             default_browser: Cell::default(),
             made_default: Cell::default(),
             skins: RefCell::default(),
@@ -260,13 +263,18 @@ impl WebHost for MockHost {
     fn site_rules(&self, _: ProfileId, kind: Permission) -> Vec<(String, PermissionState)> {
         self.rules.borrow().iter().filter(|(k, ..)| *k == kind).map(|(_, p, s)| (p.clone(), *s)).collect()
     }
-    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) {
-        self.rule_sets.borrow_mut().push((profile, kind, pattern.into(), state));
-        let mut rules = self.rules.borrow_mut();
-        rules.retain(|(k, p, _)| !(*k == kind && p == pattern));
-        if let Some(state) = state {
-            rules.push((kind, pattern.into(), state));
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) -> bool {
+        let pattern = baa_web::site_pattern(pattern);
+        if pattern.is_empty() || self.refuse_rules.get() {
+            return false;
         }
+        self.rule_sets.borrow_mut().push((profile, kind, pattern.clone(), state));
+        let mut rules = self.rules.borrow_mut();
+        rules.retain(|(k, p, _)| !(*k == kind && *p == pattern));
+        if let Some(state) = state {
+            rules.push((kind, pattern, state));
+        }
+        true
     }
     fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: baa_web::ClearData, cx: &mut App, done: baa_web::Callback<()>) {
         self.clears.borrow_mut().push((profile, since, what));

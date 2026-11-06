@@ -332,14 +332,16 @@ impl WebHost for CoreWebHost {
         rules
     }
 
-    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) {
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) -> bool {
         let handle = self.profile_handle(profile);
-        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
+        let pattern = crate::site_pattern(pattern);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null() && !pattern.is_empty()) else { return false };
         let code = state.map_or(ffi::SITE_UNSET, state_code);
-        // ponytail: the trait has no way to say Chrome refused (a bad pattern); it is logged.
-        if !(self.core.profile_set_site_rule)(handle, bit, c_string(pattern).as_ptr(), code) {
+        let done = (self.core.profile_set_site_rule)(handle, bit, c_string(&pattern).as_ptr(), code);
+        if !done {
             log::warn!("Chrome refused the {kind:?} rule {pattern:?}");
         }
+        done
     }
 
     fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, _cx: &mut App, done: Callback<()>) {

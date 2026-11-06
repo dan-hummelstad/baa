@@ -522,6 +522,16 @@ impl Session {
         ids
     }
 
+    /// Start-up housekeeping: tabs whose page no longer exists go (`gone`), idle Today tabs
+    /// are archived, and with "Pinned only" every Today tab but each Space's open one is.
+    pub fn on_launch(&mut self, settings: &Settings, now: u64, gone: impl Fn(&Tab) -> bool) {
+        self.drop_tabs(gone);
+        self.archive_expired(now, settings.archive_after_hours);
+        if !settings.restore_today {
+            self.archive_today(now);
+        }
+    }
+
     /// Forgets live tabs (not archived, not reopenable) for which `gone` is true: pages that no longer exist.
     pub fn drop_tabs(&mut self, gone: impl Fn(&Tab) -> bool) {
         let ids: Vec<TabId> = self.tabs.iter().filter(|t| gone(t)).map(|t| t.id).collect();

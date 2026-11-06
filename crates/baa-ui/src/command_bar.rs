@@ -316,9 +316,10 @@ pub(crate) fn rows(
         hits.truncate(MAX_EXTRA);
         hits
     };
+    // Pages that have a command of their own (Settings, Extensions, History, Downloads) are not listed twice.
     scored.extend(best(
-        pages::PAGES
-            .iter()
+        pages::all()
+            .filter(|p| matches!(p.route, pages::Route::WebUi | pages::Route::Settings(..)) && p.url != "baa://settings")
             .filter_map(|p| {
                 let score = fuzzy::score(query, p.label).max(fuzzy::score(query, p.keywords))?;
                 Some((score, row(Item::Page(p), p.label, p.url)))
@@ -328,10 +329,7 @@ pub(crate) fn rows(
     scored.extend(best(
         crate::settings::rows::ROWS
             .iter()
-            .filter_map(|r| {
-                let score = fuzzy::score(query, r.label).max(r.keywords.split(' ').filter_map(|w| fuzzy::score(query, w)).max())?;
-                Some((score, row(Item::Setting(r), r.label, format!("Settings › {}", r.tab.title()))))
-            })
+            .filter_map(|r| Some((crate::settings::rows::score(query, r)?, row(Item::Setting(r), r.label, format!("Settings › {}", r.tab.title())))))
             .collect(),
     ));
     // Stable sort keeps sidebar order among equal scores.
@@ -488,10 +486,20 @@ impl<H: WebHost> Browser<H> {
         match c {
             Command::NewFolder => self.new_folder(None, window, cx),
             Command::RenameSpace => self.start_rename(window, cx),
-            Command::ChangeSpaceColor => self.cycle_space_color(window, cx),
-            Command::DeleteSpace => self.delete_active_space(window, cx),
+            Command::ChangeSpaceColor => {
+                if let Some(id) = self.session.active_space() {
+                    self.cycle_color_of(id, window, cx);
+                }
+            }
+            Command::DeleteSpace => {
+                if let Some(id) = self.session.active_space() {
+                    self.delete_space(id, window, cx);
+                }
+            }
             Command::SwapSidebarSide => self.swap_sidebar_side(cx),
-            Command::Extensions => self.open_extensions("baa://extensions", window, cx),
+            Command::Extensions => {
+                self.open_own_page("baa://extensions", window, cx);
+            }
             Command::ExtensionStore => {
                 self.close_overlays(window, cx);
                 self.open_url("https://chromewebstore.google.com/", window, cx)

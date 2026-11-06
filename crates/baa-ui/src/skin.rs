@@ -1,7 +1,27 @@
 //! baa's look over Chrome's own pages (`baa://flags`, settings subpages …), as
 //! one stylesheet the engine injects into every WebUI page of a Space's profile.
 
-use crate::theme::{surface, Theme};
+use baa_web::WebHost;
+
+use crate::{
+    browser::Browser,
+    theme::{surface, Theme},
+};
+
+impl<H: WebHost> Browser<H> {
+    /// Tells the engine the skin for the active Space's Chrome pages when it changed.
+    pub(crate) fn push_webui_skin(&mut self) {
+        let Some(profile) = self.active_space().map(|s| s.profile) else { return };
+        let ((top, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
+        let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(ascii as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
+        if self.skin_sent == Some((profile, key)) {
+            return;
+        }
+        self.skin_sent = Some((profile, key));
+        let css = chrome_skin(&Theme::from_gradient(top, bottom));
+        self.host.set_webui_skin(profile, css, ascii);
+    }
+}
 
 /// baa's look over Chrome's own pages, through the variables Chrome's pages
 /// take their colours, type and shape from. Variables, not element rules, so

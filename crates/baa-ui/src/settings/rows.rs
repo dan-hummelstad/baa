@@ -163,39 +163,53 @@ pub(crate) fn label(id: &str) -> &'static str {
     find(id).map_or("", |r| r.label)
 }
 
+/// How well `query` matches the row's label (counted double) or one of its keywords.
+pub(crate) fn score(query: &str, row: &Row) -> Option<u32> {
+    let by_label = fuzzy::score(query, row.label).map(|s| s * 2);
+    let by_word = row.keywords.split(' ').filter_map(|w| fuzzy::score(query, w)).max();
+    by_label.max(by_word)
+}
+
 /// Best matches for `query` in label and keywords, label hits first.
 pub(crate) fn search(query: &str) -> Vec<&'static Row> {
-    let mut hits: Vec<(u32, &Row)> = ROWS
-        .iter()
-        .filter_map(|r| {
-            let by_label = fuzzy::score(query, r.label).map(|s| s * 2);
-            let by_word = r.keywords.split(' ').filter_map(|w| fuzzy::score(query, w)).max();
-            by_label.max(by_word).map(|s| (s, r))
-        })
-        .collect();
+    let mut hits: Vec<(u32, &Row)> = ROWS.iter().filter_map(|r| score(query, r).map(|s| (s, r))).collect();
     hits.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
     hits.into_iter().map(|(_, r)| r).collect()
 }
 
+/// One site setting: the row it has here and the name Chrome's settings give it in a URL.
+pub(crate) struct SiteKind {
+    pub kind: Permission,
+    pub row: &'static str,
+    /// `baa://settings/content/<path>`
+    pub path: &'static str,
+}
+
+const fn site(kind: Permission, row: &'static str, path: &'static str) -> SiteKind {
+    SiteKind { kind, row, path }
+}
+
+/// The only place that pairs a site setting with its row and address.
+pub(crate) static SITE_KINDS: [SiteKind; 14] = [
+    site(Permission::Location, "site.location", "location"),
+    site(Permission::Camera, "site.camera", "camera"),
+    site(Permission::Microphone, "site.microphone", "microphone"),
+    site(Permission::Notifications, "site.notifications", "notifications"),
+    site(Permission::Clipboard, "site.clipboard", "clipboard"),
+    site(Permission::Midi, "site.midi", "midiDevices"),
+    site(Permission::Popups, "site.popups", "popups"),
+    site(Permission::Sound, "site.sound", "sound"),
+    site(Permission::JavaScript, "site.javascript", "javascript"),
+    site(Permission::Cookies, "site.cookies", "cookies"),
+    site(Permission::AutomaticDownloads, "site.downloads", "automaticDownloads"),
+    site(Permission::InsecureContent, "site.insecure", "insecureContent"),
+    site(Permission::Sensors, "site.sensors", "sensors"),
+    site(Permission::WindowManagement, "site.windows", "windowManagement"),
+];
+
 /// The site-settings row of `kind`.
 pub(crate) fn site_row(kind: Permission) -> &'static str {
-    match kind {
-        Permission::Location => "site.location",
-        Permission::Camera => "site.camera",
-        Permission::Microphone => "site.microphone",
-        Permission::Notifications => "site.notifications",
-        Permission::Clipboard => "site.clipboard",
-        Permission::Midi => "site.midi",
-        Permission::Popups => "site.popups",
-        Permission::Sound => "site.sound",
-        Permission::JavaScript => "site.javascript",
-        Permission::Cookies => "site.cookies",
-        Permission::AutomaticDownloads => "site.downloads",
-        Permission::InsecureContent => "site.insecure",
-        Permission::Sensors => "site.sensors",
-        Permission::WindowManagement => "site.windows",
-        Permission::Other => "",
-    }
+    SITE_KINDS.iter().find(|k| k.kind == kind).map_or("", |k| k.row)
 }
 
 #[cfg(test)]

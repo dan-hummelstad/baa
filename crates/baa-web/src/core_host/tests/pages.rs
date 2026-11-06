@@ -192,28 +192,3 @@ fn only_tabs_are_activated(cx: &mut TestAppContext) {
     popup.read_with(cx, |page, _| page.set_visible(true));
     assert_eq!(calls("tab_activate").len(), 1, "a popup has no strip");
 }
-
-#[test]
-fn a_floating_page_rises_to_just_below_gpui_with_an_overlay_above() {
-    let at = |content: *mut AnyObject, i: usize| -> *mut AnyObject {
-        unsafe {
-            let subviews: *mut AnyObject = msg_send![content, subviews];
-            msg_send![subviews, objectAtIndex: i]
-        }
-    };
-    let (content, gpui_view) = (new_view(), new_view());
-    unsafe {
-        let _: () = msg_send![content, addSubview: gpui_view];
-    }
-    let floating = native::Container::new(gpui_view, std::ptr::null_mut(), 0.);
-    let other = native::Container::new(gpui_view, std::ptr::null_mut(), 0.);
-    let overlay = native::Container::new(std::ptr::null_mut(), std::ptr::null_mut(), 0.);
-    overlay.move_above(gpui_view);
-    floating.set_floating(true);
-    assert_eq!(at(content, 0), floating.as_ptr());
-
-    let bounds = gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), gpui::size(gpui::px(10.), gpui::px(10.)));
-    floating.place(bounds, bounds);
-    assert_eq!([at(content, 0), at(content, 1), at(content, 2), at(content, 3)], [other.as_ptr(), floating.as_ptr(), gpui_view, overlay.as_ptr()]);
-    assert!(floating.is_beside(gpui_view));
-}

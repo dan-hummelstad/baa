@@ -53,8 +53,6 @@ unsafe impl Encode for CGRect {
 }
 
 const NS_WINDOW_BELOW: isize = -1;
-#[cfg(test)]
-const NS_WINDOW_ABOVE: isize = 1;
 /// NSViewWidthSizable | NSViewHeightSizable.
 const FILL: usize = 2 | 16;
 /// NSViewMinYMargin: in an unflipped superview, keeps the top-left corner put.
@@ -175,41 +173,6 @@ impl Container {
         }
         self.placed.set(None);
         self.gpui_view.set(gpui_view);
-    }
-
-    /// Over gpui's view instead of under it: a page that is an overlay on the
-    /// UI rather than a hole in it. Mouse and keys go to the page natively.
-    // ponytail: no overlay page is left in the app (the settings sheet was the one); the tests keep the mechanism.
-    #[cfg(test)]
-    pub fn move_above(&self, gpui_view: *mut AnyObject) {
-        if gpui_view.is_null() {
-            return;
-        }
-        unsafe {
-            let content: *mut AnyObject = msg_send![gpui_view, superview];
-            let _: () = msg_send![self.view, removeFromSuperview];
-            let _: () = msg_send![content, addSubview: self.view, positioned: NS_WINDOW_ABOVE, relativeTo: gpui_view];
-        }
-        self.placed.set(None);
-        OVERLAYS.with(|o| {
-            let mut o = o.borrow_mut();
-            if !o.contains(&self.view) {
-                o.push(self.view);
-            }
-        });
-    }
-
-    /// Whether the container is in the same view as `gpui_view`.
-    #[cfg(test)]
-    pub fn is_beside(&self, gpui_view: *mut AnyObject) -> bool {
-        if gpui_view.is_null() {
-            return true;
-        }
-        unsafe {
-            let mine: *mut AnyObject = msg_send![self.view, superview];
-            let theirs: *mut AnyObject = msg_send![gpui_view, superview];
-            !mine.is_null() && mine == theirs
-        }
     }
 
     pub fn set_floating(&self, floating: bool) {

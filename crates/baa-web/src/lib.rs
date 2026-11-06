@@ -204,9 +204,10 @@ pub trait WebHost: 'static {
     /// default first, with pattern `"*"`, then each exception by Chrome's pattern
     /// (`"[*.]example.com"`). Empty for a gone profile.
     fn site_rules(&self, profile: ProfileId, kind: Permission) -> Vec<(String, PermissionState)>;
-    /// `"*"` sets the default, anything else an exception. `None` removes the rule
-    /// (for `"*"`, restores Chrome's default). Refused rules change nothing.
-    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>);
+    /// `"*"` sets the default, anything else an exception, as typed: see [`site_pattern`].
+    /// `None` removes the rule (for `"*"`, restores Chrome's default). False when Chrome
+    /// refused the rule, which then changes nothing.
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) -> bool;
     /// Deletes what `what` names that `profile` stored since `since` (`None`: ever);
     /// `done` runs on a later turn. Chrome's stores only; baa-model keeps its own records.
     fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, cx: &mut App, done: Callback<()>);
@@ -220,6 +221,20 @@ pub trait WebHost: 'static {
     /// A stylesheet over `profile`'s Chrome pages (`baa://...`); `dark` says
     /// whether its colours are dark, so Chrome's own light/dark rules match.
     fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool);
+}
+
+/// Chrome's content-setting pattern for what a person typed: a bare host or `*.host`
+/// covers its subdomains too (`[*.]host`); `*`, `[*.]host` and URLs stay as they are.
+pub fn site_pattern(text: &str) -> String {
+    let t = text.trim();
+    if let Some(host) = t.strip_prefix("*.") {
+        return format!("[*.]{host}");
+    }
+    if t.is_empty() || t.contains(['[', '*', '/']) {
+        t.to_string()
+    } else {
+        format!("[*.]{t}")
+    }
 }
 
 /// What [`WebHost::clear_data`] deletes.

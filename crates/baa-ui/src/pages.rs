@@ -37,20 +37,6 @@ pub(crate) static PAGES: &[Page] = &[
     page("baa://settings/privacy", "Settings: Privacy and Security", "cookies https", S(Privacy, None)),
     page("baa://settings/clearBrowserData", "Clear Browsing Data", "history cache cookies delete", S(Privacy, Some("clear_data"))),
     page("baa://settings/content", "Settings: Site Settings", "permissions", S(Sites, None)),
-    page("baa://settings/content/location", "Site Settings: Location", "", S(Sites, Some("site.location"))),
-    page("baa://settings/content/camera", "Site Settings: Camera", "", S(Sites, Some("site.camera"))),
-    page("baa://settings/content/microphone", "Site Settings: Microphone", "", S(Sites, Some("site.microphone"))),
-    page("baa://settings/content/notifications", "Site Settings: Notifications", "", S(Sites, Some("site.notifications"))),
-    page("baa://settings/content/clipboard", "Site Settings: Clipboard", "", S(Sites, Some("site.clipboard"))),
-    page("baa://settings/content/midiDevices", "Site Settings: MIDI", "", S(Sites, Some("site.midi"))),
-    page("baa://settings/content/popups", "Site Settings: Pop-ups", "redirects", S(Sites, Some("site.popups"))),
-    page("baa://settings/content/sound", "Site Settings: Sound", "", S(Sites, Some("site.sound"))),
-    page("baa://settings/content/javascript", "Site Settings: JavaScript", "", S(Sites, Some("site.javascript"))),
-    page("baa://settings/content/cookies", "Site Settings: Cookies", "", S(Sites, Some("site.cookies"))),
-    page("baa://settings/content/automaticDownloads", "Site Settings: Automatic Downloads", "", S(Sites, Some("site.downloads"))),
-    page("baa://settings/content/insecureContent", "Site Settings: Insecure Content", "", S(Sites, Some("site.insecure"))),
-    page("baa://settings/content/sensors", "Site Settings: Motion Sensors", "", S(Sites, Some("site.sensors"))),
-    page("baa://settings/content/windowManagement", "Site Settings: Window Management", "", S(Sites, Some("site.windows"))),
     page("baa://settings/appearance", "Settings: Appearance", "theme zoom fonts", S(Appearance, None)),
     page("baa://settings/accessibility", "Settings: Accessibility", "caret focus", S(Appearance, Some("focus_highlight"))),
     page("baa://settings/downloads", "Settings: Downloads", "folder", S(General, Some("download_dir"))),
@@ -91,6 +77,27 @@ pub(crate) static PAGES: &[Page] = &[
     page("baa://bookmarks", "Bookmarks", "", WebUi),
 ];
 
+/// The per-kind Site Settings pages, made from the one table of site kinds.
+fn site_pages() -> &'static [Page] {
+    static PAGES: std::sync::LazyLock<Vec<Page>> = std::sync::LazyLock::new(|| {
+        crate::settings::rows::SITE_KINDS
+            .iter()
+            .map(|k| Page {
+                url: Box::leak(format!("baa://settings/content/{}", k.path).into_boxed_str()),
+                label: Box::leak(format!("Site Settings: {}", crate::settings::rows::label(k.row)).into_boxed_str()),
+                keywords: "",
+                route: Route::Settings(Tab::Sites, Some(k.row)),
+            })
+            .collect()
+    });
+    &PAGES
+}
+
+/// Every page: the table, then the site kinds.
+pub(crate) fn all() -> impl Iterator<Item = &'static Page> {
+    PAGES.iter().chain(site_pages())
+}
+
 /// `chrome://` and `baa://` are the same page; the query and fragment are not part of it.
 pub(crate) fn normalize(url: &str) -> String {
     let url = url.trim();
@@ -108,7 +115,7 @@ pub(crate) fn route(url: &str) -> Option<Route> {
     if url == "baa://extensions" || url.starts_with("baa://extensions/") {
         return Some(Route::Extensions);
     }
-    PAGES.iter().find(|p| p.url == url).map(|p| p.route).filter(|r| *r != WebUi)
+    all().find(|p| p.url == url).map(|p| p.route).filter(|r| *r != WebUi)
 }
 
 /// `baa://extensions/?id=…`
@@ -121,10 +128,10 @@ pub(crate) fn extension_id(url: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Whether the command bar should autofill: it starts like an address.
+/// Whether the command bar should autofill: it starts like an address. A bare "baa" is a search.
 pub(crate) fn looks_like_page(query: &str) -> bool {
     let q = query.trim().to_lowercase();
-    q.starts_with("baa:") || q.starts_with("chrome:") || (q.len() >= 3 && "baa://".starts_with(&q))
+    q.starts_with("baa:") || q.starts_with("chrome:")
 }
 
 /// Pages whose address starts with the query: exact first, then shorter, at most `max`.
@@ -134,7 +141,7 @@ pub(crate) fn complete(query: &str, max: usize) -> Vec<&'static Page> {
         Some(rest) => format!("baa:{rest}"),
         None => q,
     };
-    let mut hits: Vec<&Page> = PAGES.iter().filter(|p| p.url.to_lowercase().starts_with(&q)).collect();
+    let mut hits: Vec<&Page> = all().filter(|p| p.url.to_lowercase().starts_with(&q)).collect();
     // Stable: equal lengths keep table order.
     hits.sort_by_key(|p| (p.url.to_lowercase() != q.trim_end_matches('/'), p.url.len()));
     hits.truncate(max);
@@ -185,13 +192,13 @@ mod tests {
         assert!(urls("baa://se").iter().all(|u| u.starts_with("baa://se")));
         assert_eq!(urls("chrome://extensions")[0], "baa://extensions");
         assert_eq!(urls("baa://settings/content")[0], "baa://settings/content");
-        assert!(looks_like_page("baa:") && looks_like_page("baa") && looks_like_page("chrome://fl"));
-        assert!(!looks_like_page("ba") && !looks_like_page("bank") && !looks_like_page("example.com"));
+        assert!(looks_like_page("baa:") && looks_like_page("baa:/") && looks_like_page("chrome://fl"));
+        assert!(!looks_like_page("baa") && !looks_like_page("bank") && !looks_like_page("example.com"));
     }
 
     #[test]
     fn every_first_party_row_exists() {
-        for p in PAGES {
+        for p in all() {
             if let Route::Settings(tab, Some(row)) = p.route {
                 assert_eq!(crate::settings::rows::find(row).map(|r| r.tab), Some(tab), "{}", p.url);
             }

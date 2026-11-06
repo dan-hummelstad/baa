@@ -147,7 +147,7 @@ impl<H: WebHost> SettingsView<H> {
             "Pick the folder that holds the extension's manifest.json.",
             tools
                 .child(self.button("ext-store", "Chrome Web Store", false, cx).on_click(cx.listener(|this, _, _, cx| {
-                    this.in_browser(cx, |b, w, cx| b.open_url("https://chromewebstore.google.com/", w, cx))
+                    this.in_browser(cx, true, |b, w, cx| b.open_url("https://chromewebstore.google.com/", w, cx))
                 })))
                 .into_any_element(),
         ));
@@ -216,7 +216,7 @@ impl<H: WebHost> SettingsView<H> {
                 self.button("ext-options", "Options", false, cx)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let options = options.clone();
-                        this.in_browser(cx, move |b, w, cx| b.open_url(&options, w, cx))
+                        this.in_browser(cx, true, move |b, w, cx| b.open_url(&options, w, cx))
                     }))
                     .into_any_element(),
             );

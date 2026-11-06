@@ -60,9 +60,9 @@ fn settings_go_to_every_open_profile_and_local_state_once(cx: &mut TestAppContex
     clear_log();
     env.host.apply_settings(&with(|s| {
         s.web.font_size = 20;
-        s.web.memory_saver = false;
+        s.web.memory_saver = true;
     }));
-    assert_eq!(writes_logged(), ["pref_set_int 0x0 performance_tuning.high_efficiency_mode.state 0"]);
+    assert_eq!(writes_logged(), ["pref_set_int 0x0 performance_tuning.high_efficiency_mode.state 2"]);
 }
 
 #[gpui::test]

@@ -452,7 +452,9 @@ impl<H: WebHost> Browser<H> {
                         .border_t_1()
                         .border_color(surface::line())
                         .child(button("extensions-manage", "Manage Extensions", false, theme, self, cx).on_click(
-                            cx.listener(|this, _, window, cx| this.open_extensions("chrome://extensions/", window, cx)),
+                            cx.listener(|this, _, window, cx| {
+                                this.open_own_page("baa://extensions", window, cx);
+                            }),
                         )),
                 ),
             "extensions-panel",

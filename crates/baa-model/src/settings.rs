@@ -116,6 +116,19 @@ pub enum Preload {
     Extended,
 }
 
+impl SecureDns {
+    pub const CLOUDFLARE: &'static str = "https://chrome.cloudflare-dns.com/dns-query";
+    pub const QUAD9: &'static str = "https://dns.quad9.net/dns-query";
+
+    /// A DNS-over-HTTPS template Chrome can use: https and a host.
+    pub fn valid_template(t: &str) -> bool {
+        t.strip_prefix("https://")
+            .and_then(|rest| rest.split(['/', '?']).next())
+            .is_some_and(|host| !host.is_empty() && !host.contains(char::is_whitespace))
+            && !t.contains(char::is_whitespace)
+    }
+}
+
 /// Cloudflare and Quad9 are `Custom` with their template.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SecureDns {
@@ -151,6 +164,7 @@ pub struct WebPrefs {
     pub global_privacy_control: bool,
     /// Applies when baa restarts.
     pub hardware_acceleration: bool,
+    /// Off: it discards hidden tabs, which baa's page views do not expect yet.
     pub memory_saver: bool,
     /// Extension developer mode (load unpacked, reload).
     pub developer_mode: bool,
@@ -178,7 +192,7 @@ impl Default for WebPrefs {
             do_not_track: false,
             global_privacy_control: false,
             hardware_acceleration: true,
-            memory_saver: true,
+            memory_saver: false,
             developer_mode: false,
             site_defaults: Vec::new(),
         }
@@ -315,6 +329,14 @@ mod tests {
         assert_eq!(s.resolve_input("rust lang"), "https://www.google.com/search?q=rust+lang");
         assert_eq!(s.resolve_input("foo"), "https://www.google.com/search?q=foo");
         assert_eq!(s.resolve_input("c++"), "https://www.google.com/search?q=c%2B%2B");
+    }
+
+    #[test]
+    fn dns_templates_need_https_and_a_host() {
+        assert!(SecureDns::valid_template(SecureDns::CLOUDFLARE) && SecureDns::valid_template("https://dns.example/q{?dns}"));
+        for bad in ["", "https://", "http://dns.example", "dns.example", "https://a b/"] {
+            assert!(!SecureDns::valid_template(bad), "{bad:?}");
+        }
     }
 
     #[test]

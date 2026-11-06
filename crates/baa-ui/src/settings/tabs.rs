@@ -38,15 +38,13 @@ fn all_engines(s: &Settings) -> Vec<SearchEngine> {
 
 impl<H: WebHost> SettingsView<H> {
     pub(super) fn general(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<Item> {
-        let default = self.browser.read(cx).host.is_default_browser();
+        let default = self.default_browser;
         let default_control: AnyElement = if default {
             div().text_size(px(12.5)).text_color(surface::muted()).child("baa is your default browser").into_any_element()
         } else {
             self.button("make-default", "Make Default", true, cx)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.browser.read(cx).host.make_default_browser();
-                    cx.notify();
-                }))
+                // macOS asks; the answer is read when this window is next in front.
+                .on_click(cx.listener(|this, _, _, cx| this.browser.read(cx).host.make_default_browser()))
                 .into_any_element()
         };
         let dir = s.web.download_dir.as_ref().map(|p| p.display().to_string());
@@ -66,7 +64,7 @@ impl<H: WebHost> SettingsView<H> {
         if arc {
             imports = imports.child(
                 self.button("import-arc", "Spaces from Arc", false, cx)
-                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, |b, w, cx| b.import_arc(w, cx)))),
+                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, false, |b, w, cx| b.import_arc(w, cx)))),
             );
         }
         for (i, source) in baa_model::import::sources().into_iter().enumerate() {
@@ -82,7 +80,7 @@ impl<H: WebHost> SettingsView<H> {
             self.row("default_browser", "", default_control),
             self.row(
                 "on_launch",
-                "Pinned tabs and favourites are always restored.",
+                "Pinned tabs and favourites are always restored. Pinned only also keeps each Space's open tab.",
                 self.segments("pref-launch", labels(&[(true, "Restore Today tabs"), (false, "Pinned only")]), s.restore_today, |v, s| s.restore_today = v, cx),
             ),
             self.row(
@@ -111,7 +109,7 @@ impl<H: WebHost> SettingsView<H> {
                 "more_languages",
                 "",
                 self.button("more-languages", "Open", false, cx)
-                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, |b, w, cx| b.open_url("baa://settings/languages", w, cx))))
+                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, true, |b, w, cx| b.open_url("baa://settings/languages", w, cx))))
                     .into_any_element(),
             ),
             self.section("Import"),
@@ -272,7 +270,7 @@ impl<H: WebHost> SettingsView<H> {
                 "pw_managers",
                 "1Password, Bitwarden and others fill logins and passkeys through their Chrome extension; baa connects it to their Mac app.",
                 self.button("pref-extensions", "Get Extension", false, cx)
-                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, |b, w, cx| b.set_up_passwords(w, cx))))
+                    .on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, true, |b, w, cx| b.set_up_passwords(w, cx))))
                     .into_any_element(),
             ),
             self.row(
@@ -320,7 +318,7 @@ impl<H: WebHost> SettingsView<H> {
                             .on_click(cx.listener(move |this, _, _, cx| this.toggle_rename(id, cx))),
                     )
                     .child(self.button("space-color", "Colour", false, cx).on_click(cx.listener(move |this, _, _, cx| {
-                        this.in_browser(cx, move |b, w, cx| b.cycle_color_of(id, w, cx))
+                        this.in_browser(cx, false, move |b, w, cx| b.cycle_color_of(id, w, cx))
                     })));
             }
             if many {
@@ -328,7 +326,7 @@ impl<H: WebHost> SettingsView<H> {
                     self.button("space-delete", if confirming { "Delete for Good" } else { "Delete" }, confirming, cx).on_click(cx.listener(move |this, _, _, cx| {
                         if this.confirm_delete == Some(id) {
                             this.confirm_delete = None;
-                            this.in_browser(cx, move |b, w, cx| b.delete_space(id, w, cx));
+                            this.in_browser(cx, false, move |b, w, cx| b.delete_space(id, w, cx));
                         } else {
                             this.confirm_delete = Some(id);
                             cx.notify();
@@ -345,9 +343,9 @@ impl<H: WebHost> SettingsView<H> {
                 .px(px(10.))
                 .flex()
                 .gap(px(8.))
-                .child(self.button("space-new", "New Space", false, cx).on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, |b, w, cx| b.new_space(w, cx)))))
+                .child(self.button("space-new", "New Space", false, cx).on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, true, |b, w, cx| b.new_space(w, cx)))))
                 .child(self.button("space-new-incognito", "New Incognito Space", false, cx).on_click(cx.listener(|this, _, _, cx| {
-                    this.in_browser(cx, |b, w, cx| b.new_incognito_space(w, cx))
+                    this.in_browser(cx, true, |b, w, cx| b.new_incognito_space(w, cx))
                 })))
                 .into_any_element(),
         ));
@@ -361,14 +359,13 @@ impl<H: WebHost> SettingsView<H> {
         let current = self.browser.read(cx).session.space(id).map(|s| format!("{} {}", s.icon, s.name)).unwrap_or_default();
         *self.field_mut(Field::SpaceName(id)) = crate::input::TextField::selected(current);
         self.renaming = true;
-        self.active = Field::SpaceName(id);
-        cx.notify();
+        self.focus_field(Field::SpaceName(id), cx);
     }
 
     pub(super) fn finish_rename(&mut self, id: SpaceId, cx: &mut Context<Self>) {
         let text = self.text(Field::SpaceName(id)).to_string();
         self.renaming = false;
-        self.active = Field::Search;
+        self.focus_field(Field::Search, cx);
         self.browser.update(cx, |b, cx| {
             b.rename_space(id, &text);
             cx.notify();
@@ -416,7 +413,7 @@ impl<H: WebHost> SettingsView<H> {
             ("page-all", "All Chrome pages", "baa://chrome-urls"),
         ];
         let pages = div().flex().flex_wrap().justify_end().gap(px(6.)).children(PAGES.into_iter().map(|(id, label, url)| {
-            self.button(id, label, false, cx).on_click(cx.listener(move |this, _, _, cx| this.in_browser(cx, move |b, w, cx| b.open_url(url, w, cx))))
+            self.button(id, label, false, cx).on_click(cx.listener(move |this, _, _, cx| this.in_browser(cx, true, move |b, w, cx| b.open_url(url, w, cx))))
         }));
         let reset: AnyElement = match self.reset {
             None => self
@@ -472,7 +469,7 @@ impl<H: WebHost> SettingsView<H> {
             ),
             self.row("chrome_pages", "Chrome's own pages open in a tab.", pages.into_any_element()),
             self.section("Reset"),
-            self.row("reset", "Puts every setting here back to its default.", reset),
+            self.row("reset", "Puts every setting back to its default. Search engines you added and your toolbar choices are kept.", reset),
         ]
     }
 
