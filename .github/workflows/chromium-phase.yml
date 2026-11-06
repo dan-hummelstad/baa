@@ -158,23 +158,6 @@ jobs:
           echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
           [ -z "$BASE" ] || echo "base_run=$BASE" >> "$ROOT/stats.txt"
           write_gn_args arm64 "${{ inputs.mode }}"
-          # No cache backend here, and a downloaded dev tree must not need one.
-          sed -i '' '/cc_wrapper/d' "$_out_dir/args.gn"
-          # Component builds compile PCHs with -fmodule-name, which this clang then
-          # rejects as a module interface; official (Helium's) builds use no PCHs.
-          # No debug info either: it is most of a build folder, and the runner disk and
-          # the downloadable tree are the limits. ponytail: set symbol_level=1 locally
-          # (one full rebuild) if C++ backtraces matter.
-          if [ "${{ inputs.mode }}" = dev ]; then
-            sed -i '' '/symbol_level/d' "$_out_dir/args.gn"
-            printf '%s\n' 'enable_precompiled_headers = false' 'symbol_level = 0' \
-              'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$_out_dir/args.gn"
-          else
-            # Release too: no dSYMs, so less disk and no dsymutil step. This moves into
-            # helium-macos/devutils/shared.sh write_gn_args with the rest (PLAN 6.1 item 2).
-            sed -i '' '/symbol_level/d' "$_out_dir/args.gn"
-            printf '%s\n' 'symbol_level = 0' 'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$_out_dir/args.gn"
-          fi
           cat "$_out_dir/args.gn"
           gn_gen
           du -sh "$_src_dir"

@@ -113,6 +113,23 @@ write_gn_args() {
   if [ "$mode" != dev ]; then
     echo 'chrome_pgo_phase=2' >> "$args"
   fi
+
+  # baa: CI and chromium/local-build.sh must write the same args, so what chromium-phase.yml
+  # used to patch in afterwards lives here, for dev and release (Helium's own ci mode is left
+  # alone). No cc_wrapper: there is no cache backend on a runner, and a downloaded dev tree must
+  # not need one. No debug info: it is most of a build folder, and the runner disk and the
+  # downloadable tree are the limits; for release also no dSYMs and no dsymutil step.
+  # Component builds compile PCHs with -fmodule-name, which this clang rejects as a module
+  # interface; official builds use no PCHs.
+  # ponytail: symbol_level=1 (and uploading the dSYMs) if C++ backtraces matter; for dev one
+  # full rebuild.
+  if [ "$mode" != ci ]; then
+    sed -i '' -e '/cc_wrapper/d' -e '/symbol_level/d' "$args"
+    printf '%s\n' 'symbol_level = 0' 'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$args"
+    if [ "$mode" = dev ]; then
+      echo 'enable_precompiled_headers = false' >> "$args"
+    fi
+  fi
 }
 
 configure_siso() {
