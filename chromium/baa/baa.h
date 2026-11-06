@@ -6,7 +6,10 @@
 //   (Chromium's UI thread). Nothing here is thread-safe.
 // - Handles (BaaProfile*, BaaTab*) are opaque and owned by BaaCore. A call on
 //   a handle that is gone (closed, or the app is terminating) does nothing and
-//   returns NULL/0/false. Rust may keep a dead handle; it must not dereference it.
+//   returns NULL/0/false, but only until its address is reused: a new tab or
+//   profile may get the address of a closed one. Never use a handle after
+//   tab_closed, or after your own baa_tab_close / baa_profile_close; drop it
+//   there.
 // - Strings in: UTF-8, NUL-terminated, borrowed for the duration of the call.
 // - Strings out: UTF-8, NUL-terminated, borrowed, valid only until the
 //   callback (or the visitor call) returns. Copy what you keep.
