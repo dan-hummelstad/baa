@@ -3,15 +3,25 @@
 # linked into BaaCore.framework (libchrome_dll.dylib in component builds).
 source_set("baa") {
   sources = [
-    "baa.cc",
+    "app_mac.mm",
     "baa.h",
-    "baa_mac.mm",
+    "internal.h",
+    "tab.mm",
+    "window.mm",
   ]
   deps = [
     "//base",
     "//chrome/browser",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/views/frame:browser_window_factory",
+    "//components/favicon/content",
+    "//components/find_in_page",
     "//components/input",
+    "//components/javascript_dialogs",
+    "//components/permissions",
+    "//components/web_modal",
+    "//components/zoom",
     "//content/public/browser",
     "//ui/base",
     "//ui/events:events_base",
