@@ -1,5 +1,20 @@
 # Settings: first-party GPUI dialog, skinned WebUI for the rest (draft, 2026-11-06)
 
+**User decisions (2026-11-06). Where they differ from the text below, they win.**
+1. **Scope:** browser-behaviour settings are global, pushed to every profile. Site exceptions,
+   extensions and clearing data are per Space.
+2. **A separate settings window, not an overlay card.** It is its own gpui window (`cx.open_window`),
+   like Safari's: a toolbar of tabs across the top, with the search field in it. The content changes
+   per tab, and the window keeps one size per tab or a fixed size. ⌘, opens the window or focuses it if
+   already open; ⌘W and Esc close it. There is one settings window per app. The tab list, rows, search
+   index, keyboard and motion rules are the same as below; read "dialog" as "settings window". Motion
+   is the crossfade on tab switch and the selection pill (§10). There is no card open animation.
+3. **Search:** the default engine stays Google, as baa has it today. DuckDuckGo and others are options.
+4. **Extensions: add developer mode.** A "Developer mode" toggle and a "Load unpacked…" button (folder
+   picker) in the Extensions tab, plus a reload button per unpacked extension. This needs one more
+   ABI 5 call, `baa_profile_load_unpacked(profile, path)`, using `UnpackedInstaller` and its result.
+   Update the extension list from the existing extension changes.
+
 Spec, not built. Written against Chromium 156 (Helium tree at `/Users/Shared/hb/helium-macos/build/src`;
 paths starting `chrome/`, `components/`, `content/` are in that tree), ABI 4 (`chromium/baa/baa.h`) and
 the ADK refactor (`PLAN-adk-refactor.md`; core_host is now `dispatch/page/slot/host/menu`, tab.mm is
