@@ -23,7 +23,7 @@ use super::{
     page::CorePage,
     PageKind, Shared, Snapshot,
 };
-use crate::{ChromeTabs, DialogKind, DownloadState, Downloads, PageEvent};
+use crate::{Callback, ChromeTabs, DialogKind, DownloadState, Downloads, PageEvent};
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
 pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
@@ -61,6 +61,14 @@ pub(super) struct Dispatch {
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) fetches: RefCell<HashMap<u64, FetchDone>>,
     pub(super) next_fetch: Cell<u64>,
+    /// `WebHost::clear_data` and `load_unpacked` calls Chrome has not answered.
+    pending_clears: RefCell<HashMap<u64, Callback<()>>>,
+    pending_unpacked: RefCell<HashMap<u64, Callback<Result<String, String>>>>,
+    next_op: Cell<u64>,
+    /// Per profile, the css of its Chrome pages and whether it is dark.
+    pub(super) skins: RefCell<HashMap<*mut Profile, (String, bool)>>,
+    /// prefers-color-scheme of websites: 0 system, 1 light, 2 dark.
+    pub(super) page_scheme: Cell<i32>,
     next_seq: Cell<u64>,
     /// `--user-data-dir`.
     pub(super) root: OnceCell<PathBuf>,
@@ -77,6 +85,11 @@ impl Dispatch {
             downloads: RefCell::default(),
             fetches: RefCell::default(),
             next_fetch: Cell::new(1),
+            pending_clears: RefCell::default(),
+            pending_unpacked: RefCell::default(),
+            next_op: Cell::new(1),
+            skins: RefCell::default(),
+            page_scheme: Cell::new(0),
             next_seq: Cell::new(0),
             root: OnceCell::new(),
         }
@@ -87,6 +100,38 @@ impl Dispatch {
         if let Some(app) = app {
             app.spawn(async move |cx| f(cx)).detach();
         }
+    }
+
+    pub(super) fn begin_clear(&self, done: Callback<()>) -> u64 {
+        let id = self.next_op.replace(self.next_op.get() + 1);
+        self.pending_clears.borrow_mut().insert(id, done);
+        id
+    }
+
+    pub(super) fn begin_unpacked(&self, done: Callback<Result<String, String>>) -> u64 {
+        let id = self.next_op.replace(self.next_op.get() + 1);
+        self.pending_unpacked.borrow_mut().insert(id, done);
+        id
+    }
+
+    /// Next turn, so the answer never lands inside the call that asked. An id
+    /// nobody waits for is ignored.
+    pub(super) fn finish_clear(&'static self, id: u64) {
+        self.queue(move |cx| {
+            let done = self.pending_clears.borrow_mut().remove(&id);
+            if let Some(done) = done {
+                cx.update(|cx| done((), cx));
+            }
+        });
+    }
+
+    pub(super) fn finish_unpacked(&'static self, id: u64, result: Result<String, String>) {
+        self.queue(move |cx| {
+            let done = self.pending_unpacked.borrow_mut().remove(&id);
+            if let Some(done) = done {
+                cx.update(|cx| done(result, cx));
+            }
+        });
     }
 
     /// The gpui entity of `tab`; none for an unknown tab or one without.
@@ -217,6 +262,7 @@ impl Dispatch {
     /// The profile is going away with its tabs, which Chrome may not report.
     pub(super) fn forget_profile(&self, profile: *mut Profile) {
         self.pending.borrow_mut().retain(|p| p.profile != profile);
+        self.skins.borrow_mut().remove(&profile);
         let gone: Vec<_> =
             self.tabs.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
         for tab in gone {
@@ -273,7 +319,7 @@ pub(super) fn callbacks() -> Callbacks {
         background: bool,
         user_gesture: bool,
     ) {
-        unsafe { dispatch(ctx).tab_created(tab, opener, profile, from_c(url), background, user_gesture) }
+        unsafe { dispatch(ctx).tab_created(tab, opener, profile, super::skin::to_baa(from_c(url)), background, user_gesture) }
     }
     extern "C" fn tab_state(ctx: *mut c_void, tab: *mut Tab, state: *const TabState) {
         let snapshot = Snapshot::from_c(unsafe { &*state });
@@ -384,9 +430,13 @@ pub(super) fn callbacks() -> Callbacks {
             }
         });
     }
-    // ponytail: WP-C routes these to the pending-call maps (as `fetch_done`).
-    extern "C" fn clear_done(_: *mut c_void, _: u64) {}
-    extern "C" fn load_unpacked_done(_: *mut c_void, _: u64, _: bool, _: *const c_char) {}
+    extern "C" fn clear_done(ctx: *mut c_void, id: u64) {
+        unsafe { dispatch(ctx) }.finish_clear(id);
+    }
+    extern "C" fn load_unpacked_done(ctx: *mut c_void, id: u64, ok: bool, message: *const c_char) {
+        let message = unsafe { from_c(message) };
+        unsafe { dispatch(ctx) }.finish_unpacked(id, if ok { Ok(message) } else { Err(message) });
+    }
     Callbacks {
         key,
         tab_created,

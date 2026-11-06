@@ -11,7 +11,9 @@ mod menu;
 mod native;
 mod page;
 pub(crate) mod profiles;
+mod settings;
 mod sheet;
+mod skin;
 mod slot;
 #[cfg(test)]
 mod tests;
@@ -164,7 +166,7 @@ impl Snapshot {
     fn from_c(state: &TabState) -> Self {
         unsafe {
             Self {
-                url: from_c(state.url),
+                url: skin::to_baa(from_c(state.url)),
                 title: from_c(state.title),
                 favicon: from_c(state.favicon_url),
                 view: state.view.cast(),
@@ -198,6 +200,8 @@ struct Shared {
     /// Null once the tab is gone (Chrome closed it, or baa did).
     tab: Cell<*mut Tab>,
     dialog: Cell<Option<u64>>,
+    /// Showing one of Chrome's own pages (`baa://…`), not a website.
+    webui: Cell<bool>,
     /// The view a mouse drag started on, and whether the pointer is over the
     /// page; across frames, so a repaint mid-click loses nothing.
     drag: Cell<Option<*mut AnyObject>>,
@@ -229,6 +233,7 @@ impl Shared {
             container: native::Container::new(gpui_view, state.view, corner_radius),
             tab: Cell::new(tab),
             dialog: Cell::new(None),
+            webui: Cell::new(false),
             drag: Cell::new(None),
             inside: Cell::new(false),
         });

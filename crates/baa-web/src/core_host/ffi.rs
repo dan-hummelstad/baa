@@ -63,20 +63,15 @@ pub const PERMISSION_INSECURE_CONTENT: u32 = 1 << 12;
 pub const PERMISSION_SENSORS: u32 = 1 << 13;
 pub const PERMISSION_WINDOW_MANAGEMENT: u32 = 1 << 14;
 
-#[allow(dead_code)] // ABI 5 settings calls are used from WP-C on
 pub const SITE_UNSET: c_int = -1;
 pub const SITE_ASK: c_int = 0;
 pub const SITE_ALLOW: c_int = 1;
 pub const SITE_BLOCK: c_int = 2;
 pub const SITE_SESSION_ONLY: c_int = 3;
 
-#[allow(dead_code)]
 pub const CLEAR_HISTORY: u32 = 1 << 0;
-#[allow(dead_code)]
 pub const CLEAR_DOWNLOADS: u32 = 1 << 1;
-#[allow(dead_code)]
 pub const CLEAR_SITE_DATA: u32 = 1 << 2;
-#[allow(dead_code)]
 pub const CLEAR_CACHE: u32 = 1 << 3;
 
 #[allow(dead_code)]
@@ -179,7 +174,6 @@ pub struct Callbacks {
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
-#[allow(dead_code)] // the ABI 5 settings calls are used from WP-C on
 pub struct Core {
     pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,

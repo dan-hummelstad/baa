@@ -18,6 +18,7 @@ use super::{
     from_c,
     menu::{present_menu, Row},
     native,
+    skin,
     slot::PageSlot,
     ffi::{Profile, Tab},
     PageKind, Shared, Snapshot,
@@ -93,6 +94,10 @@ impl CorePage {
             return;
         }
         let old = std::mem::replace(&mut self.state, new.clone());
+        // Chrome may reset the scheme when a document commits, so it is set again each time.
+        if self.shared.kind == PageKind::Tab && (new.url != old.url || new.loading != old.loading) {
+            self.apply_scheme(skin::is_webui(&new.url));
+        }
         self.emit_changes(&old, &new, cx);
         // Each DevTools document (the dock script reloads it once) gets its half.
         if self.shared.kind == PageKind::DevTools
@@ -107,6 +112,13 @@ impl CorePage {
         if view_changed {
             cx.notify();
         }
+    }
+
+    /// prefers-color-scheme for what the page shows or is about to show.
+    fn apply_scheme(&self, webui: bool) {
+        self.shared.webui.set(webui);
+        let scheme = self.dispatch.scheme_for(self.shared.profile, webui);
+        self.shared.run(|core, tab| (core.tab_set_color_scheme)(tab, scheme));
     }
 
     fn emit_changes(&self, old: &Snapshot, new: &Snapshot, cx: &mut Context<Self>) {
@@ -212,7 +224,10 @@ impl Render for CorePage {
 
 impl PageHandle for CorePage {
     fn load_url(&self, url: &str) {
-        self.shared.run(|core, tab| (core.tab_load_url)(tab, c_string(url).as_ptr()));
+        if self.shared.kind == PageKind::Tab {
+            self.apply_scheme(skin::is_webui(url));
+        }
+        self.shared.run(|core, tab| (core.tab_load_url)(tab, c_string(&skin::to_chrome(url)).as_ptr()));
     }
     fn reload(&self) {
         self.shared.run(|core, tab| (core.tab_reload)(tab));
@@ -244,7 +259,7 @@ impl PageHandle for CorePage {
     fn history(&self) -> (Vec<(String, String)>, usize) {
         extern "C" fn visit(entries: *mut c_void, title: *const c_char, url: *const c_char) {
             let entries = unsafe { &mut *entries.cast::<Vec<(String, String)>>() };
-            entries.push(unsafe { (from_c(title), from_c(url)) });
+            entries.push(unsafe { (from_c(title), skin::to_baa(from_c(url))) });
         }
         let mut entries = Vec::new();
         let mut current = 0;

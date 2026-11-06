@@ -62,6 +62,54 @@ const TOP_LEFT: usize = 8;
 /// the page crawls through stale sizes after a resize ends.
 const RESIZE_INTERVAL: f64 = 0.04;
 
+/// An autoreleased NSString.
+unsafe fn ns_string(text: &str) -> *mut AnyObject {
+    let text = std::ffi::CString::new(text).unwrap_or_default();
+    unsafe { msg_send![class!(NSString), stringWithUTF8String: text.as_ptr()] }
+}
+
+unsafe fn path_of(url: *mut AnyObject) -> Option<String> {
+    if url.is_null() {
+        return None;
+    }
+    let path: *mut AnyObject = unsafe { msg_send![url, path] };
+    let bytes: *const std::ffi::c_char = unsafe { msg_send![path, UTF8String] };
+    (!bytes.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(bytes) }.to_string_lossy().into_owned())
+}
+
+/// Whether this app opens http and https links for the system.
+pub fn is_default_browser() -> bool {
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+        let mine: *mut AnyObject = msg_send![bundle, bundleURL];
+        let Some(mine) = path_of(mine) else { return false };
+        ["http://example.com", "https://example.com"].iter().all(|probe| {
+            let url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: ns_string(probe)];
+            let app: *mut AnyObject = msg_send![workspace, URLForApplicationToOpenURL: url];
+            path_of(app).is_some_and(|app| app.trim_end_matches('/') == mine.trim_end_matches('/'))
+        })
+    }
+}
+
+/// macOS shows its own confirmation; nothing is reported back.
+pub fn make_default_browser() {
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+        let mine: *mut AnyObject = msg_send![bundle, bundleURL];
+        for scheme in ["http", "https"] {
+            let none: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![
+                workspace,
+                setDefaultApplicationAtURL: mine,
+                toOpenURLsWithScheme: ns_string(scheme),
+                completionHandler: none
+            ];
+        }
+    }
+}
+
 pub fn gpui_view(window: &Window) -> *mut AnyObject {
     match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
         Ok(RawWindowHandle::AppKit(handle)) => handle.ns_view.as_ptr().cast(),

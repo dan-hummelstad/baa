@@ -283,6 +283,7 @@ struct FakeExtension {
     site_access: c_int,
     popup: &'static str,
     enabled: bool,
+    unpacked: bool,
 }
 
 impl FakeExtension {
@@ -310,7 +311,7 @@ impl FakeExtension {
             permissions: p(7),
             site_access: self.site_access,
             enabled: self.enabled,
-            unpacked: false,
+            unpacked: self.unpacked,
         };
         (raw, strings)
     }
@@ -441,3 +442,5 @@ mod extension_tests;
 mod menus;
 mod pages;
 mod profile_tests;
+mod settings_tests;
+mod webui_tests;

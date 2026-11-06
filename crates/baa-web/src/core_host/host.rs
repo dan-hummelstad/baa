@@ -15,7 +15,8 @@ use super::{
     menu,
     page::CorePage,
     profiles::{is_ephemeral, queue_delete},
-    sheet, Core, PageKind,
+    settings::{self, Write},
+    sheet, skin, Core, PageKind,
 };
 use crate::{
     Callback, ChromeSheet, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
@@ -46,8 +47,26 @@ pub(super) fn permissions_of(kinds: u32) -> Vec<Permission> {
 }
 
 /// The bit a per-site setting exists for; screen sharing and the rest have none.
-fn permission_bit(kind: Permission) -> Option<u32> {
+pub(super) fn permission_bit(kind: Permission) -> Option<u32> {
     PERMISSION_BITS.iter().find(|(_, k)| *k == kind && *k != Permission::Other).map(|(bit, _)| *bit)
+}
+
+pub(super) fn state_code(state: PermissionState) -> i32 {
+    match state {
+        PermissionState::Ask => ffi::SITE_ASK,
+        PermissionState::Allow => ffi::SITE_ALLOW,
+        PermissionState::Block => ffi::SITE_BLOCK,
+        PermissionState::SessionOnly => ffi::SITE_SESSION_ONLY,
+    }
+}
+
+fn state_of(code: i32) -> PermissionState {
+    match code {
+        ffi::SITE_ALLOW => PermissionState::Allow,
+        ffi::SITE_BLOCK => PermissionState::Block,
+        ffi::SITE_SESSION_ONLY => PermissionState::SessionOnly,
+        _ => PermissionState::Ask,
+    }
 }
 
 pub struct CoreWebHost {
@@ -59,6 +78,8 @@ pub struct CoreWebHost {
     next_ephemeral: Cell<u64>,
     downloads: Entity<Downloads>,
     chrome_tabs: Entity<ChromeTabs>,
+    /// What `apply_settings` last sent; none before the first call.
+    applied: RefCell<Option<Vec<Write>>>,
     /// Per profile, Chrome's settings shown as a sheet.
     sheets: RefCell<HashMap<ProfileId, sheet::Sheet>>,
 }
@@ -78,6 +99,7 @@ impl CoreWebHost {
             next_ephemeral: Cell::new(u64::MAX),
             downloads,
             chrome_tabs,
+            applied: RefCell::default(),
             sheets: RefCell::default(),
         }
     }
@@ -107,6 +129,12 @@ impl CoreWebHost {
             log::error!("profile {id:?}: Chrome refused it");
         } else {
             self.profiles.borrow_mut().insert(id, handle);
+            // Before the pins below, so the privacy ones always win.
+            if let Some(list) = self.applied.borrow().as_ref() {
+                for write in list.iter().filter(|w| !w.is_local()) {
+                    settings::apply(self.core, handle, write);
+                }
+            }
             // Most are Helium's defaults already; this pins them if one was flipped in settings.
             for pref in baa_privacy::PREFS_OFF {
                 (self.core.pref_set_bool)(handle, c_string(pref).as_ptr(), false);
@@ -157,12 +185,25 @@ impl WebHost for CoreWebHost {
             std::ptr::null_mut()
         } else {
             // A tab Chrome already made for this (window.open) is taken, not duplicated.
-            self.dispatch
-                .take_pending(handle, url)
-                .unwrap_or_else(|| (self.core.tab_create)(handle, c_string(url).as_ptr()))
+            let url = skin::to_baa(url.to_string());
+            let pending = self.dispatch.take_pending(handle, &url);
+            // Chrome's own pages start blank: the skin script has to be in before their first document.
+            let tab = pending.unwrap_or_else(|| {
+                let first = if skin::is_webui(&url) { "about:blank" } else { &url };
+                (self.core.tab_create)(handle, c_string(first).as_ptr())
+            });
+            if !tab.is_null() {
+                self.dispatch.prepare_tab(tab, handle, &url, pending.is_some());
+            }
+            tab
         };
+        let webui = skin::is_webui(url);
         let dispatch = self.dispatch;
-        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))
+        cx.new(|cx| {
+            let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx);
+            page.shared.webui.set(webui);
+            page
+        })
     }
 
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
@@ -269,47 +310,102 @@ impl WebHost for CoreWebHost {
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return PermissionState::Ask };
-        match (self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit) {
-            ffi::SITE_ALLOW => PermissionState::Allow,
-            ffi::SITE_BLOCK => PermissionState::Block,
-            ffi::SITE_SESSION_ONLY => PermissionState::SessionOnly,
-            _ => PermissionState::Ask,
-        }
+        state_of((self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit))
     }
 
     fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState) {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
-        let state = match state {
-            PermissionState::Ask => ffi::SITE_ASK,
-            PermissionState::Allow => ffi::SITE_ALLOW,
-            PermissionState::Block => ffi::SITE_BLOCK,
-            PermissionState::SessionOnly => ffi::SITE_SESSION_ONLY,
-        };
-        (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state);
-    }
-    // ponytail: settings contract stubs (PLAN-settings.md WP-0); WP-C implements them.
-    fn apply_settings(&self, _: &baa_model::Settings) {}
-
-    fn site_rules(&self, _: ProfileId, _: Permission) -> Vec<(String, PermissionState)> {
-        Vec::new()
+        (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state_code(state));
     }
 
-    fn set_site_rule(&self, _: ProfileId, _: Permission, _: &str, _: Option<PermissionState>) {}
-
-    fn clear_data(&self, _: ProfileId, _: Option<std::time::SystemTime>, _: ClearData, cx: &mut App, done: Callback<()>) {
-        done((), cx);
+    fn apply_settings(&self, settings: &baa_model::Settings) {
+        let list = settings::writes(settings);
+        let old = self.applied.replace(Some(list.clone())).unwrap_or_default();
+        let changed: Vec<&Write> = list.iter().filter(|w| !old.contains(w)).collect();
+        // A default that is no longer overridden goes back to Chrome's.
+        let released: Vec<Permission> = old
+            .iter()
+            .filter_map(|w| match w {
+                Write::SiteDefault(kind, _) if !list.iter().any(|n| matches!(n, Write::SiteDefault(k, _) if k == kind)) => Some(*kind),
+                _ => None,
+            })
+            .collect();
+        for write in changed.iter().filter(|w| w.is_local()) {
+            settings::apply(self.core, std::ptr::null_mut(), write);
+        }
+        for &handle in self.profiles.borrow().values() {
+            for write in changed.iter().filter(|w| !w.is_local()) {
+                settings::apply(self.core, handle, write);
+            }
+            for kind in &released {
+                settings::restore_default(self.core, handle, *kind);
+            }
+        }
+        self.dispatch.set_page_scheme(settings::page_scheme_code(settings.page_scheme));
     }
 
-    fn load_unpacked(&self, _: ProfileId, _: &std::path::Path, cx: &mut App, done: Callback<Result<String, String>>) {
-        done(Err("Loading unpacked extensions is not implemented".into()), cx);
+    fn site_rules(&self, profile: ProfileId, kind: Permission) -> Vec<(String, PermissionState)> {
+        extern "C" fn visit(rules: *mut std::ffi::c_void, pattern: *const std::ffi::c_char, state: i32) {
+            let rules = unsafe { &mut *rules.cast::<Vec<(String, PermissionState)>>() };
+            rules.push((unsafe { super::from_c(pattern) }, state_of(state)));
+        }
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return Vec::new() };
+        let mut rules = Vec::new();
+        (self.core.profile_site_rules)(handle, bit, visit, (&mut rules as *mut Vec<_>).cast());
+        rules
+    }
+
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) {
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
+        let code = state.map_or(ffi::SITE_UNSET, state_code);
+        (self.core.profile_set_site_rule)(handle, bit, c_string(pattern).as_ptr(), code);
+    }
+
+    fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, _cx: &mut App, done: Callback<()>) {
+        let id = self.dispatch.begin_clear(done);
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return self.dispatch.finish_clear(id);
+        }
+        let since_ms = since
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as i64);
+        let types = [
+            (what.history, ffi::CLEAR_HISTORY),
+            (what.downloads, ffi::CLEAR_DOWNLOADS),
+            (what.site_data, ffi::CLEAR_SITE_DATA),
+            (what.cache, ffi::CLEAR_CACHE),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .fold(0, |bits, (_, bit)| bits | bit);
+        (self.core.profile_clear_data)(handle, id, since_ms, types);
+    }
+
+    fn load_unpacked(&self, profile: ProfileId, path: &std::path::Path, _cx: &mut App, done: Callback<Result<String, String>>) {
+        let id = self.dispatch.begin_unpacked(done);
+        let handle = if is_ephemeral(profile) { std::ptr::null_mut() } else { self.profile_handle(profile) };
+        if handle.is_null() {
+            return self.dispatch.finish_unpacked(id, Err("This Space cannot have extensions".into()));
+        }
+        (self.core.profile_load_unpacked)(handle, id, c_string(&path.to_string_lossy()).as_ptr());
     }
 
     fn is_default_browser(&self) -> bool {
-        false
+        super::native::is_default_browser()
     }
 
-    fn make_default_browser(&self) {}
+    fn make_default_browser(&self) {
+        super::native::make_default_browser();
+    }
 
-    fn set_webui_skin(&self, _: ProfileId, _: String, _: bool) {}
+    fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool) {
+        let handle = self.profile_handle(profile);
+        if !handle.is_null() {
+            self.dispatch.set_skin(handle, css, dark);
+        }
+    }
 }

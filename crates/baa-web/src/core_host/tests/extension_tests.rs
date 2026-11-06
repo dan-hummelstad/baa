@@ -5,9 +5,9 @@ fn extensions_serve_the_toolbar_and_the_page_from_one_list(cx: &mut TestAppConte
     let env = Env::new(cx);
     EXTENSIONS.with(|list| {
         list.borrow_mut().extend([
-            FakeExtension { id: "bbb", name: "beta", permissions: "Read x\nChange y", site_access: 3, popup: "chrome-extension://bbb/p.html", enabled: true },
-            FakeExtension { id: "aaa", name: "Alpha", permissions: "", site_access: 0, popup: "", enabled: false },
-            FakeExtension { id: "ccc", name: "charlie", permissions: "Z", site_access: 2, popup: "", enabled: true },
+            FakeExtension { id: "bbb", name: "beta", permissions: "Read x\nChange y", site_access: 3, popup: "chrome-extension://bbb/p.html", enabled: true, unpacked: false },
+            FakeExtension { id: "aaa", name: "Alpha", permissions: "", site_access: 0, popup: "", enabled: false, unpacked: false },
+            FakeExtension { id: "ccc", name: "charlie", permissions: "Z", site_access: 2, popup: "", enabled: true, unpacked: true },
         ]);
     });
 
@@ -25,6 +25,7 @@ fn extensions_serve_the_toolbar_and_the_page_from_one_list(cx: &mut TestAppConte
     assert_eq!(details[1].permissions, ["Read x", "Change y"]);
     assert_eq!(details[1].site_access, Some(SiteAccess::OnAllSites));
     assert_eq!(details[0].site_access, None);
+    assert_eq!(details.iter().map(|e| e.unpacked).collect::<Vec<_>>(), [false, false, true]);
 
     let ephemeral = env.host.ephemeral_profile();
     assert_eq!(env.host.extensions(ephemeral), []);
@@ -39,14 +40,14 @@ fn extensions_serve_the_toolbar_and_the_page_from_one_list(cx: &mut TestAppConte
 fn extension_changes_are_forwarded_with_their_codes(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let result = Rc::new(Cell::new(false));
-    for change in [ExtensionChange::Enable(false), ExtensionChange::Remove, ExtensionChange::SiteAccess(SiteAccess::OnSpecificSites)] {
+    for change in [ExtensionChange::Enable(false), ExtensionChange::Remove, ExtensionChange::SiteAccess(SiteAccess::OnSpecificSites), ExtensionChange::Reload] {
         let sink = result.clone();
         cx.update(|cx| env.host.change_extension(ProfileId(1), "bbb", change, cx, Box::new(move |v, _| sink.set(v))));
         assert!(result.get());
     }
     assert_eq!(
         calls("profile_extension_change"),
-        ["profile_extension_change bbb 0 0", "profile_extension_change bbb 1 0", "profile_extension_change bbb 2 2"]
+        ["profile_extension_change bbb 0 0", "profile_extension_change bbb 1 0", "profile_extension_change bbb 2 2", "profile_extension_change bbb 3 0"]
     );
 }
 
