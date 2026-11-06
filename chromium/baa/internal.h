@@ -35,7 +35,7 @@ void EnsureStarted();
 void InstallContextMenuHook();  // menu.mm
 void InstallAppModalFactory();  // dialogs: after Chrome installed its own
 
-// ---- tab.mm: handles and lookups the other files share. A BaaTab is any page
+// ---- tab.mm and profile.mm: handles and lookups the other files share. A BaaTab is any page
 // the app shows: a tab in a Browser, a popup, a DevTools front-end.
 uint64_t NextId();  // dialogs, permission asks and menus share one counter
 BaaTab* TabFor(content::WebContents* contents);  // null if not a baa page
@@ -46,20 +46,28 @@ base::WeakPtr<BaaTab> WeakTab(BaaTab* tab);
 content::WebContents* ContentsOf(BaaTab* tab);  // null if gone
 Profile* ChromeProfileOf(BaaProfile* profile);  // null if gone
 BaaProfile* ProfileFor(Profile* profile);       // null if baa never opened it
+BrowserWindowInterface* BrowserOf(BaaProfile* profile);  // made on first need
 BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile);
 // A page that is not in a tab strip. `close` destroys what holds the contents.
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
+void CloseTabsOf(Profile* profile);  // baa_profile_close: every page of it, now
 void BareTabClosedByChrome(BaaTab* tab);
 void CloseBareTabsForQuit();
 void DestroyAllPopups();  // extensions.mm: now, with their WebContents
 void SendTabState(BaaTab* tab);
+
+// ---- dialogs.mm
+void AttachDialogs(content::WebContents* wc);
+// A tab that left our windows: pending dialogs answer "no", Chrome's come back.
+void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc);
+void ShowPendingDialogsOf(BaaTab* tab);  // asked before the app knew the tab
+void DropDialogsOf(BaaTab* tab, bool tell);
 
 // ---- permissions.mm / menu.mm / devtools.mm
 void AttachPermissions(content::WebContents* wc);
 void DropPermissionsOf(BaaTab* tab, bool tell);
 // Back to Chrome's own prompt (a tab that left our windows).
 void RestoreChromePermissions(content::WebContents* wc);
-bool AnswerAppModal(uint64_t id, bool ok, const std::u16string& text);
 void DropMenusOf(BaaTab* tab);
 bool DevtoolsDocking();
 void NoteDevtoolsFront(BaaTab* front);
@@ -96,7 +104,7 @@ bool BrowserIsClosing(BrowserWindowInterface* browser);
 // are already closed).
 void DestroyBrowsersOf(Profile* profile);
 std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
-// tab.mm: sets a bool pref if the profile registers it and the user may change it.
+// profile.mm: sets a bool pref if the profile registers it and the user may change it.
 bool SetPrefBool(Profile* profile, const char* name, bool value);
 
 // Makes `browser`'s window the one Chrome treats as active.
