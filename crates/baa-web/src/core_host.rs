@@ -2,6 +2,7 @@
 //! `chromium/baa/baa.h` (PLAN-chromium-phase3.md). Pages are Chrome tabs whose
 //! NSView sits under gpui's view, seen through the hole each page element punches.
 
+mod devtools;
 mod ffi;
 mod menu;
 mod native;
@@ -594,7 +595,15 @@ fn callbacks() -> Callbacks {
         unsafe { dispatch(ctx) }.download(tab, download);
     }
     extern "C" fn resized(_: *mut c_void, _: *mut Tab, _: c_int, _: c_int) {}
-    extern "C" fn page_message(_: *mut c_void, _: *mut Tab, _: *const c_char) {}
+    extern "C" fn page_message(ctx: *mut c_void, tab: *mut Tab, message: *const c_char) {
+        let message = unsafe { from_c(message) };
+        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| {
+            // Only the DevTools front-end's dock picker speaks this.
+            if let Some(side) = message.strip_prefix("devtools-dock:").filter(|_| page.shared.kind == PageKind::DevTools) {
+                cx.emit(PageEvent::DevToolsDock(side.into()));
+            }
+        });
+    }
     extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
     Callbacks {
         key,
@@ -687,22 +696,29 @@ impl WebHost for CoreWebHost {
     fn create_devtools(
         &self,
         of: &Entity<CorePage>,
-        _inspect_at: Option<(i32, i32)>,
-        _side: &str,
+        inspect_at: Option<(i32, i32)>,
+        side: &str,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<CorePage> {
-        // ponytail: M1 has no DevTools; an empty page keeps the UI's dock working.
-        // Made directly: a pending about:blank popup is not ours to take.
-        let profile = of.read(cx).profile;
+        let (profile, inspected) = of.read_with(cx, |page, _| (page.profile, page.shared.tab.get()));
         let handle = self.profile_handle(profile);
-        let tab = if handle.is_null() {
+        let (x, y) = inspect_at.unwrap_or_default();
+        // NULL: Chrome refused, or the inspected page is gone; the page then closes itself.
+        let tab = if inspected.is_null() {
             std::ptr::null_mut()
         } else {
-            (self.core.tab_create)(handle, c"about:blank".as_ptr())
+            (self.core.tab_open_devtools)(inspected, inspect_at.is_some(), x, y)
         };
-        let dispatch = self.dispatch;
-        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx))
+        let (dispatch, side) = (self.dispatch, side.to_string());
+        cx.new(|cx| {
+            let mut page = CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx);
+            page.dock_side = side;
+            if tab.is_null() {
+                page.close_soon(cx);
+            }
+            page
+        })
     }
 
     fn show_menu(&self, at: gpui::Point<Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone) {
@@ -825,6 +841,9 @@ pub struct CorePage {
     gpui_view: *mut AnyObject,
     corner_radius: Cell<f32>,
     square_corners: Cell<u8>,
+    /// DevTools only: where baa docks it, and the url the dock script last ran for.
+    dock_side: String,
+    docked_url: String,
     this: WeakEntity<CorePage>,
     _focus: [Subscription; 2],
 }
@@ -886,6 +905,8 @@ impl CorePage {
             gpui_view,
             corner_radius: Cell::new(0.),
             square_corners: Cell::new(0),
+            dock_side: String::new(),
+            docked_url: String::new(),
             this: cx.weak_entity(),
             _focus: focus,
         }
@@ -899,6 +920,16 @@ impl CorePage {
         }
         let old = std::mem::replace(&mut self.state, new.clone());
         self.emit_changes(&old, &new, cx);
+        // Each DevTools document (the dock script reloads it once) gets its half.
+        if self.shared.kind == PageKind::DevTools
+            && !new.loading
+            && new.url.starts_with("devtools://")
+            && self.docked_url != new.url
+        {
+            let script = devtools::dock_script(&new.url, &self.dock_side);
+            self.docked_url = new.url.clone();
+            self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(&script).as_ptr(), false));
+        }
         if view_changed {
             cx.notify();
         }
@@ -939,6 +970,14 @@ impl CorePage {
                 });
             }
         });
+    }
+
+    /// A page that never had a tab tells the UI so, once it listens.
+    fn close_soon(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |page, cx| {
+            page.update(cx, |_, cx| cx.emit(PageEvent::Closed)).ok();
+        })
+        .detach();
     }
 
     fn chrome_closed(&mut self, cx: &mut Context<Self>) {
@@ -1055,8 +1094,9 @@ impl PageHandle for CorePage {
     fn find(&self, text: &str, forward: bool) {
         self.shared.run(|core, tab| (core.tab_find)(tab, c_string(text).as_ptr(), forward));
     }
-    fn open_devtools(&self, _inspect_at: Option<(i32, i32)>) {
-        log::info!("DevTools: not in M1");
+    fn open_devtools(&self, inspect_at: Option<(i32, i32)>) {
+        let (x, y) = inspect_at.unwrap_or_default();
+        self.shared.run(|core, tab| (core.tab_show_devtools_window)(tab, inspect_at.is_some(), x, y));
     }
     fn answer_permission(&self, id: u64, allow: bool) {
         // Ids are global; one Chrome no longer waits on does nothing.
