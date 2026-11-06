@@ -114,6 +114,10 @@ BAA_EXPORT void baa_install_app(int argc,
 // ChromeMain's result, once -[NSApp run] has returned.
 BAA_EXPORT int baa_exit_code(void);
 
+// True once Chrome has begun quitting (⌘Q, AttemptExit, terminate). tab_closed
+// callbacks that arrive after this are the quit closing tabs, not the user.
+BAA_EXPORT bool baa_is_quitting(void);
+
 // ---- Profiles --------------------------------------------------------------
 // A BaaProfile is a Chrome Profile plus the Browser its tabs live in. Valid
 // until baa_profile_close or app termination.

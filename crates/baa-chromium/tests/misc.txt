@@ -1,0 +1,39 @@
+# renderer crash, download, file chooser, right-click menu, then onbeforeunload + close (no prompt) and quit
+load https://example.com/
+sleep 3000
+activate
+tab 1 chrome://crash
+sleep 4000
+use 1
+state
+use 0
+eval document.title='alive-after-crash'
+sleep 500
+state
+eval document.body.innerHTML='<a id=d href="data:text/plain,baa-download" download="baa-download.txt" style="position:fixed;inset:0;display:block;background:#fcc">dl</a>'
+sleep 500
+click 200 200
+sleep 3000
+eval document.body.innerHTML='<input id=f type=file style="position:fixed;left:0;top:0;width:400px;height:400px">'
+sleep 500
+click 100 100
+sleep 3000
+screenshot
+escape
+sleep 1000
+# the sheet needs the app to be ours to dismiss: Escape through the window
+eval document.body.innerHTML='<div style="position:fixed;inset:0;background:#cfc">menu</div>'
+sleep 500
+rclick 300 300
+sleep 3000
+screenshot
+escape
+sleep 1000
+sleep 500
+eval document.body.innerHTML='<a href="#" style="position:fixed;inset:0;display:block;background:#ccf">hold</a>';window.onbeforeunload=e=>{e.preventDefault();return 'x'}
+sleep 500
+click 200 200
+sleep 500
+close
+sleep 2000
+quit

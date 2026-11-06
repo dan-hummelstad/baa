@@ -18,8 +18,8 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod app {
     use std::{
-        cell::Cell,
-        ffi::{c_char, c_void, CString},
+        cell::{Cell, RefCell},
+        ffi::{c_char, c_int, c_void, CStr, CString},
         rc::Rc,
     };
 
@@ -54,7 +54,7 @@ mod app {
         let argv: &'static [*const c_char] = Vec::leak(
             args.into_iter().map(|a| CString::new(a).unwrap().into_raw() as *const c_char).collect(),
         );
-        (core.install_app)(argv.len() as _, argv.as_ptr(), on_key, std::ptr::null_mut());
+        (core.install_app)(argv.len() as _, argv.as_ptr(), &CALLBACKS, std::ptr::null_mut());
         assert!(native::nsapp_has_gpui_ivar(), "NSApp lacks gpui's `platform` ivar");
 
         // gpui's [NSApp run] becomes ChromeMain; this closure runs from
@@ -83,6 +83,9 @@ mod app {
             cx.activate(true);
             if std::env::var_os("BAA_SPIKE_SELFTEST").is_some() {
                 self_test(spike, cx);
+            }
+            if let Ok(path) = std::env::var("BAA_SPIKE_SCRIPT") {
+                run_script(path, cx);
             }
             // BAA_SPIKE_QUIT_AFTER=<s>: quit the way ⌘Q does, for smoke.sh.
             if let Some(secs) = std::env::var("BAA_SPIKE_QUIT_AFTER").ok().and_then(|s| s.parse().ok()) {
@@ -126,14 +129,14 @@ mod app {
                 .update(cx, |spike, window, cx| {
                     window.activate_window();
                     window.focus(&spike.page_focus, cx);
-                    (ffi::core().web_contents_focus)(spike.page.contents);
+                    (ffi::core().tab_focus)(spike.page.tab);
                     native::window_number(spike.page.view)
                 })
                 .unwrap();
             wait(500).await;
             // Into the textarea the way a user gets there: a click.
             let view = spike.update(cx, |spike, _, _| spike.page.view).unwrap();
-            native::post_click(view, 200., 140.);
+            native::post_click(view, 200., 140., false, false);
             wait(500).await;
             for &(code, chars, command) in PAGE {
                 native::post_key(window_number, code, chars, command);
@@ -147,20 +150,247 @@ mod app {
     }
 
     /// ⌘/⌃/Escape from the page: gpui first; editing shortcuts the page left
-    /// alone go back to the page as edit commands (nothing else would run them:
-    /// there is no Chrome window or menu behind the page).
-    extern "C" fn on_key(_: *mut c_void, page: ffi::WebContents, event: *mut c_void, after_page: bool) -> bool {
+    /// alone go back to the page as edit actions down the responder chain
+    /// (nothing else would run them: there is no Chrome window or menu behind
+    /// the page).
+    extern "C" fn on_key(_: *mut c_void, event: *mut c_void, after_page: bool) -> bool {
         let event = event.cast::<AnyObject>();
         if !after_page {
             return native::offer_key_equivalent(GPUI_VIEW.with(Cell::get), event);
         }
         match native::edit_command(event) {
             Some(command) => {
-                (ffi::core().web_contents_edit)(page, command);
+                native::send_edit_action(command);
                 true
             }
             None => false,
         }
+    }
+
+    static CALLBACKS: ffi::Callbacks = ffi::Callbacks {
+        key: on_key,
+        tab_created: on_tab_created,
+        tab_state: on_tab_state,
+        tab_favicon: on_tab_favicon,
+        dialog: on_dialog,
+        dialog_closed: on_dialog_closed,
+        tab_closed: on_tab_closed,
+    };
+
+    fn text(p: *const c_char) -> String {
+        if p.is_null() {
+            return "<null>".into();
+        }
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+
+    thread_local! {
+        /// The page's tab is gone; its view must not be placed again.
+        static PAGE_CLOSED: Cell<bool> = const { Cell::new(false) };
+        /// Tabs the script can address: 0 is the page in the hole, then
+        /// script-made and Chrome-made tabs in arrival order.
+        static TABS: RefCell<Vec<ffi::Tab>> = const { RefCell::new(Vec::new()) };
+        /// space-1, space-2, ephemeral.
+        static PROFILES: RefCell<[ffi::Profile; 3]> = const { RefCell::new([std::ptr::null_mut(); 3]) };
+    }
+
+    fn tab_index(tab: ffi::Tab) -> String {
+        TABS.with(|t| t.borrow().iter().position(|x| *x == tab)).map_or("?".into(), |i| i.to_string())
+    }
+
+    extern "C" fn on_tab_created(
+        _: *mut c_void,
+        tab: ffi::Tab,
+        opener: ffi::Tab,
+        profile: ffi::Profile,
+        url: *const c_char,
+        background: bool,
+        gesture: bool,
+    ) {
+        let index = TABS.with(|t| {
+            let mut t = t.borrow_mut();
+            t.push(tab);
+            t.len() - 1
+        });
+        let which = PROFILES.with(|p| p.borrow().iter().position(|x| *x == profile));
+        eprintln!(
+            "baa: tab_created tab={index} opener={} profile={} url={} background={background} gesture={gesture}",
+            if opener.is_null() { "NULL".into() } else { tab_index(opener) },
+            if profile.is_null() { "NULL".into() } else { format!("{which:?}") },
+            text(url),
+        );
+    }
+
+    extern "C" fn on_tab_state(_: *mut c_void, tab: ffi::Tab, s: *const ffi::TabState) {
+        let s = unsafe { &*s };
+        eprintln!(
+            "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={}",
+            tab_index(tab),
+            text(s.url),
+            text(s.title),
+            text(s.favicon_url),
+            s.loading,
+            s.can_go_back,
+            s.can_go_forward,
+            s.audible,
+            s.secure
+        );
+    }
+
+    extern "C" fn on_tab_favicon(_: *mut c_void, tab: ffi::Tab, url: *const c_char, png: *const u8, len: usize) {
+        let head = unsafe { std::slice::from_raw_parts(png, len.min(8)) };
+        eprintln!("baa: tab_favicon tab={} url={} bytes={len} magic={head:02x?}", tab_index(tab), text(url));
+    }
+
+    extern "C" fn on_dialog(_: *mut c_void, tab: ffi::Tab, id: u64, kind: c_int, message: *const c_char, default: *const c_char) {
+        eprintln!("baa: dialog tab={} id={id} kind={kind} message={:?} default={:?}", tab_index(tab), text(message), text(default));
+    }
+
+    extern "C" fn on_dialog_closed(_: *mut c_void, tab: ffi::Tab, id: u64) {
+        eprintln!("baa: dialog_closed tab={} id={id}", tab_index(tab));
+    }
+
+    extern "C" fn on_tab_closed(_: *mut c_void, tab: ffi::Tab) {
+        eprintln!("baa: tab_closed tab={}", tab_index(tab));
+        if tab_index(tab) == "0" {
+            PAGE_CLOSED.with(|c| c.set(true));
+        }
+    }
+
+    extern "C" fn visit_history(_: *mut c_void, title: *const c_char, url: *const c_char) {
+        eprintln!("baa: history entry title={:?} url={}", text(title), text(url));
+    }
+
+    /// BAA_SPIKE_SCRIPT=<file>: one step per line, 1 s apart (`sleep <ms>`
+    /// adds more). `use <n>` picks the tab later steps act on; 0 is the page.
+    ///   load <url> | back | forward | reload | stop | history | state
+    ///   eval <js> | geval <js> (with a user gesture) | find <text> | zoom <f>
+    ///   mute | unmute | print | activate | focus | close | escape | screenshot | sleep <ms> | quit
+    ///   click | cmdclick | rclick <x> <y> (real NSEvents at points from the tab's top left)
+    ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
+    ///   closeprofile <1|2|e> | answer <id> <0|1> [text]
+    fn run_script(path: String, cx: &mut App) {
+        let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        cx.spawn(async move |cx| {
+            let executor = cx.background_executor().clone();
+            let mut current = 0usize;
+            let mut shots = 0;
+            // The page's own tab exists once the window does.
+            executor.timer(std::time::Duration::from_secs(3)).await;
+            for line in script.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+                let (verb, arg) = line.split_once(' ').unwrap_or((line, ""));
+                eprintln!("script: {line}");
+                let core = ffi::core();
+                let tab = TABS.with(|t| t.borrow().get(current).copied()).unwrap_or(std::ptr::null_mut());
+                let c = |s: &str| CString::new(s).unwrap();
+                match verb {
+                    "use" => current = arg.parse().unwrap(),
+                    "load" => (core.tab_load_url)(tab, c(arg).as_ptr()),
+                    "back" => (core.tab_go_to_offset)(tab, -1),
+                    "forward" => (core.tab_go_to_offset)(tab, 1),
+                    "reload" => (core.tab_reload)(tab),
+                    "stop" => (core.tab_stop)(tab),
+                    "history" => {
+                        let at = (core.tab_history)(tab, visit_history, std::ptr::null_mut());
+                        eprintln!("baa: history current={at}");
+                    }
+                    "state" => {
+                        let mut s = ffi::TabState::empty();
+                        let ok = (core.tab_get_state)(tab, &mut s);
+                        let (url, title) = if ok { (text(s.url), text(s.title)) } else { Default::default() };
+                        eprintln!("baa: get_state ok={ok} url={url} title={title:?} loading={}", s.loading);
+                    }
+                    "eval" => (core.tab_eval)(tab, c(arg).as_ptr(), false),
+                    "geval" => (core.tab_eval)(tab, c(arg).as_ptr(), true),
+                    "find" => (core.tab_find)(tab, c(arg).as_ptr(), true),
+                    "zoom" => (core.tab_set_zoom)(tab, arg.parse().unwrap()),
+                    "mute" => (core.tab_set_muted)(tab, true),
+                    "unmute" => (core.tab_set_muted)(tab, false),
+                    "print" => (core.tab_print)(tab),
+                    "activate" => (core.tab_activate)(tab),
+                    "focus" => (core.tab_focus)(tab),
+                    "close" => {
+                        (core.tab_close)(tab);
+                        if current == 0 {
+                            PAGE_CLOSED.with(|c| c.set(true));
+                        }
+                    }
+                    "escape" => {
+                        let mut s = ffi::TabState::empty();
+                        if (core.tab_get_state)(tab, &mut s) {
+                            native::post_key(native::window_number(s.view.cast()), 53, "\u{1b}", false);
+                        }
+                    }
+                    "screenshot" => {
+                        shots += 1;
+                        let file = format!("/tmp/baa-shot-{shots}.png");
+                        let _ = std::process::Command::new("screencapture").args(["-x", &file]).status();
+                        eprintln!("script: screenshot {file}");
+                    }
+                    "click" | "cmdclick" | "rclick" => {
+                        let mut s = ffi::TabState::empty();
+                        if (core.tab_get_state)(tab, &mut s) {
+                            let (x, y) = arg.split_once(' ').unwrap();
+                            native::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), verb == "cmdclick", verb == "rclick");
+                        }
+                    }
+                    "tab" => {
+                        let (which, url) = arg.split_once(' ').unwrap_or((arg, "about:blank"));
+                        let new = (core.tab_create)(profile_for(which), c(url).as_ptr());
+                        let index = TABS.with(|t| {
+                            let mut t = t.borrow_mut();
+                            t.push(new);
+                            t.len() - 1
+                        });
+                        eprintln!("script: tab {index} = {new:?}");
+                    }
+                    "closeprofile" => (core.profile_close)(profile_for(arg)),
+                    "answer" => {
+                        let mut parts = arg.splitn(3, ' ');
+                        let id: u64 = parts.next().unwrap().parse().unwrap();
+                        let ok = parts.next() == Some("1");
+                        (core.dialog_answer)(id, ok, c(parts.next().unwrap_or("")).as_ptr());
+                    }
+                    "sleep" => executor.timer(std::time::Duration::from_millis(arg.parse().unwrap())).await,
+                    "quit" => {
+                        eprintln!("spike: quitting");
+                        cx.update(|cx| cx.quit());
+                    }
+                    other => eprintln!("script: unknown step {other:?}"),
+                }
+                executor.timer(std::time::Duration::from_secs(1)).await;
+            }
+            eprintln!("script: done");
+        })
+        .detach();
+    }
+
+    /// Opens (once) space-1, space-2 or the ephemeral profile.
+    fn profile_for(which: &str) -> ffi::Profile {
+        let core = ffi::core();
+        let slot = match which {
+            "1" => 0,
+            "2" => 1,
+            "e" => 2,
+            other => panic!("profile {other:?}"),
+        };
+        PROFILES.with(|p| {
+            let mut p = p.borrow_mut();
+            if p[slot].is_null() {
+                p[slot] = match slot {
+                    // BAA_SPIKE_PROFILE=Default puts the page where --load-extension
+                    // puts extensions (the start-up profile).
+                    0 => {
+                        let name = std::env::var("BAA_SPIKE_PROFILE").unwrap_or_else(|_| "space-1".into());
+                        (core.profile_open)(CString::new(name).unwrap().as_ptr())
+                    }
+                    1 => (core.profile_open)(c"space-2".as_ptr()),
+                    _ => (core.profile_open_ephemeral)(),
+                };
+                eprintln!("script: profile {which} = {:?}", p[slot]);
+            }
+            p[slot]
+        })
     }
 
     struct Spike {
@@ -177,12 +407,17 @@ mod app {
             GPUI_VIEW.with(|v| v.set(gpui_view));
             native::install_mouse_forwarding(gpui_view);
             let url = std::env::var("BAA_SPIKE_URL").unwrap_or_else(|_| "https://en.wikipedia.org/wiki/Web_browser".into());
-            let core = ffi::core();
-            let contents = (core.web_contents_create)(CString::new(url).unwrap().as_ptr());
-            let view = (core.web_contents_view)(contents).cast::<AnyObject>();
+            let profile = profile_for("1");
+            let url = CString::new(url).unwrap();
+            let tab = (ffi::core().tab_create)(profile, url.as_ptr());
+            assert!(!tab.is_null(), "baa_tab_create failed");
+            TABS.with(|t| t.borrow_mut().push(tab));
+            let mut state = ffi::TabState::empty();
+            assert!((ffi::core().tab_get_state)(tab, &mut state));
+            let view = state.view.cast::<AnyObject>();
             eprintln!("spike: page created, view {view:?}");
             let page = Rc::new(Page {
-                contents,
+                tab,
                 view,
                 container: native::Container::new(gpui_view, view, 10.),
                 drag: Cell::new(None),
@@ -260,7 +495,7 @@ mod app {
     }
 
     struct Page {
-        contents: ffi::WebContents,
+        tab: ffi::Tab,
         view: *mut AnyObject,
         container: native::Container,
         /// The view a drag started on; the drag stays with it.
@@ -316,7 +551,7 @@ mod app {
             _: &mut App,
         ) -> Hitbox {
             let visible = bounds.intersect(&window.content_mask().bounds);
-            if self.page.container.place(self.page.view, bounds, visible) {
+            if !PAGE_CLOSED.with(Cell::get) && self.page.container.place(self.page.view, bounds, visible) {
                 window.request_animation_frame();
             }
             window.insert_hitbox(bounds, HitboxBehavior::Normal)
@@ -341,7 +576,7 @@ mod app {
             window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hit.is_hovered(window) {
                     window.focus(&focus, cx);
-                    (ffi::core().web_contents_focus)(page.contents);
+                    (ffi::core().tab_focus)(page.tab);
                     page.drag.set(native::forward_current_event(page.view, None));
                 }
             });

@@ -381,6 +381,24 @@ pub fn edit_command(event: *mut AnyObject) -> Option<std::ffi::c_int> {
     }
 }
 
+/// An edit command as an action down the responder chain, which reaches the
+/// page's RenderWidgetHostViewCocoa (copy:, cut:, paste:, selectAll:, undo:, redo:).
+pub fn send_edit_action(command: std::ffi::c_int) {
+    use crate::ffi::*;
+    let action = match command {
+        EDIT_COPY => sel!(copy:),
+        EDIT_CUT => sel!(cut:),
+        EDIT_PASTE => sel!(paste:),
+        EDIT_SELECT_ALL => sel!(selectAll:),
+        EDIT_UNDO => sel!(undo:),
+        _ => sel!(redo:),
+    };
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: Bool = msg_send![app, sendAction: action, to: std::ptr::null_mut::<AnyObject>(), from: std::ptr::null_mut::<AnyObject>()];
+    }
+}
+
 /// Queues a key press (down and up) for the window numbered `window_number`,
 /// through the same `-[NSApp sendEvent:]` path as a real keystroke.
 pub fn post_key(window_number: isize, key_code: u16, chars: &str, command: bool) {
@@ -410,8 +428,8 @@ pub fn post_key(window_number: isize, key_code: u16, chars: &str, command: bool)
     }
 }
 
-/// Queues a left click at (`x`, `y`) points from `view`'s top left.
-pub fn post_click(view: *mut AnyObject, x: f64, y: f64) {
+/// Queues a left click (with ⌘ held when `command`) at (`x`, `y`) points from `view`'s top left.
+pub fn post_click(view: *mut AnyObject, x: f64, y: f64, command: bool, right: bool) {
     unsafe {
         let bounds: CGRect = msg_send![view, bounds];
         let flipped: Bool = msg_send![view, isFlipped];
@@ -422,19 +440,19 @@ pub fn post_click(view: *mut AnyObject, x: f64, y: f64) {
         let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
         let now: f64 = msg_send![info, systemUptime];
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        // NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp.
-        for kind in [1usize, 2] {
+        // NSEventTypeLeftMouseDown/Up, or the right ones (3, 4).
+        for kind in if right { [3usize, 4] } else { [1, 2] } {
             let event: *mut AnyObject = msg_send![
                 class!(NSEvent),
                 mouseEventWithType: kind,
                 location: point,
-                modifierFlags: 0usize,
+                modifierFlags: if command { 1usize << 20 } else { 0 },
                 timestamp: now,
                 windowNumber: number,
                 context: std::ptr::null_mut::<AnyObject>(),
                 eventNumber: 0isize,
                 clickCount: 1isize,
-                pressure: if kind == 1 { 1.0f32 } else { 0.0f32 }
+                pressure: if kind == 1 || kind == 3 { 1.0f32 } else { 0.0f32 }
             ];
             let _: () = msg_send![app, postEvent: event, atStart: Bool::NO];
         }

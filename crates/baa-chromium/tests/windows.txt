@@ -1,0 +1,23 @@
+# window.open / popup / cmd-click / extension / window.close (driven by /tmp-style win.sh: see crates/baa-chromium/tests/win.sh)
+load https://example.com/
+sleep 3000
+activate
+# a real click gives window.open a user gesture
+eval document.body.innerHTML='<a id=o href="#" style="position:fixed;inset:0;display:block;background:#fcc">open</a>';document.getElementById('o').onclick=(e)=>{e.preventDefault();window.open('https://example.org/')}
+sleep 500
+click 200 200
+sleep 3000
+eval document.body.innerHTML='<a id=p href="#" style="position:fixed;inset:0;display:block;background:#cfc">popup</a>';document.getElementById('p').onclick=(e)=>{e.preventDefault();window.open('https://example.net/','','popup,width=300,height=300')}
+sleep 500
+click 200 200
+sleep 3000
+eval document.body.innerHTML='<a id=l href="https://www.iana.org/" style="position:fixed;inset:0;display:block;background:#ccf">link</a>'
+sleep 500
+cmdclick 200 200
+sleep 3000
+use 1
+geval window.close()
+sleep 3000
+use 0
+history
+sleep 120000

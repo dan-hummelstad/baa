@@ -1,0 +1,13 @@
+# right-click shows Chrome's NSMenu; print opens the system print panel
+load https://example.com/
+sleep 3000
+activate
+rclick 300 300
+sleep 2000
+screenshot
+escape
+sleep 1000
+print
+sleep 3000
+screenshot
+quit

@@ -1,0 +1,36 @@
+# JS dialogs: alert, confirm answered false, dialog_closed on navigation, then close with stale handle
+load https://example.com/
+sleep 3000
+eval setTimeout(()=>{alert('x'); document.title='after-alert'},100)
+sleep 1500
+answer 1 1
+sleep 1500
+eval setTimeout(()=>{document.title='confirm:'+confirm('sure?')},100)
+sleep 1500
+answer 2 0
+sleep 1500
+eval setTimeout(()=>{document.title='prompt:'+prompt('name?','dflt')},100)
+sleep 1500
+answer 3 1 bob
+sleep 1500
+eval setTimeout(()=>alert('gone'),100)
+sleep 1500
+load https://example.org/
+sleep 3000
+# permissions: must not crash; page gets a dismissal
+geval navigator.geolocation.getCurrentPosition(p=>document.title='geo-ok',e=>document.title='geo-err:'+e.code)
+sleep 2000
+geval Notification.requestPermission().then(r=>document.title='notif:'+r)
+sleep 3000
+state
+tab 1 https://example.com/
+sleep 3000
+use 1
+close
+sleep 1000
+eval document.title='must-not-crash'
+load https://example.org/
+sleep 1000
+state
+use 0
+sleep 120000

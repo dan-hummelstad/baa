@@ -1,0 +1,32 @@
+# two disk profiles + one ephemeral; cookies must not leak between them; close all tabs of a profile and reopen
+load https://example.com/
+sleep 3000
+tab 2 https://example.com/
+sleep 3000
+tab e https://example.com/
+sleep 3000
+use 0
+eval document.cookie='c=space1;path=/;max-age=3600'
+sleep 500
+eval document.title='cookie:'+document.cookie
+sleep 500
+state
+use 1
+eval document.title='cookie:'+document.cookie
+sleep 500
+state
+use 2
+eval document.title='cookie:'+document.cookie
+sleep 500
+state
+# close the only tab of space-2, then make one again in it (new Browser)
+use 1
+close
+sleep 2000
+tab 2 https://example.org/
+sleep 3000
+use 3
+state
+use 0
+state
+quit

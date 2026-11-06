@@ -11,3 +11,18 @@
  
    for (auto* contents_view : browser_view->GetAllVisibleContentsWebViews()) {
      if (contents_view->web_contents() == web_contents) {
+--- a/chrome/browser/ui/read_anything/read_anything_side_panel_controller.cc
++++ b/chrome/browser/ui/read_anything/read_anything_side_panel_controller.cc
+@@ -241,11 +241,7 @@
+   // not create a SidePanelCoordinator. This block will be unnecessary once that
+   // changes.
+   if (!side_panel_ui) {
+-    // TODO(webium): create a SidePanelCoordinator for WebUIBrowser.
+-    // This is a temporary solution to avoid a crash.
+-    if (!webui_browser::IsWebUIBrowserEnabled()) {
+-      CHECK_IS_TEST();
+-    }
++    // baa: no side panel behind our window, as in the WebUI browser.
+     return;  // IN-TEST
+   }
+ 

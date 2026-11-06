@@ -10,6 +10,7 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/ui/views/frame/baa_browser_window_hook.h"
@@ -92,6 +93,11 @@ void baa_install_app(int argc,
   // Init later is a no-op.
   base::CommandLine::Init(argc, argv);
   [BaaApplication sharedApplication];
+}
+
+bool baa_is_quitting(void) {
+  return g_terminating || browser_shutdown::IsTryingToQuit() ||
+         browser_shutdown::HasShutdownStarted();
 }
 
 int baa_exit_code(void) {

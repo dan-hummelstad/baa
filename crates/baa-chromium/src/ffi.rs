@@ -1,15 +1,15 @@
-//! BaaCore's C ABI (`chromium/baa/baa.h`), loaded with dlopen like Chrome's
-//! own launcher does, so cargo never links against the Chromium build.
+//! BaaCore's C ABI (`chromium/baa/baa.h`, version 3), loaded with dlopen like
+//! Chrome's own launcher does, so cargo never links against the Chromium build.
 
 use std::{
     ffi::{c_char, c_int, c_void, CStr, CString},
     sync::OnceLock,
 };
 
-pub type WebContents = *mut c_void;
-pub type KeyFn = extern "C" fn(*mut c_void, WebContents, *mut c_void, bool) -> bool;
+pub type Tab = *mut c_void;
+pub type Profile = *mut c_void;
 
-pub const ABI_VERSION: c_int = 2;
+pub const ABI_VERSION: c_int = 3;
 
 pub const EDIT_COPY: c_int = 0;
 pub const EDIT_CUT: c_int = 1;
@@ -18,13 +18,70 @@ pub const EDIT_SELECT_ALL: c_int = 3;
 pub const EDIT_UNDO: c_int = 4;
 pub const EDIT_REDO: c_int = 5;
 
+#[repr(C)]
+pub struct TabState {
+    pub url: *const c_char,
+    pub title: *const c_char,
+    pub favicon_url: *const c_char,
+    pub view: *mut c_void,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub audible: bool,
+    pub secure: bool,
+}
+
+impl TabState {
+    pub fn empty() -> Self {
+        Self {
+            url: std::ptr::null(),
+            title: std::ptr::null(),
+            favicon_url: std::ptr::null(),
+            view: std::ptr::null_mut(),
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+            audible: false,
+            secure: false,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct Callbacks {
+    pub key: extern "C" fn(*mut c_void, *mut c_void, bool) -> bool,
+    pub tab_created: extern "C" fn(*mut c_void, Tab, Tab, Profile, *const c_char, bool, bool),
+    pub tab_state: extern "C" fn(*mut c_void, Tab, *const TabState),
+    pub tab_favicon: extern "C" fn(*mut c_void, Tab, *const c_char, *const u8, usize),
+    pub dialog: extern "C" fn(*mut c_void, Tab, u64, c_int, *const c_char, *const c_char),
+    pub dialog_closed: extern "C" fn(*mut c_void, Tab, u64),
+    pub tab_closed: extern "C" fn(*mut c_void, Tab),
+}
+
+pub type HistoryVisitor = extern "C" fn(*mut c_void, *const c_char, *const c_char);
+
 pub struct Core {
-    pub install_app: extern "C" fn(c_int, *const *const c_char, KeyFn, *mut c_void),
+    pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,
-    pub web_contents_create: extern "C" fn(*const c_char) -> WebContents,
-    pub web_contents_view: extern "C" fn(WebContents) -> *mut c_void,
-    pub web_contents_focus: extern "C" fn(WebContents),
-    pub web_contents_edit: extern "C" fn(WebContents, c_int),
+    pub profile_open: extern "C" fn(*const c_char) -> Profile,
+    pub profile_open_ephemeral: extern "C" fn() -> Profile,
+    pub profile_close: extern "C" fn(Profile),
+    pub tab_create: extern "C" fn(Profile, *const c_char) -> Tab,
+    pub tab_close: extern "C" fn(Tab),
+    pub tab_get_state: extern "C" fn(Tab, *mut TabState) -> bool,
+    pub tab_load_url: extern "C" fn(Tab, *const c_char),
+    pub tab_reload: extern "C" fn(Tab),
+    pub tab_stop: extern "C" fn(Tab),
+    pub tab_go_to_offset: extern "C" fn(Tab, c_int),
+    pub tab_history: extern "C" fn(Tab, HistoryVisitor, *mut c_void) -> c_int,
+    pub tab_eval: extern "C" fn(Tab, *const c_char, bool),
+    pub tab_set_zoom: extern "C" fn(Tab, f64),
+    pub tab_find: extern "C" fn(Tab, *const c_char, bool),
+    pub tab_print: extern "C" fn(Tab),
+    pub tab_set_muted: extern "C" fn(Tab, bool),
+    pub tab_activate: extern "C" fn(Tab),
+    pub tab_focus: extern "C" fn(Tab),
+    pub dialog_answer: extern "C" fn(u64, bool, *const c_char),
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -59,10 +116,25 @@ pub fn load() -> &'static Core {
         let core = Core {
             install_app: std::mem::transmute(sym(c"baa_install_app")),
             exit_code: std::mem::transmute(sym(c"baa_exit_code")),
-            web_contents_create: std::mem::transmute(sym(c"baa_web_contents_create")),
-            web_contents_view: std::mem::transmute(sym(c"baa_web_contents_view")),
-            web_contents_focus: std::mem::transmute(sym(c"baa_web_contents_focus")),
-            web_contents_edit: std::mem::transmute(sym(c"baa_web_contents_edit")),
+            profile_open: std::mem::transmute(sym(c"baa_profile_open")),
+            profile_open_ephemeral: std::mem::transmute(sym(c"baa_profile_open_ephemeral")),
+            profile_close: std::mem::transmute(sym(c"baa_profile_close")),
+            tab_create: std::mem::transmute(sym(c"baa_tab_create")),
+            tab_close: std::mem::transmute(sym(c"baa_tab_close")),
+            tab_get_state: std::mem::transmute(sym(c"baa_tab_get_state")),
+            tab_load_url: std::mem::transmute(sym(c"baa_tab_load_url")),
+            tab_reload: std::mem::transmute(sym(c"baa_tab_reload")),
+            tab_stop: std::mem::transmute(sym(c"baa_tab_stop")),
+            tab_go_to_offset: std::mem::transmute(sym(c"baa_tab_go_to_offset")),
+            tab_history: std::mem::transmute(sym(c"baa_tab_history")),
+            tab_eval: std::mem::transmute(sym(c"baa_tab_eval")),
+            tab_set_zoom: std::mem::transmute(sym(c"baa_tab_set_zoom")),
+            tab_find: std::mem::transmute(sym(c"baa_tab_find")),
+            tab_print: std::mem::transmute(sym(c"baa_tab_print")),
+            tab_set_muted: std::mem::transmute(sym(c"baa_tab_set_muted")),
+            tab_activate: std::mem::transmute(sym(c"baa_tab_activate")),
+            tab_focus: std::mem::transmute(sym(c"baa_tab_focus")),
+            dialog_answer: std::mem::transmute(sym(c"baa_dialog_answer")),
         };
         CORE.get_or_init(|| core)
     }

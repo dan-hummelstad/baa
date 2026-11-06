@@ -516,16 +516,20 @@ void OnTabInserted(TabStripModel* model,
   }
   t->reported = false;
   t->background = background;
-  t->opener = model->GetOpenerOfTabAt(index);
+  // window.opener first; else the strip's opener (the active tab at insertion,
+  // which is the page a link was clicked in when baa keeps the shown tab active).
   content::RenderFrameHost* opener_frame = wc->GetOpener();
-  if (!t->opener && opener_frame) {
+  if (opener_frame) {
     t->opener = tabs::TabInterface::MaybeGetFromContents(
         content::WebContents::FromRenderFrameHost(opener_frame));
   }
+  if (!t->opener) {
+    t->opener = model->GetOpenerOfTabAt(index);
+  }
   if (t->opener && t->opener->GetContents()) {
-    t->user_gesture = t->opener->GetContents()
-                          ->GetPrimaryMainFrame()
-                          ->HasTransientUserActivation();
+    content::WebContents* from = t->opener->GetContents();
+    t->user_gesture = from->HasRecentInteraction() ||
+                      from->GetPrimaryMainFrame()->HasTransientUserActivation();
   }
   // window.open() inserts the tab blank and navigates it right after, so the
   // URL is awaited (DidStartNavigation), but not for long: a tab that never
