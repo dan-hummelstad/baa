@@ -40,9 +40,11 @@ struct Pending {
 /// What `WebHost::fetch` waits with.
 type FetchDone = Box<dyn FnOnce(Option<String>)>;
 
+/// A tab baa shows: its shared half, and its gpui entity unless it has none
+/// (the settings sheet), when only its view is followed.
 pub(super) struct Live {
     pub(super) shared: Rc<Shared>,
-    pub(super) page: WeakEntity<CorePage>,
+    pub(super) page: Option<WeakEntity<CorePage>>,
 }
 
 /// The callback side. `ctx` of every callback points at it; it lives for the
@@ -53,12 +55,10 @@ pub(super) struct Dispatch {
     /// Before [`CoreRuntime::start`] there is none and callbacks do nothing;
     /// Chrome makes no tabs of its own then (`--no-startup-window`).
     pub(super) app: RefCell<Option<AsyncApp>>,
-    pub(super) pages: RefCell<HashMap<*mut Tab, Live>>,
+    pub(super) tabs: RefCell<HashMap<*mut Tab, Live>>,
     pending: RefCell<Vec<Pending>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
-    /// Tabs without a gpui entity (the settings sheet): only their view is followed.
-    pub(super) bare: RefCell<HashMap<*mut Tab, Rc<Shared>>>,
     pub(super) fetches: RefCell<HashMap<u64, FetchDone>>,
     pub(super) next_fetch: Cell<u64>,
     next_seq: Cell<u64>,
@@ -71,11 +71,10 @@ impl Dispatch {
         Self {
             core,
             app: RefCell::default(),
-            pages: RefCell::default(),
+            tabs: RefCell::default(),
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
-            bare: RefCell::default(),
             fetches: RefCell::default(),
             next_fetch: Cell::new(1),
             next_seq: Cell::new(0),
@@ -90,10 +89,14 @@ impl Dispatch {
         }
     }
 
+    /// The gpui entity of `tab`; none for an unknown tab or one without.
+    pub(super) fn page_of(&self, tab: *mut Tab) -> Option<WeakEntity<CorePage>> {
+        self.tabs.borrow().get(&tab)?.page.clone()
+    }
+
     /// Runs `f` on the page of `tab` next turn; nothing for an unknown tab.
     pub(super) fn on_page(&self, tab: *mut Tab, f: impl FnOnce(&mut CorePage, &mut Context<CorePage>) + 'static) {
-        let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
-        if let Some(page) = page {
+        if let Some(page) = self.page_of(tab) {
             self.queue(move |cx| {
                 page.update(cx, f).ok();
             });
@@ -132,7 +135,7 @@ impl Dispatch {
         let seq = self.next_seq.get();
         self.next_seq.set(seq + 1);
         self.pending.borrow_mut().push(Pending { tab, profile, url: url.clone(), seq });
-        let opener = self.pages.borrow().get(&opener).map(|live| live.page.clone());
+        let opener = self.page_of(opener);
         self.queue(move |cx| {
             let requested = PageEvent::OpenRequested { url: url.clone(), from_user_gesture, background };
             let delivered = opener.and_then(|page| page.update(cx, |_, cx| cx.emit(requested)).ok());
@@ -164,23 +167,20 @@ impl Dispatch {
     /// A tab's snapshot. A changed view is swapped in now: Chrome frees the
     /// old one as soon as this callback returns.
     fn tab_state(&self, tab: *mut Tab, snapshot: Snapshot) {
-        let live = self.pages.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
-        let Some((shared, page)) = live else {
-            if let Some(shared) = self.bare.borrow().get(&tab) {
-                Self::swap_view(shared, snapshot.view);
-            }
-            return;
-        };
-        let view_changed = Self::swap_view(&shared, snapshot.view);
-        self.queue(move |cx| {
-            page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
-        });
+        let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
+        let Some((shared, page)) = live else { return };
+        let view_changed = shared.container.swap_page(snapshot.view);
+        if let Some(page) = page {
+            self.queue(move |cx| {
+                page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
+            });
+        }
     }
 
     /// A download started or changed. The first sight of one also tells the
     /// page it came from.
     fn download(&'static self, tab: *mut Tab, download: crate::Download) {
-        let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
+        let page = self.page_of(tab);
         self.queue(move |cx| {
             let list = self.downloads.borrow().clone();
             let new = list.and_then(|list| {
@@ -200,44 +200,27 @@ impl Dispatch {
 
     /// A menu is open in the page; a page that is gone gets it closed.
     fn context_menu(&'static self, tab: *mut Tab, id: u64, x: f32, y: f32, rows: Vec<Row>) {
-        let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
-        let bare = self.bare.borrow().get(&tab).cloned();
-        self.queue(move |cx| match (page, bare) {
-            (Some(page), _) => {
+        let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
+        self.queue(move |cx| match live {
+            Some((_, Some(page))) => {
                 if page.update(cx, |page, cx| page.show_context_menu(id, x, y, rows, cx)).is_err() {
                     (self.core.context_menu_done)(id, -1);
                 }
             }
             // The sheet has no entity: its menu opens over its view, and Inspect
             // goes to Chrome's own window like a popup's.
-            (None, Some(shared)) => present_menu(shared, id, x, y, rows, PageKind::Popup, || {}),
-            (None, None) => (self.core.context_menu_done)(id, -1),
+            Some((shared, None)) => present_menu(shared, id, x, y, rows, PageKind::Popup, || {}),
+            None => (self.core.context_menu_done)(id, -1),
         });
-    }
-
-    fn swap_view(shared: &Shared, view: *mut AnyObject) -> bool {
-        let changed = view != shared.view.get();
-        if changed {
-            shared.container.swap_page(shared.view.replace(view), view);
-            shared.container.page_created(view);
-        }
-        changed
     }
 
     /// The profile is going away with its tabs, which Chrome may not report.
     pub(super) fn forget_profile(&self, profile: *mut Profile) {
         self.pending.borrow_mut().retain(|p| p.profile != profile);
-        self.bare.borrow_mut().retain(|_, shared| {
-            let keep = shared.profile != profile;
-            if !keep {
-                shared.release();
-            }
-            keep
-        });
         let gone: Vec<_> =
-            self.pages.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
+            self.tabs.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
         for tab in gone {
-            let live = self.pages.borrow_mut().remove(&tab);
+            let live = self.tabs.borrow_mut().remove(&tab);
             if let Some(live) = live {
                 live.shared.release();
             }
@@ -252,20 +235,18 @@ impl Dispatch {
 
     fn tab_closed(&self, tab: *mut Tab) {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
-        if let Some(shared) = self.bare.borrow_mut().remove(&tab) {
-            shared.release();
-            return;
-        }
-        let Some(live) = self.pages.borrow_mut().remove(&tab) else { return };
+        let Some(live) = self.tabs.borrow_mut().remove(&tab) else { return };
         // Now, not next turn: the handle is dead, its address may be reused, and
         // its view is freed once this callback returns.
         live.shared.release();
+        // The sheet has no entity to tell; it notices through `Shared::tab`.
+        let Some(page) = live.page else { return };
         if (self.core.is_quitting)() {
             // ⌘Q closes every tab; the session must keep them.
             return;
         }
         self.queue(move |cx| {
-            live.page.update(cx, |page, cx| page.chrome_closed(cx)).ok();
+            page.update(cx, |_, cx| cx.emit(PageEvent::Closed)).ok();
         });
     }
 }
@@ -315,7 +296,7 @@ pub(super) fn callbacks() -> Callbacks {
         let d = unsafe { dispatch(ctx) };
         let kind = dialog_kind(kind);
         let quitting = matches!(kind, DialogKind::BeforeUnload { .. }) && (d.core.is_quitting)();
-        if quitting || !d.pages.borrow().contains_key(&tab) {
+        if quitting || d.page_of(tab).is_none() {
             // ⌘Q waits on a leave-site question nobody would answer for a hidden
             // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
             // ask. Answered next turn: Chrome is inside its dialog code now,
@@ -343,7 +324,7 @@ pub(super) fn callbacks() -> Callbacks {
         let origin = unsafe { from_c(origin) };
         let kinds = permissions_of(kinds);
         let d = unsafe { dispatch(ctx) };
-        if !d.pages.borrow().contains_key(&tab) {
+        if d.page_of(tab).is_none() {
             d.queue(move |_| (d.core.permission_answer)(id, false));
             return;
         }

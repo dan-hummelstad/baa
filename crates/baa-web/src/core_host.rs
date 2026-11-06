@@ -193,11 +193,10 @@ struct Shared {
     core: &'static Core,
     kind: PageKind,
     profile: *mut Profile,
-    container: Rc<native::Container>,
+    /// Holds the tab's NSView.
+    container: native::Container,
     /// Null once the tab is gone (Chrome closed it, or baa did).
     tab: Cell<*mut Tab>,
-    /// The tab's NSView while it is in the container; null once released.
-    view: Cell<*mut AnyObject>,
     dialog: Cell<Option<u64>>,
     /// The view a mouse drag started on, and whether the pointer is over the
     /// page; across frames, so a repaint mid-click loses nothing.
@@ -206,12 +205,42 @@ struct Shared {
 }
 
 impl Shared {
+    /// Reads `tab`'s first state (empty for a null tab, as when the app is
+    /// terminating) and puts its view in a new container below `gpui_view`.
+    fn open(
+        core: &'static Core,
+        kind: PageKind,
+        profile: *mut Profile,
+        tab: *mut Tab,
+        gpui_view: *mut AnyObject,
+        corner_radius: f32,
+    ) -> (Rc<Self>, Snapshot) {
+        let mut state = Snapshot::default();
+        if !tab.is_null() {
+            let mut raw: TabState = unsafe { std::mem::zeroed() };
+            if (core.tab_get_state)(tab, &mut raw) {
+                state = Snapshot::from_c(&raw);
+            }
+        }
+        let shared = Rc::new(Self {
+            core,
+            kind,
+            profile,
+            container: native::Container::new(gpui_view, state.view, corner_radius),
+            tab: Cell::new(tab),
+            dialog: Cell::new(None),
+            drag: Cell::new(None),
+            inside: Cell::new(false),
+        });
+        (shared, state)
+    }
+
     /// The tab is gone: forget its handle and take its view out of the
     /// container before Chromium frees it. Only AppKit calls, so it is safe
     /// inside a callback.
     fn release(&self) {
         self.tab.set(std::ptr::null_mut());
-        self.container.swap_page(self.view.replace(std::ptr::null_mut()), std::ptr::null_mut());
+        self.container.swap_page(std::ptr::null_mut());
         self.drag.set(None);
         self.inside.set(false);
     }

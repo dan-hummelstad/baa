@@ -14,7 +14,6 @@ use super::{native, Shared};
 /// gpui's layer transparent over it.
 pub(super) struct PageSlot {
     pub(super) shared: Rc<Shared>,
-    pub(super) container: Rc<native::Container>,
     pub(super) focus_handle: FocusHandle,
     pub(super) corner_radius: f32,
     pub(super) square_corners: u8,
@@ -63,11 +62,11 @@ impl Element for PageSlot {
     ) -> Hitbox {
         let visible = bounds.intersect(&window.content_mask().bounds);
         if visible.size.width > Pixels::ZERO && visible.size.height > Pixels::ZERO {
-            if self.container.place(self.shared.view.get(), bounds, visible) {
+            if self.shared.container.place(bounds, visible) {
                 window.request_animation_frame();
             }
         } else {
-            self.container.set_hidden(true);
+            self.shared.container.set_hidden(true);
         }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -93,7 +92,7 @@ impl Element for PageSlot {
         let (shared, hit, focus) = (self.shared.clone(), hitbox.clone(), self.focus_handle.clone());
         window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hit.is_hovered(window) {
-                shared.drag.set(native::forward_current_event(shared.view.get(), None));
+                shared.drag.set(native::forward_current_event(shared.container.page(), None));
                 window.focus(&focus, cx);
                 shared.run(|core, tab| (core.tab_focus)(tab));
             }
@@ -104,28 +103,28 @@ impl Element for PageSlot {
                 return;
             }
             if let Some(view) = shared.drag.get().filter(|_| event.pressed_button.is_some()) {
-                native::forward_current_event(shared.view.get(), Some(view));
+                native::forward_current_event(shared.container.page(), Some(view));
                 return;
             }
             // Moves over the page, and the first one off it so hover ends.
             let over = hit.is_hovered(window);
             if over || shared.inside.get() {
                 shared.inside.set(over);
-                native::forward_current_event(shared.view.get(), None);
+                native::forward_current_event(shared.container.page(), None);
             }
         });
         let shared = self.shared.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
             if phase == DispatchPhase::Bubble {
                 if let Some(view) = shared.drag.take() {
-                    native::forward_current_event(shared.view.get(), Some(view));
+                    native::forward_current_event(shared.container.page(), Some(view));
                 }
             }
         });
         let (shared, hit) = (self.shared.clone(), hitbox.clone());
         window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, _| {
             if phase == DispatchPhase::Bubble && hit.should_handle_scroll(window) {
-                native::forward_current_event(shared.view.get(), None);
+                native::forward_current_event(shared.container.page(), None);
             }
         });
     }

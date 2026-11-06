@@ -10,7 +10,7 @@ use std::{
 use objc2::runtime::AnyObject;
 use serde_json::to_string;
 
-use super::{c_string, ffi::TabState, native, Dispatch, PageKind, Shared, Snapshot};
+use super::{c_string, dispatch::Live, native, Dispatch, PageKind, Shared};
 use crate::ChromeSheet;
 
 pub struct Sheet {
@@ -41,21 +41,8 @@ impl Sheet {
         if tab.is_null() {
             return None;
         }
-        let mut raw: TabState = unsafe { std::mem::zeroed() };
-        let view = if (core.tab_get_state)(tab, &mut raw) { Snapshot::from_c(&raw).view } else { std::ptr::null_mut() };
-        let container = Rc::new(native::Container::new(std::ptr::null_mut(), view, sheet.corner_radius));
-        let shared = Rc::new(Shared {
-            core,
-            kind: PageKind::Tab,
-            profile,
-            container,
-            tab: Cell::new(tab),
-            view: Cell::new(view),
-            dialog: Cell::new(None),
-            drag: Cell::new(None),
-            inside: Cell::new(false),
-        });
-        dispatch.bare.borrow_mut().insert(tab, shared.clone());
+        let (shared, _) = Shared::open(core, PageKind::Tab, profile, tab, std::ptr::null_mut(), sheet.corner_radius);
+        dispatch.tabs.borrow_mut().insert(tab, Live { shared: shared.clone(), page: None });
         (core.tab_set_init_script)(tab, c_string(&skin_loader(&sheet.css)).as_ptr());
         (core.tab_set_color_scheme)(tab, scheme(sheet.dark));
         (core.tab_load_url)(tab, c_string(&chrome_url(&sheet.url)).as_ptr());
@@ -96,8 +83,8 @@ impl Sheet {
             container.move_above(gpui_view);
         }
         container.set_corner_radius(sheet.corner_radius);
-        container.set_visible(true, self.shared.view.get());
-        if container.place(self.shared.view.get(), sheet.bounds, sheet.bounds) {
+        container.set_visible(true);
+        if container.place(sheet.bounds, sheet.bounds) {
             window.request_animation_frame();
         }
         if !self.shown.replace(true) {
@@ -110,10 +97,10 @@ impl Sheet {
 
     pub fn hide(&self) {
         // Keys must not go on into a hidden page.
-        if self.shown.replace(false) && native::has_first_responder(self.shared.view.get()) {
+        if self.shown.replace(false) && native::has_first_responder(self.shared.container.page()) {
             native::make_first_responder(self.over.get());
         }
-        self.shared.container.set_visible(false, self.shared.view.get());
+        self.shared.container.set_visible(false);
     }
 
     /// Chrome closed its tab.
@@ -132,7 +119,7 @@ impl Drop for Sheet {
         self.hide();
         self.shared.release();
         if !tab.is_null() {
-            self.dispatch.bare.borrow_mut().remove(&tab);
+            self.dispatch.tabs.borrow_mut().remove(&tab);
             (self.dispatch.core.tab_close)(tab);
         }
     }

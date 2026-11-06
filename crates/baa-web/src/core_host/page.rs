@@ -19,7 +19,7 @@ use super::{
     menu::{present_menu, Row},
     native,
     slot::PageSlot,
-    ffi::{Profile, Tab, TabState},
+    ffi::{Profile, Tab},
     PageKind, Shared, Snapshot,
 };
 use crate::{PageEvent, PageHandle, ProfileId};
@@ -30,7 +30,6 @@ pub struct CorePage {
     pub(super) shared: Rc<Shared>,
     pub(super) profile: ProfileId,
     state: Snapshot,
-    pub(super) container: Rc<native::Container>,
     focus_handle: FocusHandle,
     /// gpui's own view, which gets keyboard focus back when the page loses it.
     gpui_view: *mut AnyObject,
@@ -54,30 +53,11 @@ impl CorePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut state = Snapshot::default();
-        if !tab.is_null() {
-            let mut raw: TabState = unsafe { std::mem::zeroed() };
-            if (dispatch.core.tab_get_state)(tab, &mut raw) {
-                state = Snapshot::from_c(&raw);
-            }
-        }
         let gpui_view = native::gpui_view(window);
         native::install_mouse_forwarding(gpui_view);
-        let container = Rc::new(native::Container::new(gpui_view, state.view, 0.));
-        container.page_created(state.view);
-        let shared = Rc::new(Shared {
-            core: dispatch.core,
-            kind,
-            profile: handle,
-            container: container.clone(),
-            tab: Cell::new(tab),
-            view: Cell::new(state.view),
-            dialog: Cell::new(None),
-            drag: Cell::new(None),
-            inside: Cell::new(false),
-        });
+        let (shared, state) = Shared::open(dispatch.core, kind, handle, tab, gpui_view, 0.);
         if !tab.is_null() {
-            dispatch.pages.borrow_mut().insert(tab, Live { shared: shared.clone(), page: cx.weak_entity() });
+            dispatch.tabs.borrow_mut().insert(tab, Live { shared: shared.clone(), page: Some(cx.weak_entity()) });
         }
         let focus_handle = cx.focus_handle();
         let focus = subscribe(&focus_handle, window, cx);
@@ -95,7 +75,6 @@ impl CorePage {
             shared,
             profile,
             state,
-            container,
             focus_handle,
             gpui_view,
             corner_radius: Cell::new(0.),
@@ -170,10 +149,6 @@ impl CorePage {
         .detach();
     }
 
-    pub(super) fn chrome_closed(&mut self, cx: &mut Context<Self>) {
-        cx.emit(PageEvent::Closed);
-    }
-
     /// Makes the tab its window's active one; popups and DevTools have no strip.
     fn activate(&self) {
         if self.shared.kind == PageKind::Tab {
@@ -182,7 +157,7 @@ impl CorePage {
     }
 
     fn set_browser_focus(&self, focused: bool) {
-        let view = self.shared.view.get();
+        let view = self.shared.container.page();
         if focused {
             self.shared.run(|core, tab| {
                 (core.tab_focus)(tab);
@@ -206,11 +181,11 @@ fn subscribe(focus_handle: &FocusHandle, window: &mut Window, cx: &mut Context<C
 impl Drop for CorePage {
     fn drop(&mut self) {
         // The view leaves the window before Chrome destroys it.
-        self.container.set_visible(false, self.shared.view.get());
+        self.shared.container.set_visible(false);
         let tab = self.shared.tab.get();
         self.shared.release();
         if !tab.is_null() {
-            self.dispatch.pages.borrow_mut().remove(&tab);
+            self.dispatch.tabs.borrow_mut().remove(&tab);
             (self.dispatch.core.tab_close)(tab);
         }
     }
@@ -228,7 +203,6 @@ impl Render for CorePage {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div().track_focus(&self.focus_handle).key_context("Webview").size_full().child(PageSlot {
             shared: self.shared.clone(),
-            container: self.container.clone(),
             focus_handle: self.focus_handle.clone(),
             corner_radius: self.corner_radius.get(),
             square_corners: self.square_corners.get(),
@@ -317,7 +291,7 @@ impl PageHandle for CorePage {
         self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(script).as_ptr(), true));
     }
     fn set_visible(&self, visible: bool) {
-        self.container.set_visible(visible, self.shared.view.get());
+        self.shared.container.set_visible(visible);
         // The tab on show is the one the user is on, focused or not.
         if visible {
             self.activate();
@@ -333,20 +307,20 @@ impl PageHandle for CorePage {
         }
     }
     fn set_corner_radius(&self, radius: f32) {
-        self.container.set_corner_radius(radius);
+        self.shared.container.set_corner_radius(radius);
         self.corner_radius.set(radius);
     }
     fn set_square_corners(&self, square: u8) {
-        self.container.set_square_corners(square);
+        self.shared.container.set_square_corners(square);
         self.square_corners.set(square);
     }
     fn set_floating(&self, floating: bool) {
-        self.container.set_floating(floating);
+        self.shared.container.set_floating(floating);
     }
     fn move_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gpui_view = native::gpui_view(window);
         self.gpui_view = gpui_view;
-        self.container.move_below(gpui_view);
+        self.shared.container.move_below(gpui_view);
         native::install_mouse_forwarding(gpui_view);
         self._focus = subscribe(&self.focus_handle, window, cx);
         cx.notify();

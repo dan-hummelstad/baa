@@ -614,7 +614,7 @@ fn superview(view: *mut AnyObject) -> *mut AnyObject {
 }
 
 fn container_of(page: &Entity<CorePage>, cx: &mut TestAppContext) -> *mut AnyObject {
-    page.read_with(cx, |page, _| page.container.as_ptr())
+    page.read_with(cx, |page, _| page.shared.container.as_ptr())
 }
 
 #[gpui::test]
@@ -629,7 +629,7 @@ fn a_replaced_view_is_swapped_in_inside_the_callback(cx: &mut TestAppContext) {
     env.state(env.tab_of(&page, cx), &State { view: new as usize, ..Default::default() });
     assert!(superview(old).is_null());
     assert_eq!(superview(new), container);
-    page.read_with(cx, |page, _| assert_eq!(page.shared.view.get(), new));
+    page.read_with(cx, |page, _| assert_eq!(page.shared.container.page(), new));
 }
 
 #[gpui::test]
@@ -642,7 +642,7 @@ fn a_tab_chrome_closed_lets_go_of_its_view_at_once(cx: &mut TestAppContext) {
 
     (env.callbacks.tab_closed)(env.ctx(), tab);
     assert!(superview(view).is_null());
-    page.read_with(cx, |page, _| assert!(page.shared.view.get().is_null()));
+    page.read_with(cx, |page, _| assert!(page.shared.container.page().is_null()));
     cx.run_until_parked();
     assert_eq!(*seen.borrow(), [PageEvent::Closed]);
     cx.update(|_| drop(page));
@@ -1147,7 +1147,7 @@ fn a_sheet_chrome_closed_is_opened_again_and_its_menu_is_not_dropped(cx: &mut Te
         env.window.update(cx, |_, window, _| env.host.show_chrome_page(ProfileId(1), Some(sheet()), window)).unwrap()
     };
     assert!(show(cx));
-    let first: *mut Tab = *env.dispatch.bare.borrow().keys().next().unwrap();
+    let first: *mut Tab = *env.dispatch.tabs.borrow().keys().next().unwrap();
 
     // Its menu goes up over the sheet; Chrome is told when it closes, not at once.
     let items = [ffi::MenuItem { label: c"Copy".as_ptr(), command: 7, depth: 0, kind: 0, enabled: true, checked: false }];
@@ -1181,7 +1181,7 @@ fn a_floating_page_rises_to_just_below_gpui_with_an_overlay_above() {
     assert_eq!(at(content, 0), floating.as_ptr());
 
     let bounds = gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), gpui::size(gpui::px(10.), gpui::px(10.)));
-    floating.place(std::ptr::null_mut(), bounds, bounds);
+    floating.place(bounds, bounds);
     assert_eq!([at(content, 0), at(content, 1), at(content, 2), at(content, 3)], [other.as_ptr(), floating.as_ptr(), gpui_view, overlay.as_ptr()]);
     assert!(floating.is_beside(gpui_view));
 }

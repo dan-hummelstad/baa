@@ -235,7 +235,7 @@ pub(super) fn menu_answer(rows: &[Row], picked: Option<usize>, kind: PageKind) -
 pub(super) fn present_menu(shared: Rc<Shared>, id: u64, x: f32, y: f32, rows: Vec<Row>, kind: PageKind, on_inspect: impl FnOnce() + 'static) {
     let core = shared.core;
     let items = menu_tree(&rows);
-    show_at(move || shared.view.get(), x, y, items, move |picked| {
+    show_at(move || shared.container.page(), x, y, items, move |picked| {
         let (command, inspect) = menu_answer(&rows, picked, kind);
         (core.context_menu_done)(id, command);
         if inspect {

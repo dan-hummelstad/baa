@@ -82,6 +82,8 @@ pub fn nsapp_has_gpui_ivar() -> bool {
 /// rounds its corners. Owns one reference; removed from the window on drop.
 pub struct Container {
     view: *mut AnyObject,
+    /// The tab's own NSView inside `view`; null until the tab has one.
+    page: Cell<*mut AnyObject>,
     placed: Cell<Option<CGRect>>,
     /// What the app asked for; layout never shows a page the app hid.
     visible: Cell<bool>,
@@ -111,6 +113,7 @@ impl Container {
             let _: () = msg_send![view, setAutoresizingMask: FILL];
             let this = Self {
                 view,
+                page: Cell::new(std::ptr::null_mut()),
                 placed: Cell::new(None),
                 visible: Cell::new(true),
                 floating: Cell::new(false),
@@ -118,7 +121,7 @@ impl Container {
                 resized_at: Cell::new(0.),
             };
             this.move_below(gpui_view);
-            this.swap_page(std::ptr::null_mut(), page);
+            this.swap_page(page);
             this
         }
     }
@@ -233,26 +236,36 @@ impl Container {
         }
     }
 
+    pub fn page(&self) -> *mut AnyObject {
+        self.page.get()
+    }
+
     /// Chrome swapped the tab's view (discard, reload): the new one takes the
-    /// old one's place. Either may be null.
-    pub fn swap_page(&self, old: *mut AnyObject, new: *mut AnyObject) {
+    /// old one's place. May be null (the tab is gone). True when it changed.
+    pub fn swap_page(&self, new: *mut AnyObject) -> bool {
+        let old = self.page.replace(new);
+        if old == new {
+            return false;
+        }
         detach(old);
-        if new.is_null() {
-            return;
+        if !new.is_null() {
+            unsafe {
+                let _: () = msg_send![self.view, addSubview: new];
+            }
+            if !self.visible.get() {
+                set_view_hidden(new, true);
+            }
+            self.page_created();
         }
-        unsafe {
-            let _: () = msg_send![self.view, addSubview: new];
-        }
-        if !self.visible.get() {
-            set_view_hidden(new, true);
-        }
+        true
     }
 
     /// Puts the container at `visible` (the element's rect clipped by its
     /// content mask) and the page at `bounds`, both in gpui window
     /// coordinates. True when the page's new size is held back: call again on
     /// a later frame.
-    pub fn place(&self, page: *mut AnyObject, bounds: Bounds<Pixels>, visible: Bounds<Pixels>) -> bool {
+    pub fn place(&self, bounds: Bounds<Pixels>, visible: Bounds<Pixels>) -> bool {
+        let page = self.page.get();
         let mut pending = false;
         unsafe {
             let content: *mut AnyObject = msg_send![self.view, superview];
@@ -307,7 +320,8 @@ impl Container {
     /// hidden container starts out believing it is visible: show it a hide.
     /// AppKit reports only effective changes, so the container is unhidden for
     /// the toggle too; all in one run loop turn, so nothing reaches the screen.
-    pub fn page_created(&self, page: *mut AnyObject) {
+    fn page_created(&self) {
+        let page = self.page.get();
         if !self.visible.get() && !page.is_null() {
             self.set_hidden(false);
             set_view_hidden(page, false);
@@ -317,11 +331,11 @@ impl Container {
     }
 
     /// Showing waits for the next [`Container::place`].
-    pub fn set_visible(&self, visible: bool, page: *mut AnyObject) {
+    pub fn set_visible(&self, visible: bool) {
         self.visible.set(visible);
         if !visible {
             self.set_hidden(true);
-            set_view_hidden(page, true);
+            set_view_hidden(self.page.get(), true);
         }
     }
 
