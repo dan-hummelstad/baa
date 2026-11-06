@@ -2,11 +2,8 @@
 name = "xtask"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
 anyhow.workspace = true
-semver = "1"
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-cef = { workspace = true, features = ["build-util"] }

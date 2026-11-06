@@ -1,19 +1,83 @@
-//! CEF host. The UI codes against [`WebHost`]/[`PageHandle`] only (PLAN.md §12);
-//! CEF types never cross this crate's boundary.
+//! BaaCore host. The UI codes against [`WebHost`]/[`PageHandle`] only; no C ABI
+//! types cross this crate's boundary.
 
-mod cef_host;
-#[cfg(all(feature = "core", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 mod core_host;
 
 use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
 pub use baa_model::ProfileId;
-pub use cef_host::{CefPage, CefRuntime, CefWebHost};
-#[cfg(all(feature = "core", target_os = "macos"))]
-pub use core_host::{chrome_argv, CorePage, CoreRuntime, CoreWebHost};
-#[cfg(all(feature = "core", target_os = "macos"))]
-pub use cef_host::{purge_deleted_profiles, share_native_messaging_hosts};
-pub use gpui_cef::{DialogKind, Download, DownloadState, Error, MenuItem, Permission, PermissionState};
+#[cfg(target_os = "macos")]
+pub use core_host::{
+    chrome_argv,
+    profiles::{migrate_cef_profiles, purge_deleted_profiles, share_native_messaging_hosts},
+    CorePage, CoreRuntime, CoreWebHost,
+};
+
+/// An entry of a native context menu (see [`WebHost::show_menu`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MenuItem {
+    /// `id` is what [`WebHost::show_menu`] reports when it is picked.
+    Action { label: String, enabled: bool, checked: bool, id: usize },
+    Separator,
+    Submenu { label: String, items: Vec<MenuItem> },
+}
+
+impl MenuItem {
+    pub fn action(label: impl Into<String>, id: usize) -> Self {
+        Self::Action { label: label.into(), enabled: true, checked: false, id }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Permission {
+    Camera,
+    Microphone,
+    ScreenShare,
+    Location,
+    Notifications,
+    Clipboard,
+    Midi,
+    /// Anything rarer (storage access, window management, ...).
+    Other,
+}
+
+/// What a profile remembers about a site's permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionState {
+    Ask,
+    Allow,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+    BeforeUnload { is_reload: bool },
+}
+
+/// A snapshot of one download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    /// Stable across updates of the same download for the life of the process.
+    pub id: u32,
+    pub url: String,
+    /// Empty until the destination is chosen.
+    pub path: String,
+    pub received_bytes: i64,
+    /// `-1` while unknown.
+    pub total_bytes: i64,
+    pub state: DownloadState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadState {
+    InProgress,
+    Complete,
+    Canceled,
+}
 
 /// What a page reports back to the shell.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,7 +134,7 @@ impl Downloads {
     }
 }
 
-/// One live page. Implemented by the CEF backend (and later WKWebView/Android).
+/// One live page. Implemented by the BaaCore backend.
 pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn load_url(&self, url: &str);
     fn reload(&self);
@@ -230,4 +294,27 @@ pub struct Extension {
     pub popup: Option<String>,
     /// Its settings page, if it has one.
     pub options: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloads_update_in_place() {
+        let download = |id, received| Download {
+            id,
+            url: "https://example.com/a.zip".into(),
+            path: String::new(),
+            received_bytes: received,
+            total_bytes: 10,
+            state: DownloadState::InProgress,
+        };
+        let mut list = Downloads::default();
+        list.upsert(download(1, 0));
+        list.upsert(download(2, 0));
+        list.upsert(download(1, 5));
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].received_bytes, 5);
+    }
 }

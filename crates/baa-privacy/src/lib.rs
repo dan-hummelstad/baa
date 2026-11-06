@@ -1,34 +1,7 @@
-//! De-Googling (PLAN.md §5). No CEF or gpui here: `baa-web` maps CEF's request types onto
-//! [`ResourceType`] and calls in.
+//! De-Googling (PLAN.md §5): what baa's own Chromium build still needs on its command line,
+//! the prefs it pins off, and the allowlist the CI proxy test enforces. Helium's patches do
+//! the rest. No gpui here.
 
 mod chromium;
 
-pub use chromium::{
-    block_browser_request, merge_disabled_features, CORE_DISABLED_FEATURES, CORE_SWITCHES, PREFS_OFF, PROXY_ALLOWLIST,
-    SWITCHES,
-};
-
-/// `cef_resource_type_t`, one variant each.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceType {
-    MainFrame,
-    SubFrame,
-    Stylesheet,
-    Script,
-    Image,
-    Font,
-    SubResource,
-    Object,
-    Media,
-    Worker,
-    SharedWorker,
-    Prefetch,
-    Favicon,
-    Xhr,
-    Ping,
-    ServiceWorker,
-    CspReport,
-    PluginResource,
-    NavigationPreloadMainFrame,
-    NavigationPreloadSubFrame,
-}
+pub use chromium::{CORE_DISABLED_FEATURES, CORE_SWITCHES, PREFS_OFF, PROXY_ALLOWLIST};

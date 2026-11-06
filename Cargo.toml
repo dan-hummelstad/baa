@@ -7,24 +7,20 @@ members = [
   "crates/baa-model",
   "crates/baa-privacy",
   "crates/baa-chromium",
-  "vendor/gpui-cef/crates/gpui-cef",
   "xtask",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 repository = "https://github.com/dan-hummelstad/baa"
 
 [workspace.dependencies]
 # gpui is taken from Zed's repo (crates.io lags a year). One rev for the whole
-# workspace; bump it in one place. This rev is the one vendor/gpui-cef CI'd against.
+# workspace; bump it in one place.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "ef075910c99ce2c8fd07da4174e7c3bb71513f35" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ef075910c99ce2c8fd07da4174e7c3bb71513f35", features = ["font-kit", "runtime_shaders"] }
-# CEF: major == Chromium major. Replaced by our own Chromium build (PLAN-chromium.md).
-cef = "154"
-gpui-cef = { path = "vendor/gpui-cef/crates/gpui-cef" }
 baa-ui = { path = "crates/baa-ui" }
 baa-web = { path = "crates/baa-web" }
 baa-model = { path = "crates/baa-model" }

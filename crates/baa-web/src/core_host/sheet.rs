@@ -11,7 +11,7 @@ use objc2::runtime::AnyObject;
 use serde_json::to_string;
 
 use super::{c_string, ffi::TabState, native, Dispatch, PageKind, Shared, Snapshot};
-use crate::{cef_host::skin_loader, ChromeSheet};
+use crate::ChromeSheet;
 
 pub struct Sheet {
     dispatch: &'static Dispatch,
@@ -136,4 +136,38 @@ impl Drop for Sheet {
             (self.dispatch.core.tab_close)(tab);
         }
     }
+}
+fn skin_loader(css: &str) -> String {
+    let css = serde_json::to_string(css).unwrap_or_default();
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!(
+        r#"(() => {{
+  const token = '{token}';
+  const apply = css => {{
+    // Before the document has a root, wait for it.
+    const root = document.head || document.documentElement;
+    if (!root) {{
+      document.addEventListener('DOMContentLoaded', () => apply(css), {{ once: true }});
+      return;
+    }}
+    let s = document.getElementById('baa-skin');
+    if (!s) {{
+      s = document.createElement('style');
+      s.id = 'baa-skin';
+      root.appendChild(s);
+    }}
+    s.textContent = css;
+  }};
+  window.__baaSkin = css => {{
+    try {{ localStorage.setItem('baa-skin', JSON.stringify({{ token, css }})); }} catch {{}}
+    apply(css);
+  }};
+  let saved = null;
+  try {{ saved = JSON.parse(localStorage.getItem('baa-skin')); }} catch {{}}
+  apply(saved && saved.token === token ? saved.css : {css});
+}})();"#
+    )
 }

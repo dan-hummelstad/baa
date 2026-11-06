@@ -2244,7 +2244,7 @@ impl<H: WebHost> Browser<H> {
                         this.open_extensions(&format!("chrome://extensions/?id={manage}"), window, cx)
                     }),
                 ));
-                // ponytail: CEF has no uninstall call; Chrome's page for it has the button.
+                // ponytail: no uninstall call; Chrome's page for it has the button.
                 items.push((
                     "Remove…",
                     Box::new(move |this, window, cx| {

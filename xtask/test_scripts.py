@@ -1,15 +1,7 @@
 """python3 -m unittest discover -s xtask -p 'test_*.py'"""
 import unittest
 
-import cef_current
 import privacy_test
-
-
-class CefCurrent(unittest.TestCase):
-    def test_reads_cef_dll_sys_build_metadata(self):
-        lock = {"package": [{"name": "cef", "version": "154.5.0+154.0.34"},
-                            {"name": "cef-dll-sys", "version": "154.5.0+154.0.34"}]}
-        self.assertEqual(cef_current.locked_cef(lock), "154.0.34")
 
 
 class PrivacyTest(unittest.TestCase):

@@ -7,18 +7,14 @@ publish = false
 
 [dependencies]
 gpui.workspace = true
-gpui-cef.workspace = true
 baa-model.workspace = true
 baa-privacy.workspace = true
 log.workspace = true
 serde_json.workspace = true
 
-[features]
-# BaaCore (baa's own Chromium) instead of CEF; PLAN-chromium-phase3.md.
-core = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Same versions as vendor/gpui-cef: gpui's NSView, the punch-hole surface, objc calls.
+# gpui's NSView, the punch-hole surface, objc calls.
 raw-window-handle = "0.6"
 core-video = "0.5.2"
 core-foundation = "0.10"

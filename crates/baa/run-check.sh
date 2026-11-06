@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launches the BaaCore dev app (built by core.sh --no-run) with a fresh data
+# Launches the BaaCore dev app (built by `cargo bundle` from a component engine) with a fresh data
 # dir, screenshots it after <seconds>, quits it like ⌘Q and reports the exit.
 #   crates/baa/run-check.sh <seconds> [shot.png] [baa args]
 set -uo pipefail

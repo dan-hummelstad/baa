@@ -1,9 +1,9 @@
-//! Packaging for the app (PLAN.md §7, §13). `cargo bundle` is an alias for `bundle`.
+//! Dev and release plumbing. `cargo bundle` is an alias for `bundle`.
 //!
-//! - `bundle [--release]`: builds `baa` and lays it out with CEF: `target/bundle/baa.app` on
-//!   macOS (framework + 5 helper apps, a bare binary cannot start), `target/bundle/baa/` on Windows.
-//! - `sign <baa.app|file>`: macOS Developer ID signing, inside-out, hardened runtime.
-//!   Identity from `MACOS_SIGN_IDENTITY`. Windows is signed in release.yml (Azure Trusted Signing).
+//! - `bundle [--release] [--engine DIR] [--no-sign] [--run [args…]]`: builds `baa` and puts the
+//!   binary into a copy of the engine's `baa.app` (BaaCore.framework and helpers).
+//! - `sign <file>`: Developer ID `codesign --timestamp` of a file (the DMG). The app itself is
+//!   signed by the engine's `sign_chrome.py` (release.yml). Identity from `MACOS_SIGN_IDENTITY`.
 //! - `notarize <file.dmg>`: notarytool + staple. Needs `APPLE_ID`, `APPLE_TEAM_ID`,
 //!   `APPLE_APP_PASSWORD` (an app-specific password).
 
@@ -16,14 +16,12 @@ use std::{
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        ["bundle"] => bundle(false),
-        ["bundle", "--release"] => bundle(true),
-        #[cfg(target_os = "macos")]
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args[..] {
+        ["bundle", ref rest @ ..] => bundle(parse_bundle(rest)?),
         ["sign", path] => mac::sign(Path::new(path)),
-        #[cfg(target_os = "macos")]
         ["notarize", path] => mac::notarize(Path::new(path)),
-        _ => bail!("usage: xtask bundle [--release] | sign <path> | notarize <path>  (sign/notarize: macOS only)"),
+        _ => bail!("usage: xtask bundle [--release] [--engine DIR] [--no-sign] [--run args…] | sign <file> | notarize <file>"),
     }
 }
 
@@ -43,148 +41,127 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn bundle(release: bool) -> Result<()> {
+const FRAMEWORK: &str = "Contents/Frameworks/BaaCore.framework";
+const SHARED_ENGINE: &str = "/Users/Shared/hb/helium-macos/build/src/out/Default";
+
+struct Bundle {
+    release: bool,
+    engine: Option<PathBuf>,
+    sign: bool,
+    run: Option<Vec<String>>,
+}
+
+fn parse_bundle(args: &[&str]) -> Result<Bundle> {
+    let mut b = Bundle { release: false, engine: None, sign: true, run: None };
+    let mut it = args.iter();
+    while let Some(&arg) = it.next() {
+        match arg {
+            "--release" => b.release = true,
+            "--no-sign" => b.sign = false,
+            "--engine" => b.engine = Some(it.next().context("--engine needs a directory")?.into()),
+            // Everything after --run goes to baa (Chromium switches, URLs).
+            "--run" => {
+                b.run = Some(it.map(|a| a.to_string()).collect());
+                break;
+            }
+            other => bail!("unknown bundle argument {other}"),
+        }
+    }
+    Ok(b)
+}
+
+/// The engine directory (it holds `baa.app`): `--engine`, `$BAA_ENGINE`, the shared
+/// local Chromium tree, `target/engine`.
+fn find_engine(arg: Option<PathBuf>) -> Result<PathBuf> {
+    let shared = PathBuf::from(SHARED_ENGINE);
+    let candidates = [arg, env::var_os("BAA_ENGINE").map(PathBuf::from), Some(shared), Some(target_dir().join("engine"))];
+    for dir in candidates.into_iter().flatten() {
+        if dir.join("baa.app").is_dir() {
+            return Ok(dir);
+        }
+    }
+    bail!(
+        "no engine (a directory with baa.app) found. Get one:\n  \
+         Rust-only work: gh run download <run> -n baa-engine-<tree> -D target/engine, then\n    \
+         zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine\n  \
+         C++ work: unpack chromium-tree at /Users/Shared/hb and run chromium/local-build.sh\n\
+         (README \"Build\"); then pass --engine DIR or set BAA_ENGINE"
+    )
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn bundle(b: Bundle) -> Result<()> {
+    let engine = find_engine(b.engine)?;
     let mut build = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    build.current_dir(workspace_root()).args(["build", "-p", "baa", "--bins"]);
-    if release {
+    build.current_dir(workspace_root()).args(["build", "-p", "baa"]);
+    if b.release {
         build.arg("--release");
     }
     run(&mut build)?;
-    let bins = target_dir().join(if release { "release" } else { "debug" });
-    let out = target_dir().join("bundle");
-    fs::create_dir_all(&out)?;
-    println!("{}", platform_bundle(&out, &bins)?.display());
-    Ok(())
-}
 
-/// `<app semver>+cef<X.Y.Z>`, so an engine-only release gets a distinct version (§13).
-#[cfg(target_os = "macos")]
-fn app_version() -> Result<semver::Version> {
-    let cef = std::str::from_utf8(&cef::sys::CEF_VERSION[..])?.trim_end_matches('\0');
-    let cef = cef.split('+').next().unwrap_or(cef);
-    Ok(format!("{}+cef{cef}", env!("CARGO_PKG_VERSION")).parse()?)
-}
-
-#[cfg(target_os = "macos")]
-fn platform_bundle(out: &Path, bins: &Path) -> Result<PathBuf> {
-    use cef::build_util::mac::{bundle, BundleInfo};
-    let app = out.join("baa.app");
-    // A stale bundle would keep old signatures and helpers around.
-    if app.exists() {
-        fs::remove_dir_all(&app)?;
+    // A component engine finds libchrome_dll.dylib through an rpath to its out
+    // directory, so its bundle has to live there. An official engine is relocatable.
+    let component = fs::read_to_string(engine.join("args.gn")).is_ok_and(|a| a.replace(' ', "").contains("is_component_build=true"));
+    let source = engine.join("baa.app");
+    let app = if component { engine.join("baa Dev.app") } else { target_dir().join("bundle/baa.app") };
+    let stale = !app.join(FRAMEWORK).exists() || modified(&source.join(FRAMEWORK)) > modified(&app.join(FRAMEWORK));
+    // An official bundle is always fresh: old helpers and signatures must not stay.
+    if stale || !component {
+        if app.exists() {
+            fs::remove_dir_all(&app)?;
+        }
+        fs::create_dir_all(app.parent().unwrap())?;
+        run(Command::new("ditto").arg(&source).arg(&app))?;
     }
-    let info = BundleInfo::new("baa", "me.baa.browser", "baa", "en", app_version()?);
-    let app = bundle(out, bins, "baa", "baa_helper", None, info).map_err(|e| anyhow::anyhow!("bundle failed: {e:?}"))?;
-    // macOS shows these when a site first asks; cef-rs fills in "baa" and has
-    // no location key, without which geolocation is refused outright.
+
+    let binary = target_dir().join(if b.release { "release" } else { "debug" }).join("baa");
+    fs::copy(&binary, app.join("Contents/MacOS/baa")).with_context(|| format!("copying {}", binary.display()))?;
     let plist = app.join("Contents/Info.plist");
-    for (key, text) in [
-        ("NSCameraUsageDescription", "Websites you allow can use the camera."),
-        ("NSMicrophoneUsageDescription", "Websites you allow can use the microphone."),
-        ("NSLocationUsageDescription", "Websites you allow can see your location."),
-        ("NSLocationWhenInUseUsageDescription", "Websites you allow can see your location."),
-    ] {
-        run(Command::new("plutil").args(["-replace", key, "-string", text]).arg(&plist))?;
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+        run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;
     }
-    Ok(app)
+    if b.sign {
+        mac::dev_sign(&app)?;
+    }
+    println!("{}", app.display());
+    match b.run {
+        Some(args) => run(Command::new(app.join("Contents/MacOS/baa")).args(args)),
+        None => Ok(()),
+    }
 }
 
-/// cef-rs's own Windows bundler expects the sandbox's dll + bootstrap.exe layout; baa is a plain
-/// exe that re-launches itself as the subprocess (§7), so this copies the runtime next to it.
-#[cfg(target_os = "windows")]
-fn platform_bundle(out: &Path, bins: &Path) -> Result<PathBuf> {
-    let dir = out.join("baa");
-    if dir.exists() {
-        fs::remove_dir_all(&dir)?;
-    }
-    let cef = cef::sys::get_cef_dir().context("CEF distribution not found; set CEF_PATH")?;
-    let runtime = |name: &str| {
-        name.ends_with("_icd.json") || [".dll", ".pak", ".dat", ".bin"].iter().any(|ext| name.ends_with(ext))
-    };
-    for (src, dst) in [(cef.clone(), dir.clone()), (cef.join("locales"), dir.join("locales"))] {
-        fs::create_dir_all(&dst)?;
-        for entry in fs::read_dir(&src)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() && runtime(&entry.file_name().to_string_lossy()) {
-                fs::copy(entry.path(), dst.join(entry.file_name()))?;
-            }
-        }
-    }
-    fs::copy(bins.join("baa.exe"), dir.join("baa.exe"))?;
-    // Without the compatibility section Chromium sees Windows 8 and misdetects features.
-    fs::write(dir.join("baa.exe.manifest"), WIN_MANIFEST)?;
-    Ok(dir)
-}
-
-#[cfg(target_os = "windows")]
-const WIN_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-    <application>
-      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
-      <maxversiontested Id="10.0.18362.0"/>
-    </application>
-  </compatibility>
-  <dependency>
-    <dependentAssembly>
-      <assemblyIdentity type="Win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
-    </dependentAssembly>
-  </dependency>
-  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security><requestedPrivileges><requestedExecutionLevel level="asInvoker"/></requestedPrivileges></security>
-  </trustInfo>
-</assembly>
-"#;
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn platform_bundle(_: &Path, _: &Path) -> Result<PathBuf> {
-    bail!("baa ships for macOS and Windows only")
-}
-
-#[cfg(target_os = "macos")]
 mod mac {
-    use super::{run, workspace_root};
+    use super::run;
     use anyhow::{bail, Context, Result};
-    use std::{env, fs, path::Path, process::Command};
+    use std::{env, path::Path, process::Command};
 
-    fn codesign(path: &Path, entitlements: Option<&Path>) -> Result<()> {
-        let identity = env::var("MACOS_SIGN_IDENTITY").context("MACOS_SIGN_IDENTITY not set")?;
-        let mut cmd = Command::new("codesign");
-        cmd.args(["--force", "--timestamp", "--options", "runtime", "--sign", &identity]);
-        if let Some(entitlements) = entitlements {
-            cmd.arg("--entitlements").arg(entitlements);
-        }
-        run(cmd.arg(path))
-    }
-
-    fn children_with_ext(dir: &Path, ext: &str) -> Result<Vec<std::path::PathBuf>> {
-        let mut out = Vec::new();
-        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-            let path = entry?.path();
-            if path.extension().is_some_and(|e| e == ext) {
-                out.push(path);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Nested code must be signed before its container, or the outer seal is invalid.
+    /// Developer ID, hardened runtime, secure timestamp.
     pub fn sign(path: &Path) -> Result<()> {
-        if path.extension().is_none_or(|e| e != "app") {
-            return codesign(path, None);
-        }
-        let entitlements = workspace_root().join("xtask/entitlements.plist");
-        let frameworks = path.join("Contents/Frameworks");
-        let cef = frameworks.join("Chromium Embedded Framework.framework");
-        for dylib in children_with_ext(&cef.join("Libraries"), "dylib")? {
-            codesign(&dylib, None)?;
-        }
-        codesign(&cef, None)?;
-        for helper in children_with_ext(&frameworks, "app")? {
-            codesign(&helper, Some(&entitlements))?;
-        }
-        codesign(path, Some(&entitlements))?;
-        run(Command::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(path))
+        let identity = env::var("MACOS_SIGN_IDENTITY").context("MACOS_SIGN_IDENTITY not set")?;
+        run(Command::new("codesign")
+            .args(["--force", "--timestamp", "--options", "runtime", "--sign", &identity])
+            .arg(path))
+    }
+
+    /// Outer app only. A stable identity keeps the Keychain's "Always Allow" for
+    /// "baa Storage Key" across rebuilds (an ad-hoc signature's requirement is the
+    /// binary's hash). `BAA_SIGN_IDENTITY` overrides; "-" signs ad hoc.
+    pub fn dev_sign(app: &Path) -> Result<()> {
+        let identity = env::var("BAA_SIGN_IDENTITY").unwrap_or_else(|_| apple_development().unwrap_or_else(|| "-".into()));
+        run(Command::new("codesign")
+            .args(["--force", "--sign", &identity, "--identifier", "me.baa.browser"])
+            .arg(app))
+    }
+
+    fn apple_development() -> Option<String> {
+        let out = Command::new("security").args(["find-identity", "-v", "-p", "codesigning"]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let start = text.find("\"Apple Development: ")? + 1;
+        let len = text[start..].find('"')?;
+        Some(text[start..start + len].to_string())
     }
 
     pub fn notarize(path: &Path) -> Result<()> {

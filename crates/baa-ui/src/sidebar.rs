@@ -855,7 +855,7 @@ fn favicon(
             .child(letter.clone())
             .into_any_element()
     };
-    // The page fetches its favicon through its own Space's storage (gpui-cef).
+    // The page fetches its favicon through its own Space's storage.
     let icon = match image {
         Some(image) => img(image)
             .size(px(size))

@@ -1,4 +1,4 @@
-//! Data model + persistence (PLAN.md §4). No gpui, no cef.
+//! Data model + persistence (PLAN.md §4). No gpui.
 //!
 //! [`Session`] is the in-memory truth the UI mutates; [`Store`] loads/saves it and
 //! [`Settings`] to SQLite. Times are unix seconds passed in by the caller so the
@@ -13,7 +13,7 @@ pub use store::{DownloadRecord, HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};
 
-/// Identifies a storage profile = one CEF request context (PLAN.md §6).
+/// Identifies a storage profile = one Chrome profile directory (PLAN.md §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProfileId(pub u64);
 

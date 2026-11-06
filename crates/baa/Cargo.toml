@@ -9,19 +9,6 @@ publish = false
 name = "baa"
 path = "src/main.rs"
 
-[[bin]]
-name = "baa_helper"
-path = "src/bin/helper.rs"
-
-[package.metadata.cef.bundle]
-helper_name = "baa_helper"
-identifier = "me.baa.browser"
-display-name = "baa"
-
-[features]
-# BaaCore (own Chromium) instead of CEF; PLAN-chromium-phase3.md.
-core = ["baa-web/core"]
-
 [dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
@@ -33,6 +20,3 @@ env_logger.workspace = true
 # Already in the graph via gpui: an unbounded channel from the open-URL thread and
 # gpui's on_open_urls (neither has an App) into the foreground.
 futures = "0.3"
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-cef = { workspace = true, features = ["build-util"] }

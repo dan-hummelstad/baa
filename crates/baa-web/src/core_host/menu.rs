@@ -4,8 +4,6 @@
 //! opened from inside a gpui update: gpui's state would stay borrowed while
 //! its callbacks keep running under it. [`popup_soon`] opens it on a later run
 //! loop turn instead.
-// ponytail: copy of vendor/gpui-cef/.../platform/cef/menu.rs minus Chrome's page
-// menus (M2). gpui-cef goes away in phase 5; then this is the only copy.
 
 use std::cell::{Cell, RefCell};
 

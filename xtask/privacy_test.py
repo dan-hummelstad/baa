@@ -115,7 +115,11 @@ def main():
     try:
         wait_for_port(port)
         extra = [f"--log-net-log={args.netlog.resolve()}"] if args.netlog else []
-        app = subprocess.Popen([str(executable(args.app)), f"--proxy-server=http://127.0.0.1:{port}", *extra, page_url])
+        # A clean profile, and no Keychain prompt on a runner (Keychain use is not network traffic).
+        app = subprocess.Popen(
+            [str(executable(args.app)), f"--proxy-server=http://127.0.0.1:{port}", "--use-mock-keychain", *extra, page_url],
+            env={**os.environ, "BAA_DATA_DIR": str(tmp / "data")},
+        )
         time.sleep(args.seconds)
         crashed = app.poll()
         stop(app)

@@ -7,6 +7,7 @@ mod extensions;
 mod ffi;
 mod menu;
 mod native;
+pub(crate) mod profiles;
 mod sheet;
 #[cfg(test)]
 mod tests;
@@ -31,10 +32,15 @@ use objc2::runtime::AnyObject;
 
 use self::ffi::{Callbacks, Core, Profile, Tab, TabState};
 use crate::{
-    cef_host::{is_ephemeral, queue_delete},
+    core_host::profiles::{is_ephemeral, queue_delete},
     Callback, ChromeSheet, ChromeTabs, DialogKind, Downloads, DownloadState, Extension, ExtensionChange, ExtensionInfo, MenuDone,
     MenuItem, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost,
 };
+
+// objc2 looks classes up by name at run time; without this a test binary that
+// does not pull in gpui's backend has no NSView.
+#[link(name = "AppKit", kind = "framework")]
+extern "C" {}
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
 const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
