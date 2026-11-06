@@ -108,3 +108,12 @@ fn pages_without_a_ui_page_are_refused_not_left_waiting(cx: &mut TestAppContext)
     assert_eq!(calls("dialog_answer"), ["dialog_answer 11 false ", "dialog_answer 12 false "]);
     assert_eq!(calls("permission_answer"), ["permission_answer 13 false"]);
 }
+
+#[gpui::test]
+fn site_settings_kinds_reach_the_core_as_bits(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Cookies, PermissionState::SessionOnly);
+    assert_eq!(calls("profile_set_site_permission"), ["profile_set_site_permission https://a.test 1024 3"]);
+    SITE_STATE.with(|s| s.set(3));
+    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Cookies), PermissionState::SessionOnly);
+}

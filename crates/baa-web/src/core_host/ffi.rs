@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 4;
+pub const ABI_VERSION: c_int = 5;
 
 #[repr(C)]
 pub struct Profile {
@@ -54,10 +54,30 @@ pub const PERMISSION_NOTIFICATIONS: u32 = 1 << 3;
 pub const PERMISSION_CLIPBOARD: u32 = 1 << 4;
 pub const PERMISSION_MIDI: u32 = 1 << 5;
 pub const PERMISSION_OTHER: u32 = 1 << 6;
+pub const PERMISSION_POPUPS: u32 = 1 << 7;
+pub const PERMISSION_SOUND: u32 = 1 << 8;
+pub const PERMISSION_JAVASCRIPT: u32 = 1 << 9;
+pub const PERMISSION_COOKIES: u32 = 1 << 10;
+pub const PERMISSION_AUTOMATIC_DOWNLOADS: u32 = 1 << 11;
+pub const PERMISSION_INSECURE_CONTENT: u32 = 1 << 12;
+pub const PERMISSION_SENSORS: u32 = 1 << 13;
+pub const PERMISSION_WINDOW_MANAGEMENT: u32 = 1 << 14;
 
+#[allow(dead_code)] // ABI 5 settings calls are used from WP-C on
+pub const SITE_UNSET: c_int = -1;
 pub const SITE_ASK: c_int = 0;
 pub const SITE_ALLOW: c_int = 1;
 pub const SITE_BLOCK: c_int = 2;
+pub const SITE_SESSION_ONLY: c_int = 3;
+
+#[allow(dead_code)]
+pub const CLEAR_HISTORY: u32 = 1 << 0;
+#[allow(dead_code)]
+pub const CLEAR_DOWNLOADS: u32 = 1 << 1;
+#[allow(dead_code)]
+pub const CLEAR_SITE_DATA: u32 = 1 << 2;
+#[allow(dead_code)]
+pub const CLEAR_CACHE: u32 = 1 << 3;
 
 #[allow(dead_code)]
 pub const SITE_ACCESS_NONE: c_int = 0;
@@ -68,6 +88,7 @@ pub const SITE_ACCESS_ON_ALL_SITES: c_int = 3;
 pub const EXTENSION_ENABLE: c_int = 0;
 pub const EXTENSION_REMOVE: c_int = 1;
 pub const EXTENSION_SITE_ACCESS: c_int = 2;
+pub const EXTENSION_RELOAD: c_int = 3;
 
 #[allow(dead_code)]
 pub const DIALOG_ALERT: c_int = 0;
@@ -103,9 +124,12 @@ pub struct Extension {
     pub permissions: *const c_char,
     pub site_access: c_int,
     pub enabled: bool,
+    pub unpacked: bool,
 }
 
 pub type ExtensionVisitor = extern "C" fn(ctx: *mut c_void, extension: *const Extension);
+
+pub type SiteRuleVisitor = extern "C" fn(ctx: *mut c_void, pattern: *const c_char, state: c_int);
 
 pub type HistoryVisitor = extern "C" fn(ctx: *mut c_void, title: *const c_char, url: *const c_char);
 
@@ -150,9 +174,12 @@ pub struct Callbacks {
     pub resized: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, width: c_int, height: c_int),
     pub page_message: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, message: *const c_char),
     pub fetch_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize),
+    pub clear_done: extern "C" fn(ctx: *mut c_void, id: u64),
+    pub load_unpacked_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, message: *const c_char),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
+#[allow(dead_code)] // the ABI 5 settings calls are used from WP-C on
 pub struct Core {
     pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,
@@ -161,12 +188,21 @@ pub struct Core {
     pub profile_open: extern "C" fn(*const c_char) -> *mut Profile,
     pub profile_open_ephemeral: extern "C" fn() -> *mut Profile,
     pub profile_close: extern "C" fn(*mut Profile),
-    pub profile_set_pref_bool: extern "C" fn(*mut Profile, *const c_char, bool),
+    /// Null profile: Local State.
+    pub pref_set_bool: extern "C" fn(*mut Profile, *const c_char, bool) -> bool,
+    pub pref_set_int: extern "C" fn(*mut Profile, *const c_char, c_int) -> bool,
+    pub pref_set_string: extern "C" fn(*mut Profile, *const c_char, *const c_char) -> bool,
+    pub profile_set_default_zoom: extern "C" fn(*mut Profile, f64),
+    pub profile_set_search_engine: extern "C" fn(*mut Profile, *const c_char, *const c_char, *const c_char) -> bool,
     pub profile_site_permission: extern "C" fn(*mut Profile, *const c_char, u32) -> c_int,
     pub profile_set_site_permission: extern "C" fn(*mut Profile, *const c_char, u32, c_int),
+    pub profile_site_rules: extern "C" fn(*mut Profile, u32, SiteRuleVisitor, *mut c_void) -> c_int,
+    pub profile_set_site_rule: extern "C" fn(*mut Profile, u32, *const c_char, c_int) -> bool,
+    pub profile_clear_data: extern "C" fn(*mut Profile, u64, i64, u32),
     pub profile_fetch: extern "C" fn(*mut Profile, *const c_char, u64),
     pub profile_extensions: extern "C" fn(*mut Profile, ExtensionVisitor, *mut c_void) -> c_int,
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
+    pub profile_load_unpacked: extern "C" fn(*mut Profile, u64, *const c_char),
     pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
     pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
     pub tab_close: extern "C" fn(*mut Tab),
@@ -234,12 +270,20 @@ pub fn load() -> &'static Core {
             profile_open,
             profile_open_ephemeral,
             profile_close,
-            profile_set_pref_bool,
+            pref_set_bool,
+            pref_set_int,
+            pref_set_string,
+            profile_set_default_zoom,
+            profile_set_search_engine,
             profile_site_permission,
             profile_set_site_permission,
+            profile_site_rules,
+            profile_set_site_rule,
+            profile_clear_data,
             profile_fetch,
             profile_extensions,
             profile_extension_change,
+            profile_load_unpacked,
             extension_popup,
             tab_create,
             tab_close,
@@ -347,6 +391,21 @@ mod tests {
             ("BAA_PERMISSION_CLIPBOARD", PERMISSION_CLIPBOARD as i64),
             ("BAA_PERMISSION_MIDI", PERMISSION_MIDI as i64),
             ("BAA_PERMISSION_OTHER", PERMISSION_OTHER as i64),
+            ("BAA_PERMISSION_POPUPS", PERMISSION_POPUPS as i64),
+            ("BAA_PERMISSION_SOUND", PERMISSION_SOUND as i64),
+            ("BAA_PERMISSION_JAVASCRIPT", PERMISSION_JAVASCRIPT as i64),
+            ("BAA_PERMISSION_COOKIES", PERMISSION_COOKIES as i64),
+            ("BAA_PERMISSION_AUTOMATIC_DOWNLOADS", PERMISSION_AUTOMATIC_DOWNLOADS as i64),
+            ("BAA_PERMISSION_INSECURE_CONTENT", PERMISSION_INSECURE_CONTENT as i64),
+            ("BAA_PERMISSION_SENSORS", PERMISSION_SENSORS as i64),
+            ("BAA_PERMISSION_WINDOW_MANAGEMENT", PERMISSION_WINDOW_MANAGEMENT as i64),
+            ("BAA_SITE_UNSET", SITE_UNSET as i64),
+            ("BAA_SITE_SESSION_ONLY", SITE_SESSION_ONLY as i64),
+            ("BAA_CLEAR_HISTORY", CLEAR_HISTORY as i64),
+            ("BAA_CLEAR_DOWNLOADS", CLEAR_DOWNLOADS as i64),
+            ("BAA_CLEAR_SITE_DATA", CLEAR_SITE_DATA as i64),
+            ("BAA_CLEAR_CACHE", CLEAR_CACHE as i64),
+            ("BAA_EXTENSION_RELOAD", EXTENSION_RELOAD as i64),
             ("BAA_SITE_ASK", SITE_ASK as i64),
             ("BAA_SITE_ALLOW", SITE_ALLOW as i64),
             ("BAA_SITE_BLOCK", SITE_BLOCK as i64),

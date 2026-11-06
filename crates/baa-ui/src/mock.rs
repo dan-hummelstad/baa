@@ -5,6 +5,8 @@ use std::cell::{Cell, RefCell};
 use baa_web::{Downloads, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
 use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
 
+pub type RuleSet = (ProfileId, Permission, String, Option<PermissionState>);
+
 pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
     pub downloads: Entity<Downloads>,
@@ -23,6 +25,20 @@ pub struct MockHost {
     /// The menus shown, and the item id the next one picks.
     pub menus: RefCell<Vec<Vec<baa_web::MenuItem>>>,
     pub menu_pick: Cell<Option<usize>>,
+    /// The last `apply_settings`.
+    pub applied: RefCell<Option<baa_model::Settings>>,
+    /// What `site_rules` answers, per kind; `set_site_rule` edits it.
+    pub rules: RefCell<Vec<(Permission, String, PermissionState)>>,
+    /// (profile, kind, pattern, state) of each `set_site_rule`.
+    pub rule_sets: RefCell<Vec<RuleSet>>,
+    pub clears: RefCell<Vec<(ProfileId, Option<std::time::SystemTime>, baa_web::ClearData)>>,
+    pub unpacked: RefCell<Vec<(ProfileId, std::path::PathBuf)>>,
+    /// What `load_unpacked` answers.
+    pub unpacked_result: RefCell<Result<String, String>>,
+    pub default_browser: Cell<bool>,
+    pub made_default: Cell<u32>,
+    /// (profile, css, dark) of each `set_webui_skin`.
+    pub skins: RefCell<Vec<(ProfileId, String, bool)>>,
 }
 
 pub struct MockPage {
@@ -132,6 +148,15 @@ impl MockHost {
             popups: RefCell::default(),
             menus: RefCell::default(),
             menu_pick: Cell::default(),
+            applied: RefCell::default(),
+            rules: RefCell::default(),
+            rule_sets: RefCell::default(),
+            clears: RefCell::default(),
+            unpacked: RefCell::default(),
+            unpacked_result: RefCell::new(Ok("unpacked-id".into())),
+            default_browser: Cell::default(),
+            made_default: Cell::default(),
+            skins: RefCell::default(),
         }
     }
 }
@@ -202,6 +227,7 @@ impl WebHost for MockHost {
         let mut list = self.extension_details.borrow_mut();
         match change {
             baa_web::ExtensionChange::Remove => list.retain(|e| e.id != id),
+            baa_web::ExtensionChange::Reload => {}
             baa_web::ExtensionChange::Enable(on) => list.iter_mut().filter(|e| e.id == id).for_each(|e| e.enabled = on),
             baa_web::ExtensionChange::SiteAccess(a) => {
                 list.iter_mut().filter(|e| e.id == id).for_each(|e| e.site_access = Some(a))
@@ -234,5 +260,36 @@ impl WebHost for MockHost {
     }
     fn set_site_permission(&self, _: ProfileId, url: &str, kind: Permission, state: PermissionState) {
         self.permissions.borrow_mut().push((url.into(), kind, state));
+    }
+    fn apply_settings(&self, settings: &baa_model::Settings) {
+        *self.applied.borrow_mut() = Some(settings.clone());
+    }
+    fn site_rules(&self, _: ProfileId, kind: Permission) -> Vec<(String, PermissionState)> {
+        self.rules.borrow().iter().filter(|(k, ..)| *k == kind).map(|(_, p, s)| (p.clone(), *s)).collect()
+    }
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>) {
+        self.rule_sets.borrow_mut().push((profile, kind, pattern.into(), state));
+        let mut rules = self.rules.borrow_mut();
+        rules.retain(|(k, p, _)| !(*k == kind && p == pattern));
+        if let Some(state) = state {
+            rules.push((kind, pattern.into(), state));
+        }
+    }
+    fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: baa_web::ClearData, cx: &mut App, done: baa_web::Callback<()>) {
+        self.clears.borrow_mut().push((profile, since, what));
+        done((), cx)
+    }
+    fn load_unpacked(&self, profile: ProfileId, path: &std::path::Path, cx: &mut App, done: baa_web::Callback<Result<String, String>>) {
+        self.unpacked.borrow_mut().push((profile, path.into()));
+        done(self.unpacked_result.borrow().clone(), cx)
+    }
+    fn is_default_browser(&self) -> bool {
+        self.default_browser.get()
+    }
+    fn make_default_browser(&self) {
+        self.made_default.set(self.made_default.get() + 1);
+    }
+    fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool) {
+        self.skins.borrow_mut().push((profile, css, dark));
     }
 }

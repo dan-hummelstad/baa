@@ -200,6 +200,8 @@ mod app {
         resized: on_resized,
         page_message: on_page_message,
         fetch_done: on_fetch_done,
+        clear_done: on_clear_done,
+        load_unpacked_done: on_load_unpacked_done,
     };
 
     thread_local! {
@@ -387,6 +389,14 @@ mod app {
         eprintln!("baa: fetch_done id={id} ok={ok} len={len} body={head:?}");
     }
 
+    extern "C" fn on_clear_done(_: *mut c_void, id: u64) {
+        eprintln!("baa: clear_done id={id}");
+    }
+
+    extern "C" fn on_load_unpacked_done(_: *mut c_void, id: u64, ok: bool, message: *const c_char) {
+        eprintln!("baa: load_unpacked_done id={id} ok={ok} {}", text(message));
+    }
+
     extern "C" fn visit_extension(_: *mut c_void, e: *const ffi::Extension) {
         let e = unsafe { &*e };
         eprintln!(
@@ -538,7 +548,7 @@ mod app {
                     }
                     "pref" => {
                         let (name, value) = arg.split_once(' ').unwrap();
-                        (core.profile_set_pref_bool)(profile_for("1"), c(name).as_ptr(), value == "true" || value == "1");
+                        (core.pref_set_bool)(profile_for("1"), c(name).as_ptr(), value == "true" || value == "1");
                     }
                     "initscript" => (core.tab_set_init_script)(tab, c(arg).as_ptr()),
                     "scheme" => (core.tab_set_color_scheme)(tab, arg.parse().unwrap()),

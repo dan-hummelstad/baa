@@ -38,6 +38,8 @@ thread_local! {
     static FIRST_URL: Cell<&'static CStr> = const { Cell::new(c"") };
     static QUITTING: Cell<bool> = const { Cell::new(false) };
     static SITE_STATE: Cell<c_int> = const { Cell::new(0) };
+    /// What the fake `baa_profile_site_rules` visits.
+    static SITE_RULES: RefCell<Vec<(String, c_int)>> = const { RefCell::new(Vec::new()) };
     static POPUP_NULL: Cell<bool> = const { Cell::new(false) };
     /// What the fake `baa_profile_extensions` lists.
     static EXTENSIONS: RefCell<Vec<FakeExtension>> = const { RefCell::new(Vec::new()) };
@@ -84,8 +86,44 @@ extern "C" fn tab_create(profile: *mut Profile, url: *const c_char) -> *mut Tab 
 extern "C" fn tab_close(tab: *mut Tab) {
     log(format!("tab_close {tab:?}"));
 }
-extern "C" fn profile_set_pref_bool(profile: *mut Profile, name: *const c_char, value: bool) {
-    log(format!("profile_set_pref_bool {profile:?} {} {value}", arg(name)));
+extern "C" fn pref_set_bool(profile: *mut Profile, name: *const c_char, value: bool) -> bool {
+    log(format!("pref_set_bool {profile:?} {} {value}", arg(name)));
+    true
+}
+extern "C" fn pref_set_int(profile: *mut Profile, name: *const c_char, value: c_int) -> bool {
+    log(format!("pref_set_int {profile:?} {} {value}", arg(name)));
+    true
+}
+extern "C" fn pref_set_string(profile: *mut Profile, name: *const c_char, value: *const c_char) -> bool {
+    log(format!("pref_set_string {profile:?} {} {}", arg(name), arg(value)));
+    true
+}
+extern "C" fn profile_set_default_zoom(_: *mut Profile, factor: f64) {
+    log(format!("profile_set_default_zoom {factor}"));
+}
+extern "C" fn profile_set_search_engine(_: *mut Profile, name: *const c_char, keyword: *const c_char, url: *const c_char) -> bool {
+    log(format!("profile_set_search_engine {} {} {}", arg(name), arg(keyword), arg(url)));
+    true
+}
+extern "C" fn profile_site_rules(_: *mut Profile, kind: u32, visit: ffi::SiteRuleVisitor, ctx: *mut c_void) -> c_int {
+    log(format!("profile_site_rules {kind}"));
+    SITE_RULES.with(|rules| {
+        for (pattern, state) in rules.borrow().iter() {
+            let pattern = CString::new(pattern.as_str()).unwrap();
+            visit(ctx, pattern.as_ptr(), *state);
+        }
+        rules.borrow().len() as c_int
+    })
+}
+extern "C" fn profile_set_site_rule(_: *mut Profile, kind: u32, pattern: *const c_char, state: c_int) -> bool {
+    log(format!("profile_set_site_rule {kind} {} {state}", arg(pattern)));
+    true
+}
+extern "C" fn profile_clear_data(_: *mut Profile, id: u64, since_ms: i64, types: u32) {
+    log(format!("profile_clear_data {id} {since_ms} {types}"));
+}
+extern "C" fn profile_load_unpacked(_: *mut Profile, id: u64, path: *const c_char) {
+    log(format!("profile_load_unpacked {id} {}", arg(path)));
 }
 extern "C" fn profile_site_permission(_: *mut Profile, url: *const c_char, kind: u32) -> c_int {
     log(format!("profile_site_permission {} {kind}", arg(url)));
@@ -197,12 +235,20 @@ fn fake_core() -> &'static Core {
         profile_open,
         profile_open_ephemeral,
         profile_close,
-        profile_set_pref_bool,
+        pref_set_bool,
+        pref_set_int,
+        pref_set_string,
+        profile_set_default_zoom,
+        profile_set_search_engine,
         profile_site_permission,
         profile_set_site_permission,
+        profile_site_rules,
+        profile_set_site_rule,
+        profile_clear_data,
         profile_fetch,
         profile_extensions,
         profile_extension_change,
+        profile_load_unpacked,
         extension_popup,
         tab_create,
         tab_close,
@@ -264,6 +310,7 @@ impl FakeExtension {
             permissions: p(7),
             site_access: self.site_access,
             enabled: self.enabled,
+            unpacked: false,
         };
         (raw, strings)
     }
@@ -294,6 +341,7 @@ impl Env {
         QUITTING.with(|q| q.set(false));
         SITE_STATE.with(|s| s.set(0));
         POPUP_NULL.with(|p| p.set(false));
+        SITE_RULES.with(|r| r.borrow_mut().clear());
         EXTENSIONS.with(|e| e.borrow_mut().clear());
         let core = fake_core();
         let dispatch: &'static Dispatch = Box::leak(Box::new(Dispatch::new(core)));

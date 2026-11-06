@@ -5,10 +5,15 @@
 //! archive policy is testable.
 
 pub mod import;
+mod permission;
 mod settings;
 mod store;
 
-pub use settings::{parse_suggestions, ChromeStyle, DevToolsDock, SearchEngine, Settings, SidebarSide, SEARCH_ENGINES};
+pub use permission::{Permission, PermissionState};
+pub use settings::{
+    parse_suggestions, ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
+    SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
+};
 pub use store::{DownloadRecord, HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};

@@ -6,7 +6,7 @@ mod core_host;
 
 use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
-pub use baa_model::ProfileId;
+pub use baa_model::{Permission, PermissionState, ProfileId};
 #[cfg(target_os = "macos")]
 pub use core_host::{
     chrome_argv,
@@ -27,26 +27,6 @@ impl MenuItem {
     pub fn action(label: impl Into<String>, id: usize) -> Self {
         Self::Action { label: label.into(), enabled: true, checked: false, id }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Permission {
-    Camera,
-    Microphone,
-    Location,
-    Notifications,
-    Clipboard,
-    Midi,
-    /// Anything rarer (storage access, window management, ...).
-    Other,
-}
-
-/// What a profile remembers about a site's permission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionState {
-    Ask,
-    Allow,
-    Block,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +201,39 @@ pub trait WebHost: 'static {
     /// What `profile` remembers about `kind` for `url`'s site.
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState;
     fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState);
+    /// baa's global browser settings into every profile, now and as each one
+    /// opens. Sends only what changed since the last call.
+    fn apply_settings(&self, settings: &baa_model::Settings);
+    /// The rules `profile` has for `kind` (a site setting, never `Other`): the
+    /// default first, with pattern `"*"`, then each exception by Chrome's pattern
+    /// (`"[*.]example.com"`). Empty for a gone profile.
+    fn site_rules(&self, profile: ProfileId, kind: Permission) -> Vec<(String, PermissionState)>;
+    /// `"*"` sets the default, anything else an exception. `None` removes the rule
+    /// (for `"*"`, restores Chrome's default). Refused rules change nothing.
+    fn set_site_rule(&self, profile: ProfileId, kind: Permission, pattern: &str, state: Option<PermissionState>);
+    /// Deletes what `what` names that `profile` stored since `since` (`None`: ever);
+    /// `done` runs on a later turn. Chrome's stores only; baa-model keeps its own records.
+    fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, cx: &mut App, done: Callback<()>);
+    /// Loads the unpacked extension in folder `path` (developer mode); `done`
+    /// gets its id, or Chrome's error text.
+    fn load_unpacked(&self, profile: ProfileId, path: &std::path::Path, cx: &mut App, done: Callback<Result<String, String>>);
+    /// Whether baa is the system's default browser for http and https.
+    fn is_default_browser(&self) -> bool;
+    /// macOS asks the user; check again with `is_default_browser` later.
+    fn make_default_browser(&self);
+    /// A stylesheet over `profile`'s Chrome pages (`baa://...`); `dark` says
+    /// whether its colours are dark, so Chrome's own light/dark rules match.
+    fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool);
+}
+
+/// What [`WebHost::clear_data`] deletes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClearData {
+    pub history: bool,
+    pub downloads: bool,
+    /// Cookies, storage, service workers.
+    pub site_data: bool,
+    pub cache: bool,
 }
 
 /// Where and how [`WebHost::show_chrome_page`] shows Chrome's page.
@@ -255,6 +268,8 @@ pub struct ExtensionInfo {
     /// Where it may run, when that is the user's choice.
     pub site_access: Option<SiteAccess>,
     pub options: Option<String>,
+    /// Loaded from a folder (developer mode); only these reload.
+    pub unpacked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +284,8 @@ pub enum ExtensionChange {
     Enable(bool),
     SiteAccess(SiteAccess),
     Remove,
+    /// Unpacked extensions only.
+    Reload,
 }
 
 /// An installed extension, as the toolbar shows it.

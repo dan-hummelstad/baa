@@ -159,6 +159,7 @@ impl<H: WebHost> Browser<H> {
         if let Some(list) = &mut self.extensions_page.list {
             match change {
                 ExtensionChange::Remove => list.retain(|e| e.id != id),
+                ExtensionChange::Reload => {}
                 ExtensionChange::Enable(on) => list.iter_mut().filter(|e| e.id == id).for_each(|e| e.enabled = on),
                 ExtensionChange::SiteAccess(a) => {
                     list.iter_mut().filter(|e| e.id == id).for_each(|e| e.site_access = Some(a))

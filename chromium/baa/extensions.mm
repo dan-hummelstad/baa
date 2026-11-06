@@ -275,6 +275,7 @@ int baa_profile_extensions(BaaProfile* profile, BaaExtensionVisitor visit, void*
     out.permissions = permissions.c_str();
     out.site_access = site_access;
     out.enabled = registry->enabled_extensions().Contains(ext.id());
+    out.unpacked = extensions::Manifest::IsUnpackedLocation(ext.location());
     visit(ctx, &out);
     ++count;
   }

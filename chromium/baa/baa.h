@@ -31,7 +31,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 4
+#define BAA_ABI_VERSION 5
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -82,9 +82,28 @@ enum {
   BAA_PERMISSION_CLIPBOARD = 1 << 4,
   BAA_PERMISSION_MIDI = 1 << 5,
   BAA_PERMISSION_OTHER = 1 << 6,  // any request type not above
+  // Site settings only: never in a `permission` ask's `kinds`.
+  BAA_PERMISSION_POPUPS = 1 << 7,
+  BAA_PERMISSION_SOUND = 1 << 8,
+  BAA_PERMISSION_JAVASCRIPT = 1 << 9,
+  BAA_PERMISSION_COOKIES = 1 << 10,
+  BAA_PERMISSION_AUTOMATIC_DOWNLOADS = 1 << 11,
+  BAA_PERMISSION_INSECURE_CONTENT = 1 << 12,  // mixed content
+  BAA_PERMISSION_SENSORS = 1 << 13,           // motion sensors
+  BAA_PERMISSION_WINDOW_MANAGEMENT = 1 << 14,
 };
 
-enum { BAA_SITE_ASK = 0, BAA_SITE_ALLOW = 1, BAA_SITE_BLOCK = 2 };
+// A site setting's state. Not every kind takes every state: popups, sound,
+// javascript, insecure content and sensors take ALLOW and BLOCK only (their
+// default is one of them, never ASK); SESSION_ONLY is for COOKIES only.
+// BAA_SITE_UNSET is only ever an argument: it removes a rule.
+enum {
+  BAA_SITE_UNSET = -1,
+  BAA_SITE_ASK = 0,
+  BAA_SITE_ALLOW = 1,
+  BAA_SITE_BLOCK = 2,
+  BAA_SITE_SESSION_ONLY = 3,
+};
 
 typedef struct {
   uint32_t id;           // unique per run; baa_download_cancel takes it
@@ -179,6 +198,16 @@ typedef struct {
   // baa_profile_fetch finished. `body` is NULL when !ok.
   void (*fetch_done)(void* ctx, uint64_t id, bool ok, const char* body,
                      size_t len);
+
+  // baa_profile_clear_data(id, ...) finished (or failed to start: then at once,
+  // on a later turn). Sent exactly once per call, never inside it.
+  void (*clear_done)(void* ctx, uint64_t id);
+
+  // baa_profile_load_unpacked(id, ...) finished. `message` is the new
+  // extension's id when `ok`, else Chrome's error text. Sent exactly once per
+  // call, never inside it.
+  void (*load_unpacked_done)(void* ctx, uint64_t id, bool ok,
+                             const char* message);
 } BaaCallbacks;
 
 // ---- App -------------------------------------------------------------------
@@ -219,9 +248,36 @@ BAA_EXPORT BaaProfile* baa_profile_open_ephemeral(void);
 // baa_install_app).
 BAA_EXPORT void baa_profile_close(BaaProfile* profile);
 
-// Sets a boolean pref if the profile registers it (unknown names are ignored).
-BAA_EXPORT void baa_profile_set_pref_bool(BaaProfile* profile,
-                                          const char* name, bool value);
+// ---- Prefs -----------------------------------------------------------------
+
+// Sets a user pref by its Chrome name. `profile` NULL means Local State
+// (browser-wide prefs). True when the pref is registered, the user may change
+// it (policy does not force it) and it has this type; otherwise false and
+// nothing changes. A dead profile is false too. The pref changes at once;
+// nothing is notified back. A string pref that holds a path takes the path.
+BAA_EXPORT bool baa_pref_set_bool(BaaProfile* profile, const char* name,
+                                  bool value);
+BAA_EXPORT bool baa_pref_set_int(BaaProfile* profile, const char* name,
+                                 int value);
+BAA_EXPORT bool baa_pref_set_string(BaaProfile* profile, const char* name,
+                                    const char* value);
+
+// The default zoom of the profile's pages; `factor` 1.0 is 100%. Pages that
+// have their own zoom (baa_tab_set_zoom) keep it.
+BAA_EXPORT void baa_profile_set_default_zoom(BaaProfile* profile,
+                                             double factor);
+
+// Makes the engine the profile's default search, adding it when no engine has
+// this URL. `url` holds %s for the query; `keyword` is its short name for the
+// omnibox ("" derives one). Applied once the profile's engine list has loaded,
+// maybe after this returns. False if the arguments are unusable (no %s, empty
+// name) or Chrome refuses it as a default; true means accepted.
+BAA_EXPORT bool baa_profile_set_search_engine(BaaProfile* profile,
+                                              const char* name,
+                                              const char* keyword,
+                                              const char* url);
+
+// ---- Site settings ---------------------------------------------------------
 
 // What the profile remembers for `kind` (one BAA_PERMISSION_* bit, not OTHER)
 // on `url`'s site: BAA_SITE_*.
@@ -230,6 +286,39 @@ BAA_EXPORT int baa_profile_site_permission(BaaProfile* profile,
 BAA_EXPORT void baa_profile_set_site_permission(BaaProfile* profile,
                                                 const char* url,
                                                 uint32_t kind, int state);
+
+// Visits the rules the user set for `kind` (one BAA_PERMISSION_* bit, not
+// OTHER): first the default as pattern "*" (Chrome's own when the user set
+// none), then each exception with Chrome's pattern string (e.g.
+// "[*.]example.com"), `state` a BAA_SITE_* value. Synchronous; strings are
+// borrowed for the visit. Returns the number visited, -1 for a gone profile or
+// an unknown kind.
+typedef void (*BaaSiteRuleVisitor)(void* ctx, const char* pattern, int state);
+BAA_EXPORT int baa_profile_site_rules(BaaProfile* profile, uint32_t kind,
+                                      BaaSiteRuleVisitor visit, void* ctx);
+
+// "*" sets the kind's default, anything else an exception for that pattern.
+// BAA_SITE_UNSET removes the exception (or restores Chrome's default for "*").
+// False for a bad pattern, an unknown kind or a state the kind does not take;
+// then nothing changes.
+BAA_EXPORT bool baa_profile_set_site_rule(BaaProfile* profile, uint32_t kind,
+                                          const char* pattern, int state);
+
+// ---- Browsing data ---------------------------------------------------------
+
+enum {
+  BAA_CLEAR_HISTORY = 1 << 0,
+  BAA_CLEAR_DOWNLOADS = 1 << 1,
+  BAA_CLEAR_SITE_DATA = 1 << 2,  // cookies, storage, service workers
+  BAA_CLEAR_CACHE = 1 << 3,
+};
+
+// Deletes the `types` (BAA_CLEAR_* bits) the profile wrote since `since_ms`
+// (Unix ms; 0 = all time). Then `clear_done(id)`, never inside this call. `id`
+// is the caller's, unique among its pending calls. Chrome's own stores only:
+// the caller keeps any records of its own.
+BAA_EXPORT void baa_profile_clear_data(BaaProfile* profile, uint64_t id,
+                                       int64_t since_ms, uint32_t types);
 
 // GET `url` through the profile's network stack without cookies;
 // fetch_done(id, ...) later, never inside this call.
@@ -257,6 +346,7 @@ typedef struct {
   const char* permissions;  // Chrome's permission messages, '\n'-separated
   int site_access;          // BAA_SITE_ACCESS_*
   bool enabled;
+  bool unpacked;            // loaded from a folder (developer mode): reloadable
 } BaaExtension;
 
 typedef void (*BaaExtensionVisitor)(void* ctx, const BaaExtension* extension);
@@ -270,13 +360,21 @@ enum {
   BAA_EXTENSION_ENABLE = 0,       // value: 1 enable, 0 disable
   BAA_EXTENSION_REMOVE = 1,       // value ignored
   BAA_EXTENSION_SITE_ACCESS = 2,  // value: BAA_SITE_ACCESS_ON_*
+  BAA_EXTENSION_RELOAD = 3,       // unpacked extensions only; value ignored
 };
 
-// Carries out the change at once; false if it was refused or the id is
-// unknown.
+// Carries out the change at once (RELOAD starts the reload); false if it was
+// refused or the id is unknown.
 BAA_EXPORT bool baa_profile_extension_change(BaaProfile* profile,
                                              const char* extension_id,
                                              int change, int value);
+
+// Loads the unpacked extension in folder `path` (the developer mode "Load
+// unpacked"; `extensions.ui.developer_mode` is a pref the caller sets with
+// baa_pref_set_bool). Result by `load_unpacked_done(id, ...)`, never inside this
+// call. The extension then shows in baa_profile_extensions.
+BAA_EXPORT void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id,
+                                          const char* path);
 
 // Clicks the extension's toolbar action on the profile's active tab (grants
 // activeTab, fires action.onClicked). Returns the popup page when the action

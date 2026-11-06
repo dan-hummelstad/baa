@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
@@ -194,25 +195,61 @@ void baa_profile_close(BaaProfile* profile) {
 }
 
 
+namespace {
+
+// The pref if it is registered, user-modifiable and of `type`.
+PrefService* UserPref(PrefService* prefs, const char* name, base::Value::Type type) {
+  const PrefService::Preference* pref = prefs && name ? prefs->FindPreference(name) : nullptr;
+  return pref && pref->IsUserModifiable() && pref->GetType() == type ? prefs : nullptr;
+}
+
+// NULL `profile` is Local State; a handle that is gone gives null.
+PrefService* PrefsOf(BaaProfile* profile) {
+  if (!profile) {
+    return g_browser_process->local_state();
+  }
+  return AliveProfile(profile) ? profile->profile->GetPrefs() : nullptr;
+}
+
+}  // namespace
+
 namespace baa {
 
 bool SetPrefBool(Profile* profile, const char* name, bool value) {
-  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
-  const PrefService::Preference* pref = prefs ? prefs->FindPreference(name) : nullptr;
-  if (!pref || !pref->IsUserModifiable() || !pref->GetValue()->is_bool()) {
-    return false;
+  PrefService* prefs = UserPref(profile ? profile->GetPrefs() : nullptr, name, base::Value::Type::BOOLEAN);
+  if (prefs) {
+    prefs->SetBoolean(name, value);
   }
-  prefs->SetBoolean(name, value);
-  return true;
+  return prefs;
 }
 
 }  // namespace baa
 
-void baa_profile_set_pref_bool(BaaProfile* profile, const char* name, bool value) {
-  if (AliveProfile(profile)) {
-    LOG(INFO) << "baa: set_pref_bool " << name << " = " << value << " -> "
-              << baa::SetPrefBool(profile->profile, name, value);
+bool baa_pref_set_bool(BaaProfile* profile, const char* name, bool value) {
+  PrefService* prefs = UserPref(PrefsOf(profile), name, base::Value::Type::BOOLEAN);
+  LOG(INFO) << "baa: set_pref_bool " << name << " = " << value << " -> " << (prefs != nullptr);
+  if (prefs) {
+    prefs->SetBoolean(name, value);
   }
+  return prefs;
+}
+
+bool baa_pref_set_int(BaaProfile* profile, const char* name, int value) {
+  PrefService* prefs = UserPref(PrefsOf(profile), name, base::Value::Type::INTEGER);
+  LOG(INFO) << "baa: set_pref_int " << name << " = " << value << " -> " << (prefs != nullptr);
+  if (prefs) {
+    prefs->SetInteger(name, value);
+  }
+  return prefs;
+}
+
+bool baa_pref_set_string(BaaProfile* profile, const char* name, const char* value) {
+  PrefService* prefs = value ? UserPref(PrefsOf(profile), name, base::Value::Type::STRING) : nullptr;
+  LOG(INFO) << "baa: set_pref_string " << name << " -> " << (prefs != nullptr);
+  if (prefs) {
+    prefs->SetString(name, value);
+  }
+  return prefs;
 }
 namespace baa {
 

@@ -47,6 +47,7 @@ fn convert(raw: &ffi::Extension) -> (Extension, ExtensionInfo) {
                 _ => None,
             },
             options: some(raw.options_url),
+            unpacked: raw.unpacked,
         },
     )
 }
@@ -56,6 +57,7 @@ pub fn change_code(change: ExtensionChange) -> (i32, i32) {
     match change {
         ExtensionChange::Enable(on) => (ffi::EXTENSION_ENABLE, on as i32),
         ExtensionChange::Remove => (ffi::EXTENSION_REMOVE, 0),
+        ExtensionChange::Reload => (ffi::EXTENSION_RELOAD, 0),
         ExtensionChange::SiteAccess(access) => (
             ffi::EXTENSION_SITE_ACCESS,
             match access {

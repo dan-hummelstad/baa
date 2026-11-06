@@ -60,7 +60,7 @@ fn permission_icon(kind: Permission) -> &'static str {
         Permission::Location => "map-pin",
         Permission::Notifications => "bell",
         Permission::Clipboard => "clipboard",
-        Permission::Midi | Permission::Other => "sliders-horizontal",
+        _ => "sliders-horizontal",
     }
 }
 
@@ -72,7 +72,8 @@ fn permission_name(kind: Permission) -> &'static str {
         Permission::Notifications => "Notifications",
         Permission::Clipboard => "Clipboard",
         Permission::Midi => "MIDI Devices",
-        Permission::Other => "Other",
+        // Site settings only: no ask shows them.
+        _ => "Other",
     }
 }
 
@@ -85,7 +86,7 @@ pub(crate) fn permission_sentence(kinds: &[Permission]) -> String {
         Permission::Notifications => "show notifications",
         Permission::Clipboard => "see what you copy",
         Permission::Midi => "use your MIDI devices",
-        Permission::Other => "use more of your device",
+        _ => "use more of your device",
     };
     // "use your camera and use your microphone" reads as "use your camera and microphone".
     if kinds == [Permission::Camera, Permission::Microphone] {

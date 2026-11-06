@@ -37,7 +37,7 @@ fn every_opened_profile_gets_its_prefs_pinned_off(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     env.page(1, "https://a.test", cx);
     env.page(1, "https://b.test", cx);
-    let calls = calls("profile_set_pref_bool");
+    let calls = calls("pref_set_bool");
     assert_eq!(calls.len(), baa_privacy::PREFS_OFF.len(), "once per profile, not per page");
     assert!(calls[0].ends_with("alternate_error_pages.enabled false"));
 }

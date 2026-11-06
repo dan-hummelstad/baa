@@ -73,6 +73,118 @@ impl Default for SearchEngine {
     }
 }
 
+/// Where a link another app opens goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ExternalLinks {
+    #[default]
+    LilBaa,
+    Tab,
+}
+
+/// prefers-color-scheme that websites see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PageScheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Cookies {
+    AllowAll,
+    #[default]
+    BlockThirdParty,
+    BlockAll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Https {
+    Off,
+    /// Upgrade when possible (Helium's default).
+    #[default]
+    Balanced,
+    /// Always, warn before falling back.
+    Strict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Preload {
+    #[default]
+    Off,
+    Standard,
+    Extended,
+}
+
+/// Cloudflare and Quad9 are `Custom` with their template.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SecureDns {
+    Off,
+    #[default]
+    Automatic,
+    Custom(String),
+}
+
+/// Browser-behaviour settings that baa pushes to Chrome's prefs in every profile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebPrefs {
+    /// `None`: Chrome's own (the system Downloads folder).
+    pub download_dir: Option<std::path::PathBuf>,
+    pub ask_where_to_save: bool,
+    /// Comma-separated language codes; `None` is the system's, and nothing is pushed.
+    pub languages: Option<String>,
+    pub spellcheck: bool,
+    /// 1.0 is 100%.
+    pub default_zoom: f64,
+    pub font_size: u32,
+    /// 0 is off.
+    pub min_font_size: u32,
+    pub focus_highlight: bool,
+    pub caret_browsing: bool,
+    pub cookies: Cookies,
+    pub clear_cookies_on_quit: bool,
+    pub https: Https,
+    pub preload: Preload,
+    pub secure_dns: SecureDns,
+    pub do_not_track: bool,
+    pub global_privacy_control: bool,
+    /// Applies when baa restarts.
+    pub hardware_acceleration: bool,
+    pub memory_saver: bool,
+    /// Extension developer mode (load unpacked, reload).
+    pub developer_mode: bool,
+    /// Only the kinds the user changed; the others are Chrome's ([`crate::Permission::chrome_default`]).
+    pub site_defaults: Vec<(crate::Permission, crate::PermissionState)>,
+}
+
+impl Default for WebPrefs {
+    fn default() -> Self {
+        WebPrefs {
+            download_dir: None,
+            ask_where_to_save: false,
+            languages: None,
+            spellcheck: true,
+            default_zoom: 1.0,
+            font_size: 16,
+            min_font_size: 0,
+            focus_highlight: false,
+            caret_browsing: false,
+            cookies: Cookies::default(),
+            clear_cookies_on_quit: false,
+            https: Https::default(),
+            preload: Preload::default(),
+            secure_dns: SecureDns::default(),
+            do_not_track: false,
+            global_privacy_control: false,
+            hardware_acceleration: true,
+            memory_saver: true,
+            developer_mode: false,
+            site_defaults: Vec::new(),
+        }
+    }
+}
+
 /// Global settings. Stored as JSON so adding a field needs no migration; missing
 /// fields take their defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,6 +203,15 @@ pub struct Settings {
     /// Extension ids kept out of the toolbar; they stay in the extensions menu.
     pub unpinned_extensions: Vec<String>,
     pub devtools_dock: DevToolsDock,
+    /// false archives Today tabs at startup instead of restoring them.
+    pub restore_today: bool,
+    pub external_links: ExternalLinks,
+    /// Links that open a new tab show in Peek first.
+    pub peek_links: bool,
+    pub page_scheme: PageScheme,
+    /// Engines the user added, beside [`SEARCH_ENGINES`].
+    pub search_engines: Vec<SearchEngine>,
+    pub web: WebPrefs,
 }
 
 impl Default for Settings {
@@ -104,6 +225,12 @@ impl Default for Settings {
             chrome: ChromeStyle::Arc,
             unpinned_extensions: Vec::new(),
             devtools_dock: DevToolsDock::default(),
+            restore_today: true,
+            external_links: ExternalLinks::default(),
+            peek_links: true,
+            page_scheme: PageScheme::default(),
+            search_engines: Vec::new(),
+            web: WebPrefs::default(),
         }
     }
 }

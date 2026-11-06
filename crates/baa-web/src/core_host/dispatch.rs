@@ -384,6 +384,9 @@ pub(super) fn callbacks() -> Callbacks {
             }
         });
     }
+    // ponytail: WP-C routes these to the pending-call maps (as `fetch_done`).
+    extern "C" fn clear_done(_: *mut c_void, _: u64) {}
+    extern "C" fn load_unpacked_done(_: *mut c_void, _: u64, _: bool, _: *const c_char) {}
     Callbacks {
         key,
         tab_created,
@@ -399,6 +402,8 @@ pub(super) fn callbacks() -> Callbacks {
         resized,
         page_message,
         fetch_done,
+        clear_done,
+        load_unpacked_done,
     }
 }
 

@@ -18,12 +18,12 @@ use super::{
     sheet, Core, PageKind,
 };
 use crate::{
-    Callback, ChromeSheet, ChromeTabs, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
+    Callback, ChromeSheet, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
     PageHandle, Permission, PermissionState, ProfileId, WebHost,
 };
 
 /// `BAA_PERMISSION_*` bits, in bit order.
-const PERMISSION_BITS: [(u32, Permission); 7] = [
+const PERMISSION_BITS: [(u32, Permission); 15] = [
     (ffi::PERMISSION_CAMERA, Permission::Camera),
     (ffi::PERMISSION_MICROPHONE, Permission::Microphone),
     (ffi::PERMISSION_LOCATION, Permission::Location),
@@ -31,6 +31,14 @@ const PERMISSION_BITS: [(u32, Permission); 7] = [
     (ffi::PERMISSION_CLIPBOARD, Permission::Clipboard),
     (ffi::PERMISSION_MIDI, Permission::Midi),
     (ffi::PERMISSION_OTHER, Permission::Other),
+    (ffi::PERMISSION_POPUPS, Permission::Popups),
+    (ffi::PERMISSION_SOUND, Permission::Sound),
+    (ffi::PERMISSION_JAVASCRIPT, Permission::JavaScript),
+    (ffi::PERMISSION_COOKIES, Permission::Cookies),
+    (ffi::PERMISSION_AUTOMATIC_DOWNLOADS, Permission::AutomaticDownloads),
+    (ffi::PERMISSION_INSECURE_CONTENT, Permission::InsecureContent),
+    (ffi::PERMISSION_SENSORS, Permission::Sensors),
+    (ffi::PERMISSION_WINDOW_MANAGEMENT, Permission::WindowManagement),
 ];
 
 pub(super) fn permissions_of(kinds: u32) -> Vec<Permission> {
@@ -101,7 +109,7 @@ impl CoreWebHost {
             self.profiles.borrow_mut().insert(id, handle);
             // Most are Helium's defaults already; this pins them if one was flipped in settings.
             for pref in baa_privacy::PREFS_OFF {
-                (self.core.profile_set_pref_bool)(handle, c_string(pref).as_ptr(), false);
+                (self.core.pref_set_bool)(handle, c_string(pref).as_ptr(), false);
             }
         }
         handle
@@ -264,6 +272,7 @@ impl WebHost for CoreWebHost {
         match (self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit) {
             ffi::SITE_ALLOW => PermissionState::Allow,
             ffi::SITE_BLOCK => PermissionState::Block,
+            ffi::SITE_SESSION_ONLY => PermissionState::SessionOnly,
             _ => PermissionState::Ask,
         }
     }
@@ -275,7 +284,32 @@ impl WebHost for CoreWebHost {
             PermissionState::Ask => ffi::SITE_ASK,
             PermissionState::Allow => ffi::SITE_ALLOW,
             PermissionState::Block => ffi::SITE_BLOCK,
+            PermissionState::SessionOnly => ffi::SITE_SESSION_ONLY,
         };
         (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state);
     }
+    // ponytail: settings contract stubs (PLAN-settings.md WP-0); WP-C implements them.
+    fn apply_settings(&self, _: &baa_model::Settings) {}
+
+    fn site_rules(&self, _: ProfileId, _: Permission) -> Vec<(String, PermissionState)> {
+        Vec::new()
+    }
+
+    fn set_site_rule(&self, _: ProfileId, _: Permission, _: &str, _: Option<PermissionState>) {}
+
+    fn clear_data(&self, _: ProfileId, _: Option<std::time::SystemTime>, _: ClearData, cx: &mut App, done: Callback<()>) {
+        done((), cx);
+    }
+
+    fn load_unpacked(&self, _: ProfileId, _: &std::path::Path, cx: &mut App, done: Callback<Result<String, String>>) {
+        done(Err("Loading unpacked extensions is not implemented".into()), cx);
+    }
+
+    fn is_default_browser(&self) -> bool {
+        false
+    }
+
+    fn make_default_browser(&self) {}
+
+    fn set_webui_skin(&self, _: ProfileId, _: String, _: bool) {}
 }
