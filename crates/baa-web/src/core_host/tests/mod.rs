@@ -423,6 +423,7 @@ struct State {
     loading: bool,
     can_go_back: bool,
     audible: bool,
+    crashed: bool,
     view: usize,
 }
 
@@ -440,7 +441,7 @@ impl State {
             can_go_forward: false,
             audible: self.audible,
             secure: false,
-            crashed: false,
+            crashed: self.crashed,
         };
         (state, strings)
     }
@@ -463,6 +464,7 @@ mod adoption;
 mod devtools_tests;
 mod dialogs;
 mod extension_tests;
+mod m3;
 mod menus;
 mod pages;
 mod profile_tests;

@@ -66,6 +66,8 @@ pub fn writes(settings: &Settings) -> Writes {
     profile.push(Write::Bool("settings.a11y.focus_highlight", web.focus_highlight));
     profile.push(Write::Bool("settings.a11y.caretbrowsing.enabled", web.caret_browsing));
     profile.push(Write::Bool("extensions.ui.developer_mode", web.developer_mode));
+    // Chrome's default is on, and PREFS_OFF no longer pins it off.
+    profile.push(Write::Bool("search.suggest_enabled", settings.search_suggest));
     profile.push(Write::Zoom(web.default_zoom));
     profile.push(Write::Engine { name: settings.search_engine.name.clone(), url: settings.search_engine.url.clone() });
     // Every kind, so one the user stopped overriding is restored. Block wins over
@@ -153,6 +155,7 @@ mod tests {
             Bool("settings.a11y.focus_highlight", false),
             Bool("settings.a11y.caretbrowsing.enabled", false),
             Bool("extensions.ui.developer_mode", false),
+            Bool("search.suggest_enabled", true),
             Zoom(1.0),
             Engine { name: "Google".into(), url: "https://www.google.com/search?q=%s".into() },
         ];
@@ -180,6 +183,13 @@ mod tests {
                 Write::Int("performance_tuning.high_efficiency_mode.state", 0),
             ]
         );
+    }
+
+    #[test]
+    fn search_suggest_is_written_from_the_setting() {
+        let s = Settings { search_suggest: false, ..Settings::default() };
+        assert!(writes(&s).profile.contains(&Write::Bool("search.suggest_enabled", false)));
+        assert!(writes(&Settings::default()).profile.contains(&Write::Bool("search.suggest_enabled", true)));
     }
 
     #[test]

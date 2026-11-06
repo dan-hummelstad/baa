@@ -142,6 +142,7 @@ struct Snapshot {
     can_go_forward: bool,
     audible: bool,
     secure: bool,
+    crashed: bool,
 }
 
 impl Default for Snapshot {
@@ -156,6 +157,7 @@ impl Default for Snapshot {
             can_go_forward: false,
             audible: false,
             secure: false,
+            crashed: false,
         }
     }
 }
@@ -173,6 +175,7 @@ impl Snapshot {
                 can_go_forward: state.can_go_forward,
                 audible: state.audible,
                 secure: state.secure,
+                crashed: state.crashed,
             }
         }
     }

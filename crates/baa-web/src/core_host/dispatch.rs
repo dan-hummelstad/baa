@@ -23,7 +23,7 @@ use super::{
     page::CorePage,
     PageKind, Shared, Snapshot,
 };
-use crate::{Callback, ChromeTabs, DialogKind, DownloadState, Downloads, PageEvent};
+use crate::{Callback, ChromeTabs, DialogKind, DownloadState, Downloads, PageEvent, SuggestUpdate, Suggestion};
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
 pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
@@ -79,6 +79,9 @@ pub(super) struct Dispatch {
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) clears: Waiting<Callback<()>>,
     pub(super) unpacked: Waiting<Callback<Result<String, String>>>,
+    /// The one query whose results still count: its id and whom to tell.
+    autocomplete: RefCell<Option<(u64, SuggestUpdate)>>,
+    next_autocomplete: Cell<u64>,
     /// `--user-data-dir`.
     pub(super) root: OnceCell<PathBuf>,
 }
@@ -94,6 +97,8 @@ impl Dispatch {
             downloads: RefCell::default(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
+            autocomplete: RefCell::default(),
+            next_autocomplete: Cell::new(1),
             root: OnceCell::new(),
         }
     }
@@ -121,6 +126,28 @@ impl Dispatch {
             let done = self.unpacked.take(id);
             if let Some(done) = done {
                 cx.update(|cx| done(result, cx));
+            }
+        });
+    }
+
+    /// A new query replaces the last; returns the id to give Chrome.
+    pub(super) fn autocomplete_started(&self, update: SuggestUpdate) -> u64 {
+        let id = self.next_autocomplete.replace(self.next_autocomplete.get() + 1);
+        *self.autocomplete.borrow_mut() = Some((id, update));
+        id
+    }
+
+    /// Matches for query `id`, next turn. Late results of a replaced query are
+    /// dropped, and so is the callback once Chrome is done.
+    fn autocompleted(&'static self, id: u64, list: Vec<Suggestion>, done: bool) {
+        self.queue(move |cx| {
+            // Out of the cell while it runs: `update` may start the next query.
+            let current = self.autocomplete.borrow_mut().take_if(|(current, _)| *current == id);
+            let Some((_, mut update)) = current else { return };
+            cx.update(|cx| update(list, cx));
+            if !done {
+                // A query `update` started wins.
+                self.autocomplete.borrow_mut().get_or_insert((id, update));
             }
         });
     }
@@ -388,11 +415,29 @@ pub(super) fn callbacks() -> Callbacks {
         };
         unsafe { dispatch(ctx) }.on_page(front, move |_, cx| cx.emit(PageEvent::DevToolsDock(side.into())));
     }
-    // ponytail: WP-R2 fills these four.
-    extern "C" fn fullscreen(_: *mut c_void, _: TabId, _: bool) {}
-    extern "C" fn find_result(_: *mut c_void, _: TabId, _: c_int, _: c_int) {}
-    extern "C" fn tab_group(_: *mut c_void, _: TabId, _: u64, _: *const c_char) {}
-    extern "C" fn autocomplete(_: *mut c_void, _: u64, _: *const ffi::Match, _: usize, _: bool) {}
+    extern "C" fn fullscreen(ctx: *mut c_void, tab: TabId, on: bool) {
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::Fullscreen(on)));
+    }
+    extern "C" fn find_result(ctx: *mut c_void, tab: TabId, active: c_int, count: c_int) {
+        let (active, total) = (active.max(0) as u32, count.max(0) as u32);
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::FindResult { active, total }));
+    }
+    extern "C" fn tab_group(ctx: *mut c_void, tab: TabId, group: u64, title: *const c_char) {
+        let title = unsafe { from_c(title) };
+        let group = (group != 0).then_some(group);
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::GroupChanged { group, title }));
+    }
+    extern "C" fn autocomplete(ctx: *mut c_void, id: u64, matches: *const ffi::Match, count: usize, done: bool) {
+        // Copied now: Chrome frees the array when this returns.
+        let matches = if matches.is_null() { &[] } else { unsafe { std::slice::from_raw_parts(matches, count) } };
+        let list = matches
+            .iter()
+            .map(|m| unsafe {
+                Suggestion { url: from_c(m.url), text: from_c(m.contents), description: from_c(m.description), search: m.search }
+            })
+            .collect();
+        unsafe { dispatch(ctx) }.autocompleted(id, list, done);
+    }
     extern "C" fn clear_done(ctx: *mut c_void, id: u64) {
         unsafe { dispatch(ctx) }.finish_clear(id);
     }

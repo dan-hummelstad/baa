@@ -114,6 +114,9 @@ impl CorePage {
         if new.audible != old.audible {
             cx.emit(PageEvent::AudibleChanged(new.audible));
         }
+        if new.crashed != old.crashed {
+            cx.emit(PageEvent::Crashed(new.crashed));
+        }
     }
 
     /// Shows Chrome's menu natively over the page; Chrome is told exactly once.

@@ -271,8 +271,15 @@ impl WebHost for CoreWebHost {
         list
     }
 
-    // ponytail: WP-R2 wires `update` to baa_profile_autocomplete.
-    fn autocomplete(&self, _profile: ProfileId, _text: &str, _update: crate::SuggestUpdate) {}
+    fn autocomplete(&self, profile: ProfileId, text: &str, update: crate::SuggestUpdate) {
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return;
+        }
+        // Replacing drops the old callback; Chrome restarts its controller itself.
+        let id = self.dispatch.autocomplete_started(update);
+        (self.core.profile_autocomplete)(handle, id, c_string(text).as_ptr());
+    }
 
     fn downloads(&self) -> Entity<Downloads> {
         self.downloads.clone()
