@@ -29,6 +29,13 @@ std::map<uint64_t, std::unique_ptr<network::SimpleURLLoader>>& Loaders() {
   return *loaders;
 }
 
+// A failure that never started a loader: it must not erase one in flight under a reused id.
+void Fail(uint64_t id) {
+  if (baa::Callbacks().fetch_done) {
+    baa::Callbacks().fetch_done(baa::CallbackContext(), id, false, nullptr, 0);
+  }
+}
+
 void Done(uint64_t id, std::optional<std::string> body) {
   Loaders().erase(id);
   if (!baa::Callbacks().fetch_done) {
@@ -49,7 +56,7 @@ void baa_profile_fetch(BaaProfile* profile, const char* url, uint64_t id) {
   // Never answers inside this call, whatever went wrong.
   if (!chrome_profile || !target.is_valid() || !target.SchemeIsHTTPOrHTTPS()) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Done, id, std::optional<std::string>()));
+        FROM_HERE, base::BindOnce(&Fail, id));
     return;
   }
   net::NetworkTrafficAnnotationTag annotation = net::DefineNetworkTrafficAnnotation("baa_suggest", R"(

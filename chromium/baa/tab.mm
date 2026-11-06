@@ -200,7 +200,7 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
              std::u16string default_text,
              content::JavaScriptDialogManager::DialogClosedCallback callback)
       : id_(id),
-        tab_(tab),
+        tab_(baa::WeakTab(tab)),
         default_text_(std::move(default_text)),
         callback_(std::move(callback)) {}
 
@@ -214,7 +214,7 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
     return std::move(callback_);
   }
   void MarkAnswered() { answered_ = true; }
-  BaaTab* tab() const { return tab_; }
+  BaaTab* tab() const { return tab_.get(); }
   uint64_t id() const { return id_; }
   void Remember(int type, std::string message, std::string default_text) {
     type_ = type;
@@ -226,7 +226,7 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
 
  private:
   const uint64_t id_;
-  raw_ptr<BaaTab> tab_;
+  base::WeakPtr<BaaTab> tab_;
   std::u16string default_text_;
   content::JavaScriptDialogManager::DialogClosedCallback callback_;
   bool answered_ = false;
@@ -483,8 +483,9 @@ void DialogView::CloseDialogWithoutCallback() {
   // Destroys this; nothing after.
   std::unique_ptr<DialogView> self = std::move(it->second);
   Dialogs().erase(it);
-  if (AliveTab(tab_) && baa::Callbacks().dialog_closed) {
-    baa::Callbacks().dialog_closed(baa::CallbackContext(), tab_, id_);
+  BaaTab* tab = tab_.get();
+  if (tab && tab->reported && baa::Callbacks().dialog_closed) {
+    baa::Callbacks().dialog_closed(baa::CallbackContext(), tab, id_);
   }
 }
 
@@ -616,26 +617,31 @@ void OnTabInserted(TabStripModel* model,
 // The tab is going away for good, from any window (a tab reparented into a
 // Chrome-made Browser still dies through here): tab_closed once, before its
 // WebContents and NSView are destroyed.
-void ReportClosed(BaaTab* t) {
-  if (t->closed_sent || t->closing_by_baa) {
-    return;
-  }
-  t->closed_sent = true;
-  DropPermissionsOf(t);
+// Everything that hangs off a tab, dropped on every way out; the app is told
+// (`tell`) only when it did not close the tab itself.
+void Cleanup(BaaTab* t, bool tell) {
+  tell = tell && t->reported;
+  DropPermissionsOf(t, tell);
   DropMenusOf(t);
   ForgetDevtoolsOf(t);
   for (auto d = Dialogs().begin(); d != Dialogs().end();) {
     if (d->second->tab() == t) {
       uint64_t id = d->first;
       d = Dialogs().erase(d);
-      if (t->reported && Callbacks().dialog_closed) {
+      if (tell && Callbacks().dialog_closed) {
         Callbacks().dialog_closed(CallbackContext(), t, id);
       }
     } else {
       ++d;
     }
   }
-  if (t->reported && Callbacks().tab_closed) {
+}
+
+void ReportClosed(BaaTab* t) {
+  bool tell = !t->closed_sent && !t->closing_by_baa;
+  t->closed_sent = true;
+  Cleanup(t, tell);
+  if (tell && t->reported && Callbacks().tab_closed) {
     Callbacks().tab_closed(CallbackContext(), t);
   }
 }
@@ -661,23 +667,40 @@ void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
     return;
   }
   // Moving to another strip. If it lands somewhere that is not ours (an app
-  // Browser), nothing would report it any more: check once it has settled.
+  // Browser), the app no longer shows it: give Chrome its own dialogs and
+  // prompts back, answer what is pending, and forget the handle.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
-                     [](base::WeakPtr<BaaTab> weak) {
-                       if (!weak || !weak->web_contents()) {
+                     [](tabs::TabInterface* ti, base::WeakPtr<BaaTab> weak) {
+                       if (!weak) {
                          return;
                        }
-                       tabs::TabInterface* ti = weak->tab;
-                       BrowserWindowInterface* browser = ti->GetBrowserWindowInterface();
+                       content::WebContents* wc = weak->web_contents();
+                       BrowserWindowInterface* browser = wc ? ti->GetBrowserWindowInterface() : nullptr;
                        if (browser && baa::IsOurBrowser(browser)) {
                          return;
+                       }
+                       if (wc) {
+                         // Pending page dialogs say "no" so the page does not hang.
+                         std::vector<uint64_t> pending;
+                         for (auto& [id, view] : Dialogs()) {
+                           if (view->tab() == weak.get()) {
+                             pending.push_back(id);
+                           }
+                         }
+                         for (uint64_t id : pending) {
+                           baa_dialog_answer(id, false, "");
+                         }
+                         wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
+                         javascript_dialogs::TabModalDialogManager::CreateForWebContents(
+                             wc, std::make_unique<JavaScriptTabModalDialogManagerDelegateDesktop>(wc));
+                         RestoreChromePermissions(wc);
                        }
                        ReportClosed(weak.get());
                        weak->Detach();
                        Tabs().erase(ti);
                      },
-                     t->weak_factory.GetWeakPtr()));
+                     tab, t->weak_factory.GetWeakPtr()));
 }
 
 void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) {
@@ -842,8 +865,7 @@ void baa_tab_close(BaaTab* tab) {
   if (!tab->tab) {
     // A popup: destroying what holds the contents closes it.
     base::OnceClosure close = std::move(tab->close_bare);
-    baa::DropPermissionsOf(tab);
-    baa::DropMenusOf(tab);
+    baa::ReportClosed(tab);  // closing_by_baa: cleanup only, no callbacks
     tab->Detach();
     std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
     if (close) {
@@ -852,14 +874,18 @@ void baa_tab_close(BaaTab* tab) {
     return;
   }
   BrowserWindowInterface* browser = tab->tab->GetBrowserWindowInterface();
-  if (!browser) {
-    return;
-  }
-  TabStripModel* model = browser->GetTabStripModel();
-  int index = model->GetIndexOfTab(tab->tab);
+  TabStripModel* model = browser ? browser->GetTabStripModel() : nullptr;
+  int index = model ? model->GetIndexOfTab(tab->tab) : -1;
   if (index >= 0) {
     model->DetachAndDeleteWebContentsAt(index);
+    return;
   }
+  // In no strip (being moved or torn down): nothing of ours can close it, so
+  // the handle just ends here.
+  tabs::TabInterface* ti = tab->tab;
+  baa::ReportClosed(tab);
+  tab->Detach();
+  baa::Tabs_Erase(ti);
 }
 
 bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
@@ -1075,6 +1101,10 @@ BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close) {
 
 // The holder closed the page itself (a popup's window.close(), its extension
 // unloaded): tab_closed once, then the handle is dead.
+void Tabs_Erase(tabs::TabInterface* ti) {
+  Tabs().erase(ti);
+}
+
 void BareTabClosedByChrome(BaaTab* tab) {
   if (!AliveTab(tab)) {
     return;
@@ -1098,6 +1128,8 @@ void CloseBareTabsForQuit() {
       std::move(close).Run();
     }
   }
+  // Popups that closed themselves and wait for their deletion task too.
+  DestroyAllPopups();
 }
 
 // Sends the first state of a page nobody told the app about yet.
@@ -1127,4 +1159,8 @@ void baa_tab_set_color_scheme(BaaTab* tab, int scheme) {
       tab->ApplyColorScheme();
     }
   }
+}
+
+base::WeakPtr<BaaTab> baa::WeakTab(BaaTab* tab) {
+  return tab ? tab->weak_factory.GetWeakPtr() : nullptr;
 }

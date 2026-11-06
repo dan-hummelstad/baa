@@ -58,6 +58,8 @@ uint64_t NextId();  // dialogs, permission asks and menus share one counter
 BaaTab* TabFor(content::WebContents* contents);  // null if not a baa page
 bool TabAnnounced(BaaTab* tab);  // the app knows the handle
 bool TabAlive(BaaTab* tab);
+// What long-lived holders keep instead of a raw handle: null once the tab is gone.
+base::WeakPtr<BaaTab> WeakTab(BaaTab* tab);
 content::WebContents* ContentsOf(BaaTab* tab);  // null if gone
 Profile* ChromeProfileOf(BaaProfile* profile);  // null if gone
 BaaProfile* ProfileFor(Profile* profile);       // null if baa never opened it
@@ -66,11 +68,16 @@ BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile);
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
 void BareTabClosedByChrome(BaaTab* tab);
 void CloseBareTabsForQuit();
+void Tabs_Erase(tabs::TabInterface* ti);
+void ReportClosed(BaaTab* tab);  // closed_sent once; cleanup always
+void DestroyAllPopups();  // extensions.mm: now, with their WebContents
 void SendTabState(BaaTab* tab);
 
 // ---- permissions.mm / menu.mm / downloads.mm / devtools.mm
 void AttachPermissions(content::WebContents* wc);
-void DropPermissionsOf(BaaTab* tab);
+void DropPermissionsOf(BaaTab* tab, bool tell);
+// Back to Chrome's own prompt (a tab that left our windows).
+void RestoreChromePermissions(content::WebContents* wc);
 void InstallAppModalFactory();
 bool AnswerAppModal(uint64_t id, bool ok, const std::u16string& text);
 void DropMenusOf(BaaTab* tab);
@@ -308,6 +315,7 @@ class Window : public BrowserWindow,
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
   const bool hidden_;
   bool closing_ = false;
+  base::CallbackListSubscription close_cancelled_;
   std::unique_ptr<ExtensionsContainer> extensions_container_;
   std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;
   base::WeakPtrFactory<Window> weak_factory_{this};

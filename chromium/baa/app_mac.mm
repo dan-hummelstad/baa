@@ -30,6 +30,10 @@ int g_exit_code = 0;
 BaaCallbacks g_callbacks = {};
 void* g_ctx = nullptr;
 bool g_terminating = false;
+PrefChangeRegistrar& PinRegistrar() {
+  static base::NoDestructor<PrefChangeRegistrar> pin;
+  return *pin;
+}
 }  // namespace
 
 namespace baa {
@@ -53,13 +57,15 @@ void WatchTermination() {
       browser_shutdown::AddAppTerminatingCallback(
           base::BindOnce([] {
         g_terminating = true;
+        // The registrar must be gone before local state is.
+        PinRegistrar().RemoveAll();
         CloseBareTabsForQuit();
       })));
   // The post-install dialog dereferences a null BrowserView when it closes
   // (extension_install_ui_desktop.cc); the install prompt itself still shows.
   static base::NoDestructor<base::AutoReset<bool>> no_install_ui(
       ExtensionInstallUI::disable_ui_for_tests(true));
-  static base::NoDestructor<PrefChangeRegistrar> pin;
+  PrefChangeRegistrar* pin = &PinRegistrar();
   if (!pin->prefs() && g_browser_process && g_browser_process->local_state()) {
     PrefService* local_state = g_browser_process->local_state();
     auto reset = [](PrefService* local_state) {

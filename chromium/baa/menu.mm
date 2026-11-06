@@ -133,7 +133,7 @@ std::map<uint64_t, AppModal*>& AppModals() {
 class AppModal : public javascript_dialogs::AppModalDialogView {
  public:
   AppModal(std::unique_ptr<javascript_dialogs::AppModalDialogController> controller, BaaTab* tab)
-      : controller_(std::move(controller)), tab_(tab), id_(NextId()) {}
+      : controller_(std::move(controller)), tab_(WeakTab(tab)), id_(NextId()) {}
 
   void ShowAppModalDialog() override {
     AppModals()[id_] = this;
@@ -148,7 +148,7 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
                : controller_->javascript_dialog_type() == content::JAVASCRIPT_DIALOG_TYPE_PROMPT
                    ? BAA_DIALOG_PROMPT
                    : BAA_DIALOG_ALERT;
-    Callbacks().dialog(CallbackContext(), tab_, id_,
+    Callbacks().dialog(CallbackContext(), tab_.get(), id_,
                        kind, base::UTF16ToUTF8(controller_->message_text()).c_str(),
                        base::UTF16ToUTF8(controller_->default_prompt_text()).c_str());
   }
@@ -180,13 +180,14 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
 
  private:
   void Forget(bool tell_app) {
-    if (AppModals().erase(id_) && tell_app && TabAlive(tab_) && Callbacks().dialog_closed) {
-      Callbacks().dialog_closed(CallbackContext(), tab_, id_);
+    BaaTab* tab = tab_.get();
+    if (AppModals().erase(id_) && tell_app && tab && TabAnnounced(tab) && Callbacks().dialog_closed) {
+      Callbacks().dialog_closed(CallbackContext(), tab, id_);
     }
   }
 
   std::unique_ptr<javascript_dialogs::AppModalDialogController> controller_;
-  raw_ptr<BaaTab> tab_;
+  base::WeakPtr<BaaTab> tab_;
   const uint64_t id_;
 };
 
@@ -247,7 +248,7 @@ void baa_context_menu_done(uint64_t id, int command) {
   }
   std::unique_ptr<RenderViewContextMenuBase> menu = std::move(it->second.menu);
   baa::Menus().erase(it);
-  if (command >= 0) {
+  if (command >= 0 && menu->IsCommandIdEnabled(command)) {
     // Before closing: a page's own items need the menu's client.
     menu->ExecuteCommand(command, 0);
   }

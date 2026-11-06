@@ -12,6 +12,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_manager_service.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
@@ -374,6 +376,10 @@ Window::Window(BrowserWindowInterface* browser, bool hidden)
     : browser_(browser), location_bar_(std::make_unique<StubLocationBar>()), hidden_(hidden) {
   // Without one registered, extension context menus and the CDP extensions
   // handler dereference null.
+  // A close the user cancelled (beforeunload "Stay") leaves the window usable and closable again.
+  close_cancelled_ = browser->RegisterBrowserCloseCancelled(
+      base::BindRepeating([](Window* self, BrowserWindowInterface*, BrowserWindowInterface::ClosingStatus) { self->closing_ = false; },
+                          base::Unretained(this)));
   extensions_container_ = MakeExtensionsContainer(browser);
   extensions_registration_ = std::make_unique<ui::ScopedUnownedUserData<ExtensionsContainer>>(
       browser->GetUnownedUserDataHost(), *extensions_container_);
@@ -430,12 +436,28 @@ bool BrowserIsClosing(BrowserWindowInterface* browser) {
 
 void DestroyBrowsersOf(Profile* profile) {
   std::vector<BrowserWindowInterface*> doomed;
+  // Ours, then Chrome's own (a DevTools window, a popup): every Browser of the
+  // profile must be gone before an OTR profile is destroyed.
+  if (auto* collection = ProfileBrowserCollection::GetForProfile(profile)) {
+    collection->ForEach(
+        [&](BrowserWindowInterface* browser) {
+          doomed.push_back(browser);
+          return true;
+        },
+        BrowserCollection::Order::kCreation);
+  }
   for (Window* window : Windows()) {
-    if (window->browser()->GetProfile() == profile) {
+    if (window->browser()->GetProfile() == profile &&
+        std::find(doomed.begin(), doomed.end(), window->browser()) == doomed.end()) {
       doomed.push_back(window->browser());
     }
   }
   for (BrowserWindowInterface* browser : doomed) {
+    // Tabs first: the Browser must be empty to be destroyed.
+    TabStripModel* model = browser->GetTabStripModel();
+    while (model->count() > 0) {
+      model->DetachAndDeleteWebContentsAt(model->count() - 1);
+    }
     BrowserManagerService::SynchronouslyDestroyBrowser(browser);
   }
 }

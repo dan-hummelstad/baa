@@ -111,6 +111,7 @@ class ManagerWatch : public content::DownloadManager::Observer {
     watches_gone_ = true;
   }
   bool gone() const { return watches_gone_; }
+  content::DownloadManager* manager() const { return manager_; }
 
  private:
   raw_ptr<content::DownloadManager> manager_;
@@ -128,6 +129,13 @@ std::vector<std::unique_ptr<ManagerWatch>>& Managers() {
 void WatchDownloads(Profile* profile) {
   std::erase_if(Managers(), [](auto& m) { return m->gone(); });
   if (auto* manager = profile->GetDownloadManager()) {
+    // The Default profile and its incognito twin share nothing, but a profile
+    // opened twice must not be watched twice.
+    for (auto& m : Managers()) {
+      if (m->manager() == manager) {
+        return;
+      }
+    }
     Managers().push_back(std::make_unique<ManagerWatch>(manager));
   }
 }

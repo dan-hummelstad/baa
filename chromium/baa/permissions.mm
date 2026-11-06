@@ -56,7 +56,7 @@ uint32_t KindBit(permissions::RequestType type) {
 class Prompt : public permissions::PermissionPrompt {
  public:
   Prompt(BaaTab* tab, Delegate* delegate)
-      : tab_(tab), delegate_(delegate->GetWeakPtr()), id_(NextId()) {
+      : tab_(WeakTab(tab)), delegate_(delegate->GetWeakPtr()), id_(NextId()) {
     uint32_t kinds = 0;
     for (const auto& request : delegate->Requests()) {
       kinds |= KindBit(request->request_type());
@@ -65,19 +65,21 @@ class Prompt : public permissions::PermissionPrompt {
     Prompts()[id_] = this;
     kinds_ = kinds;
     if (Callbacks().permission) {
-      Callbacks().permission(CallbackContext(), tab_, id_, origin_.c_str(), kinds_);
+      BaaTab* tab = tab_.get();
+      Callbacks().permission(CallbackContext(), tab, id_, origin_.c_str(), kinds_);
     }
   }
 
   ~Prompt() override {
     // Still waiting: Chrome dropped the request (navigation, tab closed).
-    if (Prompts().erase(id_) && TabAlive(tab_) && Callbacks().permission_closed) {
-      Callbacks().permission_closed(CallbackContext(), tab_, id_);
+    BaaTab* tab = tab_.get();
+    if (Prompts().erase(id_) && tab && TabAnnounced(tab) && Callbacks().permission_closed) {
+      Callbacks().permission_closed(CallbackContext(), tab, id_);
     }
   }
 
   base::WeakPtr<Delegate> delegate() const { return delegate_; }
-  BaaTab* tab() const { return tab_; }
+  BaaTab* tab() const { return tab_.get(); }
 
   bool UpdateAnchor() override { return true; }
   // The app keeps asks per tab.
@@ -96,7 +98,7 @@ class Prompt : public permissions::PermissionPrompt {
   }
 
  private:
-  raw_ptr<BaaTab> tab_;
+  base::WeakPtr<BaaTab> tab_;
   base::WeakPtr<Delegate> delegate_;
   const uint64_t id_;
   std::string origin_;
@@ -171,12 +173,18 @@ void AttachPermissions(content::WebContents* wc) {
   }
 }
 
-void DropPermissionsOf(BaaTab* tab) {
+void RestoreChromePermissions(content::WebContents* wc) {
+  if (auto* manager = permissions::PermissionRequestManager::FromWebContents(wc)) {
+    manager->set_view_factory_for_testing(base::BindRepeating(&permissions::PermissionPrompt::Create));
+  }
+}
+
+void DropPermissionsOf(BaaTab* tab, bool tell) {
   for (auto it = Prompts().begin(); it != Prompts().end();) {
     if (it->second->tab() == tab) {
       uint64_t id = it->first;
       it = Prompts().erase(it);
-      if (Callbacks().permission_closed) {
+      if (tell && Callbacks().permission_closed) {
         Callbacks().permission_closed(CallbackContext(), tab, id);
       }
     } else {

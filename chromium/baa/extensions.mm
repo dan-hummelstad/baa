@@ -3,6 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "baa/baa.h"
 #include "baa/internal.h"
 #include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
@@ -30,6 +32,7 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/uninstall_reason.h"
@@ -111,15 +114,32 @@ std::string PermissionLines(Profile* profile, const extensions::Extension& ext, 
 
 // ---- Popups --------------------------------------------------------------------
 
+class Popup;
+std::vector<Popup*>& Popups() {
+  static base::NoDestructor<std::vector<Popup*>> popups;
+  return *popups;
+}
+
+// Deletes a popup once; a posted deletion may find it already gone (quit).
+void DestroyPopup(Popup* popup);
+
 class Popup : public extensions::ExtensionView,
               public extensions::ExtensionRegistryObserver {
  public:
-  Popup(Profile* profile, std::unique_ptr<extensions::ExtensionViewHost> host)
+  Popup(Profile* profile, BrowserWindowInterface* browser, std::unique_ptr<extensions::ExtensionViewHost> host)
       : profile_(profile), host_(std::move(host)) {
     registry_.Observe(extensions::ExtensionRegistry::Get(profile));
+    Popups().push_back(this);
+    // The host's delegate holds the Browser: when it goes, so does the popup,
+    // now (not from a task).
+    browser_closed_ = browser->RegisterBrowserDidClose(
+        base::BindRepeating([](Popup* self, BrowserWindowInterface*) { self->Closed(); }, base::Unretained(this)));
   }
 
-  ~Popup() override { host_.reset(); }
+  ~Popup() override {
+    std::erase(Popups(), this);
+    host_.reset();
+  }
 
   void Start() {
     tab_ = CreateBareTab(host_->host_contents(),
@@ -162,18 +182,33 @@ class Popup : public extensions::ExtensionView,
 
   // Chrome (the page, or its extension going away) closed the popup.
   void Closed() {
+    if (closed_) {
+      return;
+    }
+    closed_ = true;
     BaaTab* tab = tab_;
     tab_ = nullptr;
     BareTabClosedByChrome(tab);
-    // Not from inside the host's own callback.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+    browser_closed_ = {};
+    // The contents go now (they hold the Browser or the extension); the shell
+    // goes from a task, not from inside the host's or the Browser's callback.
+    host_.reset();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&DestroyPopup, this));
   }
 
   raw_ptr<Profile> profile_;
   std::unique_ptr<extensions::ExtensionViewHost> host_;
   raw_ptr<BaaTab> tab_ = nullptr;
+  bool closed_ = false;
+  base::CallbackListSubscription browser_closed_;
   base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver> registry_{this};
 };
+
+void DestroyPopup(Popup* popup) {
+  if (std::find(Popups().begin(), Popups().end(), popup) != Popups().end()) {
+    delete popup;
+  }
+}
 
 // The ExtensionsContainer of a baa window: enough that Chrome's extension code
 // can ask it, and answer "no" (there is no toolbar).
@@ -196,6 +231,12 @@ class Container : public ExtensionsContainer {
 };
 
 }  // namespace
+
+void DestroyAllPopups() {
+  while (!Popups().empty()) {
+    delete Popups().back();
+  }
+}
 
 std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser) {
   return std::make_unique<Container>(browser);
@@ -299,6 +340,10 @@ BaaTab* baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   }
   const extensions::Extension* ext =
       extensions::ExtensionRegistry::Get(chrome_profile)->enabled_extensions().GetByID(extension_id);
+  // An OTR profile only runs the extensions the user allowed in incognito.
+  if (ext && chrome_profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(ext, chrome_profile)) {
+    return nullptr;
+  }
   content::WebContents* active = browser->GetTabStripModel()->GetActiveWebContents();
   if (!ext || !active) {
     return nullptr;
@@ -321,7 +366,7 @@ BaaTab* baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   if (!host) {
     return nullptr;
   }
-  auto* popup = new baa::Popup(chrome_profile, std::move(host));
+  auto* popup = new baa::Popup(chrome_profile, browser, std::move(host));
   popup->Start();
   return popup->tab();
 }
