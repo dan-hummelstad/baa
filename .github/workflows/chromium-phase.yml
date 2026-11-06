@@ -141,7 +141,7 @@ jobs:
           # and cannot be undone, so a fresh tree is the only correct source.
           PREP=$ROOT; [ -z "$BASE" ] || PREP=/Users/Shared/hb-new
           mkdir -p "$PREP"
-          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$PREP/"
+          cp -R "$GITHUB_WORKSPACE/baa/chromium/helium" "$GITHUB_WORKSPACE/baa/chromium/helium-macos" "$GITHUB_WORKSPACE/baa/chromium/patches" "$GITHUB_WORKSPACE/baa/chromium/baa" "$PREP/"
           cd "$PREP/helium-macos"
           t=$(date +%s)
           source devutils/shared.sh
