@@ -12,6 +12,10 @@ CACHE=/Users/Shared/hb-downloads
 SRC=$ROOT/helium-macos/build/src
 RSYNC=/opt/homebrew/bin/rsync  # the rsync CI uses
 
+# One run at a time: two re-preps share $PREP and delete each other's half-unpacked tree.
+LOCK=/Users/Shared/hb-local-build.lock
+mkdir "$LOCK" 2>/dev/null || { echo "another local-build.sh is running (stale? rmdir $LOCK)" >&2; exit 1; }
+trap 'rmdir "$LOCK"' EXIT
 ! pgrep -x siso >/dev/null || { echo "a siso build is running; wait for it" >&2; exit 1; }
 [ -f "$SRC/out/Default/args.gn" ] || { echo "no dev tree at $ROOT; unpack a chromium-tree-xcode* artifact there" >&2; exit 1; }
 
