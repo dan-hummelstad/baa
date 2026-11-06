@@ -10,6 +10,9 @@
 #   APPLE_ID                Apple ID used for notarization
 #   APPLE_TEAM_ID           10-character Apple team ID
 #   APPLE_APP_PASSWORD      app-specific password for APPLE_ID
+# Without MACOS_CERT_P12_BASE64 the release is ad-hoc signed and not notarised
+# (user decision 2026-11-06: no CI signing for now); adding the secrets switches
+# to Developer ID + notarisation with no other change.
 name: release
 
 on:
@@ -55,6 +58,11 @@ jobs:
   macos:
     needs: [version, engine]
     runs-on: macos-15
+    outputs:
+      signed: ${{ env.SIGNED }}
+    env:
+      # Secrets cannot appear in `if:`; this can.
+      SIGNED: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -79,7 +87,8 @@ jobs:
         run: |
           cargo install cargo-about --locked --features cli
           cargo about generate about.hbs > target/bundle/baa.app/Contents/Resources/rust-credits.html
-      - uses: apple-actions/import-codesign-certs@v7
+      - if: env.SIGNED == 'true'
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -92,23 +101,34 @@ jobs:
           VER: ${{ needs.version.outputs.version }}
         run: |
           set -eux
-          python3 "target/bundle/baa Packaging/sign_chrome.py" --input target/bundle \
-            --output target/bundle/signed --identity "$MACOS_SIGN_IDENTITY" --disable-packaging \
-            --notarize staple --notary-arg=--apple-id="$APPLE_ID" --notary-arg=--team-id="$APPLE_TEAM_ID" \
-            --notary-arg=--password="$APPLE_APP_PASSWORD"
-          # The signer adds the secure timestamp only with --notarize; it staples the app.
-          # Path per Helium's sign_and_package_app.sh (out/Default/signed/stable/); check on the first run.
-          APP=$(find target/bundle/signed -name baa.app -maxdepth 3 | head -1)
-          codesign -dv "$APP" 2>&1 | grep -E 'flags=|TeamIdentifier='
+          if [ "$SIGNED" = true ]; then
+            python3 "target/bundle/baa Packaging/sign_chrome.py" --input target/bundle \
+              --output target/bundle/signed --identity "$MACOS_SIGN_IDENTITY" --disable-packaging \
+              --notarize staple --notary-arg=--apple-id="$APPLE_ID" --notary-arg=--team-id="$APPLE_TEAM_ID" \
+              --notary-arg=--password="$APPLE_APP_PASSWORD"
+            # The signer adds the secure timestamp only with --notarize; it staples the app.
+            # Path per Helium's sign_and_package_app.sh (out/Default/signed/stable/); check on the first run.
+            APP=$(find target/bundle/signed -name baa.app -maxdepth 3 | head -1)
+            SUFFIX=
+          else
+            # ponytail: ad-hoc signature, no hardened runtime, not notarised; users open it
+            # with right-click → Open. Developer ID once the secrets exist.
+            APP=target/bundle/baa.app
+            codesign --force --deep --sign - --identifier me.baa.browser "$APP"
+            SUFFIX=-unsigned
+          fi
+          codesign -dv "$APP" 2>&1 | grep -E 'flags=|TeamIdentifier=|Signature='
           # The signed app, as shipped.
           python3 xtask/privacy_test.py "$APP" proxy-allowlist.txt --seconds 60 --netlog netlog.json
           mkdir "$RUNNER_TEMP/dmg"
           ditto "$APP" "$RUNNER_TEMP/dmg/baa.app"
           ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
-          DMG="baa-$VER-macos-arm64.dmg"
+          DMG="baa-$VER-macos-arm64$SUFFIX.dmg"
           hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -format ULMO "$DMG"
-          cargo run --release -p xtask -- sign "$DMG"
-          cargo run --release -p xtask -- notarize "$DMG"
+          if [ "$SIGNED" = true ]; then
+            cargo run --release -p xtask -- sign "$DMG"
+            cargo run --release -p xtask -- notarize "$DMG"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: macos
@@ -140,6 +160,9 @@ jobs:
           set -eu
           e=dist/engine/engine.json
           notes="Engine: Chromium $(jq -r .chromium "$e"), Helium $(jq -r .helium "$e"), engine $(jq -r '.tree[0:8]' "$e"). Source: https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_REF_NAME"
+          if [ "${{ needs.macos.outputs.signed }}" != true ]; then
+            notes="$notes"$'\n\n'"Not signed with a Developer ID or notarised yet: open it with right-click → Open (or \`xattr -dr com.apple.quarantine /Applications/baa.app\`)."
+          fi
           # ponytail: GitHub Release only; mirroring to baa.me/dl (§13) waits until baa.me hosts anything.
           gh release create "$GITHUB_REF_NAME" dist/baa-*.dmg dist/engine/engine.json --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "baa ${{ needs.version.outputs.version }}" --notes "$notes" --generate-notes

@@ -119,9 +119,11 @@ not survive that move, so sign in to sites once more.
 Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` uses the engine built from the
 tagged commit's `chromium/` tree (`baa-engine-<tree>`, built by `chromium.yml` with `mode=release`;
 it fails and says what to run if there is none), adds the Rust binary, signs with Chromium's signer,
-runs the privacy test, notarises a DMG and publishes a GitHub Release. Secrets, once:
-`MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`,
-`APPLE_APP_PASSWORD`.
+runs the privacy test, notarises a DMG and publishes a GitHub Release. Signing is optional for now:
+without the secrets the app is ad-hoc signed, the DMG is `baa-X.Y.Z-macos-arm64-unsigned.dmg`, nothing
+is notarised, and the release notes say to open it with right-click → Open. Adding these secrets
+switches to Developer ID + notarisation: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`,
+`MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`.
 
 ## Layout
 
