@@ -295,6 +295,12 @@ bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id,
   }
   extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(chrome_profile);
   switch (change) {
+    case BAA_EXTENSION_RELOAD:
+      if (!extensions::Manifest::IsUnpackedLocation(ext->location())) {
+        return false;
+      }
+      registrar->ReloadExtension(id);
+      return true;
     case BAA_EXTENSION_ENABLE:
       if (value) {
         registrar->EnableExtension(id);

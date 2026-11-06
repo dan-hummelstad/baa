@@ -25,7 +25,8 @@ Called by ci.sh, which builds and bundles the harness. Each test:
   clipboard-set: <text>             before the run
   clipboard: <text>                 the pasteboard afterwards
   exists: <path>                    under the user data dir afterwards
-{EXT_ID} in a script is the test extension's id.
+{EXT_ID} in a script is the test extension's id. {EXT_COPY} is a fresh copy of test-ext in the
+test's temp dir (for baa_profile_load_unpacked; the script may edit it) and {COPY_ID} its id.
 """
 
 import argparse
@@ -149,6 +150,9 @@ def run_test(spec, exe, keep):
     try:
         text = open(os.path.join(TESTS, spec.script), encoding="utf-8").read()
         text = text.replace("{EXT_ID}", ext_id(os.path.realpath(ext_path)))
+        copy = os.path.join(os.path.realpath(tmp), "ext-copy")
+        shutil.copytree(ext_path, copy)
+        text = text.replace("{EXT_COPY}", copy).replace("{COPY_ID}", ext_id(copy))
         if spec.server:
             sp = free_port()
             server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)])

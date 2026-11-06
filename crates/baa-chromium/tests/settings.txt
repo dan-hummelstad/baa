@@ -1,0 +1,184 @@
+# ABI 5 settings calls with real effects: prefs, font size, DNT, site rules, clear data, search engine,
+# default zoom, load unpacked, reload
+prefb 1 enable_do_not_track true
+prefb 1 no.such true
+prefi 1 enable_do_not_track 1
+prefs 1 enable_do_not_track x
+prefb local hardware_acceleration_mode.enabled false
+prefb local no.such true
+prefi 1 webkit.webprefs.default_font_size 24
+load data:text/html,<p>x
+sleep 2000
+eval document.title=getComputedStyle(document.body).fontSize
+sleep 500
+state
+eval document.title='dnt:'+navigator.doNotTrack
+sleep 500
+state
+# defaults of all 14 kinds on a profile where the user changed nothing
+rules camera
+rules microphone
+rules location
+rules notifications
+rules clipboard
+rules midi
+rules popups
+rules sound
+rules javascript
+rules cookies
+rules downloads
+rules insecure
+rules sensors
+rules windows
+rules other
+# exceptions: set, listed, removed; kinds refuse states they do not take
+rule popups [*.]example.com allow
+rules popups
+rule popups [*.]example.com unset
+rules popups
+rule cookies [*.]a.test session
+rules cookies
+rule cookies [*.]a.test unset
+rule popups x.test session
+rule popups x.test ask
+rule cookies x.test ask
+rule popups not-a-pattern-://[ allow
+rule location https://b.test:8080 block
+rule midi [*.]c.test allow
+rule downloads [*.]d.test block
+rule insecure [*.]e.test allow
+rule sensors [*.]f.test block
+rule windows [*.]g.test allow
+rule sound [*.]h.test block
+rule javascript [*.]i.test block
+rules location
+rules midi
+rules downloads
+rules insecure
+rules sensors
+rules windows
+rules sound
+rules javascript
+# a default: set, then back to Chrome's
+rule popups * allow
+rules popups
+rule popups * unset
+rules popups
+rule cookies * session
+rules cookies
+rule cookies * unset
+rules cookies
+# the site-permission calls see a rule set here
+rule popups [*.]example.com block
+rules popups
+# clear data: a cookie and localStorage set before are gone after
+load https://example.com/
+sleep 3000
+eval document.cookie='a=1;path=/;max-age=999';localStorage.setItem('k','v')
+sleep 500
+eval document.title='before:'+document.cookie+':'+localStorage.getItem('k')
+sleep 500
+state
+clear site 0
+sleep 2500
+load https://example.com/
+sleep 3000
+eval document.title='after:'+document.cookie+':'+localStorage.getItem('k')
+sleep 500
+state
+clear history 0
+clear all 1
+clear cache 0
+sleep 2500
+# search engine: refused without %s, accepted with, and the context menu offers it
+engine Kagi kagi.com https://kagi.com/search
+engine - kagi.com https://kagi.com/search?q=%s
+engine Kagi kagi.com https://kagi.com/search?q=%s
+sleep 1500
+eval document.body.innerHTML='<div id=u style="position:fixed;left:0;top:450px;width:400px;height:100px;background:#fcf">select me too</div>'
+sleep 500
+activate
+eval getSelection().selectAllChildren(document.getElementById('u'))
+sleep 300
+menu 100 480
+sleep 2500
+# default zoom reaches a fresh page: devicePixelRatio is the display scale times the zoom
+load data:text/html,<p>z
+sleep 2000
+eval document.title='dpr:'+Math.round(devicePixelRatio*100)/100
+sleep 500
+state
+zoomdefault 1.5
+load data:text/html,<p>zz
+sleep 2000
+eval document.title='dpr:'+Math.round(devicePixelRatio*100)/100
+sleep 500
+state
+zoomdefault 1
+# colour schemes by URL kind: websites follow the first, chrome: pages the second, live tabs follow changes
+schemes 2 1
+load https://example.com/
+sleep 3000
+eval document.title='site:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+tab 1 chrome://version/
+sleep 4500
+use 1
+eval document.title='webui:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+schemes 1 2
+sleep 500
+eval document.title='webui2:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+use 0
+eval document.title='site2:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+schemes 0 0
+# an ephemeral profile takes the defaults of its parent: a site default, and the zoom
+profile e
+rule popups * allow
+rules popups
+site popups https://example.com/
+rule popups * unset
+site popups https://example.com/
+rule popups [*.]example.org allow
+rules popups
+rule popups [*.]example.org unset
+engine Kagi kagi.com https://kagi.com/search?q=%s
+zoomdefault 1.5
+tab e data:text/html,<p>o
+sleep 3000
+use 2
+eval document.title='otr-dpr:'+Math.round(devicePixelRatio*100)/100
+sleep 500
+state
+zoomdefault 1
+use 0
+profile 1
+# load unpacked: an extension, a missing folder, then the manifest changes and the reload shows it
+prefb 1 extensions.ui.developer_mode true
+unpacked {EXT_COPY}
+sleep 3000
+extensions
+unpacked /no/such/folder
+sleep 2000
+shell sed -i '' 's/"version": "1"/"version": "2"/' {EXT_COPY}/manifest.json
+reload-ext {COPY_ID}
+sleep 3000
+extensions
+reload-ext aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+# pref_clear: back to the default font size, refusals, default browser answers
+prefclear 1 webkit.webprefs.default_font_size
+prefclear 1 no.such
+prefclear local no.such
+load data:text/html,<p>y
+sleep 2000
+eval document.title='font:'+getComputedStyle(document.body).fontSize
+sleep 500
+state
+defaultbrowser
+quit

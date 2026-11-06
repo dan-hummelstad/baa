@@ -261,9 +261,18 @@ BAA_EXPORT bool baa_pref_set_int(BaaProfile* profile, const char* name,
                                  int value);
 BAA_EXPORT bool baa_pref_set_string(BaaProfile* profile, const char* name,
                                     const char* value);
+// Resets a user pref to its default. False for an unknown pref, one that
+// policy forces, or a dead profile. `profile` NULL means Local State.
+BAA_EXPORT bool baa_pref_clear(BaaProfile* profile, const char* name);
+
+// Whether this app is the system's default web browser, and asking the system
+// to make it so (the system confirms with its own dialog; there is no result).
+BAA_EXPORT bool baa_is_default_browser(void);
+BAA_EXPORT void baa_set_default_browser(void);
 
 // The default zoom of the profile's pages; `factor` 1.0 is 100%. Pages that
-// have their own zoom (baa_tab_set_zoom) keep it.
+// have their own zoom (baa_tab_set_zoom) keep it. An ephemeral profile uses
+// its parent's, so this sets the parent's.
 BAA_EXPORT void baa_profile_set_default_zoom(BaaProfile* profile,
                                              double factor);
 
@@ -436,8 +445,12 @@ BAA_EXPORT void baa_tab_focus(BaaTab* tab);
 // tab, as soon as its root element exists. NULL or "" stops it.
 BAA_EXPORT void baa_tab_set_init_script(BaaTab* tab, const char* script);
 
-// prefers-color-scheme for the page: 0 follows the system, 1 light, 2 dark.
-BAA_EXPORT void baa_tab_set_color_scheme(BaaTab* tab, int scheme);
+// prefers-color-scheme of the profile's pages: 0 follows the system, 1 light,
+// 2 dark. `webui` applies to Chrome's own pages (chrome: and baa: URLs),
+// `website` to everything else; each document gets the one for its committed
+// URL, and live tabs follow a change at once.
+BAA_EXPORT void baa_profile_set_color_schemes(BaaProfile* profile, int website,
+                                              int webui);
 
 // DevTools for `tab`, to be docked by the caller: returns the front-end page
 // (place its state.view; baa_tab_close closes DevTools). With `inspect`,

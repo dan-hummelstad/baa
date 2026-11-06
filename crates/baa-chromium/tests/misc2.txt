@@ -15,17 +15,17 @@ sleep 3500
 eval document.title='init:'+window.__baa
 sleep 500
 state
-scheme 2
+schemes 0 2
 eval document.title='dark:'+matchMedia('(prefers-color-scheme: dark)').matches
 sleep 500
 state
-scheme 1
+schemes 0 1
 eval document.title='light-dark:'+matchMedia('(prefers-color-scheme: dark)').matches
 sleep 500
 state
 # a pref that this profile registers
-pref search.suggest_enabled false
-pref no.such.pref true
+prefb 1 search.suggest_enabled false
+prefb 1 no.such.pref true
 load chrome://prefs-internals/
 sleep 3500
 eval document.title='suggest:'+(document.body.innerText.match(/"suggest_enabled":\s*(true|false)/)||[])[1]

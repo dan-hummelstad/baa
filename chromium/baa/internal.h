@@ -16,6 +16,7 @@
 #include "content/public/browser/web_contents.h"
 
 class ExtensionsContainer;
+class GURL;
 class Profile;
 struct BaaTab;
 struct BaaProfile;
@@ -67,6 +68,10 @@ bool DevtoolsDocking();  // a kDevtoolsFront insertion is in progress
 
 // A page that is not in a tab strip. `close` destroys what holds the contents.
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
+// profile.mm: 0 system, 1 light, 2 dark for a document at `url` of this profile.
+int ColorSchemeFor(Profile* profile, const GURL& url);
+void ReapplyColorSchemes(Profile* profile);  // tab.mm: after the profile's choice changed
+void AnswerPendingOf(Profile* profile);      // settings.mm: clear_done/load_unpacked_done for a closing profile
 void CloseTabsOf(Profile* profile);  // baa_profile_close: every page of it, now
 void BareTabClosedByChrome(BaaTab* tab);
 void CloseBareTabsForQuit();

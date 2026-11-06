@@ -400,17 +400,32 @@ mod app {
     extern "C" fn visit_extension(_: *mut c_void, e: *const ffi::Extension) {
         let e = unsafe { &*e };
         eprintln!(
-            "baa: extension id={} name={:?} version={} enabled={} site_access={} popup={} options={} icon={} permissions={:?}",
+            "baa: extension id={} name={:?} version={} enabled={} unpacked={} site_access={} popup={} options={} icon={} permissions={:?}",
             text(e.id),
             text(e.name),
             text(e.version),
             e.enabled as u8,
+            e.unpacked as u8,
             e.site_access,
             text(e.popup_url),
             text(e.options_url),
             text(e.icon_path),
             text(e.permissions)
         );
+    }
+
+    extern "C" fn visit_rule(ctx: *mut c_void, pattern: *const c_char, state: c_int) {
+        let state = ["ask", "allow", "block", "session"].get(state as usize).copied().unwrap_or("?");
+        // SAFETY: ctx is the Vec the `rules` step passes.
+        unsafe { &mut *ctx.cast::<Vec<String>>() }.push(format!("{} {state}", text(pattern)));
+    }
+
+    fn rule_kind(name: &str) -> u32 {
+        const NAMES: [&str; 15] = [
+            "camera", "microphone", "location", "notifications", "clipboard", "midi", "other", "popups", "sound",
+            "javascript", "cookies", "downloads", "insecure", "sensors", "windows",
+        ];
+        1 << NAMES.iter().position(|n| *n == name).unwrap_or_else(|| panic!("kind {name:?}"))
     }
 
     extern "C" fn visit_history(_: *mut c_void, title: *const c_char, url: *const c_char) {
@@ -426,7 +441,8 @@ mod app {
     ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
     ///   menu <x> <y> | devtools [inspect <x> <y>] | devtools-window | popup <ext-id> | extensions
     ///   ext <id> enable|disable|remove|access <n> | site <kind> <url> [ask|allow|block]
-    ///   fetch <url> | pref <name> <bool> | initscript <js> | scheme <0|1|2>
+    ///   fetch <url> | prefb|prefi|prefs <1|local> <name> <value> | zoomdefault <f> | engine <name> <kw> <url>
+    ///   rules <kind> | rule <kind> <pattern> <state> | clear <what> <since_ms> | unpacked <path> | reload-ext <id> | initscript <js> | schemes <website> <webui> | profile <1|2|e> | prefclear <1|local> <name> | defaultbrowser
     ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id> <0|1> [text]
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -435,6 +451,8 @@ mod app {
             let mut current = 0usize;
             let mut shots = 0;
             let mut fetches = 0u64;
+            let (mut clears, mut unpacked) = (0u64, 0u64);
+            let mut which: &str = "1";
             // The page's own tab exists once the window does.
             executor.timer(std::time::Duration::from_secs(3)).await;
             for line in script.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
@@ -517,18 +535,10 @@ mod app {
                         let ok = (core.profile_extension_change)(profile_for("1"), id.as_ptr(), change, value);
                         eprintln!("baa: ext {arg} -> {ok}");
                     }
-                    // site <camera|microphone|location|notifications|clipboard|midi> <url> [ask|allow|block]
+                    // site <kind> <url> [ask|allow|block]
                     "site" => {
                         let mut p = arg.splitn(3, ' ');
-                        let kind = match p.next().unwrap() {
-                            "camera" => 1,
-                            "microphone" => 2,
-                            "location" => 4,
-                            "notifications" => 8,
-                            "clipboard" => 16,
-                            "midi" => 32,
-                            other => panic!("kind {other:?}"),
-                        };
+                        let kind = rule_kind(p.next().unwrap());
                         let url = CString::new(p.next().unwrap()).unwrap();
                         if let Some(state) = p.next() {
                             let state = match state {
@@ -536,22 +546,105 @@ mod app {
                                 "block" => 2,
                                 _ => 0,
                             };
-                            (core.profile_set_site_permission)(profile_for("1"), url.as_ptr(), kind, state);
+                            (core.profile_set_site_permission)(profile_for(which), url.as_ptr(), kind, state);
                         }
-                        let now = (core.profile_site_permission)(profile_for("1"), url.as_ptr(), kind);
-                        eprintln!("baa: site {arg} = {}", ["ask", "allow", "block"][now as usize]);
+                        let now = (core.profile_site_permission)(profile_for(which), url.as_ptr(), kind);
+                        eprintln!("baa: site {arg} = {}", ["ask", "allow", "block", "session"][now as usize]);
                     }
                     "fetch" => {
                         fetches += 1;
                         (core.profile_fetch)(profile_for("1"), c(arg).as_ptr(), fetches);
                         eprintln!("baa: fetch {fetches} {arg}");
                     }
-                    "pref" => {
-                        let (name, value) = arg.split_once(' ').unwrap();
-                        (core.pref_set_bool)(profile_for("1"), c(name).as_ptr(), value == "true" || value == "1");
+                    // prefb|prefi|prefs <1|local> <name> <value>: `local` is Local State.
+                    "prefb" | "prefi" | "prefs" => {
+                        let mut p = arg.splitn(3, ' ');
+                        let (which, name, value) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
+                        let profile = if which == "local" { std::ptr::null_mut() } else { profile_for(which) };
+                        let ok = match verb {
+                            "prefb" => (core.pref_set_bool)(profile, c(name).as_ptr(), value == "true" || value == "1"),
+                            "prefi" => (core.pref_set_int)(profile, c(name).as_ptr(), value.parse().unwrap()),
+                            _ => (core.pref_set_string)(profile, c(name).as_ptr(), c(value).as_ptr()),
+                        };
+                        eprintln!("baa: {verb} {arg} -> {}", ok as u8);
+                    }
+                    "zoomdefault" => {
+                        (core.profile_set_default_zoom)(profile_for(which), arg.parse().unwrap());
+                        eprintln!("baa: zoomdefault {arg}");
+                    }
+                    // engine <name> <keyword> <url> (a keyword of `-` is empty)
+                    "engine" => {
+                        let mut p = arg.splitn(3, ' ');
+                        let (name, keyword, url) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
+                        let keyword = if keyword == "-" { "" } else { keyword };
+                        let ok = (core.profile_set_search_engine)(profile_for(which), c(name).as_ptr(), c(keyword).as_ptr(), c(url).as_ptr());
+                        eprintln!("baa: engine {arg} -> {}", ok as u8);
+                    }
+                    "rules" => {
+                        let mut rows: Vec<String> = Vec::new();
+                        let ctx = std::ptr::addr_of_mut!(rows).cast();
+                        let n = (core.profile_site_rules)(profile_for(which), rule_kind(arg), visit_rule, ctx);
+                        eprintln!("baa: rules {arg} -> {n} [{}]", rows.join(", "));
+                    }
+                    // rule <kind> <pattern> <ask|allow|block|session|unset>
+                    "rule" => {
+                        let mut p = arg.splitn(3, ' ');
+                        let (kind, pattern, state) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
+                        let state = match state {
+                            "unset" => -1,
+                            "ask" => 0,
+                            "allow" => 1,
+                            "block" => 2,
+                            "session" => 3,
+                            other => panic!("state {other:?}"),
+                        };
+                        let ok = (core.profile_set_site_rule)(profile_for(which), rule_kind(kind), c(pattern).as_ptr(), state);
+                        eprintln!("baa: rule {arg} -> {}", ok as u8);
+                    }
+                    // clear <history|downloads|site|cache|all> <since_ms>
+                    "clear" => {
+                        let (what, since) = arg.split_once(' ').unwrap();
+                        let bits = match what {
+                            "history" => 1,
+                            "downloads" => 2,
+                            "site" => 4,
+                            "cache" => 8,
+                            "all" => 15,
+                            other => panic!("clear {other:?}"),
+                        };
+                        clears += 1;
+                        (core.profile_clear_data)(profile_for(which), clears, since.parse().unwrap(), bits);
+                        eprintln!("baa: clear {arg} id={clears}");
+                    }
+                    "unpacked" => {
+                        unpacked += 1;
+                        (core.profile_load_unpacked)(profile_for(which), unpacked, c(arg).as_ptr());
+                        eprintln!("baa: unpacked {arg} id={unpacked}");
+                    }
+                    "reload-ext" => {
+                        let ok = (core.profile_extension_change)(profile_for(which), c(arg).as_ptr(), 3, 0);
+                        eprintln!("baa: reload-ext {arg} -> {ok}");
+                    }
+                    // shell <cmd>: lets a test change files the engine reads (an unpacked extension's manifest).
+                    "shell" => {
+                        let ok = std::process::Command::new("sh").args(["-c", arg]).status().is_ok_and(|s| s.success());
+                        eprintln!("baa: shell -> {}", ok as u8);
                     }
                     "initscript" => (core.tab_set_init_script)(tab, c(arg).as_ptr()),
-                    "scheme" => (core.tab_set_color_scheme)(tab, arg.parse().unwrap()),
+                    // schemes <website> <webui>: 0 system, 1 light, 2 dark
+                    "schemes" => {
+                        let (website, webui) = arg.split_once(' ').unwrap();
+                        (core.profile_set_color_schemes)(profile_for(which), website.parse().unwrap(), webui.parse().unwrap());
+                    }
+                    // profile <1|2|e>: the profile the settings steps (prefs, rules, engine, zoom, ...) act on
+                    "profile" => which = Box::leak(arg.to_string().into_boxed_str()),
+                    "prefclear" => {
+                        let (w, name) = arg.split_once(' ').unwrap();
+                        let profile = if w == "local" { std::ptr::null_mut() } else { profile_for(w) };
+                        let ok = (core.pref_clear)(profile, c(name).as_ptr());
+                        eprintln!("baa: prefclear {arg} -> {}", ok as u8);
+                    }
+                    "defaultbrowser" => eprintln!("baa: defaultbrowser -> {}", (core.is_default_browser)() as u8),
                     "close" => {
                         (core.tab_close)(tab);
                         if current == 0 {

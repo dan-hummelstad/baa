@@ -1,0 +1,106 @@
+# ABI 5 settings calls with their real effects (settings.txt): prefs by type, font size and DNT reach pages,
+# Chrome's defaults for the 14 site kinds (= baa-model Permission::chrome_default), exceptions set and
+# removed, clear_data empties a cookie and localStorage, the search engine reaches the context menu,
+# the default zoom reaches a new page, unpacked load and reload
+script: settings.txt
+secs: 420
+env: BAA_HARNESS_MENU=none
+
+# prefs: profile and Local State, right type, unknown name, wrong type
+must: baa: prefb 1 enable_do_not_track true -> 1
+must: baa: prefb 1 no.such true -> 0
+must: baa: prefi 1 enable_do_not_track 1 -> 0
+must: baa: prefs 1 enable_do_not_track x -> 0
+must: baa: prefb local hardware_acceleration_mode.enabled false -> 1
+must: baa: prefb local no.such true -> 0
+must: baa: prefi 1 webkit.webprefs.default_font_size 24 -> 1
+must: title="24px"
+must: title="dnt:1"
+
+# the defaults table
+must: baa: rules camera -> 1 \[\* ask\]$
+must: baa: rules microphone -> 1 \[\* ask\]$
+must: baa: rules location -> 1 \[\* ask\]$
+must: baa: rules notifications -> 1 \[\* ask\]$
+must: baa: rules clipboard -> 1 \[\* ask\]$
+must: baa: rules midi -> 1 \[\* ask\]$
+must: baa: rules popups -> 1 \[\* block\]$
+must: baa: rules sound -> 1 \[\* allow\]$
+must: baa: rules javascript -> 1 \[\* allow\]$
+must: baa: rules cookies -> 1 \[\* allow\]$
+must: baa: rules downloads -> 1 \[\* ask\]$
+must: baa: rules insecure -> 1 \[\* block\]$
+must: baa: rules sensors -> 1 \[\* allow\]$
+must: baa: rules windows -> 1 \[\* ask\]$
+must: baa: rules other -> -1 \[\]$
+
+# exceptions
+must: baa: rule popups \[\*\.\]example\.com allow -> 1
+must: baa: rules popups -> 2 \[\* block, \[\*\.\]example\.com allow\]$
+must: baa: rule popups \[\*\.\]example\.com unset -> 1
+must: baa: rule cookies \[\*\.\]a\.test session -> 1
+must: baa: rules cookies -> 2 \[\* allow, \[\*\.\]a\.test session\]$
+must: baa: rule popups x\.test session -> 0
+must: baa: rule popups x\.test ask -> 0
+must: baa: rule cookies x\.test ask -> 0
+must: baa: rule popups not-a-pattern-://\[ allow -> 0
+must: baa: rules location -> 2 \[\* ask, https://b\.test:8080 block\]$
+must: baa: rules midi -> 2 \[\* ask, \[\*\.\]c\.test allow\]$
+must: baa: rules downloads -> 2 \[\* ask, \[\*\.\]d\.test block\]$
+must: baa: rules insecure -> 2 \[\* block, \[\*\.\]e\.test allow\]$
+must: baa: rules sensors -> 2 \[\* allow, \[\*\.\]f\.test block\]$
+must: baa: rules windows -> 2 \[\* ask, \[\*\.\]g\.test allow\]$
+must: baa: rules sound -> 2 \[\* allow, \[\*\.\]h\.test block\]$
+must: baa: rules javascript -> 2 \[\* allow, \[\*\.\]i\.test block\]$
+# defaults: set, then restored
+must: baa: rules popups -> 1 \[\* allow\]$
+must: baa: rules cookies -> 1 \[\* session\]$
+# the removed exceptions are gone: popups is back to its default alone once, with the example.com rule after
+count: 3 baa: rules popups -> 1 \[\* block\]$
+count: 2 baa: rules cookies -> 1 \[\* allow\]$
+must: baa: rules popups -> 2 \[\* block, \[\*\.\]example\.com block\]$
+
+# clear data: answered once per call, effect visible after a reload
+must: title="before:a=1:v"
+must: title="after::null"
+count: 4 baa: clear_done id=\d+$
+count: 1 baa: clear_done id=1$
+
+# search engine
+must: baa: engine Kagi kagi\.com https://kagi\.com/search -> 0
+must: baa: engine - kagi\.com https://kagi\.com/search\?q=%s -> 1
+must: baa:   menu Search with Kagi cmd=\d+ kind=0 enabled=true
+
+# default zoom: the display scale (1 or 2) times the zoom
+must: title="dpr:(1|2)"
+must: title="dpr:(1\.5|3)"
+
+# load unpacked and reload
+must: baa: load_unpacked_done id=1 ok=true \w{32}
+must: baa: extension id=\w{32} name="baa probe" version=1 enabled=1 unpacked=1
+must: baa: load_unpacked_done id=2 ok=false \S
+must: baa: shell -> 1
+must: baa: reload-ext \w{32} -> true
+must: baa: extension id=\w{32} name="baa probe" version=2 enabled=1 unpacked=1
+must: baa: reload-ext a{32} -> false
+
+# colour schemes: per URL kind, live tabs follow
+must: title="site:true"
+must: title="webui:false"
+must: title="webui2:true"
+must: title="site2:false"
+
+# an ephemeral profile: parent's default is effective there, exceptions stay, zoom follows
+must: baa: rule popups \* allow -> 1
+must: baa: site popups https://example\.com/ = allow
+must: baa: site popups https://example\.com/ = block
+must: baa: rule popups \[\*\.\]example\.org allow -> 1
+must: baa: engine Kagi kagi\.com https://kagi\.com/search\?q=%s -> 1
+must: title="otr-dpr:(1\.5|3)"
+
+# pref_clear
+must: baa: prefclear 1 webkit.webprefs.default_font_size -> 1
+must: baa: prefclear 1 no.such -> 0
+must: baa: prefclear local no.such -> 0
+must: title="font:16px"
+must: baa: defaultbrowser -> [01]

@@ -19,7 +19,10 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/shell_integration.h"
+#include "url/gurl.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
@@ -90,6 +93,8 @@ struct BaaProfile : ProfileObserver {
 
   raw_ptr<Profile> profile;
   const bool ephemeral;
+  // 0 system, 1 light, 2 dark; baa_profile_set_color_schemes.
+  int website_scheme = 0, webui_scheme = 0;
   std::string name;
   std::unique_ptr<ScopedProfileKeepAlive> keep_alive;
   baa::DownloadWatch downloads{profile};
@@ -181,6 +186,7 @@ void baa_profile_close(BaaProfile* profile) {
     return;
   }
   Profile* chrome_profile = profile->profile;
+  baa::AnswerPendingOf(chrome_profile);
   baa::CloseTabsOf(chrome_profile);
   bool ephemeral = profile->ephemeral;
   std::erase_if(Profiles(), [&](auto& p) { return p.get() == profile; });
@@ -228,10 +234,16 @@ bool SetPrefBool(Profile* profile, const char* name, bool value) {
 bool baa_pref_set_bool(BaaProfile* profile, const char* name, bool value) {
   PrefService* prefs = UserPref(PrefsOf(profile), name, base::Value::Type::BOOLEAN);
   LOG(INFO) << "baa: set_pref_bool " << name << " = " << value << " -> " << (prefs != nullptr);
-  if (prefs) {
+  if (!prefs) {
+    return false;
+  }
+  // Also tells the renderers (userScripts, extension APIs) about the mode.
+  if (profile && std::string_view(name) == "extensions.ui.developer_mode") {
+    extensions::util::SetDeveloperModeForProfile(profile->profile, value);
+  } else {
     prefs->SetBoolean(name, value);
   }
-  return prefs;
+  return true;
 }
 
 bool baa_pref_set_int(BaaProfile* profile, const char* name, int value) {
@@ -251,6 +263,50 @@ bool baa_pref_set_string(BaaProfile* profile, const char* name, const char* valu
   }
   return prefs;
 }
+
+bool baa_pref_clear(BaaProfile* profile, const char* name) {
+  PrefService* prefs = PrefsOf(profile);
+  const PrefService::Preference* pref = prefs && name ? prefs->FindPreference(name) : nullptr;
+  LOG(INFO) << "baa: clear_pref " << (name ? name : "") << " -> " << (pref && pref->IsUserModifiable());
+  if (!pref || !pref->IsUserModifiable()) {
+    return false;
+  }
+  if (profile && std::string_view(name) == "extensions.ui.developer_mode") {
+    extensions::util::SetDeveloperModeForProfile(profile->profile, false);  // its default
+  }
+  prefs->ClearPref(name);
+  return true;
+}
+
+bool baa_is_default_browser(void) {
+  return shell_integration::GetDefaultBrowser() == shell_integration::IS_DEFAULT;
+}
+
+void baa_set_default_browser(void) {
+  shell_integration::SetAsDefaultBrowser();
+}
+
+void baa_profile_set_color_schemes(BaaProfile* profile, int website, int webui) {
+  if (!AliveProfile(profile)) {
+    return;
+  }
+  profile->website_scheme = website;
+  profile->webui_scheme = webui;
+  baa::ReapplyColorSchemes(profile->profile);
+}
+
+namespace baa {
+
+int ColorSchemeFor(Profile* chrome_profile, const GURL& url) {
+  BaaProfile* profile = ProfileFor(chrome_profile);
+  if (!profile) {
+    return 0;
+  }
+  bool webui = url.SchemeIs("chrome") || url.SchemeIs("baa") || url.SchemeIs("chrome-untrusted");
+  return webui ? profile->webui_scheme : profile->website_scheme;
+}
+
+}  // namespace baa
 namespace baa {
 
 Profile* ChromeProfileOf(BaaProfile* profile) {
