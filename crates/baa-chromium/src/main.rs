@@ -3,6 +3,8 @@
 //! Start-up order and why: PLAN-chromium-phase2.md.
 
 #[cfg(target_os = "macos")]
+#[path = "../../baa-web/src/core_host/ffi.rs"]
+#[allow(dead_code)] // the harness drives a subset of the ABI
 mod ffi;
 #[cfg(target_os = "macos")]
 mod native;
@@ -38,9 +40,20 @@ mod app {
     thread_local! {
         static GPUI_VIEW: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };    }
 
+    static CORE: std::sync::OnceLock<&'static ffi::Core> = std::sync::OnceLock::new();
+
+    fn core() -> &'static ffi::Core {
+        CORE.get().expect("BaaCore not loaded")
+    }
+
+    fn empty_state() -> ffi::TabState {
+        // SAFETY: raw pointers and bools; all-zero is null and false.
+        unsafe { std::mem::zeroed() }
+    }
+
     pub fn main() {
         // Before anything can start a thread (see ffi::load).
-        let core = ffi::load();
+        let core = *CORE.get_or_init(ffi::load);
 
         let mut args: Vec<String> = std::env::args().collect();
         for flag in ["--no-first-run", "--no-startup-window", "--enable-logging=stderr"] {
@@ -130,7 +143,7 @@ mod app {
                 .update(cx, |spike, window, cx| {
                     window.activate_window();
                     window.focus(&spike.page_focus, cx);
-                    (ffi::core().tab_focus)(spike.page.tab);
+                    (core().tab_focus)(spike.page.tab);
                     native::window_number(spike.page.view)
                 })
                 .unwrap();
@@ -218,20 +231,20 @@ mod app {
         static PAGE_CLOSED: Cell<bool> = const { Cell::new(false) };
         /// Tabs the script can address: 0 is the page in the hole, then
         /// script-made and Chrome-made tabs in arrival order.
-        static TABS: RefCell<Vec<ffi::Tab>> = const { RefCell::new(Vec::new()) };
+        static TABS: RefCell<Vec<*mut ffi::Tab>> = const { RefCell::new(Vec::new()) };
         /// space-1, space-2, ephemeral.
-        static PROFILES: RefCell<[ffi::Profile; 3]> = const { RefCell::new([std::ptr::null_mut(); 3]) };
+        static PROFILES: RefCell<[*mut ffi::Profile; 3]> = const { RefCell::new([std::ptr::null_mut(); 3]) };
     }
 
-    fn tab_index(tab: ffi::Tab) -> String {
+    fn tab_index(tab: *mut ffi::Tab) -> String {
         TABS.with(|t| t.borrow().iter().position(|x| *x == tab)).map_or("?".into(), |i| i.to_string())
     }
 
     extern "C" fn on_tab_created(
         _: *mut c_void,
-        tab: ffi::Tab,
-        opener: ffi::Tab,
-        profile: ffi::Profile,
+        tab: *mut ffi::Tab,
+        opener: *mut ffi::Tab,
+        profile: *mut ffi::Profile,
         url: *const c_char,
         background: bool,
         gesture: bool,
@@ -250,7 +263,7 @@ mod app {
         );
     }
 
-    extern "C" fn on_tab_state(_: *mut c_void, tab: ffi::Tab, s: *const ffi::TabState) {
+    extern "C" fn on_tab_state(_: *mut c_void, tab: *mut ffi::Tab, s: *const ffi::TabState) {
         let s = unsafe { &*s };
         eprintln!(
             "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={}",
@@ -266,50 +279,50 @@ mod app {
         );
     }
 
-    extern "C" fn on_tab_favicon(_: *mut c_void, tab: ffi::Tab, url: *const c_char, png: *const u8, len: usize) {
+    extern "C" fn on_tab_favicon(_: *mut c_void, tab: *mut ffi::Tab, url: *const c_char, png: *const u8, len: usize) {
         let head = unsafe { std::slice::from_raw_parts(png, len.min(8)) };
         eprintln!("baa: tab_favicon tab={} url={} bytes={len} magic={head:02x?}", tab_index(tab), text(url));
     }
 
-    extern "C" fn on_dialog(_: *mut c_void, tab: ffi::Tab, id: u64, kind: c_int, message: *const c_char, default: *const c_char) {
+    extern "C" fn on_dialog(_: *mut c_void, tab: *mut ffi::Tab, id: u64, kind: c_int, message: *const c_char, default: *const c_char) {
         eprintln!("baa: dialog tab={} id={id} kind={kind} message={:?} default={:?}", tab_index(tab), text(message), text(default));
         // BAA_HARNESS_DIALOG=ok|cancel answers at once (default: only logs).
         if let Ok(answer) = std::env::var("BAA_HARNESS_DIALOG") {
             later(move || {
-                (ffi::core().dialog_answer)(id, answer == "ok", c"".as_ptr());
+                (core().dialog_answer)(id, answer == "ok", c"".as_ptr());
                 eprintln!("baa: dialog_answer id={id} {answer}");
             });
         }
     }
 
-    extern "C" fn on_dialog_closed(_: *mut c_void, tab: ffi::Tab, id: u64) {
+    extern "C" fn on_dialog_closed(_: *mut c_void, tab: *mut ffi::Tab, id: u64) {
         eprintln!("baa: dialog_closed tab={} id={id}", tab_index(tab));
     }
 
-    extern "C" fn on_tab_closed(_: *mut c_void, tab: ffi::Tab) {
-        eprintln!("baa: tab_closed tab={} quitting={}", tab_index(tab), (ffi::core().is_quitting)());
+    extern "C" fn on_tab_closed(_: *mut c_void, tab: *mut ffi::Tab) {
+        eprintln!("baa: tab_closed tab={} quitting={}", tab_index(tab), (core().is_quitting)());
         if tab_index(tab) == "0" {
             PAGE_CLOSED.with(|c| c.set(true));
         }
     }
 
     /// BAA_HARNESS_PERMISSION=allow|deny answers permission asks (default: only logs).
-    extern "C" fn on_permission(_: *mut c_void, tab: ffi::Tab, id: u64, origin: *const c_char, kinds: u32) {
+    extern "C" fn on_permission(_: *mut c_void, tab: *mut ffi::Tab, id: u64, origin: *const c_char, kinds: u32) {
         eprintln!("baa: permission tab={} id={id} origin={} kinds={kinds:#x}", tab_index(tab), text(origin));
         if let Ok(answer) = std::env::var("BAA_HARNESS_PERMISSION") {
             later(move || {
-                (ffi::core().permission_answer)(id, answer == "allow");
+                (core().permission_answer)(id, answer == "allow");
                 eprintln!("baa: permission_answer id={id} {answer}");
             });
         }
     }
 
-    extern "C" fn on_permission_closed(_: *mut c_void, tab: ffi::Tab, id: u64) {
+    extern "C" fn on_permission_closed(_: *mut c_void, tab: *mut ffi::Tab, id: u64) {
         eprintln!("baa: permission_closed tab={} id={id}", tab_index(tab));
     }
 
     /// BAA_HARNESS_MENU=<label>|none picks a row by label (or closes with nothing).
-    extern "C" fn on_context_menu(_: *mut c_void, tab: ffi::Tab, id: u64, x: f32, y: f32, items: *const ffi::MenuItem, count: usize) {
+    extern "C" fn on_context_menu(_: *mut c_void, tab: *mut ffi::Tab, id: u64, x: f32, y: f32, items: *const ffi::MenuItem, count: usize) {
         let rows = unsafe { std::slice::from_raw_parts(items, count) };
         let inspect = rows.iter().filter(|r| r.kind == 3).count();
         eprintln!("baa: context_menu tab={} id={id} at={x},{y} rows={count} inspect={inspect}", tab_index(tab));
@@ -329,12 +342,12 @@ mod app {
         if !want.is_empty() {
             later(move || {
                 eprintln!("baa: context_menu_done id={id} command={command}");
-                (ffi::core().context_menu_done)(id, command);
+                (core().context_menu_done)(id, command);
             });
         }
     }
 
-    extern "C" fn on_download(_: *mut c_void, tab: ffi::Tab, d: *const ffi::Download) {
+    extern "C" fn on_download(_: *mut c_void, tab: *mut ffi::Tab, d: *const ffi::Download) {
         let d = unsafe { &*d };
         eprintln!(
             "baa: download tab={} id={} url={} path={} received={} total={} state={}",
@@ -351,17 +364,17 @@ mod app {
                 let id = d.id;
                 later(move || {
                     eprintln!("baa: download_cancel id={id}");
-                    (ffi::core().download_cancel)(id);
+                    (core().download_cancel)(id);
                 });
             }
         }
     }
 
-    extern "C" fn on_resized(_: *mut c_void, tab: ffi::Tab, w: c_int, h: c_int) {
+    extern "C" fn on_resized(_: *mut c_void, tab: *mut ffi::Tab, w: c_int, h: c_int) {
         eprintln!("baa: resized tab={} {w}x{h}", tab_index(tab));
     }
 
-    extern "C" fn on_page_message(_: *mut c_void, tab: ffi::Tab, message: *const c_char) {
+    extern "C" fn on_page_message(_: *mut c_void, tab: *mut ffi::Tab, message: *const c_char) {
         eprintln!("baa: page_message tab={} {}", tab_index(tab), text(message));
     }
 
@@ -413,7 +426,7 @@ mod app {
             for line in script.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
                 let (verb, arg) = line.split_once(' ').unwrap_or((line, ""));
                 eprintln!("script: {line}");
-                let core = ffi::core();
+                let core = core();
                 let tab = TABS.with(|t| t.borrow().get(current).copied()).unwrap_or(std::ptr::null_mut());
                 let c = |s: &str| CString::new(s).unwrap();
                 match verb {
@@ -428,7 +441,7 @@ mod app {
                         eprintln!("baa: history current={at}");
                     }
                     "state" => {
-                        let mut s = ffi::TabState::empty();
+                        let mut s = empty_state();
                         let ok = (core.tab_get_state)(tab, &mut s);
                         let (url, title) = if ok { (text(s.url), text(s.title)) } else { Default::default() };
                         eprintln!("baa: get_state ok={ok} url={url} title={title:?} loading={}", s.loading);
@@ -443,7 +456,7 @@ mod app {
                     "activate" => (core.tab_activate)(tab),
                     "focus" => (core.tab_focus)(tab),
                     "menu" => {
-                        let mut s = ffi::TabState::empty();
+                        let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             let (x, y) = arg.split_once(' ').unwrap();
                             native::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), false, true);
@@ -532,7 +545,7 @@ mod app {
                         }
                     }
                     "escape" => {
-                        let mut s = ffi::TabState::empty();
+                        let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             native::post_key(native::window_number(s.view.cast()), 53, "\u{1b}", false);
                         }
@@ -544,7 +557,7 @@ mod app {
                         eprintln!("script: screenshot {file}");
                     }
                     "click" | "cmdclick" | "rclick" => {
-                        let mut s = ffi::TabState::empty();
+                        let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             let (x, y) = arg.split_once(' ').unwrap();
                             native::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), verb == "cmdclick", verb == "rclick");
@@ -607,8 +620,8 @@ mod app {
     }
 
     /// Opens (once) space-1, space-2 or the ephemeral profile.
-    fn profile_for(which: &str) -> ffi::Profile {
-        let core = ffi::core();
+    fn profile_for(which: &str) -> *mut ffi::Profile {
+        let core = core();
         let slot = slot_of(which);
         PROFILES.with(|p| {
             let mut p = p.borrow_mut();
@@ -645,11 +658,11 @@ mod app {
             let url = std::env::var("BAA_SPIKE_URL").unwrap_or_else(|_| "https://en.wikipedia.org/wiki/Web_browser".into());
             let profile = profile_for("1");
             let url = CString::new(url).unwrap();
-            let tab = (ffi::core().tab_create)(profile, url.as_ptr());
+            let tab = (core().tab_create)(profile, url.as_ptr());
             assert!(!tab.is_null(), "baa_tab_create failed");
             TABS.with(|t| t.borrow_mut().push(tab));
-            let mut state = ffi::TabState::empty();
-            assert!((ffi::core().tab_get_state)(tab, &mut state));
+            let mut state = empty_state();
+            assert!((core().tab_get_state)(tab, &mut state));
             let view = state.view.cast::<AnyObject>();
             eprintln!("spike: page created, view {view:?}");
             let page = Rc::new(Page {
@@ -731,7 +744,7 @@ mod app {
     }
 
     struct Page {
-        tab: ffi::Tab,
+        tab: *mut ffi::Tab,
         view: *mut AnyObject,
         container: native::Container,
         /// The view a drag started on; the drag stays with it.
@@ -812,7 +825,7 @@ mod app {
             window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hit.is_hovered(window) {
                     window.focus(&focus, cx);
-                    (ffi::core().tab_focus)(page.tab);
+                    (core().tab_focus)(page.tab);
                     page.drag.set(native::forward_current_event(page.view, None));
                 }
             });

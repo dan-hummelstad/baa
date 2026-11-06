@@ -351,13 +351,19 @@ pub fn make_first_responder(view: *mut AnyObject) {
     }
 }
 
+pub const EDIT_COPY: std::ffi::c_int = 0;
+pub const EDIT_CUT: std::ffi::c_int = 1;
+pub const EDIT_PASTE: std::ffi::c_int = 2;
+pub const EDIT_SELECT_ALL: std::ffi::c_int = 3;
+pub const EDIT_UNDO: std::ffi::c_int = 4;
+pub const EDIT_REDO: std::ffi::c_int = 5;
+
 /// ⌘C/⌘X/⌘V/⌘A/⌘Z/⇧⌘Z as a BaaCore edit command; None for any other key.
 pub fn edit_command(event: *mut AnyObject) -> Option<std::ffi::c_int> {
     // NSEventModifierFlags: shift, control, option, command.
     const SHIFT: usize = 1 << 17;
     const OTHERS: usize = (1 << 18) | (1 << 19);
     const COMMAND: usize = 1 << 20;
-    use crate::ffi::*;
     unsafe {
         let flags: usize = msg_send![event, modifierFlags];
         if flags & COMMAND == 0 || flags & OTHERS != 0 {
@@ -384,7 +390,6 @@ pub fn edit_command(event: *mut AnyObject) -> Option<std::ffi::c_int> {
 /// An edit command as an action down the responder chain, which reaches the
 /// page's RenderWidgetHostViewCocoa (copy:, cut:, paste:, selectAll:, undo:, redo:).
 pub fn send_edit_action(command: std::ffi::c_int) {
-    use crate::ffi::*;
     let action = match command {
         EDIT_COPY => sel!(copy:),
         EDIT_CUT => sel!(cut:),
