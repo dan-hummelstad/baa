@@ -399,11 +399,17 @@ impl Dispatch {
     /// A menu is open in the page; a page that is gone gets it closed.
     fn context_menu(&'static self, tab: *mut Tab, id: u64, x: f32, y: f32, rows: Vec<Row>) {
         let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
-        self.queue(move |cx| {
-            let shown = page.and_then(|page| page.update(cx, |page, cx| page.show_context_menu(id, x, y, rows, cx)).ok());
-            if shown.is_none() {
-                (self.core.context_menu_done)(id, -1);
+        let bare = self.bare.borrow().get(&tab).cloned();
+        self.queue(move |cx| match (page, bare) {
+            (Some(page), _) => {
+                if page.update(cx, |page, cx| page.show_context_menu(id, x, y, rows, cx)).is_err() {
+                    (self.core.context_menu_done)(id, -1);
+                }
             }
+            // The sheet has no entity: its menu opens over its view, and Inspect
+            // goes to Chrome's own window like a popup's.
+            (None, Some(shared)) => present_menu(shared, id, x, y, rows, PageKind::Popup, || {}),
+            (None, None) => (self.core.context_menu_done)(id, -1),
         });
     }
 
@@ -526,6 +532,20 @@ fn menu_answer(rows: &[Row], picked: Option<usize>, kind: PageKind) -> (c_int, b
     }
 }
 
+/// Opens Chrome's menu over `shared`'s view and tells Chrome the outcome once;
+/// `on_inspect` runs when baa's own DevTools were asked for.
+fn present_menu(shared: Rc<Shared>, id: u64, x: f32, y: f32, rows: Vec<Row>, kind: PageKind, on_inspect: impl FnOnce() + 'static) {
+    let core = shared.core;
+    let items = menu_tree(&rows);
+    menu::show_at(move || shared.view.get(), x, y, items, move |picked| {
+        let (command, inspect) = menu_answer(&rows, picked, kind);
+        (core.context_menu_done)(id, command);
+        if inspect {
+            on_inspect();
+        }
+    });
+}
+
 fn callbacks() -> Callbacks {
     unsafe fn dispatch(ctx: *mut c_void) -> &'static Dispatch {
         unsafe { &*(ctx as *const Dispatch) }
@@ -569,9 +589,13 @@ fn callbacks() -> Callbacks {
     ) {
         let (message, default_text) = unsafe { (from_c(message), from_c(default_text)) };
         let d = unsafe { dispatch(ctx) };
-        if kind >= 3 && (d.core.is_quitting)() {
-            // ⌘Q waits on this; the page may be a hidden tab nobody would answer for.
-            (d.core.dialog_answer)(id, true, c"".as_ptr());
+        let quitting = kind >= 3 && (d.core.is_quitting)();
+        if quitting || !d.pages.borrow().contains_key(&tab) {
+            // ⌘Q waits on a leave-site question nobody would answer for a hidden
+            // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
+            // ask. Answered next turn: Chrome is inside its dialog code now,
+            // and may not have recorded the id yet.
+            d.queue(move |_| (d.core.dialog_answer)(id, quitting, c"".as_ptr()));
             return;
         }
         let kind = match kind {
@@ -600,7 +624,12 @@ fn callbacks() -> Callbacks {
     extern "C" fn permission(ctx: *mut c_void, tab: *mut Tab, id: u64, origin: *const c_char, kinds: u32) {
         let origin = unsafe { from_c(origin) };
         let kinds = permissions_of(kinds);
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
+        let d = unsafe { dispatch(ctx) };
+        if !d.pages.borrow().contains_key(&tab) {
+            d.queue(move |_| (d.core.permission_answer)(id, false));
+            return;
+        }
+        d.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
     }
     extern "C" fn permission_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionDismissed(id)));
@@ -728,8 +757,11 @@ impl CoreWebHost {
 
     /// Ephemeral profiles have no extensions.
     fn read_extensions(&self, profile: ProfileId) -> Vec<(Extension, ExtensionInfo)> {
+        if is_ephemeral(profile) {
+            return Vec::new();
+        }
         let handle = self.profile_handle(profile);
-        if is_ephemeral(profile) || handle.is_null() {
+        if handle.is_null() {
             return Vec::new();
         }
         extensions::read(self.core, handle)
@@ -863,6 +895,10 @@ impl WebHost for CoreWebHost {
             }
         }
         let Some(sheet) = sheet else { return true };
+        // Chrome closed it (an extension's chrome.tabs.remove): open a fresh one.
+        if sheets.get(&profile).is_some_and(|page| page.is_gone()) {
+            sheets.remove(&profile);
+        }
         let page = match sheets.entry(profile) {
             std::collections::hash_map::Entry::Occupied(page) => page.into_mut(),
             std::collections::hash_map::Entry::Vacant(slot) => {
@@ -875,11 +911,9 @@ impl WebHost for CoreWebHost {
     }
 
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
-        let handle = self.profile_handle(profile);
         let (change, value) = extensions::change_code(change);
-        let done_ok = !is_ephemeral(profile)
-            && !handle.is_null()
-            && (self.core.profile_extension_change)(handle, c_string(id).as_ptr(), change, value);
+        let handle = if is_ephemeral(profile) { std::ptr::null_mut() } else { self.profile_handle(profile) };
+        let done_ok = !handle.is_null() && (self.core.profile_extension_change)(handle, c_string(id).as_ptr(), change, value);
         done(done_ok, cx);
     }
 
@@ -1064,17 +1098,12 @@ impl CorePage {
 
     /// Shows Chrome's menu natively over the page; Chrome is told exactly once.
     fn show_context_menu(&mut self, id: u64, x: f32, y: f32, rows: Vec<Row>, cx: &mut Context<Self>) {
-        let items = menu_tree(&rows);
-        let (shared, app, this) = (self.shared.clone(), cx.to_async(), cx.weak_entity());
-        let (core, kind) = (shared.core, shared.kind);
-        menu::show_at(move || shared.view.get(), x, y, items, move |picked| {
-            let (command, inspect) = menu_answer(&rows, picked, kind);
-            (core.context_menu_done)(id, command);
-            if inspect {
-                app.update(|cx| {
-                    this.update(cx, |_, cx| cx.emit(PageEvent::DevToolsRequested { x: x as i32, y: y as i32 })).ok();
-                });
-            }
+        let (app, this) = (cx.to_async(), cx.weak_entity());
+        let kind = self.shared.kind;
+        present_menu(self.shared.clone(), id, x, y, rows, kind, move || {
+            app.update(|cx| {
+                this.update(cx, |_, cx| cx.emit(PageEvent::DevToolsRequested { x: x as i32, y: y as i32 })).ok();
+            });
         });
     }
 
@@ -1090,13 +1119,20 @@ impl CorePage {
         cx.emit(PageEvent::Closed);
     }
 
+    /// Makes the tab its window's active one; popups and DevTools have no strip.
+    fn activate(&self) {
+        if self.shared.kind == PageKind::Tab {
+            self.shared.run(|core, tab| (core.tab_activate)(tab));
+        }
+    }
+
     fn set_browser_focus(&self, focused: bool) {
         let view = self.shared.view.get();
         if focused {
             self.shared.run(|core, tab| {
                 (core.tab_focus)(tab);
-                (core.tab_activate)(tab);
             });
+            self.activate();
         } else if native::has_first_responder(view) {
             native::make_first_responder(self.gpui_view);
         }
@@ -1229,7 +1265,7 @@ impl PageHandle for CorePage {
         self.container.set_visible(visible, self.shared.view.get());
         // The tab on show is the one the user is on, focused or not.
         if visible {
-            self.shared.run(|core, tab| (core.tab_activate)(tab));
+            self.activate();
         }
     }
     fn focus_handle(&self, cx: &App) -> FocusHandle {

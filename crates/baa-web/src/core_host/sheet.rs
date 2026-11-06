@@ -21,6 +21,7 @@ pub struct Sheet {
     url: RefCell<String>,
     css: RefCell<String>,
     dark: Cell<bool>,
+    shown: Cell<bool>,
 }
 
 /// Helium's own scheme is not rewritten by a plain load.
@@ -65,11 +66,12 @@ impl Sheet {
             url: RefCell::new(sheet.url.clone()),
             css: RefCell::new(sheet.css.clone()),
             dark: Cell::new(sheet.dark),
+            shown: Cell::new(false),
         })
     }
 
     /// Puts the page over `sheet.bounds` of `window`, after applying what changed.
-    pub fn show(&mut self, sheet: &ChromeSheet, window: &gpui::Window) -> bool {
+    pub fn show(&mut self, sheet: &ChromeSheet, window: &mut gpui::Window) -> bool {
         if self.dark.replace(sheet.dark) != sheet.dark {
             self.shared.run(|core, tab| (core.tab_set_color_scheme)(tab, scheme(sheet.dark)));
         }
@@ -88,18 +90,35 @@ impl Sheet {
             });
         }
         let gpui_view = native::gpui_view(window);
-        if self.over.replace(gpui_view) != gpui_view {
-            self.shared.container.move_above(gpui_view);
-        }
         let container = &self.shared.container;
+        // A view pointer can be reused by another window: the superview says if it is still ours.
+        if self.over.replace(gpui_view) != gpui_view || !container.is_beside(gpui_view) {
+            container.move_above(gpui_view);
+        }
         container.set_corner_radius(sheet.corner_radius);
         container.set_visible(true, self.shared.view.get());
-        container.place(self.shared.view.get(), sheet.bounds, sheet.bounds);
+        if container.place(self.shared.view.get(), sheet.bounds, sheet.bounds) {
+            window.request_animation_frame();
+        }
+        if !self.shown.replace(true) {
+            // The page takes the keyboard when the sheet comes up (gpui's own focus
+            // cannot be dropped from here: Window::blur needs an App).
+            self.shared.run(|core, tab| (core.tab_focus)(tab));
+        }
         true
     }
 
     pub fn hide(&self) {
+        // Keys must not go on into a hidden page.
+        if self.shown.replace(false) && native::has_first_responder(self.shared.view.get()) {
+            native::make_first_responder(self.over.get());
+        }
         self.shared.container.set_visible(false, self.shared.view.get());
+    }
+
+    /// Chrome closed its tab.
+    pub fn is_gone(&self) -> bool {
+        self.shared.tab.get().is_null()
     }
 }
 

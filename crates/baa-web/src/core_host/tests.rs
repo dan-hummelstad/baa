@@ -747,6 +747,7 @@ fn beforeunload_kinds_and_the_quit_fallback(cx: &mut TestAppContext) {
     QUITTING.with(|q| q.set(true));
     seen.borrow_mut().clear();
     (env.callbacks.dialog)(env.ctx(), tab, 3, 3, c"Leave?".as_ptr(), c"".as_ptr());
+    assert_eq!(calls("dialog_answer"), Vec::<String>::new(), "not inside Chrome's dialog code");
     cx.run_until_parked();
     assert!(seen.borrow().is_empty(), "nobody is asked while quitting");
     assert_eq!(calls("dialog_answer"), ["dialog_answer 3 true "]);
@@ -1072,4 +1073,94 @@ fn the_settings_sheet_is_one_skinned_tab_per_profile(cx: &mut TestAppContext) {
     assert_eq!(calls_now("tab_close"), Vec::<String>::new(), "hidden, not closed");
     env.host.delete_profile(ProfileId(1));
     assert_eq!(calls_now("tab_close").len(), 1);
+}
+
+#[gpui::test]
+fn pages_without_a_ui_page_are_refused_not_left_waiting(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let unknown = 0xdead0 as *mut Tab;
+    (env.callbacks.dialog)(env.ctx(), unknown, 11, 0, c"hi".as_ptr(), c"".as_ptr());
+    (env.callbacks.dialog)(env.ctx(), unknown, 12, 3, c"leave?".as_ptr(), c"".as_ptr());
+    (env.callbacks.permission)(env.ctx(), unknown, 13, c"https://x.test".as_ptr(), 1);
+    assert_eq!(calls("dialog_answer").len() + calls("permission_answer").len(), 0, "queued, not inline");
+    cx.run_until_parked();
+    assert_eq!(calls("dialog_answer"), ["dialog_answer 11 false ", "dialog_answer 12 false "]);
+    assert_eq!(calls("permission_answer"), ["permission_answer 13 false"]);
+}
+
+#[gpui::test]
+fn only_tabs_are_activated(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let tab_page = env.page(1, "https://a.test", cx);
+    tab_page.read_with(cx, |page, _| page.set_visible(true));
+    assert_eq!(calls("tab_activate").len(), 1);
+
+    let popup = env
+        .window
+        .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", "", "", window, cx))
+        .unwrap();
+    popup.read_with(cx, |page, _| page.set_visible(true));
+    assert_eq!(calls("tab_activate").len(), 1, "a popup has no strip");
+}
+
+#[gpui::test]
+fn ephemeral_profiles_are_not_opened_to_find_no_extensions(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let ephemeral = env.host.ephemeral_profile();
+    assert_eq!(env.host.extensions(ephemeral), []);
+    cx.update(|cx| env.host.change_extension(ephemeral, "x", ExtensionChange::Remove, cx, Box::new(|_, _| {})));
+    assert_eq!(calls("profile_open_ephemeral"), Vec::<String>::new());
+}
+
+#[gpui::test]
+fn a_sheet_chrome_closed_is_opened_again_and_its_menu_is_not_dropped(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let sheet = || crate::ChromeSheet {
+        url: "baa://settings".into(),
+        bounds: gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), gpui::size(gpui::px(100.), gpui::px(100.))),
+        corner_radius: 8.,
+        css: String::new(),
+        dark: false,
+    };
+    let show = |cx: &mut TestAppContext| {
+        env.window.update(cx, |_, window, _| env.host.show_chrome_page(ProfileId(1), Some(sheet()), window)).unwrap()
+    };
+    assert!(show(cx));
+    let first: *mut Tab = *env.dispatch.bare.borrow().keys().next().unwrap();
+
+    // Its menu goes up over the sheet; Chrome is told when it closes, not at once.
+    let items = [ffi::MenuItem { label: c"Copy".as_ptr(), command: 7, depth: 0, kind: 0, enabled: true, checked: false }];
+    (env.callbacks.context_menu)(env.ctx(), first, 4, 1., 2., items.as_ptr(), 1);
+    cx.run_until_parked();
+    assert_eq!(calls("context_menu_done"), Vec::<String>::new());
+
+    (env.callbacks.tab_closed)(env.ctx(), first);
+    assert!(show(cx));
+    assert_eq!(calls("tab_create").len(), 2, "a fresh tab replaced the dead one");
+    assert_eq!(calls("tab_close"), Vec::<String>::new(), "the dead one is not closed again");
+}
+
+#[test]
+fn a_floating_page_rises_to_just_below_gpui_with_an_overlay_above() {
+    let at = |content: *mut AnyObject, i: usize| -> *mut AnyObject {
+        unsafe {
+            let subviews: *mut AnyObject = msg_send![content, subviews];
+            msg_send![subviews, objectAtIndex: i]
+        }
+    };
+    let (content, gpui_view) = (new_view(), new_view());
+    unsafe {
+        let _: () = msg_send![content, addSubview: gpui_view];
+    }
+    let floating = native::Container::new(gpui_view, std::ptr::null_mut(), 0.);
+    let other = native::Container::new(gpui_view, std::ptr::null_mut(), 0.);
+    let overlay = native::Container::new(std::ptr::null_mut(), std::ptr::null_mut(), 0.);
+    overlay.move_above(gpui_view);
+    floating.set_floating(true);
+    assert_eq!(at(content, 0), floating.as_ptr());
+
+    let bounds = gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), gpui::size(gpui::px(10.), gpui::px(10.)));
+    floating.place(std::ptr::null_mut(), bounds, bounds);
+    assert_eq!([at(content, 0), at(content, 1), at(content, 2), at(content, 3)], [other.as_ptr(), floating.as_ptr(), gpui_view, overlay.as_ptr()]);
+    assert!(floating.is_beside(gpui_view));
 }
