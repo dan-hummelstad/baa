@@ -1,0 +1,26 @@
+# DevTools: docked front-end is a BaaTab (no tab_created), loads devtools://, closes silently; inspect; reopen at once; Chrome's own window
+load https://example.com/
+sleep 3000
+activate
+devtools
+sleep 4000
+use 1
+state
+# console message from the front-end reaches the app
+eval console.debug("baa:devtools-dock:left")
+sleep 1000
+close
+sleep 1500
+use 0
+devtools inspect 100 100
+sleep 4000
+# opening again while open closes the first
+devtools
+sleep 4000
+use 3
+state
+use 0
+devtools-window
+sleep 4000
+screenshot
+quit

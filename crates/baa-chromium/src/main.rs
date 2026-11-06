@@ -84,6 +84,7 @@ mod app {
             if std::env::var_os("BAA_SPIKE_SELFTEST").is_some() {
                 self_test(spike, cx);
             }
+            start_poller(cx);
             if let Ok(path) = std::env::var("BAA_SPIKE_SCRIPT") {
                 run_script(path, cx);
             }
@@ -184,6 +185,27 @@ mod app {
         fetch_done: on_fetch_done,
     };
 
+    thread_local! {
+        /// Answers wait for the next turn, as the app's do: Chrome has not
+        /// finished with a prompt or menu inside the callback that announced it.
+        static LATER: RefCell<Vec<Box<dyn FnOnce()>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn later(f: impl FnOnce() + 'static) {
+        LATER.with(|l| l.borrow_mut().push(Box::new(f)));
+    }
+
+    fn start_poller(cx: &mut App) {
+        cx.spawn(async move |cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+            let jobs: Vec<_> = LATER.with(|l| l.borrow_mut().drain(..).collect());
+            for job in jobs {
+                job();
+            }
+        })
+        .detach();
+    }
+
     fn text(p: *const c_char) -> String {
         if p.is_null() {
             return "<null>".into();
@@ -253,8 +275,10 @@ mod app {
         eprintln!("baa: dialog tab={} id={id} kind={kind} message={:?} default={:?}", tab_index(tab), text(message), text(default));
         // BAA_HARNESS_DIALOG=ok|cancel answers at once (default: only logs).
         if let Ok(answer) = std::env::var("BAA_HARNESS_DIALOG") {
-            (ffi::core().dialog_answer)(id, answer == "ok", c"".as_ptr());
-            eprintln!("baa: dialog_answer id={id} {answer}");
+            later(move || {
+                (ffi::core().dialog_answer)(id, answer == "ok", c"".as_ptr());
+                eprintln!("baa: dialog_answer id={id} {answer}");
+            });
         }
     }
 
@@ -273,8 +297,10 @@ mod app {
     extern "C" fn on_permission(_: *mut c_void, tab: ffi::Tab, id: u64, origin: *const c_char, kinds: u32) {
         eprintln!("baa: permission tab={} id={id} origin={} kinds={kinds:#x}", tab_index(tab), text(origin));
         if let Ok(answer) = std::env::var("BAA_HARNESS_PERMISSION") {
-            (ffi::core().permission_answer)(id, answer == "allow");
-            eprintln!("baa: permission_answer id={id} {answer}");
+            later(move || {
+                (ffi::core().permission_answer)(id, answer == "allow");
+                eprintln!("baa: permission_answer id={id} {answer}");
+            });
         }
     }
 
@@ -301,8 +327,10 @@ mod app {
         let want = std::env::var("BAA_HARNESS_MENU").unwrap_or_default();
         let command = rows.iter().find(|r| r.kind != 1 && text(r.label) == want).map_or(-1, |r| r.command);
         if !want.is_empty() {
-            eprintln!("baa: context_menu_done id={id} command={command}");
-            (ffi::core().context_menu_done)(id, command);
+            later(move || {
+                eprintln!("baa: context_menu_done id={id} command={command}");
+                (ffi::core().context_menu_done)(id, command);
+            });
         }
     }
 
@@ -320,8 +348,11 @@ mod app {
         );
         if let Some(cancel_at) = std::env::var("BAA_HARNESS_DOWNLOAD_CANCEL").ok().and_then(|s| s.parse::<i64>().ok()) {
             if d.state == 0 && d.received_bytes >= cancel_at {
-                eprintln!("baa: download_cancel id={}", d.id);
-                (ffi::core().download_cancel)(d.id);
+                let id = d.id;
+                later(move || {
+                    eprintln!("baa: download_cancel id={id}");
+                    (ffi::core().download_cancel)(id);
+                });
             }
         }
     }

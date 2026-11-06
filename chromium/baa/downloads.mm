@@ -77,7 +77,8 @@ class ItemWatch : public download::DownloadItem::Observer {
   }
 
   void OnDownloadUpdated(download::DownloadItem*) override { Send(); }
-  void OnDownloadDestroyed(download::DownloadItem*) override {
+  void OnDownloadDestroyed(download::DownloadItem* item) override {
+    item->RemoveObserver(this);  // an observer must be out of the list before it dies
     item_ = nullptr;
     delete this;
   }

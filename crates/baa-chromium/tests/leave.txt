@@ -1,0 +1,15 @@
+# "leave site?" (run with BAA_HARNESS_DIALOG=cancel, then =ok): beforeunload arrives as kind 3, reload as kind 4
+load https://example.com/
+sleep 3000
+activate
+eval document.body.innerHTML='<a href="#" style="position:fixed;inset:0;display:block;background:#ccf">hold</a>';window.onbeforeunload=e=>{e.preventDefault();return 'x'}
+sleep 500
+click 200 200
+sleep 500
+load https://example.org/
+sleep 3000
+state
+reload
+sleep 3000
+state
+quit

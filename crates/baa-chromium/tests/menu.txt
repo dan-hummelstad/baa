@@ -1,0 +1,19 @@
+# context menus (run with BAA_HARNESS_MENU="Copy Link Address"): rows for a link, oncontextmenu with preventDefault shows none, a text selection enables Copy
+load https://example.com/
+sleep 3000
+activate
+eval document.body.innerHTML='<a href="https://www.iana.org/" style="position:fixed;left:0;top:0;width:400px;height:200px;background:#ccf;display:block">link</a><div id=t style="position:fixed;left:0;top:300px;width:400px;height:100px;background:#cfc">select me</div><div id=u style="position:fixed;left:0;top:450px;width:400px;height:100px;background:#fcf">select me too</div>'
+sleep 500
+menu 100 100
+sleep 2500
+# a page that handles contextmenu itself: no menu
+eval document.getElementById('t').oncontextmenu=e=>{e.preventDefault()}
+sleep 300
+menu 100 350
+sleep 2000
+# selected text: Copy is enabled
+eval getSelection().selectAllChildren(document.getElementById('u'))
+sleep 300
+menu 100 480
+sleep 2500
+quit

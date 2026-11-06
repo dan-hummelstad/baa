@@ -26,3 +26,18 @@
      return;  // IN-TEST
    }
  
+--- a/chrome/browser/ui/toasts/toast_controller.cc
++++ b/chrome/browser/ui/toasts/toast_controller.cc
+@@ -318,11 +318,7 @@
+   // ToastController testability.
+   views::View* anchor_view = GetAnchorView(spec->is_global_scope());
+   if (!anchor_view) {
+-    // Don't actually create the toast in unit tests
+-    // TODO(webium): show toast in webui browser.
+-    if (!webui_browser::IsWebUIBrowserEnabled()) {
+-      CHECK_IS_TEST();
+-    }
++    // baa: no toast anchor behind our window (the app has its own feedback).
+     return;
+   }
+ 
