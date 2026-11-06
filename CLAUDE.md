@@ -13,6 +13,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - `crates/baa-model`   data + SQLite + settings
 - `crates/baa-privacy` switches, host blocklist
 - `crates/baa-web`     CEF host (`WebHost` trait in lib.rs is the contract; UI codes against it) + `vendor/gpui-cef`
+- `crates/baa-chromium` gpui shell on our own Chromium (`BaaCore.framework`, `chromium/baa`); baa-web orchestrator; becomes baa-web's backend in phase 5 (PLAN-chromium.md)
 - `crates/baa-ui`      GPUI views, theme, motion
 - `crates/baa`         app shell wiring (integration orchestrator only)
 - `.github/`, `xtask/` CI/release orchestrator only

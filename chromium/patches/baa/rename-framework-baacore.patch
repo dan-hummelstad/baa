@@ -1,0 +1,67 @@
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -486,7 +486,7 @@
+   }
+ } else if (is_mac) {
+   chrome_helper_name = chrome_product_full_name + " Helper"
+-  chrome_framework_name = chrome_product_full_name + " Framework"
++  chrome_framework_name = "BaaCore"
+   chrome_framework_version = chrome_version_full
+ 
+   verify_dynamic_libraries = !is_component_build && !is_asan && !is_ubsan_any
+--- a/chrome/common/chrome_constants.cc
++++ b/chrome/common/chrome_constants.cc
+@@ -81,9 +81,8 @@
+ 
+ #if BUILDFLAG(IS_MAC)
+ const base::FilePath::CharType kFrameworkName[] =
+-    FPL(PRODUCT_FULLNAME_STRING " Framework.framework");
+-const base::FilePath::CharType kFrameworkExecutableName[] =
+-    FPL(PRODUCT_FULLNAME_STRING " Framework");
++    FPL("BaaCore.framework");
++const base::FilePath::CharType kFrameworkExecutableName[] = FPL("BaaCore");
+ const char kMacHelperSuffixAlerts[] = " (Alerts)";
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+--- a/chrome/app/chrome_exe_main_mac.cc
++++ b/chrome/app/chrome_exe_main_mac.cc
+@@ -182,14 +182,12 @@
+   // The helper lives within the versioned framework directory, so simply
+   // go up to find the main dylib.
+   static constexpr char entry_symbol[] = "ChromeMain";
+-  static constexpr char rel_path[] =
+-      "../../../../" PRODUCT_FULLNAME_STRING " Framework";
++  static constexpr char rel_path[] = "../../../../BaaCore";
+ #else                             // defined(HELPER_EXECUTABLE)
+   static constexpr char entry_symbol[] = "ChromeMain";
+   static constexpr char rel_path[] =
+-      "../Frameworks/" PRODUCT_FULLNAME_STRING
+-      " Framework.framework/Versions/" CHROME_VERSION_STRING
+-      "/" PRODUCT_FULLNAME_STRING " Framework";
++      "../Frameworks/BaaCore.framework/Versions/" CHROME_VERSION_STRING
++      "/BaaCore";
+ #endif                            // defined(RENDERER_HELPER_EXECUTABLE)
+ 
+   // Slice off the last part of the main executable path, and append the
+--- a/chrome/browser/web_applications/os_integration/mac/BUILD.gn
++++ b/chrome/browser/web_applications/os_integration/mac/BUILD.gn
+@@ -42,7 +42,7 @@
+       # The helper is a standalone tool rather than a bundled app so the
+       # framework's install name does not work as-is. Rewrite it so the
+       # relative path is correct given the executable's location.
+-      "-Wcrl,installnametool,-change,@executable_path/../Frameworks/${chrome_product_full_name} Framework.framework/Versions/${chrome_version_full}/${chrome_product_full_name} Framework,@executable_path/../${chrome_product_full_name} Framework",
++      "-Wcrl,installnametool,-change,@executable_path/../Frameworks/BaaCore.framework/Versions/${chrome_version_full}/BaaCore,@executable_path/../BaaCore",
+     ]
+ 
+     if (is_asan || is_ubsan_any) {
+--- a/chrome/installer/mac/signing/config.py
++++ b/chrome/installer/mac/signing/config.py
+@@ -230,7 +230,7 @@
+     @property
+     def framework_dir(self):
+         """Returns the path to the app's framework directory."""
+-        return '{0.app_dir}/Contents/Frameworks/{0.product} Framework.framework'.format(
++        return '{0.app_dir}/Contents/Frameworks/BaaCore.framework'.format(
+             self
+         )
+ 

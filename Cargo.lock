@@ -589,6 +589,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "baa-chromium"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-video",
+ "gpui",
+ "gpui_platform",
+ "libc",
+ "objc2 0.6.5",
+ "raw-window-handle",
+]
+
+[[package]]
 name = "baa-model"
 version = "0.1.0"
 dependencies = [

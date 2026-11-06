@@ -1,5 +1,5 @@
 #include "baa/baa.h"
 
 int baa_abi_version(void) {
-  return 1;
+  return 2;
 }

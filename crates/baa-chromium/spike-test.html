@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>baa spike test</title>
+<style>
+  body { font: 15px system-ui; margin: 0; }
+  #hud { position: fixed; top: 8px; right: 8px; background: #000c; color: #8f8; padding: 8px 12px;
+         font: 13px ui-monospace; border-radius: 6px; white-space: pre; }
+  main { padding: 16px; max-width: 760px; }
+  textarea { width: 100%; height: 120px; font: 16px system-ui; }
+  .row { height: 60px; border-bottom: 1px solid #ddd; display: flex; align-items: center; padding: 0 8px; }
+  .row:nth-child(odd) { background: #f4f6fb; }
+</style>
+<div id="hud">fps –</div>
+<main>
+  <p>Phase 2 checks: scroll with the trackpad and read fps (≥110 on ProMotion); type and use an IME in the
+    box; press ⌘L / ⌘T (gpui must take them, the log below must not show them); ⌘A ⌘C ⌘V ⌘X ⌘Z ⇧⌘Z in the
+    box; Escape must show in the log.</p>
+  <textarea autofocus placeholder="type here"></textarea>
+  <div id="rows"></div>
+</main>
+<script>
+  const hud = document.getElementById('hud');
+  const keys = [];
+  let frames = 0, last = performance.now(), fps = 0;
+  function tick(now) {
+    frames++;
+    if (now - last >= 500) { fps = Math.round(frames * 1000 / (now - last)); frames = 0; last = now; draw(); }
+    requestAnimationFrame(tick);
+  }
+  function draw() { hud.textContent = `fps ${fps}\n` + keys.slice(-8).join('\n'); }
+  requestAnimationFrame(tick);
+  addEventListener('keydown', e => {
+    const mods = (e.metaKey ? '⌘' : '') + (e.ctrlKey ? '⌃' : '') + (e.altKey ? '⌥' : '') + (e.shiftKey ? '⇧' : '');
+    keys.push(`keydown ${mods}${e.key}${e.isComposing ? ' (ime)' : ''}`);
+    draw();
+  }, true);
+  const rows = document.getElementById('rows');
+  for (let i = 0; i < 400; i++) {
+    const d = document.createElement('div'); d.className = 'row'; d.textContent = `row ${i}`; rows.append(d);
+  }
+</script>

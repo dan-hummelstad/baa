@@ -1,9 +1,18 @@
 # //baa: baa's ADK-style layer (PLAN-chromium.md). Reached from
-# //chrome:dependencies by chromium/patches/baa/add-baa-layer.patch.
-# ponytail: a source_set linked into the framework; becomes a component (BaaCore) in phase 2.
+# //chrome:dependencies by chromium/patches/baa/add-baa-layer.patch, so it is
+# linked into BaaCore.framework (libchrome_dll.dylib in component builds).
 source_set("baa") {
   sources = [
     "baa.cc",
     "baa.h",
+    "baa_mac.mm",
+  ]
+  deps = [
+    "//chrome/browser",
+    "//components/input",
+    "//content/public/browser",
+    "//ui/base",
+    "//ui/events:events_base",
+    "//url",
   ]
 }

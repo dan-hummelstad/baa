@@ -6,6 +6,7 @@ members = [
   "crates/baa-web",
   "crates/baa-model",
   "crates/baa-privacy",
+  "crates/baa-chromium",
   "vendor/gpui-cef/crates/gpui-cef",
   "xtask",
 ]

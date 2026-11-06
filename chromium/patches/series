@@ -1,3 +1,5 @@
 baa/remove-helium-services.patch
 baa/no-crash-uploads.patch
 baa/add-baa-layer.patch
+baa/rename-framework-baacore.patch
+baa/embed-in-gpui.patch
