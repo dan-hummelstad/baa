@@ -7,3 +7,4 @@ baa/browser-window-hook.patch
 baa/no-views-guards.patch
 baa/baa-otr-browsers.patch
 baa/gpui-main-menu.patch
+baa/context-menu-hook.patch

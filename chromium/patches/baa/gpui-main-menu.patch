@@ -14,3 +14,19 @@
  
    // Since we may have different windows with different profiles, we clear the
    // subscription each time a window becomes the main.
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -2246,6 +2246,13 @@
+   if (profile == _lastProfile)
+     return;
+ 
++  // baa: gpui's menu bar has no Bookmarks menu for the bridge below to fill
++  // (profileWasRemoved: calls this whenever any profile goes away).
++  if (![NSApp.mainMenu itemWithTag:IDC_BOOKMARKS_MENU]) {
++    _lastProfile = profile;
++    return;
++  }
++
+   // If _lastProfile becomes null, remember the last state of Cmd+Shift+T so the
+   // command can continue working (or stay disabled). This is primarily meant
+   // for the zero-profile state.

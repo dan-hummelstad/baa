@@ -10,7 +10,12 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/common/chrome_constants.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_change_registrar.h"
+#include "components/prefs/pref_service.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/ui/views/frame/baa_browser_window_hook.h"
@@ -37,13 +42,27 @@ bool Terminating() {
   return g_terminating;
 }
 
-// Pages and Browsers go when Chrome starts terminating, before profiles are
-// torn down (a page outliving its profile trips shutdown checks); later calls
-// from the UI on a gone handle do nothing. Called once Chrome is up.
+// Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
+// close through BrowserCloseManager (our windows' Close), and later calls from
+// the UI on a gone handle do nothing. Also keeps Chrome's "last used profile"
+// on Default: it follows whichever Space was active, and a deleted Space's
+// directory would be recreated by the next start-up. Called once Chrome is up.
 void WatchTermination() {
   static base::NoDestructor<base::CallbackListSubscription> on_terminating(
       browser_shutdown::AddAppTerminatingCallback(
           base::BindOnce([] { g_terminating = true; })));
+  static base::NoDestructor<PrefChangeRegistrar> pin;
+  if (!pin->prefs() && g_browser_process && g_browser_process->local_state()) {
+    PrefService* local_state = g_browser_process->local_state();
+    auto reset = [](PrefService* local_state) {
+      if (local_state->GetString(prefs::kProfileLastUsed) != chrome::kInitialProfile) {
+        local_state->SetString(prefs::kProfileLastUsed, chrome::kInitialProfile);
+      }
+    };
+    pin->Init(local_state);
+    pin->Add(prefs::kProfileLastUsed, base::BindRepeating(reset, local_state));
+    reset(local_state);
+  }
 }
 }  // namespace baa
 

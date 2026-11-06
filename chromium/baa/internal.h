@@ -53,6 +53,16 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents);
 // Reports a key to the app. Synchronous.
 bool OfferKey(const input::NativeWebKeyboardEvent& event, bool after_page);
 
+// window.mm: Browser queries and teardown.
+bool IsOurBrowser(BrowserWindowInterface* browser);
+// A Browser whose window was asked to close (it is on its way out).
+bool BrowserIsClosing(BrowserWindowInterface* browser);
+// Destroys, now, every Browser of `profile` that has a baa window (their tabs
+// are already closed).
+void DestroyBrowsersOf(Profile* profile);
+// tab.mm: sets a bool pref if the profile registers it and the user may change it.
+bool SetPrefBool(Profile* profile, const char* name, bool value);
+
 
 // Makes `browser`'s window the one Chrome treats as active.
 void ActivateBrowser(BrowserWindowInterface* browser);
@@ -75,6 +85,7 @@ class Window : public BrowserWindow,
                                bool user_gesture);
 
   BrowserWindowInterface* browser() const { return browser_; }
+  bool closing() const { return closing_; }
 
   // BrowserWindow:
   void Show() override {}
@@ -150,7 +161,6 @@ class Window : public BrowserWindow,
   bool HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event) override;
   bool IsTabStripEditable() const override;
   void DisableTabStripEditingForTesting() override;
-  void SetIsTabStripEditable(bool is_editable);
   bool IsToolbarVisible() const override;
   bool IsLocationBarVisible() const override;
   bool IsToolbarShowing() const override;
@@ -258,7 +268,7 @@ class Window : public BrowserWindow,
   raw_ptr<BrowserWindowInterface> browser_;
   std::unique_ptr<StubLocationBar> location_bar_;
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
-  bool close_scheduled_ = false;
+  bool closing_ = false;
   base::WeakPtrFactory<Window> weak_factory_{this};
 };
 

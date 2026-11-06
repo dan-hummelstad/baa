@@ -11,6 +11,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
+#include "chrome/browser/ui/browser_manager_service.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
@@ -399,6 +400,36 @@ BrowserWindow* Window::Create(BrowserWindowInterface* browser,
   }
 }
 
+bool IsOurBrowser(BrowserWindowInterface* browser) {
+  for (Window* window : Windows()) {
+    if (window->browser() == browser) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool BrowserIsClosing(BrowserWindowInterface* browser) {
+  for (Window* window : Windows()) {
+    if (window->browser() == browser) {
+      return window->closing();
+    }
+  }
+  return true;  // not ours any more
+}
+
+void DestroyBrowsersOf(Profile* profile) {
+  std::vector<BrowserWindowInterface*> doomed;
+  for (Window* window : Windows()) {
+    if (window->browser()->GetProfile() == profile) {
+      doomed.push_back(window->browser());
+    }
+  }
+  for (BrowserWindowInterface* browser : doomed) {
+    BrowserManagerService::SynchronouslyDestroyBrowser(browser);
+  }
+}
+
 void ActivateBrowser(BrowserWindowInterface* browser) {
   for (Window* window : Windows()) {
     if (window->browser() == browser) {
@@ -416,10 +447,10 @@ void Window::DeleteBrowserWindow() {
 // UnloadController closes tabs and schedules the Browser's deletion; neither
 // may run in that stack, so it is posted. Calls after the first are no-ops.
 void Window::Close() {
-  if (close_scheduled_) {
+  if (closing_) {
     return;
   }
-  close_scheduled_ = true;
+  closing_ = true;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -427,7 +458,6 @@ void Window::Close() {
             if (!window) {
               return;
             }
-            window->close_scheduled_ = false;
             UnloadController::From(window->browser_)->OnWindowClosing();
           },
           weak_factory_.GetWeakPtr()));

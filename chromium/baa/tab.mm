@@ -32,7 +32,9 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
+#include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/tabs/tab_muted_utils.h"
+#include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver_observer.h"
@@ -76,6 +78,13 @@ struct BaaProfile : ProfileObserver {
     // Printing goes through the system panel (printing::StartBasicPrint);
     // the in-page preview needs a views dialog host.
     profile->GetPrefs()->SetBoolean(prefs::kPrintPreviewDisabled, true);
+    // Autofill and password bubbles need a BrowserView (the window has no
+    // autofill bubble handler).
+    for (const char* name : {"autofill.profile_enabled", "autofill.credit_card_enabled",
+                             "autofill.payment_methods_enabled", "credentials_enable_service",
+                             "credentials_enable_autosignin"}) {
+      baa::SetPrefBool(profile, name, false);
+    }
   }
 
   void OnProfileWillBeDestroyed(Profile*) override {
@@ -88,10 +97,16 @@ struct BaaProfile : ProfileObserver {
   // The Browser holding this profile's tabs, made on first need and again
   // after it closed. Null when the profile is gone or Chrome refuses.
   BrowserWindowInterface* GetBrowser() {
+    // A Browser whose last tab just closed is on its way out (Window::Close
+    // is posted); a tab put in it now would be closed with it.
+    if (browser && baa::BrowserIsClosing(browser)) {
+      browser = nullptr;
+      browser_closed = {};
+    }
     if (browser) {
       return browser;
     }
-    if (!profile || baa::Terminating() ||
+    if (!profile || baa_is_quitting() ||
         GetBrowserWindowCreationStatusForProfile(*profile) !=
             BrowserWindowInterface::CreationStatus::kOk) {
       return nullptr;
@@ -198,6 +213,13 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
   void MarkAnswered() { answered_ = true; }
   BaaTab* tab() const { return tab_; }
   uint64_t id() const { return id_; }
+  void Remember(int type, std::string message, std::string default_text) {
+    type_ = type;
+    message_ = std::move(message);
+    default_s_ = std::move(default_text);
+  }
+  int type_ = 0;
+  std::string message_, default_s_;
 
  private:
   const uint64_t id_;
@@ -219,12 +241,15 @@ struct BaaTab : content::WebContentsObserver,
 
   tabs::TabInterface* const tab;
   bool closing_by_baa = false;
+  // tab_closed already sent (a tab deleted from a window that is not ours).
+  bool closed_sent = false;
+  base::CallbackListSubscription will_detach;
   // Chrome-made tabs are announced (tab_created) once their URL is known;
   // until then they are silent.
   bool reported = true;
   bool background = false;
   bool user_gesture = false;
-  tabs::TabInterface* opener = nullptr;
+  base::WeakPtr<BaaTab> opener;
   std::string icon_url;
   std::u16string find_text;
   // Storage behind get_state's strings.
@@ -303,10 +328,13 @@ struct BaaTab : content::WebContentsObserver,
                         const GURL& icon_url_in,
                         bool,
                         const gfx::Image& image) override {
-    if (image.IsEmpty() || !reported) {
+    if (image.IsEmpty()) {
       return;
     }
     icon_url = icon_url_in.spec();
+    if (!reported) {
+      return;
+    }
     SendState();
     if (!baa::Callbacks().tab_favicon) {
       return;
@@ -391,6 +419,12 @@ std::unique_ptr<permissions::PermissionPrompt> MakeIgnoringPrompt(
   return std::make_unique<IgnoringPrompt>();
 }
 
+int KindOf(int type) {
+  return type == content::JAVASCRIPT_DIALOG_TYPE_CONFIRM  ? BAA_DIALOG_CONFIRM
+         : type == content::JAVASCRIPT_DIALOG_TYPE_PROMPT ? BAA_DIALOG_PROMPT
+                                                          : BAA_DIALOG_ALERT;
+}
+
 class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
  public:
   explicit DialogDelegate(content::WebContents* wc)
@@ -409,13 +443,14 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
     auto view = std::make_unique<DialogView>(id, tab, default_text,
                                              std::move(callback));
     auto weak = view->GetWeakPtr();
+    view->Remember(static_cast<int>(type), base::UTF16ToUTF8(message), base::UTF16ToUTF8(default_text));
     Dialogs()[id] = std::move(view);
-    if (tab && baa::Callbacks().dialog) {
-      int kind = type == content::JAVASCRIPT_DIALOG_TYPE_CONFIRM
-                     ? BAA_DIALOG_CONFIRM
-                 : type == content::JAVASCRIPT_DIALOG_TYPE_PROMPT
-                     ? BAA_DIALOG_PROMPT
-                     : BAA_DIALOG_ALERT;
+    if (!tab) {
+      // A page nobody shows (its tab handle is gone): answer "no" so it does not hang.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce([](uint64_t id) { baa_dialog_answer(id, false, ""); }, id));
+    } else if (tab->reported && baa::Callbacks().dialog) {
+      int kind = KindOf(type);
       baa::Callbacks().dialog(baa::CallbackContext(), tab, id, kind,
                               base::UTF16ToUTF8(message).c_str(),
                               base::UTF16ToUTF8(default_text).c_str());
@@ -483,21 +518,27 @@ void BaaTab::TryReport(const GURL& url, bool force) {
   if (!baa::Callbacks().tab_created) {
     return;
   }
-  BaaTab* opener_tab = nullptr;
-  auto it = Tabs().find(opener);
-  if (it != Tabs().end()) {
-    opener_tab = it->second.get();
-  }
-  BaaProfile* profile = ProfileOf(
-      tab->GetBrowserWindowInterface()->GetProfile());
+  BaaTab* opener_tab = opener.get();
+  BaaProfile* profile = ProfileOf(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
   std::string spec = url.spec();
   baa::Callbacks().tab_created(baa::CallbackContext(), this, opener_tab,
                                profile, spec.c_str(), background, user_gesture);
+  // A dialog the page raised before the app knew the tab.
+  if (baa::Callbacks().dialog) {
+    for (auto& [id, view] : Dialogs()) {
+      if (view->tab() == this) {
+        baa::Callbacks().dialog(baa::CallbackContext(), this, id, KindOf(view->type_),
+                                view->message_.c_str(), view->default_s_.c_str());
+      }
+    }
+  }
 }
 
 // ---- window.mm entry points ----------------------------------------------------
 
 namespace baa {
+
+void OnWillDetach(tabs::TabInterface* tab, tabs::TabInterface::DetachReason reason);
 
 void OnTabInserted(TabStripModel* model,
                    tabs::TabInterface* tab,
@@ -510,6 +551,7 @@ void OnTabInserted(TabStripModel* model,
   BaaTab* t = owned.get();
   Tabs()[tab] = std::move(owned);
   content::WebContents* wc = tab->GetContents();
+  t->will_detach = tab->RegisterWillDetach(base::BindRepeating(&OnWillDetach));
   t->Attach(wc);
   if (g_creating) {
     return;
@@ -518,18 +560,21 @@ void OnTabInserted(TabStripModel* model,
   t->background = background;
   // window.opener first; else the strip's opener (the active tab at insertion,
   // which is the page a link was clicked in when baa keeps the shown tab active).
+  tabs::TabInterface* opener_tab = nullptr;
   content::RenderFrameHost* opener_frame = wc->GetOpener();
   if (opener_frame) {
-    t->opener = tabs::TabInterface::MaybeGetFromContents(
+    opener_tab = tabs::TabInterface::MaybeGetFromContents(
         content::WebContents::FromRenderFrameHost(opener_frame));
   }
-  if (!t->opener) {
-    t->opener = model->GetOpenerOfTabAt(index);
+  if (!opener_tab) {
+    opener_tab = model->GetOpenerOfTabAt(index);
   }
-  if (t->opener && t->opener->GetContents()) {
-    content::WebContents* from = t->opener->GetContents();
-    t->user_gesture = from->HasRecentInteraction() ||
-                      from->GetPrimaryMainFrame()->HasTransientUserActivation();
+  auto opener_it = Tabs().find(opener_tab);
+  if (opener_it != Tabs().end()) {
+    t->opener = opener_it->second->weak_factory.GetWeakPtr();
+    content::WebContents* from = opener_it->second->web_contents();
+    t->user_gesture = from && (from->HasRecentInteraction() ||
+                               from->GetPrimaryMainFrame()->HasTransientUserActivation());
   }
   // window.open() inserts the tab blank and navigates it right after, so the
   // URL is awaited (DidStartNavigation), but not for long: a tab that never
@@ -547,29 +592,68 @@ void OnTabInserted(TabStripModel* model,
   t->TryReport(wc->GetVisibleURL(), false);
 }
 
-void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
-  auto it = Tabs().find(tab);
-  if (it == Tabs().end() || reason != TabRemovedReason::kDeleted) {
-    return;  // moving to another strip: same BaaTab
+// The tab is going away for good, from any window (a tab reparented into a
+// Chrome-made Browser still dies through here): tab_closed once, before its
+// WebContents and NSView are destroyed.
+void ReportClosed(BaaTab* t) {
+  if (t->closed_sent || t->closing_by_baa) {
+    return;
   }
-  BaaTab* t = it->second.get();
-  // Dialogs of a page that went away.
+  t->closed_sent = true;
   for (auto d = Dialogs().begin(); d != Dialogs().end();) {
     if (d->second->tab() == t) {
       uint64_t id = d->first;
       d = Dialogs().erase(d);
-      if (!t->closing_by_baa && Callbacks().dialog_closed) {
+      if (t->reported && Callbacks().dialog_closed) {
         Callbacks().dialog_closed(CallbackContext(), t, id);
       }
     } else {
       ++d;
     }
   }
-  if (!t->closing_by_baa && t->reported && Callbacks().tab_closed) {
+  if (t->reported && Callbacks().tab_closed) {
     Callbacks().tab_closed(CallbackContext(), t);
   }
-  t->Detach();
-  Tabs().erase(it);
+}
+
+void OnWillDetach(tabs::TabInterface* tab, tabs::TabInterface::DetachReason reason) {
+  auto it = Tabs().find(tab);
+  if (it == Tabs().end() || reason != tabs::TabInterface::DetachReason::kDelete) {
+    return;
+  }
+  ReportClosed(it->second.get());
+}
+
+void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
+  auto it = Tabs().find(tab);
+  if (it == Tabs().end()) {
+    return;
+  }
+  BaaTab* t = it->second.get();
+  if (TabRemoveReasonUtils::WillDeleteTab(reason)) {
+    ReportClosed(t);
+    t->Detach();
+    Tabs().erase(it);
+    return;
+  }
+  // Moving to another strip. If it lands somewhere that is not ours (an app
+  // Browser), nothing would report it any more: check once it has settled.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<BaaTab> weak) {
+                       if (!weak || !weak->web_contents()) {
+                         return;
+                       }
+                       tabs::TabInterface* ti = weak->tab;
+                       BrowserWindowInterface* browser = ti->GetBrowserWindowInterface();
+                       if (browser && baa::IsOurBrowser(browser)) {
+                         return;
+                       }
+                       ReportClosed(weak.get());
+                       weak->Detach();
+                       Tabs().erase(ti);
+                     },
+                     t->weak_factory.GetWeakPtr()));
 }
 
 void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) {
@@ -591,7 +675,8 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
 BaaProfile* baa_profile_open(const char* dir_name) {
   baa::WatchTermination();
   std::string name = dir_name ? dir_name : "";
-  if (baa::Terminating() || name.empty() || name.find('/') != std::string::npos ||
+  if (!g_browser_process || !g_browser_process->profile_manager() ||
+      baa_is_quitting() || name.empty() || name.find('/') != std::string::npos ||
       name.find("..") != std::string::npos) {
     return nullptr;
   }
@@ -622,11 +707,16 @@ BaaProfile* baa_profile_open(const char* dir_name) {
 
 BaaProfile* baa_profile_open_ephemeral(void) {
   baa::WatchTermination();
-  if (baa::Terminating()) {
+  if (!g_browser_process || !g_browser_process->profile_manager() ||
+      baa_is_quitting()) {
     return nullptr;
   }
   base::ScopedAllowBlockingForTesting allow_blocking;
-  Profile* base = ProfileManager::GetLastUsedProfile();
+  // The Default profile, never GetLastUsedProfile(): Chrome moves that to
+  // whatever Space was active.
+  ProfileManager* manager = g_browser_process->profile_manager();
+  Profile* base =
+      manager->GetProfile(manager->user_data_dir().AppendASCII(chrome::kInitialProfile));
   if (!base) {
     return nullptr;
   }
@@ -644,9 +734,11 @@ void baa_profile_close(BaaProfile* profile) {
   if (!AliveProfile(profile)) {
     return;
   }
+  Profile* chrome_profile = profile->profile;
   std::vector<tabs::TabInterface*> doomed;
   for (auto& [key, value] : Tabs()) {
-    if (ProfileOf(key->GetBrowserWindowInterface()->GetProfile()) == profile) {
+    content::WebContents* wc = value->web_contents();
+    if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
       value->closing_by_baa = true;
       doomed.push_back(key);
     }
@@ -656,24 +748,27 @@ void baa_profile_close(BaaProfile* profile) {
       continue;
     }
     BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
-    TabStripModel* model = browser->GetTabStripModel();
-    int index = model->GetIndexOfTab(tab);
+    int index = browser ? browser->GetTabStripModel()->GetIndexOfTab(tab) : -1;
     if (index >= 0) {
-      model->DetachAndDeleteWebContentsAt(index);
+      browser->GetTabStripModel()->DetachAndDeleteWebContentsAt(index);
     }
   }
-  Profile* chrome_profile = profile->profile;
   bool ephemeral = profile->ephemeral;
   std::erase_if(Profiles(), [&](auto& p) { return p.get() == profile; });
-  if (ephemeral && chrome_profile) {
-    ProfileDestroyer::DestroyOTRProfileWhenAppropriate(chrome_profile);
+  if (chrome_profile) {
+    // The tabs are gone but their Browsers close by a posted task, and
+    // destroying an OTR profile while one lives CHECKs. Ours go now.
+    baa::DestroyBrowsersOf(chrome_profile);
+    if (ephemeral) {
+      ProfileDestroyer::DestroyOTRProfileWhenAppropriate(chrome_profile);
+    }
   }
 }
 
 // ---- C ABI: tabs ---------------------------------------------------------------
 
 BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
-  if (!AliveProfile(profile) || baa::Terminating()) {
+  if (!AliveProfile(profile) || baa_is_quitting()) {
     return nullptr;
   }
   BrowserWindowInterface* browser = profile->GetBrowser();
@@ -684,7 +779,14 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
   content::WebContents* wc =
       chrome::AddAndReturnTabAt(browser, GURL(url), -1, /*foreground=*/false);
   g_creating = false;
-  return wc ? TabOf(wc) : nullptr;
+  BaaTab* tab = wc ? TabOf(wc) : nullptr;
+  // Navigate sends a URL for an OTR profile to the parent's Browser; a tab
+  // in another profile than asked for is not ours to hand out.
+  if (tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != profile->profile) {
+    baa_tab_close(tab);
+    return nullptr;
+  }
+  return tab;
 }
 
 namespace {
@@ -699,7 +801,11 @@ void baa_tab_close(BaaTab* tab) {
     return;
   }
   tab->closing_by_baa = true;
-  TabStripModel* model = tab->tab->GetBrowserWindowInterface()->GetTabStripModel();
+  BrowserWindowInterface* browser = tab->tab->GetBrowserWindowInterface();
+  if (!browser) {
+    return;
+  }
+  TabStripModel* model = browser->GetTabStripModel();
   int index = model->GetIndexOfTab(tab->tab);
   if (index >= 0) {
     model->DetachAndDeleteWebContentsAt(index);
@@ -841,4 +947,24 @@ void baa_dialog_answer(uint64_t id, bool ok, const char* text) {
   view->MarkAnswered();
   auto callback = view->TakeCallback();
   std::move(callback).Run(ok, base::UTF8ToUTF16(text ? text : ""));
+}
+
+namespace baa {
+
+bool SetPrefBool(Profile* profile, const char* name, bool value) {
+  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
+  const PrefService::Preference* pref = prefs ? prefs->FindPreference(name) : nullptr;
+  if (!pref || !pref->IsUserModifiable() || !pref->GetValue()->is_bool()) {
+    return false;
+  }
+  prefs->SetBoolean(name, value);
+  return true;
+}
+
+}  // namespace baa
+
+void baa_profile_set_pref_bool(BaaProfile* profile, const char* name, bool value) {
+  if (AliveProfile(profile)) {
+    baa::SetPrefBool(profile->profile, name, value);
+  }
 }

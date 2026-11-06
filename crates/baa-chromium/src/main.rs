@@ -268,7 +268,7 @@ mod app {
     ///   mute | unmute | print | activate | focus | close | escape | screenshot | sleep <ms> | quit
     ///   click | cmdclick | rclick <x> <y> (real NSEvents at points from the tab's top left)
     ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
-    ///   closeprofile <1|2|e> | answer <id> <0|1> [text]
+    ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id> <0|1> [text]
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         cx.spawn(async move |cx| {
@@ -344,7 +344,23 @@ mod app {
                         });
                         eprintln!("script: tab {index} = {new:?}");
                     }
-                    "closeprofile" => (core.profile_close)(profile_for(arg)),
+                    "closeprofile" => {
+                        (core.profile_close)(profile_for(arg));
+                        // The handle is dead; the next `tab` opens the profile again.
+                        PROFILES.with(|p| p.borrow_mut()[slot_of(arg)] = std::ptr::null_mut());
+                    }
+                    // Close the current tab and make one in the same profile at once.
+                    "reopen" => {
+                        let (which, url) = arg.split_once(' ').unwrap();
+                        (core.tab_close)(tab);
+                        let new = (core.tab_create)(profile_for(which), c(url).as_ptr());
+                        let index = TABS.with(|t| {
+                            let mut t = t.borrow_mut();
+                            t.push(new);
+                            t.len() - 1
+                        });
+                        eprintln!("script: tab {index} = {new:?}");
+                    }
                     "answer" => {
                         let mut parts = arg.splitn(3, ' ');
                         let id: u64 = parts.next().unwrap().parse().unwrap();
@@ -365,15 +381,19 @@ mod app {
         .detach();
     }
 
-    /// Opens (once) space-1, space-2 or the ephemeral profile.
-    fn profile_for(which: &str) -> ffi::Profile {
-        let core = ffi::core();
-        let slot = match which {
+    fn slot_of(which: &str) -> usize {
+        match which {
             "1" => 0,
             "2" => 1,
             "e" => 2,
             other => panic!("profile {other:?}"),
-        };
+        }
+    }
+
+    /// Opens (once) space-1, space-2 or the ephemeral profile.
+    fn profile_for(which: &str) -> ffi::Profile {
+        let core = ffi::core();
+        let slot = slot_of(which);
         PROFILES.with(|p| {
             let mut p = p.borrow_mut();
             if p[slot].is_null() {
