@@ -71,7 +71,7 @@ pub fn gpui_view(window: &Window) -> *mut AnyObject {
 }
 
 /// gpui's `GPUIApplication` is NSApplication plus this ivar; BaaCore's NSApp
-/// class must carry it too (chromium/baa/baa_mac.mm).
+/// class must carry it too (chromium/baa/app_mac.mm).
 pub fn nsapp_has_gpui_ivar() -> bool {
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -122,6 +122,11 @@ impl Container {
             this.swap_page(std::ptr::null_mut(), page);
             this
         }
+    }
+
+    #[cfg(test)]
+    pub fn as_ptr(&self) -> *mut AnyObject {
+        self.view
     }
 
     pub fn set_corner_radius(&self, radius: f32) {

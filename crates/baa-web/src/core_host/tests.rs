@@ -4,12 +4,17 @@
 use std::{cell::RefCell, ffi::CString};
 
 use gpui::{div, IntoElement, Render, TestAppContext, WindowHandle};
+use objc2::{class, msg_send};
 
 use super::*;
 
 thread_local! {
     static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static NEXT: Cell<usize> = const { Cell::new(0x1000) };
+    /// What the fake `baa_tab_get_state` reports as the tab's view and url.
+    static FIRST_VIEW: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
+    static FIRST_URL: Cell<&'static CStr> = const { Cell::new(c"") };
+    static QUITTING: Cell<bool> = const { Cell::new(false) };
 }
 
 fn log(call: String) {
@@ -32,6 +37,9 @@ extern "C" fn install_app(_: c_int, _: *const *const c_char, _: *const Callbacks
 extern "C" fn exit_code() -> c_int {
     0
 }
+extern "C" fn is_quitting() -> bool {
+    QUITTING.with(Cell::get)
+}
 extern "C" fn profile_open(name: *const c_char) -> *mut Profile {
     log(format!("profile_open {}", arg(name)));
     fresh()
@@ -52,7 +60,8 @@ extern "C" fn tab_close(tab: *mut Tab) {
 }
 extern "C" fn tab_get_state(_: *mut Tab, state: *mut TabState) -> bool {
     unsafe {
-        (*state).url = c"".as_ptr();
+        (*state).url = FIRST_URL.with(Cell::get).as_ptr();
+        (*state).view = FIRST_VIEW.with(Cell::get).cast();
         (*state).title = c"".as_ptr();
         (*state).favicon_url = c"".as_ptr();
     }
@@ -107,6 +116,7 @@ fn fake_core() -> &'static Core {
     Box::leak(Box::new(Core {
         install_app,
         exit_code,
+        is_quitting,
         profile_open,
         profile_open_ephemeral,
         profile_close,
@@ -147,6 +157,9 @@ struct Env {
 impl Env {
     fn new(cx: &mut TestAppContext) -> Self {
         CALLS.with(|c| c.borrow_mut().clear());
+        FIRST_VIEW.with(|v| v.set(std::ptr::null_mut()));
+        FIRST_URL.with(|u| u.set(c""));
+        QUITTING.with(|q| q.set(false));
         let core = fake_core();
         let dispatch: &'static Dispatch = Box::leak(Box::new(Dispatch::new(core)));
         let host = cx.update(|cx| CoreWebHost::new(core, dispatch, std::env::temp_dir().join("baa-core-host-test"), cx));
@@ -172,9 +185,19 @@ impl Env {
     }
 
     fn created(&self, tab: *mut Tab, opener: *mut Tab, profile: ProfileId, url: &str) {
+        self.created_in(tab, opener, profile, url, false);
+    }
+
+    fn created_in(&self, tab: *mut Tab, opener: *mut Tab, profile: ProfileId, url: &str, background: bool) {
         let url = CString::new(url).unwrap();
         let handle = self.host.profile_handle(profile);
-        (self.callbacks.tab_created)(self.ctx(), tab, opener, handle, url.as_ptr(), false, true);
+        (self.callbacks.tab_created)(self.ctx(), tab, opener, handle, url.as_ptr(), background, true);
+    }
+
+    /// A page whose tab starts with `view` in it.
+    fn page_with_view(&self, view: *mut AnyObject, cx: &mut TestAppContext) -> Entity<CorePage> {
+        FIRST_VIEW.with(|v| v.set(view));
+        self.page(1, "https://a.test", cx)
     }
 }
 
@@ -193,6 +216,7 @@ struct State {
     loading: bool,
     can_go_back: bool,
     audible: bool,
+    view: usize,
 }
 
 impl State {
@@ -203,7 +227,7 @@ impl State {
             url: strings[0].as_ptr(),
             title: strings[1].as_ptr(),
             favicon_url: strings[2].as_ptr(),
-            view: std::ptr::null_mut(),
+            view: self.view as *mut c_void,
             loading: self.loading,
             can_go_back: self.can_go_back,
             can_go_forward: false,
@@ -443,4 +467,119 @@ fn chrome_gets_user_flags_our_switches_and_no_urls() {
 
     let own = chrome_argv(&["baa".into(), "--user-data-dir=/mine".into()], Path::new("/data/chromium"));
     assert_eq!(own.iter().filter(|a| a.starts_with("--user-data-dir=")).collect::<Vec<_>>(), ["--user-data-dir=/mine"]);
+}
+
+/// A real NSView standing in for Chromium's tab view.
+fn new_view() -> *mut AnyObject {
+    unsafe { msg_send![class!(NSView), new] }
+}
+
+fn superview(view: *mut AnyObject) -> *mut AnyObject {
+    unsafe { msg_send![view, superview] }
+}
+
+fn container_of(page: &Entity<CorePage>, cx: &mut TestAppContext) -> *mut AnyObject {
+    page.read_with(cx, |page, _| page.container.as_ptr())
+}
+
+#[gpui::test]
+fn a_replaced_view_is_swapped_in_inside_the_callback(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let (old, new) = (new_view(), new_view());
+    let page = env.page_with_view(old, cx);
+    let container = container_of(&page, cx);
+    assert_eq!(superview(old), container);
+
+    // Chrome frees `old` when the callback returns: it must already be out.
+    env.state(env.tab_of(&page, cx), &State { view: new as usize, ..Default::default() });
+    assert!(superview(old).is_null());
+    assert_eq!(superview(new), container);
+    page.read_with(cx, |page, _| assert_eq!(page.shared.view.get(), new));
+}
+
+#[gpui::test]
+fn a_tab_chrome_closed_lets_go_of_its_view_at_once(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let view = new_view();
+    let page = env.page_with_view(view, cx);
+    let tab = env.tab_of(&page, cx);
+    let seen = events(&page, cx);
+
+    (env.callbacks.tab_closed)(env.ctx(), tab);
+    assert!(superview(view).is_null());
+    page.read_with(cx, |page, _| assert!(page.shared.view.get().is_null()));
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [PageEvent::Closed]);
+    cx.update(|_| drop(page));
+    assert_eq!(calls("tab_close"), Vec::<String>::new());
+}
+
+#[gpui::test]
+fn quitting_releases_views_but_keeps_the_session(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let view = new_view();
+    let page = env.page_with_view(view, cx);
+    let seen = events(&page, cx);
+
+    QUITTING.with(|q| q.set(true));
+    (env.callbacks.tab_closed)(env.ctx(), env.tab_of(&page, cx));
+    cx.run_until_parked();
+    assert!(superview(view).is_null());
+    assert!(seen.borrow().is_empty(), "no Closed: the tab is still in the session");
+}
+
+#[gpui::test]
+fn deleting_a_profile_lets_go_of_its_pages_and_pending_tabs(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let view = new_view();
+    let page = env.page_with_view(view, cx);
+    env.created(0x9000 as *mut Tab, std::ptr::null_mut(), ProfileId(1), "https://p.test");
+
+    env.host.delete_profile(ProfileId(1));
+    assert!(superview(view).is_null());
+    assert_eq!(calls("profile_close").len(), 1);
+    cx.update(|_| drop(page));
+    cx.executor().advance_clock(ADOPTION_EXPIRY + Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(calls("tab_close"), Vec::<String>::new(), "Chrome owns those tabs' end now");
+}
+
+#[gpui::test]
+fn a_foreground_open_nobody_adopts_is_closed_this_turn_but_background_waits(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let opener = env.page(1, "https://a.test", cx);
+    let opener_tab = env.tab_of(&opener, cx);
+
+    env.created_in(0x9000 as *mut Tab, opener_tab, ProfileId(1), "https://fg.test", false);
+    env.created_in(0x9010 as *mut Tab, opener_tab, ProfileId(1), "https://bg.test", true);
+    cx.run_until_parked();
+    assert_eq!(calls("tab_close"), [format!("tab_close {:?}", 0x9000 as *mut Tab)]);
+
+    cx.executor().advance_clock(ADOPTION_EXPIRY + Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(calls("tab_close").len(), 2);
+}
+
+#[gpui::test]
+fn an_adopted_tabs_current_state_reaches_a_late_subscriber(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    FIRST_URL.with(|u| u.set(c"https://adopted.test/"));
+    let page = env.page(1, "https://adopted.test/", cx);
+    let seen = events(&page, cx);
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [PageEvent::UrlChanged("https://adopted.test/".into())]);
+}
+
+#[gpui::test]
+fn devtools_never_adopt_a_pending_tab(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let of = env.page(1, "https://a.test", cx);
+    env.created(0x9000 as *mut Tab, std::ptr::null_mut(), ProfileId(1), "about:blank");
+    let creates = calls("tab_create").len();
+    let devtools = env
+        .window
+        .update(cx, |_, window, cx| env.host.create_devtools(&of, None, "right", window, cx))
+        .unwrap();
+    assert_eq!(calls("tab_create").len(), creates + 1);
+    assert_ne!(env.tab_of(&devtools, cx), 0x9000 as *mut Tab);
 }

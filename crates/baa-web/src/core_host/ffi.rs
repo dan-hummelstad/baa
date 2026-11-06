@@ -61,6 +61,8 @@ pub struct Callbacks {
 pub struct Core {
     pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,
+    /// Chrome is closing every tab for ⌘Q: their `tab_closed` is not the user's doing.
+    pub is_quitting: extern "C" fn() -> bool,
     pub profile_open: extern "C" fn(*const c_char) -> *mut Profile,
     pub profile_open_ephemeral: extern "C" fn() -> *mut Profile,
     pub profile_close: extern "C" fn(*mut Profile),
@@ -119,6 +121,7 @@ pub fn load() -> &'static Core {
         Box::leak(Box::new(core!(
             install_app,
             exit_code,
+            is_quitting,
             profile_open,
             profile_open_ephemeral,
             profile_close,

@@ -183,8 +183,11 @@ struct Pending {
 /// What callbacks and pages share about one tab. Main thread only.
 struct Shared {
     core: &'static Core,
+    profile: *mut Profile,
+    container: Rc<native::Container>,
     /// Null once the tab is gone (Chrome closed it, or baa did).
     tab: Cell<*mut Tab>,
+    /// The tab's NSView while it is in the container; null once released.
     view: Cell<*mut AnyObject>,
     dialog: Cell<Option<u64>>,
     /// The view a mouse drag started on, and whether the pointer is over the
@@ -194,6 +197,16 @@ struct Shared {
 }
 
 impl Shared {
+    /// The tab is gone: forget its handle and take its view out of the
+    /// container before Chromium frees it. Only AppKit calls, so it is safe
+    /// inside a callback.
+    fn release(&self) {
+        self.tab.set(std::ptr::null_mut());
+        self.container.swap_page(self.view.replace(std::ptr::null_mut()), std::ptr::null_mut());
+        self.drag.set(None);
+        self.inside.set(false);
+    }
+
     fn run(&self, f: impl FnOnce(&Core, *mut Tab)) {
         let tab = self.tab.get();
         if !tab.is_null() {
@@ -291,18 +304,56 @@ impl Dispatch {
             let delivered = opener.and_then(|page| page.update(cx, |_, cx| cx.emit(requested)).ok());
             if delivered.is_none() {
                 self.chrome_tab(url, cx);
+            } else if !background {
+                // The UI takes it (create_page) while handling the event, or
+                // not at all: a tab nobody shows must not linger.
+                cx.update(|cx| cx.defer(move |_| self.expire(seq)));
             }
         });
         app.spawn(async move |cx| {
             cx.background_executor().timer(ADOPTION_EXPIRY).await;
-            let mut pending = self.pending.borrow_mut();
-            if let Some(at) = pending.iter().position(|p| p.seq == seq) {
-                let expired = pending.remove(at);
-                drop(pending);
-                (self.core.tab_close)(expired.tab);
-            }
+            self.expire(seq);
         })
         .detach();
+    }
+
+    /// Closes the pending tab `seq` unless it was adopted meanwhile.
+    fn expire(&self, seq: u64) {
+        let mut pending = self.pending.borrow_mut();
+        if let Some(at) = pending.iter().position(|p| p.seq == seq) {
+            let expired = pending.remove(at);
+            drop(pending);
+            (self.core.tab_close)(expired.tab);
+        }
+    }
+
+    /// A tab's snapshot. A changed view is swapped in now: Chrome frees the
+    /// old one as soon as this callback returns.
+    fn tab_state(&self, tab: *mut Tab, snapshot: Snapshot) {
+        let Some((shared, page)) = self.pages.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone())) else {
+            return;
+        };
+        let view_changed = snapshot.view != shared.view.get();
+        if view_changed {
+            shared.container.swap_page(shared.view.replace(snapshot.view), snapshot.view);
+            shared.container.page_created(snapshot.view);
+        }
+        self.queue(move |cx| {
+            page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
+        });
+    }
+
+    /// The profile is going away with its tabs, which Chrome may not report.
+    fn forget_profile(&self, profile: *mut Profile) {
+        self.pending.borrow_mut().retain(|p| p.profile != profile);
+        let gone: Vec<_> =
+            self.pages.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
+        for tab in gone {
+            let live = self.pages.borrow_mut().remove(&tab);
+            if let Some(live) = live {
+                live.shared.release();
+            }
+        }
     }
 
     fn take_pending(&self, profile: *mut Profile, url: &str) -> Option<*mut Tab> {
@@ -314,8 +365,13 @@ impl Dispatch {
     fn tab_closed(&self, tab: *mut Tab) {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
         let Some(live) = self.pages.borrow_mut().remove(&tab) else { return };
-        // Now, not next turn: the handle is dead and its address may be reused.
-        live.shared.tab.set(std::ptr::null_mut());
+        // Now, not next turn: the handle is dead, its address may be reused, and
+        // its view is freed once this callback returns.
+        live.shared.release();
+        if (self.core.is_quitting)() {
+            // ⌘Q closes every tab; the session must keep them.
+            return;
+        }
         self.queue(move |cx| {
             live.page.update(cx, |page, cx| page.chrome_closed(cx)).ok();
         });
@@ -348,7 +404,7 @@ fn callbacks() -> Callbacks {
     }
     extern "C" fn tab_state(ctx: *mut c_void, tab: *mut Tab, state: *const TabState) {
         let snapshot = Snapshot::from_c(unsafe { &*state });
-        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| page.apply(snapshot, cx));
+        unsafe { dispatch(ctx) }.tab_state(tab, snapshot);
     }
     extern "C" fn tab_favicon(ctx: *mut c_void, tab: *mut Tab, icon_url: *const c_char, png: *const u8, len: usize) {
         let url = unsafe { from_c(icon_url) };
@@ -445,8 +501,16 @@ impl WebHost for CoreWebHost {
         cx: &mut App,
     ) -> Entity<CorePage> {
         // ponytail: M1 has no DevTools; an empty page keeps the UI's dock working.
+        // Made directly: a pending about:blank popup is not ours to take.
         let profile = of.read(cx).profile;
-        self.create_page(profile, "about:blank", window, cx)
+        let handle = self.profile_handle(profile);
+        let tab = if handle.is_null() {
+            std::ptr::null_mut()
+        } else {
+            (self.core.tab_create)(handle, c"about:blank".as_ptr())
+        };
+        let dispatch = self.dispatch;
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, window, cx))
     }
 
     fn show_menu(&self, at: gpui::Point<Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone) {
@@ -464,7 +528,7 @@ impl WebHost for CoreWebHost {
                 .unwrap_or_else(|| (self.core.tab_create)(handle, c_string(url).as_ptr()))
         };
         let dispatch = self.dispatch;
-        cx.new(|cx| CorePage::new(dispatch, profile, tab, window, cx))
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, window, cx))
     }
 
     fn create_popup(
@@ -489,6 +553,7 @@ impl WebHost for CoreWebHost {
 
     fn delete_profile(&self, profile: ProfileId) {
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
+            self.dispatch.forget_profile(handle);
             (self.core.profile_close)(handle);
         }
         if !is_ephemeral(profile) {
@@ -557,7 +622,14 @@ pub struct CorePage {
 
 impl CorePage {
     /// `tab` may be null (the app is terminating): the page then renders empty.
-    fn new(dispatch: &'static Dispatch, profile: ProfileId, tab: *mut Tab, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        dispatch: &'static Dispatch,
+        profile: ProfileId,
+        handle: *mut Profile,
+        tab: *mut Tab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut state = Snapshot::default();
         if !tab.is_null() {
             let mut raw: TabState = unsafe { std::mem::zeroed() };
@@ -571,6 +643,8 @@ impl CorePage {
         container.page_created(state.view);
         let shared = Rc::new(Shared {
             core: dispatch.core,
+            profile: handle,
+            container: container.clone(),
             tab: Cell::new(tab),
             view: Cell::new(state.view),
             dialog: Cell::new(None),
@@ -582,6 +656,15 @@ impl CorePage {
         }
         let focus_handle = cx.focus_handle();
         let focus = subscribe(&focus_handle, window, cx);
+        if !tab.is_null() {
+            // An adopted tab already has a url and title: the UI hears them
+            // once it has subscribed, which is after this constructor.
+            let first = state.clone();
+            cx.spawn(async move |page, cx| {
+                page.update(cx, |page, cx| page.emit_changes(&Snapshot::default(), &first, cx)).ok();
+            })
+            .detach();
+        }
         Self {
             dispatch,
             shared,
@@ -598,11 +681,19 @@ impl CorePage {
     }
 
     /// Diffs a tab snapshot against the last one and reports what changed.
-    fn apply(&mut self, new: Snapshot, cx: &mut Context<Self>) {
+    /// The view was already swapped by the callback.
+    fn apply(&mut self, new: Snapshot, view_changed: bool, cx: &mut Context<Self>) {
         if self.shared.tab.get().is_null() {
             return;
         }
         let old = std::mem::replace(&mut self.state, new.clone());
+        self.emit_changes(&old, &new, cx);
+        if view_changed {
+            cx.notify();
+        }
+    }
+
+    fn emit_changes(&self, old: &Snapshot, new: &Snapshot, cx: &mut Context<Self>) {
         if new.url != old.url {
             cx.emit(PageEvent::UrlChanged(new.url.clone()));
         }
@@ -621,16 +712,9 @@ impl CorePage {
         if new.audible != old.audible {
             cx.emit(PageEvent::AudibleChanged(new.audible));
         }
-        if new.view != old.view {
-            self.container.swap_page(old.view, new.view);
-            self.container.page_created(new.view);
-            self.shared.view.set(new.view);
-            cx.notify();
-        }
     }
 
     fn chrome_closed(&mut self, cx: &mut Context<Self>) {
-        self.container.swap_page(self.shared.view.replace(std::ptr::null_mut()), std::ptr::null_mut());
         cx.emit(PageEvent::Closed);
     }
 
@@ -641,7 +725,6 @@ impl CorePage {
                 (core.tab_focus)(tab);
                 (core.tab_activate)(tab);
             });
-            native::make_first_responder(view);
         } else if native::has_first_responder(view) {
             native::make_first_responder(self.gpui_view);
         }
@@ -661,8 +744,8 @@ impl Drop for CorePage {
     fn drop(&mut self) {
         // The view leaves the window before Chrome destroys it.
         self.container.set_visible(false, self.shared.view.get());
-        native::detach(self.shared.view.get());
-        let tab = self.shared.tab.replace(std::ptr::null_mut());
+        let tab = self.shared.tab.get();
+        self.shared.release();
         if !tab.is_null() {
             self.dispatch.pages.borrow_mut().remove(&tab);
             (self.dispatch.core.tab_close)(tab);
