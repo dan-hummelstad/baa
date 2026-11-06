@@ -354,6 +354,17 @@ impl Dispatch {
         });
     }
 
+    /// A menu is open in the page; a page that is gone gets it closed.
+    fn context_menu(&'static self, tab: *mut Tab, id: u64, x: f32, y: f32, rows: Vec<Row>) {
+        let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
+        self.queue(move |cx| {
+            let shown = page.and_then(|page| page.update(cx, |page, cx| page.show_context_menu(id, x, y, rows, cx)).ok());
+            if shown.is_none() {
+                (self.core.context_menu_done)(id, -1);
+            }
+        });
+    }
+
     /// The profile is going away with its tabs, which Chrome may not report.
     fn forget_profile(&self, profile: *mut Profile) {
         self.pending.borrow_mut().retain(|p| p.profile != profile);
@@ -386,6 +397,70 @@ impl Dispatch {
         self.queue(move |cx| {
             live.page.update(cx, |page, cx| page.chrome_closed(cx)).ok();
         });
+    }
+}
+
+/// One row of a context menu, as Chrome flattened it.
+struct Row {
+    label: String,
+    command: c_int,
+    depth: u8,
+    kind: u8,
+    enabled: bool,
+    checked: bool,
+}
+
+impl Row {
+    fn from_c(items: *const ffi::MenuItem, count: usize) -> Vec<Row> {
+        if items.is_null() {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(items, count) }
+            .iter()
+            .map(|item| Row {
+                label: unsafe { from_c(item.label) },
+                command: item.command,
+                depth: item.depth,
+                kind: item.kind,
+                enabled: item.enabled,
+                checked: item.checked,
+            })
+            .collect()
+    }
+}
+
+/// The rows as a menu tree; an action's id is its row index.
+fn menu_tree(rows: &[Row]) -> Vec<MenuItem> {
+    fn level(rows: &[Row], at: &mut usize, depth: u8) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        while let Some(row) = rows.get(*at).filter(|row| row.depth == depth) {
+            let index = *at;
+            *at += 1;
+            items.push(match row.kind {
+                ffi::MENU_SEPARATOR => MenuItem::Separator,
+                ffi::MENU_SUBMENU => MenuItem::Submenu { label: row.label.clone(), items: level(rows, at, depth + 1) },
+                _ => MenuItem::Action { label: row.label.clone(), enabled: row.enabled, checked: row.checked, id: index },
+            });
+        }
+        items
+    }
+    let mut at = 0;
+    let mut items = level(rows, &mut at, 0);
+    // Rows that skip a depth (a malformed list) end the menu rather than loop.
+    while at < rows.len() && rows[at].depth == 0 {
+        items.extend(level(rows, &mut at, 0));
+    }
+    items
+}
+
+/// What to tell Chrome once the menu closed, and whether baa's own DevTools
+/// should open: Chrome's Inspect would open its window against our hidden one,
+/// so on a tab it is not run.
+fn menu_answer(rows: &[Row], picked: Option<usize>, kind: PageKind) -> (c_int, bool) {
+    match picked.and_then(|index| rows.get(index)) {
+        Some(row) if row.kind == ffi::MENU_INSPECT && kind == PageKind::Tab => (-1, true),
+        Some(row) => (row.command, false),
+        None => (-1, false),
     }
 }
 
@@ -468,7 +543,17 @@ fn callbacks() -> Callbacks {
     extern "C" fn permission_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionDismissed(id)));
     }
-    extern "C" fn context_menu(_: *mut c_void, _: *mut Tab, _: u64, _: f32, _: f32, _: *const ffi::MenuItem, _: usize) {}
+    extern "C" fn context_menu(
+        ctx: *mut c_void,
+        tab: *mut Tab,
+        id: u64,
+        x: f32,
+        y: f32,
+        items: *const ffi::MenuItem,
+        count: usize,
+    ) {
+        unsafe { dispatch(ctx) }.context_menu(tab, id, x, y, Row::from_c(items, count));
+    }
     extern "C" fn download(_: *mut c_void, _: *mut Tab, _: *const ffi::Download) {}
     extern "C" fn resized(_: *mut c_void, _: *mut Tab, _: c_int, _: c_int) {}
     extern "C" fn page_message(_: *mut c_void, _: *mut Tab, _: *const c_char) {}
@@ -796,6 +881,22 @@ impl CorePage {
         if new.audible != old.audible {
             cx.emit(PageEvent::AudibleChanged(new.audible));
         }
+    }
+
+    /// Shows Chrome's menu natively over the page; Chrome is told exactly once.
+    fn show_context_menu(&mut self, id: u64, x: f32, y: f32, rows: Vec<Row>, cx: &mut Context<Self>) {
+        let items = menu_tree(&rows);
+        let (shared, app, this) = (self.shared.clone(), cx.to_async(), cx.weak_entity());
+        let (core, kind) = (shared.core, shared.kind);
+        menu::show_at(move || shared.view.get(), x, y, items, move |picked| {
+            let (command, inspect) = menu_answer(&rows, picked, kind);
+            (core.context_menu_done)(id, command);
+            if inspect {
+                app.update(|cx| {
+                    this.update(cx, |_, cx| cx.emit(PageEvent::DevToolsRequested { x: x as i32, y: y as i32 })).ok();
+                });
+            }
+        });
     }
 
     fn chrome_closed(&mut self, cx: &mut Context<Self>) {

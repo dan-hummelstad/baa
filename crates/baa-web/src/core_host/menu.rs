@@ -172,3 +172,16 @@ pub fn show_menu(window: &mut Window, cx: &mut App, at: gpui::Point<Pixels>, ite
         let _ = gpui::AppContext::update_window(&mut cx, handle, |_, window, cx| done(picked, window, cx));
     });
 }
+
+/// Opens `items` over the page view (`view` is asked for when the menu is
+/// about to open: the page may be gone by then) at (`x`, `y`) in it; `done`
+/// gets the picked item's id. Later run loop turn, never inside a callback.
+pub fn show_at(
+    view: impl FnOnce() -> *mut AnyObject + 'static,
+    x: f32,
+    y: f32,
+    items: Vec<MenuItem>,
+    done: impl FnOnce(Option<usize>) + 'static,
+) {
+    popup_soon(move || done(popup(view(), x, y, &items)));
+}
