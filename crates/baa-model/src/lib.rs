@@ -500,10 +500,19 @@ impl Session {
             return Vec::new();
         }
         let cutoff = now.saturating_sub(u64::from(after_hours) * 3600);
+        self.archive_today_where(now, |t| t.last_active < cutoff)
+    }
+
+    /// "On launch: pinned only": every Today tab but each Space's active one is archived.
+    pub fn archive_today(&mut self, now: u64) -> Vec<TabId> {
+        self.archive_today_where(now, |_| true)
+    }
+
+    fn archive_today_where(&mut self, now: u64, old: impl Fn(&Tab) -> bool) -> Vec<TabId> {
         let keep: Vec<TabId> = self.spaces.iter().filter_map(|s| s.active_tab).collect();
         let ephemeral: Vec<SpaceId> = self.spaces.iter().filter(|s| s.ephemeral).map(|s| s.id).collect();
         let (expired, live): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs).into_iter().partition(|t| {
-            t.zone == Zone::Today && t.last_active < cutoff && !keep.contains(&t.id) && !ephemeral.contains(&t.space)
+            t.zone == Zone::Today && old(t) && !keep.contains(&t.id) && !ephemeral.contains(&t.space)
         });
         self.tabs = live;
         let ids = expired.iter().map(|t| t.id).collect();
@@ -511,6 +520,16 @@ impl Session {
             self.push_archive(Tab { archived_at: Some(now), ..t });
         }
         ids
+    }
+
+    /// Forgets live tabs (not archived, not reopenable) for which `gone` is true: pages that no longer exist.
+    pub fn drop_tabs(&mut self, gone: impl Fn(&Tab) -> bool) {
+        let ids: Vec<TabId> = self.tabs.iter().filter(|t| gone(t)).map(|t| t.id).collect();
+        for id in ids {
+            if let Some((tab, index)) = self.take(id) {
+                self.pick_neighbour(tab.space, id, tab.zone, index);
+            }
+        }
     }
 
     /// Back to the top of Today.
@@ -631,6 +650,19 @@ mod tests {
         assert!(s.tab(active).is_some() && s.tab(pinned).is_some() && s.tab(fresh).is_some());
         assert_eq!(s.restore_archived(old, 20 * 3600), Some(old));
         assert_eq!(s.tabs(sp, Zone::Today).next().unwrap().id, old);
+    }
+
+    #[test]
+    fn archive_today_and_drop_tabs() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "https://a", 1);
+        let b = s.open_tab(sp, "baa://extensions", 2);
+        let c = s.open_tab(sp, "https://c", 3);
+        s.drop_tabs(|t| t.url.starts_with("baa://extensions"));
+        assert!(s.tab(b).is_none() && s.archived().is_empty());
+        assert_eq!(s.archive_today(10), [a]);
+        assert!(s.tab(c).is_some(), "the active tab stays");
     }
 
     #[test]
