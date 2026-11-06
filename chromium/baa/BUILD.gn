@@ -8,7 +8,9 @@ source_set("baa") {
     "baa_mac.mm",
   ]
   deps = [
+    "//base",
     "//chrome/browser",
+    "//chrome/browser/lifetime:termination_notification",
     "//components/input",
     "//content/public/browser",
     "//ui/base",

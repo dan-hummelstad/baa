@@ -19,5 +19,10 @@ if [ ! -d "$APP/$FRAMEWORK" ] || [ "$OUT/baa.app/$FRAMEWORK" -nt "$APP/$FRAMEWOR
   ditto "$OUT/baa.app" "$APP"
 fi
 cp "${CARGO_TARGET_DIR:-target}/debug/spike" "$APP/Contents/MacOS/baa"
-codesign --force --sign - "$APP/Contents/MacOS/baa"
+# A stable identity, so the Keychain's "Always Allow" for "baa Storage Key"
+# survives rebuilds (an ad-hoc signature's requirement is the binary's hash).
+# BAA_SIGN_IDENTITY overrides; "-" signs ad-hoc.
+IDENTITY=${BAA_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | grep -m1 -o '"Apple Development: [^"]*"' | tr -d '"' || true)}
+codesign --force --sign "${IDENTITY:--}" --identifier me.baa.browser "$APP"
+[ "${1:-}" = --no-run ] && exit 0
 exec "$APP/Contents/MacOS/baa" "$@"

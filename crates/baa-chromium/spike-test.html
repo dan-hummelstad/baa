@@ -21,10 +21,18 @@
 <script>
   const hud = document.getElementById('hud');
   const keys = [];
-  let frames = 0, last = performance.now(), fps = 0;
+  let frames = 0, last = performance.now(), fps = 0, lastScroll = -1e9;
+  // fps samples taken while the page scrolled; read over DevTools by the self-test.
+  const scrollFps = [];
+  let maxScrollY = 0;
+  addEventListener('scroll', () => { lastScroll = performance.now(); maxScrollY = Math.max(maxScrollY, scrollY); });
   function tick(now) {
     frames++;
-    if (now - last >= 500) { fps = Math.round(frames * 1000 / (now - last)); frames = 0; last = now; draw(); }
+    if (now - last >= 500) {
+      fps = Math.round(frames * 1000 / (now - last));
+      if (now - lastScroll < 100) scrollFps.push(fps);
+      frames = 0; last = now; draw();
+    }
     requestAnimationFrame(tick);
   }
   function draw() { hud.textContent = `fps ${fps}\n` + keys.slice(-8).join('\n'); }
@@ -34,6 +42,7 @@
     keys.push(`keydown ${mods}${e.key}${e.isComposing ? ' (ime)' : ''}`);
     draw();
   }, true);
+  for (const type of ['mousedown', 'mouseup']) addEventListener(type, () => { keys.push(type); draw(); }, true);
   const rows = document.getElementById('rows');
   for (let i = 0; i < 400; i++) {
     const d = document.createElement('div'); d.className = 'row'; d.textContent = `row ${i}`; rows.append(d);

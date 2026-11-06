@@ -27,7 +27,7 @@ mod app {
         actions, div, prelude::*, px, relative, rgb, size, App, Bounds, DispatchPhase, Element, ElementId,
         FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, KeyBinding, KeyDownEvent,
         LayoutId, Menu, MenuItem, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollWheelEvent,
-        SharedString, Style, Window, WindowBounds, WindowOptions,
+        SharedString, Style, Window, WindowBackgroundAppearance, WindowBounds, WindowOptions,
     };
     use objc2::runtime::AnyObject;
 
@@ -36,8 +36,7 @@ mod app {
     actions!(spike, [Quit, FocusBar, NewTab]);
 
     thread_local! {
-        static GPUI_VIEW: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
-    }
+        static GPUI_VIEW: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };    }
 
     pub fn main() {
         // Before anything can start a thread (see ffi::load).
@@ -61,6 +60,7 @@ mod app {
         // gpui's [NSApp run] becomes ChromeMain; this closure runs from
         // didFinishLaunching once Chromium's browser process is up.
         gpui_platform::application().run(|cx: &mut App| {
+            eprintln!("spike: gpui finished launching");
             cx.bind_keys([
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-l", FocusBar, None),
@@ -73,11 +73,77 @@ mod app {
                 disabled: false,
             }]);
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
-            let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
-            cx.open_window(options, |window, cx| cx.new(|cx| Spike::new(window, cx))).unwrap();
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // An opaque Metal layer draws the punched hole black.
+                window_background: WindowBackgroundAppearance::Transparent,
+                ..Default::default()
+            };
+            let spike = cx.open_window(options, |window, cx| cx.new(|cx| Spike::new(window, cx))).unwrap();
             cx.activate(true);
+            if std::env::var_os("BAA_SPIKE_SELFTEST").is_some() {
+                self_test(spike, cx);
+            }
+            // BAA_SPIKE_QUIT_AFTER=<s>: quit the way ⌘Q does, for smoke.sh.
+            if let Some(secs) = std::env::var("BAA_SPIKE_QUIT_AFTER").ok().and_then(|s| s.parse().ok()) {
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(std::time::Duration::from_secs(secs)).await;
+                    eprintln!("spike: quitting");
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
         });
+        eprintln!("spike: run loop returned, exit code {}", (core.exit_code)());
         std::process::exit((core.exit_code)());
+    }
+
+    /// BAA_SPIKE_SELFTEST: real NSEvents through the window, page focused,
+    /// then the bar. The checks: stderr (`spike: gpui ...`) for gpui's side,
+    /// the page's `keys` log and textarea over DevTools for the page's side.
+    fn self_test(spike: gpui::WindowHandle<Spike>, cx: &mut App) {
+        // (key code, characters, ⌘); "focus bar" steps are gpui-side.
+        const PAGE: &[(u16, &str, bool)] = &[
+            (4, "h", false),
+            (14, "e", false),
+            (37, "l", false),
+            (37, "l", false),
+            (31, "o", false),
+            (0, "a", true),  // ⌘A: select all (edit fallback)
+            (7, "x", false), // replaces the selection
+            (6, "z", true),  // ⌘Z: undo, back to "hello"
+            (53, "\u{1b}", false),
+            (17, "t", true), // ⌘T: gpui
+            (37, "l", true), // ⌘L: gpui focuses the bar
+            (0, "a", false), // into the bar, not the page
+            (11, "b", false),
+        ];
+        cx.spawn(async move |cx| {
+            let executor = cx.background_executor().clone();
+            let wait = |ms| executor.timer(std::time::Duration::from_millis(ms));
+            wait(3000).await;
+            let window_number = spike
+                .update(cx, |spike, window, cx| {
+                    window.activate_window();
+                    window.focus(&spike.page_focus, cx);
+                    (ffi::core().web_contents_focus)(spike.page.contents);
+                    native::window_number(spike.page.view)
+                })
+                .unwrap();
+            wait(500).await;
+            // Into the textarea the way a user gets there: a click.
+            let view = spike.update(cx, |spike, _, _| spike.page.view).unwrap();
+            native::post_click(view, 200., 140.);
+            wait(500).await;
+            for &(code, chars, command) in PAGE {
+                native::post_key(window_number, code, chars, command);
+                wait(150).await;
+            }
+            wait(500).await;
+            spike.update(cx, |spike, _, _| eprintln!("spike: gpui bar text {:?}", spike.typed)).ok();
+            eprintln!("spike: self-test done");
+        })
+        .detach();
     }
 
     /// ⌘/⌃/Escape from the page: gpui first; editing shortcuts the page left
@@ -114,6 +180,7 @@ mod app {
             let core = ffi::core();
             let contents = (core.web_contents_create)(CString::new(url).unwrap().as_ptr());
             let view = (core.web_contents_view)(contents).cast::<AnyObject>();
+            eprintln!("spike: page created, view {view:?}");
             let page = Rc::new(Page {
                 contents,
                 view,
@@ -149,10 +216,12 @@ mod app {
                 .p_2()
                 .gap_2()
                 .on_action(cx.listener(|this, _: &FocusBar, window, cx| {
+                    eprintln!("spike: gpui action FocusBar");
                     this.status = "⌘L reached gpui".into();
                     this.focus_bar(window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &NewTab, _, cx| {
+                    eprintln!("spike: gpui action NewTab");
                     this.status = "⌘T reached gpui".into();
                     cx.notify();
                 }))

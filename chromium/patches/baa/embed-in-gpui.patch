@@ -7,15 +7,31 @@
 +_baa_*
 --- a/chrome/browser/app_controller_mac.mm
 +++ b/chrome/browser/app_controller_mac.mm
-@@ -799,12 +799,15 @@
+@@ -799,12 +799,31 @@
  + (AppController*)sharedController {
    static AppController* sharedController = [] {
      AppController* sharedController = [[AppController alloc] init];
 -    NSApp.delegate = sharedController;
 +    // baa: the embedding UI (gpui) owns NSApp's delegate; AppController only
-+    // takes the role when nobody set one (the stock baa.app).
++    // takes the role when nobody set one (the stock baa.app). Otherwise it
++    // still gets the delegate notifications it does start-up and shutdown
++    // work in (the last keep-alive goes in -applicationWillTerminate:).
 +    if (!NSApp.delegate) {
 +      NSApp.delegate = sharedController;
++    } else {
++      NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
++      [center addObserver:sharedController
++                 selector:@selector(applicationWillFinishLaunching:)
++                     name:NSApplicationWillFinishLaunchingNotification
++                   object:NSApp];
++      [center addObserver:sharedController
++                 selector:@selector(applicationDidFinishLaunching:)
++                     name:NSApplicationDidFinishLaunchingNotification
++                   object:NSApp];
++      [center addObserver:sharedController
++                 selector:@selector(applicationWillTerminate:)
++                     name:NSApplicationWillTerminateNotification
++                   object:NSApp];
 +    }
      return sharedController;
    }();

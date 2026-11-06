@@ -13,12 +13,12 @@ and ⌘ keys work, and the ⌘ keys go to GPUI.
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | Framework | Reuse Chrome's `chrome_framework` target as it is ("baa Framework.framework"). `//baa` is already linked into it by phase 1. No content_shell. The rename to `BaaCore` is deferred (open question 1). |
+| 1 | Framework | Reuse Chrome's `chrome_framework` target, renamed to `BaaCore.framework` (`patches/baa/rename-framework-baacore.patch`; user decision 2026-11-06). `//baa` is already linked into it by phase 1. No content_shell. |
 | 2 | How much Chrome | Full `//chrome` startup with a real `Profile`. The spike uses a bare `WebContents` with our own `WebContentsDelegate`. There is no `Browser` and no `BrowserWindow` yet. |
 | 3 | Event loop | **Chromium calls `[NSApp run]`, not GPUI.** NSApp is `BaaApplication : BrowserCrApplication` from `//baa`. Its `-run` starts `ChromeMain` on the first call and calls `[super run]` when Chromium's pump calls it again. This corrects the start-up paragraph in `PLAN-chromium.md` (see "Why not Initialize without Run"). |
 | 4 | View | Reuse the CEF windowed design: the `WebContents` NSView goes in a clipping container under GPUI's view, and GPUI punches a hole. The code is copied from `vendor/gpui-cef/.../native.rs`. |
 | 5 | Input | GPUI's view keeps the mouse and forwards it to the page (existing code). Keyboard and IME go natively to `RenderWidgetHostViewCocoa`. ⌘ keys come back through `WebContentsDelegate::PreHandleKeyboardEvent` / `HandleKeyboardEvent` to a Rust callback that offers them to GPUI first, the same way CEF's `on_pre_key_event` does today. |
-| 6 | C ABI and Rust | Seven `extern "C"` functions. A new crate `crates/baa-chromium` (owned by the baa-web orchestrator) calls `dlopen` on the framework at startup. The bundle is a copy of the GN `baa.app` inside `out/Default`, with our Rust binary in place of `MacOS/baa`, ad-hoc signed. |
+| 6 | C ABI and Rust | Seven `extern "C"` functions. A new crate `crates/baa-chromium` (owned by the baa-web orchestrator) calls `dlopen` on the framework at startup. The bundle is a copy of the GN `baa.app` inside `out/Default`, with our Rust binary in place of `MacOS/baa`, signed with the local Apple Development identity. |
 
 ## Evidence
 
@@ -310,10 +310,58 @@ Expected incremental times (component build, estimates; measure them in step 1 a
 | 7 | GN visibility or `gn check` refuses `//baa` → `//chrome/browser`. | Step 1's first build. | Add `//baa/*` to the `visibility` lists in `embed-in-gpui.patch`. |
 | 8 | The spike app's ad-hoc signature, or the copy of a component-build bundle, breaks helper launch. | Step 2: `ps` shows the renderer and GPU helpers. | Run from the GN `baa.app` itself, with `MacOS/baa` swapped in place. |
 
-## Open questions for the user
+## Decided (user, 2026-11-06)
 
-1. Rename "baa Framework.framework" to `BaaCore.framework`? It is cosmetic. It touches
-   `chrome_framework_name`, the helpers' `rel_path`, the signing configs and the CI artifact
-   paths. Recommendation: not in phase 2; decide before phase 6.
-2. gpui's quit hooks (`on_app_quit`) do not fire with Chrome's `terminate:`. Is persisting baa-model
-   state from a `will_quit` callback (phase 3) acceptable, or must gpui's own hook keep working?
+1. The framework is `BaaCore.framework` now (rename patch above).
+2. Persisting baa-model state from a phase 3 `will_quit` callback is fine.
+
+## Results (2026-11-06)
+
+Implemented on branch `worktree-phase2-plan`: `chromium/baa/{baa.h,baa.cc,baa_mac.mm,BUILD.gn}`,
+`chromium/patches/baa/{rename-framework-baacore,embed-in-gpui}.patch`, `crates/baa-chromium`
+(`src/{main,ffi,native}.rs`, `spike.sh`, `smoke.sh`, `cdp.mjs`, `spike-test.html`).
+
+Run: `crates/baa-chromium/spike.sh` (builds, refreshes `out/Default/baa Spike.app`, signs, runs in
+the foreground). Checks without a human: `BAA_SPIKE_SELFTEST=1 BAA_SPIKE_QUIT_AFTER=14
+crates/baa-chromium/smoke.sh "<out>/baa Spike.app/Contents/MacOS/baa" 20`, plus
+`--remote-debugging-port=9333` and `node crates/baa-chromium/cdp.mjs 9333 '({value:
+document.querySelector("textarea").value, keys})'` for the page's side.
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| BaaCore.framework with `//baa` | done | `BaaCore.framework` with helpers inside; 8 `_baa_*` exports in `libchrome_dll.dylib`. |
+| Rust `main` starts it, CrAppProtocol NSApp | done | Main-thread stack: gpui `run` → `-[BaaApplication run]` → `ChromeMain` → `BrowserMain` → `RunLoop::Run` → `MessagePumpNSApplication::DoRun` → `-[BaaApplication run]` → `-[NSApplication run]`. gpui's `didFinishLaunching` runs after the profile is up (uBlock Origin's background page is running). |
+| Quit | done | gpui `cx.quit()` (the ⌘Q path) → Chrome shutdown → `ChromeMain` returns 0 → process exits 0, no crash reports, no DCHECKs. |
+| WebContents NSView in a GPUI hole | done | Screenshot: page under gpui's bar with rounded corners; page reports `visible`, 1184×745 = the hole. |
+| Typing | done (synthetic NSEvents) | Click into the textarea, type "hello": page gets mousedown/mouseup and every keydown; textarea has the text. |
+| ⌘ keys to GPUI | done (synthetic) | With the page focused, ⌘T and ⌘L run gpui actions and never reach the page; after ⌘L, "ab" goes to gpui's bar, not the page. |
+| Editing ⌘ keys | done (synthetic) | ⌘A then "x" then ⌘Z leaves "hello": the page saw the keys unhandled, the after-page callback sent select-all / undo. Escape reaches the page. |
+| 120 Hz | partly | Page rAF runs at 120 fps on the ProMotion display. **Trackpad scrolling still needs a human**: synthetic scroll events never reach the app without Accessibility permission. The page's HUD shows fps while scrolling; `scrollFps` holds the samples taken while scrolling. |
+| IME | **needs a human** | Japanese/Pinyin in the textarea: marked text, candidate window at the caret, commit, Esc. |
+
+Measured build loop: a `//baa` edit rebuilds in 14–21 s (2 steps); a patch change re-preps the tree
+(about 5 min) and then builds in about 25 s; the Rust side is 2–5 s.
+
+What changed from the plan while building it:
+- `baa_install_app` calls `base::CommandLine::Init` first: `+[BrowserCrApplication initialize]` reads
+  the command line before `ChromeMain` runs.
+- AppController, when it is not the delegate, observes the will/did-finish-launching and
+  will-terminate notifications itself. Without that it never drops its keep-alive and quit hangs.
+  Chrome posts `NSApplicationWillTerminateNotification` itself, so gpui's delegate gets
+  `applicationWillTerminate:` too.
+- Pages are destroyed on `browser_shutdown::AddAppTerminatingCallback`. A page that outlives its
+  profile trips `SiteProcessCountTracker`'s DCHECK. Later UI calls on a gone page do nothing.
+- The gpui window needs `WindowBackgroundAppearance::Transparent`. An opaque Metal layer draws the
+  hole black.
+- Signing: ad-hoc signatures change with every build, so the Keychain asked about
+  "baa Storage Key" on every launch. The prompt also took key focus away during tests. `spike.sh`
+  signs with the first "Apple Development" identity (`BAA_SIGN_IDENTITY` overrides it), so "Always
+  Allow" is kept across rebuilds. The stock `out/Default/baa.app` is still ad-hoc (siso owns it) and
+  still asks.
+
+Gotchas found:
+- `--remote-debugging-port` plus `--no-startup-window` keeps Chrome alive until DevTools sends
+  `Browser.close`, so ⌘Q does nothing in such a run (`chrome_devtools_manager_delegate.cc:197`).
+- In 1 of 4 synthetic runs, the page stopped acknowledging keys after an event carried "left button
+  down" (a real click elsewhere, probably on the Keychain prompt). Re-check by hand: hold the mouse
+  button outside the window, release it, then type and use ⌘A in the page.

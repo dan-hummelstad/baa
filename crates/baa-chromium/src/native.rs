@@ -381,6 +381,73 @@ pub fn edit_command(event: *mut AnyObject) -> Option<std::ffi::c_int> {
     }
 }
 
+/// Queues a key press (down and up) for the window numbered `window_number`,
+/// through the same `-[NSApp sendEvent:]` path as a real keystroke.
+pub fn post_key(window_number: isize, key_code: u16, chars: &str, command: bool) {
+    unsafe {
+        let chars = std::ffi::CString::new(chars).unwrap();
+        let chars: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: chars.as_ptr()];
+        let flags: usize = if command { 1 << 20 } else { 0 };
+        let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+        let now: f64 = msg_send![info, systemUptime];
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        for kind in [10usize, 11] {
+            let event: *mut AnyObject = msg_send![
+                class!(NSEvent),
+                keyEventWithType: kind,
+                location: CGPoint { x: 0., y: 0. },
+                modifierFlags: flags,
+                timestamp: now,
+                windowNumber: window_number,
+                context: std::ptr::null_mut::<AnyObject>(),
+                characters: chars,
+                charactersIgnoringModifiers: chars,
+                isARepeat: Bool::NO,
+                keyCode: key_code
+            ];
+            let _: () = msg_send![app, postEvent: event, atStart: Bool::NO];
+        }
+    }
+}
+
+/// Queues a left click at (`x`, `y`) points from `view`'s top left.
+pub fn post_click(view: *mut AnyObject, x: f64, y: f64) {
+    unsafe {
+        let bounds: CGRect = msg_send![view, bounds];
+        let flipped: Bool = msg_send![view, isFlipped];
+        let y = if flipped.as_bool() { y } else { bounds.size.height - y };
+        let point: CGPoint = msg_send![view, convertPoint: CGPoint { x, y }, toView: std::ptr::null_mut::<AnyObject>()];
+        let window: *mut AnyObject = msg_send![view, window];
+        let number: isize = msg_send![window, windowNumber];
+        let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+        let now: f64 = msg_send![info, systemUptime];
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        // NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp.
+        for kind in [1usize, 2] {
+            let event: *mut AnyObject = msg_send![
+                class!(NSEvent),
+                mouseEventWithType: kind,
+                location: point,
+                modifierFlags: 0usize,
+                timestamp: now,
+                windowNumber: number,
+                context: std::ptr::null_mut::<AnyObject>(),
+                eventNumber: 0isize,
+                clickCount: 1isize,
+                pressure: if kind == 1 { 1.0f32 } else { 0.0f32 }
+            ];
+            let _: () = msg_send![app, postEvent: event, atStart: Bool::NO];
+        }
+    }
+}
+
+pub fn window_number(view: *mut AnyObject) -> isize {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        msg_send![window, windowNumber]
+    }
+}
+
 /// The marker surface the vendored gpui renderer turns into a transparent hole
 /// with `radius` (device pixels) rounded corners.
 pub fn punch_buffer(radius: usize) -> Option<CVPixelBuffer> {

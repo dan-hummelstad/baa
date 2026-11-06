@@ -6,6 +6,11 @@
 #include <vector>
 
 #include "baa/baa.h"
+#include "base/command_line.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/lifetime/termination_notification.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -62,6 +67,9 @@ void baa_install_app(int argc,
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_key = key;
   g_key_ctx = key_ctx;
+  // +[BrowserCrApplication initialize] reads the command line; content's own
+  // Init later is a no-op.
+  base::CommandLine::Init(argc, argv);
   [BaaApplication sharedApplication];
 }
 
@@ -108,8 +116,34 @@ struct BaaWebContents : content::WebContentsDelegate {
   }
 };
 
+namespace {
+// Live pages. They go when Chrome starts terminating, before profiles are torn
+// down (a page outliving its profile trips shutdown checks); later calls from
+// the UI on a gone page do nothing.
+base::flat_set<BaaWebContents*>& Pages() {
+  static base::NoDestructor<base::flat_set<BaaWebContents*>> pages;
+  return *pages;
+}
+
+bool Alive(BaaWebContents* page) {
+  return Pages().contains(page);
+}
+
+void DestroyAllPages() {
+  auto pages = std::move(Pages());
+  Pages().clear();
+  for (BaaWebContents* page : pages) {
+    delete page;
+  }
+}
+}  // namespace
+
 BaaWebContents* baa_web_contents_create(const char* url) {
+  static base::NoDestructor<base::CallbackListSubscription> on_terminating(
+      browser_shutdown::AddAppTerminatingCallback(
+          base::BindOnce(&DestroyAllPages)));
   auto* page = new BaaWebContents;
+  Pages().insert(page);
   page->contents = content::WebContents::Create(
       content::WebContents::CreateParams(ProfileManager::GetLastUsedProfile()));
   page->contents->SetDelegate(page);
@@ -120,14 +154,22 @@ BaaWebContents* baa_web_contents_create(const char* url) {
 }
 
 void* baa_web_contents_view(BaaWebContents* page) {
+  if (!Alive(page)) {
+    return nullptr;
+  }
   return (__bridge void*)page->contents->GetNativeView().GetNativeNSView();
 }
 
 void baa_web_contents_focus(BaaWebContents* page) {
-  page->contents->Focus();
+  if (Alive(page)) {
+    page->contents->Focus();
+  }
 }
 
 void baa_web_contents_edit(BaaWebContents* page, int command) {
+  if (!Alive(page)) {
+    return;
+  }
   content::WebContents* c = page->contents.get();
   switch (command) {
     case BAA_EDIT_COPY:
@@ -152,5 +194,7 @@ void baa_web_contents_edit(BaaWebContents* page, int command) {
 }
 
 void baa_web_contents_destroy(BaaWebContents* page) {
-  delete page;
+  if (Pages().erase(page)) {
+    delete page;
+  }
 }
