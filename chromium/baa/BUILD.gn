@@ -14,6 +14,7 @@ source_set("baa") {
     "net.mm",
     "permissions.mm",
     "profile.mm",
+    "requests.mm",
     "settings.mm",
     "tab.mm",
     "window.h",

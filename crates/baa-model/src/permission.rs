@@ -51,15 +51,22 @@ impl Permission {
         Self::WindowManagement,
     ];
 
-    /// Whether `state` is a valid rule for this kind (ask is no rule for kinds Chrome never asks about).
+    /// Whether `state` is a valid exception for this kind: Chrome's `valid_settings` per type
+    /// (content_settings_registry.cc). Cookies never ask; sensors do.
     pub fn takes(self, state: PermissionState) -> bool {
         match self {
-            Self::Popups | Self::Sound | Self::JavaScript | Self::InsecureContent | Self::Sensors => {
+            Self::Popups | Self::Sound | Self::JavaScript | Self::InsecureContent => {
                 matches!(state, PermissionState::Allow | PermissionState::Block)
             }
-            Self::Cookies => true,
+            Self::Cookies => state != PermissionState::Ask,
             _ => state != PermissionState::SessionOnly,
         }
+    }
+
+    /// Whether `state` is a valid site default: as [`Self::takes`], except Chrome refuses an
+    /// always-allow default for camera and microphone (`IsDefaultSettingValid`).
+    pub fn takes_default(self, state: PermissionState) -> bool {
+        self.takes(state) && !(matches!(self, Self::Camera | Self::Microphone) && state == PermissionState::Allow)
     }
 
     /// Chrome's default for a profile whose user changed nothing.
@@ -80,7 +87,19 @@ mod tests {
     #[test]
     fn defaults_are_valid_rules() {
         for kind in Permission::SITE_KINDS {
-            assert!(kind.takes(kind.chrome_default()), "{kind:?}");
+            assert!(kind.takes_default(kind.chrome_default()), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn validity_follows_chrome() {
+        use PermissionState::*;
+        assert!(!Permission::Cookies.takes(Ask));
+        assert!(Permission::Cookies.takes(SessionOnly));
+        assert!(Permission::Sensors.takes(Ask));
+        assert!(!Permission::Popups.takes(Ask) && !Permission::Popups.takes(SessionOnly));
+        assert!(Permission::Camera.takes(Allow) && !Permission::Camera.takes_default(Allow));
+        assert!(Permission::Microphone.takes_default(Block) && !Permission::Microphone.takes_default(Allow));
+        assert!(!Permission::Location.takes(SessionOnly));
     }
 }

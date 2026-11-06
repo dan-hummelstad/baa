@@ -276,11 +276,16 @@ BAA_EXPORT void baa_set_default_browser(void);
 BAA_EXPORT void baa_profile_set_default_zoom(BaaProfile* profile,
                                              double factor);
 
-// Makes the engine the profile's default search, adding it when no engine has
-// this URL. `url` holds %s for the query; `keyword` is its short name for the
-// omnibox ("" derives one). Applied once the profile's engine list has loaded,
-// maybe after this returns. False if the arguments are unusable (no %s, empty
-// name) or Chrome refuses it as a default; true means accepted.
+// Makes the engine the profile's default search. An engine with this URL, or
+// any engine of the same site (Chrome's own Google, say), is reused: a
+// user-added one gets the new name, keyword and URL, a built-in one keeps its
+// own. Otherwise the engine is added. `url` holds %s for the query; `keyword`
+// is its short name for the omnibox ("" derives one). Applied once the
+// profile's engine list has loaded, maybe after this returns. False if the
+// arguments are unusable (no %s, empty name, not http(s)) or, when the list is
+// loaded, Chrome refuses it as a default (policy or an extension controls
+// search); true means accepted, and then still pending if the list was not
+// loaded. An ephemeral profile uses its parent's list.
 BAA_EXPORT bool baa_profile_set_search_engine(BaaProfile* profile,
                                               const char* name,
                                               const char* keyword,

@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,8 +22,9 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/shell_integration.h"
-#include "url/gurl.h"
+#include "chrome/browser/baa_hooks.h"
+#include "content/public/browser/security_principal.h"
+#include "content/public/browser/web_contents.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
@@ -93,8 +95,9 @@ struct BaaProfile : ProfileObserver {
 
   raw_ptr<Profile> profile;
   const bool ephemeral;
-  // 0 system, 1 light, 2 dark; baa_profile_set_color_schemes.
-  int website_scheme = 0, webui_scheme = 0;
+  // baa_profile_set_color_schemes.
+  baa::ColorScheme website_scheme = baa::ColorScheme::kSystem;
+  baa::ColorScheme webui_scheme = baa::ColorScheme::kSystem;
   std::string name;
   std::unique_ptr<ScopedProfileKeepAlive> keep_alive;
   baa::DownloadWatch downloads{profile};
@@ -238,7 +241,7 @@ bool baa_pref_set_bool(BaaProfile* profile, const char* name, bool value) {
     return false;
   }
   // Also tells the renderers (userScripts, extension APIs) about the mode.
-  if (profile && std::string_view(name) == "extensions.ui.developer_mode") {
+  if (profile && !profile->ephemeral && std::string_view(name) == "extensions.ui.developer_mode") {
     extensions::util::SetDeveloperModeForProfile(profile->profile, value);
   } else {
     prefs->SetBoolean(name, value);
@@ -271,42 +274,58 @@ bool baa_pref_clear(BaaProfile* profile, const char* name) {
   if (!pref || !pref->IsUserModifiable()) {
     return false;
   }
-  if (profile && std::string_view(name) == "extensions.ui.developer_mode") {
+  if (profile && !profile->ephemeral && std::string_view(name) == "extensions.ui.developer_mode") {
     extensions::util::SetDeveloperModeForProfile(profile->profile, false);  // its default
   }
   prefs->ClearPref(name);
   return true;
 }
 
-bool baa_is_default_browser(void) {
-  return shell_integration::GetDefaultBrowser() == shell_integration::IS_DEFAULT;
-}
-
-void baa_set_default_browser(void) {
-  shell_integration::SetAsDefaultBrowser();
-}
-
 void baa_profile_set_color_schemes(BaaProfile* profile, int website, int webui) {
   if (!AliveProfile(profile)) {
     return;
   }
-  profile->website_scheme = website;
-  profile->webui_scheme = webui;
+  profile->website_scheme = baa::ColorSchemeOf(website);
+  profile->webui_scheme = baa::ColorSchemeOf(webui);
   baa::ReapplyColorSchemes(profile->profile);
 }
 
 namespace baa {
 
-int ColorSchemeFor(Profile* chrome_profile, const GURL& url) {
-  BaaProfile* profile = ProfileFor(chrome_profile);
+namespace {
+
+// Chrome asks this for every WebPreferences recompute (navigations, theme changes, font prefs),
+// so nothing is cached per tab. patches/baa/color-scheme-hook.patch.
+bool PreferredColorScheme(content::WebContents* contents,
+                          const content::SecurityPrincipal& principal,
+                          blink::mojom::PreferredColorScheme* scheme) {
+  BaaProfile* profile = ProfileFor(Profile::FromBrowserContext(contents->GetBrowserContext()));
   if (!profile) {
-    return 0;
+    return false;
   }
-  bool webui = url.SchemeIs("chrome") || url.SchemeIs("baa") || url.SchemeIs("chrome-untrusted");
-  return webui ? profile->webui_scheme : profile->website_scheme;
+  // IsWebUI covers chrome:, chrome-untrusted:, chrome-search: and devtools: (the DevTools front-end
+  // is Chrome's own page, so it follows the WebUI choice).
+  ColorScheme choice = principal.IsWebUI() ? profile->webui_scheme : profile->website_scheme;
+  if (choice == ColorScheme::kSystem) {
+    return false;
+  }
+  *scheme = choice == ColorScheme::kDark ? blink::mojom::PreferredColorScheme::kDark
+                                         : blink::mojom::PreferredColorScheme::kLight;
+  return true;
+}
+
+}  // namespace
+
+void InstallColorSchemeHook() {
+  g_baa_preferred_color_scheme = &PreferredColorScheme;
+}
+
+Profile* DefaultsProfile(Profile* profile) {
+  return profile->IsOffTheRecord() ? profile->GetOriginalProfile() : profile;
 }
 
 }  // namespace baa
+
 namespace baa {
 
 Profile* ChromeProfileOf(BaaProfile* profile) {

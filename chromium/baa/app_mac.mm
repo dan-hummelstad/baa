@@ -14,6 +14,7 @@
 #include "base/no_destructor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/shell_integration.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/browser/ui/extensions/extension_install_ui.h"
@@ -52,6 +53,7 @@ void EnsureStarted() {
     return;
   }
   done = true;
+  InstallColorSchemeHook();
   // Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
   // close through BrowserCloseManager (our windows' Close), and later calls from
   // the UI on a gone handle do nothing.
@@ -160,3 +162,12 @@ bool baa_is_quitting(void) {
 int baa_exit_code(void) {
   return g_exit_code;
 }
+
+bool baa_is_default_browser(void) {
+  return shell_integration::GetDefaultBrowser() == shell_integration::IS_DEFAULT;
+}
+
+void baa_set_default_browser(void) {
+  shell_integration::SetAsDefaultBrowser();
+}
+

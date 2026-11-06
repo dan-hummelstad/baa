@@ -1,0 +1,64 @@
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -67,6 +67,7 @@
+ #include "chrome/browser/bluetooth/chrome_bluetooth_delegate.h"
+ #include "chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.h"
+ #include "chrome/browser/browser_about_handler.h"
++#include "chrome/browser/baa_hooks.h"
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
+@@ -3989,6 +3990,8 @@
+   return main_page_url.SchemeIs(dom_distiller::kDomDistillerScheme);
+ }
+ #endif
++
++BaaPreferredColorSchemeFn g_baa_preferred_color_scheme = nullptr;
+ 
+ namespace {
+ 
+@@ -4104,6 +4107,12 @@
+           web_contents->GetColorProvider().GetColor(kColorToolbar))
+           ? blink::mojom::PreferredColorScheme::kDark
+           : blink::mojom::PreferredColorScheme::kLight;
++  // baa: the app's per-profile choice, for WebUI and websites separately.
++  if (g_baa_preferred_color_scheme &&
++      g_baa_preferred_color_scheme(web_contents, security_principal,
++                                   &preferred_color_scheme)) {
++    preferred_root_scrollbar_color_scheme = preferred_color_scheme;
++  }
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_GUEST_VIEW)
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -858,6 +858,7 @@
+     "chrome_browser_interface_binders_webui.cc",
+     "chrome_browser_interface_binders_webui.h",
+     "chrome_browser_interface_binders_webui_parts_features.cc",
++    "baa_hooks.h",
+     "chrome_browser_main.cc",
+     "chrome_content_browser_client.cc",
+     "chrome_content_browser_client_binder_policies.cc",
+--- /dev/null
++++ b/chrome/browser/baa_hooks.h
+@@ -0,0 +1,19 @@
++// baa: lets the embedding app (//baa) pick prefers-color-scheme per page.
++// //chrome cannot depend on //baa, so //baa sets this pointer. Null keeps Chrome's behaviour.
++#ifndef CHROME_BROWSER_BAA_HOOKS_H_
++#define CHROME_BROWSER_BAA_HOOKS_H_
++
++#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-shared.h"
++
++namespace content {
++class SecurityPrincipal;
++class WebContents;
++}  // namespace content
++
++// Returns true after setting `*scheme` for a document of `principal` in `contents`.
++using BaaPreferredColorSchemeFn = bool (*)(content::WebContents* contents,
++                                           const content::SecurityPrincipal& principal,
++                                           blink::mojom::PreferredColorScheme* scheme);
++extern BaaPreferredColorSchemeFn g_baa_preferred_color_scheme;
++
++#endif  // CHROME_BROWSER_BAA_HOOKS_H_

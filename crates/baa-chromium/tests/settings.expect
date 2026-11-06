@@ -68,17 +68,20 @@ count: 1 baa: clear_done id=1$
 
 # search engine
 must: baa: engine Kagi kagi\.com https://kagi\.com/search -> 0
-must: baa: engine - kagi\.com https://kagi\.com/search\?q=%s -> 1
-must: baa:   menu Search with Kagi cmd=\d+ kind=0 enabled=true
+must: baa: engine Zed - https://zed\.search\.test/find\?q=%s -> 1
+must: baa:   menu Search with Zed cmd=\d+ kind=0 enabled=true
+must: baa: engine Zed2 zed2 https://zed\.search\.test/find\?q=%s -> 1
+must: baa:   menu Search with Zed2 cmd=\d+ kind=0 enabled=true
 
 # default zoom: the display scale (1 or 2) times the zoom
 must: title="dpr:(1|2)"
 must: title="dpr:(1\.5|3)"
 
 # load unpacked and reload
-must: baa: load_unpacked_done id=1 ok=true \w{32}
+must: baa: load_unpacked_done id=1 ok=false Must be in developer mode to load unpacked extensions\.
+must: baa: load_unpacked_done id=2 ok=true \w{32}
 must: baa: extension id=\w{32} name="baa probe" version=1 enabled=1 unpacked=1
-must: baa: load_unpacked_done id=2 ok=false \S
+must: baa: load_unpacked_done id=3 ok=false \S
 must: baa: shell -> 1
 must: baa: reload-ext \w{32} -> true
 must: baa: extension id=\w{32} name="baa probe" version=2 enabled=1 unpacked=1
@@ -86,6 +89,9 @@ must: baa: reload-ext a{32} -> false
 
 # colour schemes: per URL kind, live tabs follow
 must: title="site:true"
+must: title="site-nav:true"
+must: title="site-push:true"
+must: title="site-font:true"
 must: title="webui:false"
 must: title="webui2:true"
 must: title="site2:false"

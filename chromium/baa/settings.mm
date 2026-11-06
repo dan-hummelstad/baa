@@ -1,22 +1,16 @@
 // Settings calls that are not a pref set or a site rule (permissions.mm): default
-// zoom, search engine, clearing data, loading unpacked extensions
-// (PLAN-settings.md section 5).
-
-#import <Cocoa/Cocoa.h>
+// zoom, search engine, clearing data (PLAN-settings.md section 5).
 
 #include <cstring>
-#include <map>
 #include <memory>
 #include <string>
 
 #include "baa/baa.h"
 #include "baa/internal.h"
-#include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/no_destructor.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/profiles/profile.h"
@@ -25,40 +19,44 @@
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/search_engines/template_url_service_observer.h"
 #include "content/public/browser/browsing_data_remover.h"
-#include "extensions/browser/unpacked_installer.h"
-#include "extensions/common/extension.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "url/gurl.h"
 
 namespace baa {
 namespace {
 
-// Applies the engine once the list has loaded; owns itself until then.
-class EngineApplier {
+// Makes the engine the default; after the list has loaded, if it had not. Owns itself until then.
+class EngineApplier : public TemplateURLServiceObserver {
  public:
-  static void Run(TemplateURLService* service, TemplateURLData data) {
+  // False if Chrome refuses the engine as default now; true when accepted or still waiting.
+  static bool Run(TemplateURLService* service, TemplateURLData data) {
     if (service->loaded()) {
-      Apply(service, data);
-      return;
+      return Apply(service, data);
     }
-    auto* self = new EngineApplier(service, std::move(data));
-    self->subscription_ = service->RegisterOnLoadedCallback(
-        base::BindOnce(&EngineApplier::Loaded, base::Unretained(self)));
-    service->Load();
+    new EngineApplier(service, std::move(data));
+    return true;
   }
 
  private:
   EngineApplier(TemplateURLService* service, TemplateURLData data)
-      : service_(service), data_(std::move(data)) {}
-
-  void Loaded() {
-    Apply(service_, data_);
-    // Deleting inside the callback list's own run is not safe.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+      : service_(service), data_(std::move(data)) {
+    observation_.Observe(service);
+    service->Load();
   }
 
-  static void Apply(TemplateURLService* service, const TemplateURLData& data) {
+  void OnTemplateURLServiceChanged() override {
+    if (service_->loaded()) {
+      Apply(service_, data_);
+      delete this;
+    }
+  }
+  // The service goes first at shutdown; nothing to apply to.
+  void OnTemplateURLServiceShuttingDown() override { delete this; }
+
+  static bool Apply(TemplateURLService* service, const TemplateURLData& data) {
+    std::u16string name = data.short_name(), keyword = data.keyword();
     TemplateURL* engine = nullptr;
     for (TemplateURL* candidate : service->GetTemplateURLs()) {
       if (candidate->url() == data.url()) {
@@ -66,38 +64,32 @@ class EngineApplier {
         break;
       }
     }
+    // The same site under another URL is the same engine (Chrome's prepopulated Google has
+    // many search URLs), so no duplicate.
+    if (!engine) {
+      engine = service->GetTemplateURLForHost(std::string(GURL(data.url()).host()));
+    }
     if (!engine) {
       engine = service->Add(std::make_unique<TemplateURL>(data));
+    } else if (engine->prepopulate_id() == 0 && engine->type() == TemplateURL::NORMAL) {
+      // Prepopulated engines keep their own names and URLs (Chrome updates them).
+      service->ResetTemplateURL(engine, name, keyword, data.url(), engine->suggestions_url());
     }
-    if (engine && service->CanMakeDefault(engine)) {
-      service->SetUserSelectedDefaultSearchProvider(engine);
+    // CanMakeDefault says no for the engine that already is the default; set it again anyway so
+    // a rename reaches the stored copy.
+    if (!engine || (engine != service->GetDefaultSearchProvider() && !service->CanMakeDefault(engine))) {
+      return false;
     }
+    service->SetUserSelectedDefaultSearchProvider(engine);
+    return true;
   }
 
   raw_ptr<TemplateURLService> service_;
   TemplateURLData data_;
-  base::CallbackListSubscription subscription_;
+  base::ScopedObservation<TemplateURLService, TemplateURLServiceObserver> observation_{this};
 };
 
-// Calls the app has not been answered yet, by the caller's id, and the profile each runs
-// in: a profile that closes mid-operation answers them itself (AnswerPendingOf), and the
-// late real completion then finds nothing.
-std::map<uint64_t, Profile*>& PendingClears() {
-  static base::NoDestructor<std::map<uint64_t, Profile*>> pending;
-  return *pending;
-}
-std::map<uint64_t, Profile*>& PendingLoads() {
-  static base::NoDestructor<std::map<uint64_t, Profile*>> pending;
-  return *pending;
-}
-bool Take(std::map<uint64_t, Profile*>& pending, uint64_t id) {
-  return pending.erase(id) > 0;
-}
-
-void AnswerClear(uint64_t id);
-void AnswerLoad(uint64_t id, bool ok, std::string message);
-
-// One removal; answers the app from a task and deletes itself.
+// One removal; answers the app and deletes itself.
 class Clearing : public content::BrowsingDataRemover::Observer {
  public:
   Clearing(content::BrowsingDataRemover* remover, uint64_t id) : remover_(remover), id_(id) {
@@ -105,9 +97,7 @@ class Clearing : public content::BrowsingDataRemover::Observer {
   }
   void OnBrowsingDataRemoverDone(uint64_t) override {
     remover_->RemoveObserver(this);
-    if (Take(PendingClears(), id_)) {
-      Callbacks().clear_done(CallbackContext(), id_);
-    }
+    FinishRequest(RequestKind::kClear, id_, true, "");
     delete this;
   }
 
@@ -117,52 +107,7 @@ class Clearing : public content::BrowsingDataRemover::Observer {
   const uint64_t id_;
 };
 
-void AnswerClear(uint64_t id) {
-  Callbacks().clear_done(CallbackContext(), id);
-}
-
-void AnswerLoad(uint64_t id, bool ok, std::string message) {
-  Callbacks().load_unpacked_done(CallbackContext(), id, ok, message.c_str());
-}
-
-void AnswerFromPending(uint64_t id, bool ok, std::string message) {
-  if (Take(PendingLoads(), id)) {
-    AnswerLoad(id, ok, std::move(message));
-  }
-}
-
-void AnswerPendingOfImpl(Profile* profile) {
-  auto runner = base::SingleThreadTaskRunner::GetCurrentDefault();
-  for (auto it = PendingClears().begin(); it != PendingClears().end();) {
-    if (it->second == profile) {
-      runner->PostTask(FROM_HERE, base::BindOnce(&AnswerClear, it->first));
-      it = PendingClears().erase(it);
-    } else {
-      ++it;
-    }
-  }
-  for (auto it = PendingLoads().begin(); it != PendingLoads().end();) {
-    if (it->second == profile) {
-      runner->PostTask(FROM_HERE,
-                       base::BindOnce(&AnswerLoad, it->first, false, std::string("The profile closed")));
-      it = PendingLoads().erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-// OTR profiles ignore default content settings and share the parent's search engines, so the
-// profile-wide defaults go to the parent.
-Profile* DefaultsOf(Profile* profile) {
-  return profile->IsOffTheRecord() ? profile->GetOriginalProfile() : profile;
-}
-
 }  // namespace
-
-void AnswerPendingOf(Profile* profile) {
-  AnswerPendingOfImpl(profile);
-}
 }  // namespace baa
 
 void baa_profile_set_default_zoom(BaaProfile* profile, double factor) {
@@ -170,7 +115,7 @@ void baa_profile_set_default_zoom(BaaProfile* profile, double factor) {
   if (!chrome_profile || !(factor > 0)) {
     return;
   }
-  if (auto* prefs = baa::DefaultsOf(chrome_profile)->GetZoomLevelPrefs()) {
+  if (auto* prefs = baa::DefaultsProfile(chrome_profile)->GetZoomLevelPrefs()) {
     prefs->SetDefaultZoomLevelPref(blink::ZoomFactorToZoomLevel(factor));
   }
 }
@@ -183,7 +128,7 @@ bool baa_profile_set_search_engine(BaaProfile* profile,
   if (!chrome_profile || !name || !*name || !url || !strstr(url, "%s")) {
     return false;
   }
-  TemplateURLService* service = TemplateURLServiceFactory::GetForProfile(baa::DefaultsOf(chrome_profile));
+  TemplateURLService* service = TemplateURLServiceFactory::GetForProfile(baa::DefaultsProfile(chrome_profile));
   if (!service) {
     return false;
   }
@@ -193,20 +138,18 @@ bool baa_profile_set_search_engine(BaaProfile* profile,
   if (!parsed.is_valid() || !parsed.SchemeIsHTTPOrHTTPS()) {
     return false;
   }
-  std::u16string short_name = base::UTF8ToUTF16(name);
   // "" derives the keyword from the host, as Chrome does for a site search.
   std::u16string word = base::UTF8ToUTF16(keyword ? keyword : "");
   if (word.empty()) {
     word = base::UTF8ToUTF16(parsed.host());
   }
   TemplateURLData data;
-  data.SetShortName(short_name);
+  data.SetShortName(base::UTF8ToUTF16(name));
   data.SetKeyword(word);
   data.SetURL(search_url);
   data.favicon_url = TemplateURL::GenerateFaviconURL(parsed);
   data.safe_for_autoreplace = false;
-  baa::EngineApplier::Run(service, std::move(data));
-  return true;
+  return baa::EngineApplier::Run(service, std::move(data));
 }
 
 void baa_profile_clear_data(BaaProfile* profile, uint64_t id, int64_t since_ms, uint32_t types) {
@@ -224,41 +167,16 @@ void baa_profile_clear_data(BaaProfile* profile, uint64_t id, int64_t since_ms, 
   if (types & BAA_CLEAR_CACHE) {
     mask |= content::BrowsingDataRemover::DATA_TYPE_CACHE;
   }
+  baa::BeginRequest(baa::RequestKind::kClear, id, chrome_profile);
   if (!chrome_profile || !mask) {
     // Nothing to do or nobody to do it: answered later, as the contract says.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&baa::AnswerClear, id));
+    baa::FinishRequestLater(baa::RequestKind::kClear, id, true, "");
     return;
   }
   base::Time begin = since_ms > 0 ? base::Time::FromMillisecondsSinceUnixEpoch(since_ms) : base::Time();
   // The remover answers from a task, never inside this call.
-  baa::PendingClears()[id] = chrome_profile;
   content::BrowsingDataRemover* remover = chrome_profile->GetBrowsingDataRemover();
   remover->RemoveAndReply(begin, base::Time::Max(), mask,
                           content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB,
                           new baa::Clearing(remover, id));
-}
-
-void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id, const char* path) {
-  Profile* chrome_profile = baa::ChromeProfileOf(profile);
-  if (!chrome_profile || !path || !*path) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&baa::AnswerLoad, id, false, std::string("No such profile or path")));
-    return;
-  }
-  auto installer = extensions::UnpackedInstaller::Create(chrome_profile);
-  baa::PendingLoads()[id] = chrome_profile;
-  installer->set_be_noisy_on_failure(false);
-  // Posted: the installer reports some failures before Load returns.
-  installer->set_completion_callback(base::BindOnce(
-      [](uint64_t id, const extensions::Extension* extension, const base::FilePath&, const std::u16string& error) {
-        std::string message = extension ? extension->id() : base::UTF16ToUTF8(error);
-        if (message.empty()) {
-          message = "Could not load the extension";
-        }
-        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-            FROM_HERE, base::BindOnce(&baa::AnswerFromPending, id, extension != nullptr, std::move(message)));
-      },
-      id));
-  installer->Load(base::FilePath(path));
 }

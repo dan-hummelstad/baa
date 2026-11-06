@@ -86,10 +86,6 @@ struct BaaTab : content::WebContentsObserver,
   base::OnceClosure close_bare;
   // baa_tab_set_init_script.
   std::u16string init_script;
-  // The scheme last pushed to the renderer (0 = the system's), and to which view: a new
-  // renderer after a cross-process navigation starts without it.
-  int applied_scheme = 0;
-  raw_ptr<content::RenderViewHost> applied_view;
   // Chrome-made tabs are announced (tab_created) once their URL is known;
   // until then they are silent.
   bool reported = true;
@@ -104,7 +100,6 @@ struct BaaTab : content::WebContentsObserver,
   content::WebContents* contents() const { return web_contents(); }
 
   void Attach(content::WebContents* wc);
-  void ApplyColorScheme();
   void Detach();
 
   BaaTabState Snapshot(std::string& url, std::string& title, std::string& icon) {
@@ -167,7 +162,6 @@ struct BaaTab : content::WebContentsObserver,
     SendState();
   }
   void PrimaryMainDocumentElementAvailable() override {
-    ApplyColorScheme();
     if (!init_script.empty()) {
       web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(init_script, base::NullCallback());
     }
@@ -314,29 +308,6 @@ void BaaTab::Attach(content::WebContents* wc) {
   }
   baa::AttachDialogs(wc);
   baa::AttachPermissions(wc);
-}
-
-void BaaTab::ApplyColorScheme() {
-  content::WebContents* wc = web_contents();
-  if (!wc) {
-    return;
-  }
-  int scheme = baa::ColorSchemeFor(Profile::FromBrowserContext(wc->GetBrowserContext()),
-                                   wc->GetLastCommittedURL());
-  content::RenderViewHost* view = wc->GetRenderViewHost();
-  if (scheme == applied_scheme && (scheme == 0 || view == applied_view)) {
-    return;
-  }
-  applied_scheme = scheme;
-  applied_view = view;
-  if (scheme == 0) {
-    wc->OnWebPreferencesChanged();  // back to what the system says
-    return;
-  }
-  blink::web_pref::WebPreferences prefs = wc->GetOrCreateWebPreferences();
-  prefs.preferred_color_scheme = scheme == 2 ? blink::mojom::PreferredColorScheme::kDark
-                                             : blink::mojom::PreferredColorScheme::kLight;
-  wc->SetWebPreferences(prefs);
 }
 
 void BaaTab::Detach() {
@@ -497,7 +468,7 @@ void baa::ReapplyColorSchemes(Profile* chrome_profile) {
   for (auto& value : Registry()) {
     content::WebContents* wc = value->web_contents();
     if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
-      value->ApplyColorScheme();
+      wc->NotifyPreferencesChanged();
     }
   }
 }

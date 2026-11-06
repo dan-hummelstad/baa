@@ -1,7 +1,5 @@
 // Permission prompts and per-site settings. PLAN-chromium-phase4.md step 1.
 
-#import <Cocoa/Cocoa.h>
-
 #include <map>
 #include <string>
 
@@ -12,6 +10,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/content_settings/core/browser/content_settings_info.h"
+#include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
@@ -175,6 +175,47 @@ ContentSettingsType TypeOf(uint32_t kind) {
   }
 }
 
+// BAA_SITE_* <-> ContentSetting; UNSET (and anything unknown) is DEFAULT, which removes a rule.
+int StateOf(ContentSetting setting) {
+  switch (setting) {
+    case CONTENT_SETTING_ALLOW:
+      return BAA_SITE_ALLOW;
+    case CONTENT_SETTING_BLOCK:
+      return BAA_SITE_BLOCK;
+    case CONTENT_SETTING_SESSION_ONLY:
+      return BAA_SITE_SESSION_ONLY;
+    case CONTENT_SETTING_ASK:
+      return BAA_SITE_ASK;
+    default:
+      return BAA_SITE_UNSET;
+  }
+}
+
+ContentSetting SettingOf(int state) {
+  switch (state) {
+    case BAA_SITE_ALLOW:
+      return CONTENT_SETTING_ALLOW;
+    case BAA_SITE_BLOCK:
+      return CONTENT_SETTING_BLOCK;
+    case BAA_SITE_ASK:
+      return CONTENT_SETTING_ASK;
+    case BAA_SITE_SESSION_ONLY:
+      return CONTENT_SETTING_SESSION_ONLY;
+    default:
+      return CONTENT_SETTING_DEFAULT;
+  }
+}
+
+// Chrome's own rules for what a type takes, as a default or as an exception.
+bool Takes(ContentSettingsType type, ContentSetting setting, bool as_default) {
+  if (setting == CONTENT_SETTING_DEFAULT) {
+    return true;  // UNSET
+  }
+  const content_settings::ContentSettingsInfo* info =
+      content_settings::ContentSettingsRegistry::GetInstance()->Get(type);
+  return info && (as_default ? info->IsDefaultSettingValid(setting) : info->IsSettingValid(setting));
+}
+
 }  // namespace
 
 // After the tab's helpers exist, and again after a WebContents swap.
@@ -228,21 +269,13 @@ void baa_permission_answer(uint64_t id, bool allow) {
 int baa_profile_site_permission(BaaProfile* profile, const char* url, uint32_t kind) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
   ContentSettingsType type = baa::TypeOf(kind);
-  GURL site(url);
+  GURL site(url ? url : "");
   if (!chrome_profile || type == ContentSettingsType::DEFAULT || !site.is_valid()) {
     return BAA_SITE_ASK;
   }
-  switch (HostContentSettingsMapFactory::GetForProfile(chrome_profile)
-              ->GetContentSetting(site, site, type)) {
-    case CONTENT_SETTING_ALLOW:
-      return BAA_SITE_ALLOW;
-    case CONTENT_SETTING_BLOCK:
-      return BAA_SITE_BLOCK;
-    case CONTENT_SETTING_SESSION_ONLY:
-      return BAA_SITE_SESSION_ONLY;
-    default:
-      return BAA_SITE_ASK;
-  }
+  int state = baa::StateOf(
+      HostContentSettingsMapFactory::GetForProfile(chrome_profile)->GetContentSetting(site, site, type));
+  return state == BAA_SITE_UNSET ? BAA_SITE_ASK : state;
 }
 
 void baa_profile_set_site_permission(BaaProfile* profile,
@@ -251,75 +284,36 @@ void baa_profile_set_site_permission(BaaProfile* profile,
                                      int state) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
   ContentSettingsType type = baa::TypeOf(kind);
-  GURL site(url);
+  GURL site(url ? url : "");
   if (!chrome_profile || type == ContentSettingsType::DEFAULT || !site.is_valid()) {
     return;
   }
   // "Ask" is going back to the default, not writing an Ask rule.
-  ContentSetting setting = state == BAA_SITE_ALLOW   ? CONTENT_SETTING_ALLOW
-                           : state == BAA_SITE_BLOCK ? CONTENT_SETTING_BLOCK
-                                                     : CONTENT_SETTING_DEFAULT;
+  ContentSetting setting = state == BAA_SITE_ALLOW || state == BAA_SITE_BLOCK
+                               ? baa::SettingOf(state)
+                               : CONTENT_SETTING_DEFAULT;
   HostContentSettingsMapFactory::GetForProfile(chrome_profile)
       ->SetContentSettingDefaultScope(site, site, type, setting);
 }
 
-namespace {
-
-int StateOf(ContentSetting setting) {
-  switch (setting) {
-    case CONTENT_SETTING_ALLOW:
-      return BAA_SITE_ALLOW;
-    case CONTENT_SETTING_BLOCK:
-      return BAA_SITE_BLOCK;
-    case CONTENT_SETTING_SESSION_ONLY:
-      return BAA_SITE_SESSION_ONLY;
-    case CONTENT_SETTING_ASK:
-      return BAA_SITE_ASK;
-    default:
-      return BAA_SITE_UNSET;
-  }
-}
-
-// Which states a kind takes (baa.h): the always-on kinds never ask, only
-// cookies keep for the session.
-bool TakesState(uint32_t kind, int state) {
-  switch (state) {
-    case BAA_SITE_ALLOW:
-    case BAA_SITE_BLOCK:
-      return true;
-    case BAA_SITE_ASK:
-      return !(kind & (BAA_PERMISSION_POPUPS | BAA_PERMISSION_SOUND | BAA_PERMISSION_JAVASCRIPT |
-                       BAA_PERMISSION_COOKIES | BAA_PERMISSION_INSECURE_CONTENT | BAA_PERMISSION_SENSORS));
-    case BAA_SITE_SESSION_ONLY:
-      return kind == BAA_PERMISSION_COOKIES;
-    case BAA_SITE_UNSET:
-      return true;
-  }
-  return false;
-}
-
-bool SiteKind(uint32_t kind) {
-  return kind != BAA_PERMISSION_OTHER && baa::TypeOf(kind) != ContentSettingsType::DEFAULT;
-}
-
-}  // namespace
-
 int baa_profile_site_rules(BaaProfile* profile, uint32_t kind, BaaSiteRuleVisitor visit, void* ctx) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
-  if (!chrome_profile || !SiteKind(kind)) {
+  if (!chrome_profile || !visit || kind == BAA_PERMISSION_OTHER ||
+      baa::TypeOf(kind) == ContentSettingsType::DEFAULT) {
     return -1;
   }
   ContentSettingsType type = baa::TypeOf(kind);
   HostContentSettingsMap* map = HostContentSettingsMapFactory::GetForProfile(chrome_profile);
-  // Defaults live on the parent for an off-the-record profile (set_site_rule).
-  visit(ctx, "*", StateOf(HostContentSettingsMapFactory::GetForProfile(chrome_profile->GetOriginalProfile())
-                               ->GetDefaultContentSetting(type)));
+  // An off-the-record map answers with the parent's default as it applies there.
+  visit(ctx, "*", baa::StateOf(map->GetDefaultContentSetting(type)));
   int count = 1;
   for (const ContentSettingPatternSource& rule : map->GetSettingsForOneType(type)) {
-    // Only what the user set: not policy, extensions or built-in rules, nor
-    // the default and nor third-party (secondary pattern) cookie rules.
-    int state = StateOf(rule.GetContentSetting());
+    // Only what the user set in this profile: not policy, extensions or built-in rules, not
+    // the parent's rules (an off-the-record map lists those too), the default, or
+    // third-party (secondary pattern) cookie rules.
+    int state = baa::StateOf(rule.GetContentSetting());
     if (rule.source != content_settings::ProviderType::kPrefProvider ||
+        rule.incognito != chrome_profile->IsOffTheRecord() ||
         rule.primary_pattern == ContentSettingsPattern::Wildcard() ||
         rule.secondary_pattern != ContentSettingsPattern::Wildcard() || rule.IsExpired() ||
         state == BAA_SITE_UNSET) {
@@ -333,19 +327,19 @@ int baa_profile_site_rules(BaaProfile* profile, uint32_t kind, BaaSiteRuleVisito
 
 bool baa_profile_set_site_rule(BaaProfile* profile, uint32_t kind, const char* pattern, int state) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
-  if (!chrome_profile || !pattern || !SiteKind(kind) || !TakesState(kind, state)) {
+  ContentSettingsType type = baa::TypeOf(kind);
+  if (!chrome_profile || !pattern || kind == BAA_PERMISSION_OTHER || type == ContentSettingsType::DEFAULT ||
+      state < BAA_SITE_UNSET || state > BAA_SITE_SESSION_ONLY) {
     return false;
   }
-  ContentSettingsType type = baa::TypeOf(kind);
-  ContentSetting setting = state == BAA_SITE_ALLOW          ? CONTENT_SETTING_ALLOW
-                           : state == BAA_SITE_BLOCK        ? CONTENT_SETTING_BLOCK
-                           : state == BAA_SITE_ASK          ? CONTENT_SETTING_ASK
-                           : state == BAA_SITE_SESSION_ONLY ? CONTENT_SETTING_SESSION_ONLY
-                                                            : CONTENT_SETTING_DEFAULT;
-  HostContentSettingsMap* map = HostContentSettingsMapFactory::GetForProfile(chrome_profile);
-  if (std::string(pattern) == "*") {
-    // The parent's: an off-the-record map takes no defaults and uses them.
-    HostContentSettingsMapFactory::GetForProfile(chrome_profile->GetOriginalProfile())
+  ContentSetting setting = baa::SettingOf(state);
+  bool is_default = std::string_view(pattern) == "*";
+  if (!baa::Takes(type, setting, is_default)) {
+    return false;
+  }
+  if (is_default) {
+    // An off-the-record map takes no defaults and inherits the parent's.
+    HostContentSettingsMapFactory::GetForProfile(baa::DefaultsProfile(chrome_profile))
         ->SetDefaultContentSetting(type, setting);
     return true;
   }
@@ -353,6 +347,7 @@ bool baa_profile_set_site_rule(BaaProfile* profile, uint32_t kind, const char* p
   if (!primary.IsValid()) {
     return false;
   }
-  map->SetContentSettingCustomScope(primary, ContentSettingsPattern::Wildcard(), type, setting);
+  HostContentSettingsMapFactory::GetForProfile(chrome_profile)
+      ->SetContentSettingCustomScope(primary, ContentSettingsPattern::Wildcard(), type, setting);
   return true;
 }

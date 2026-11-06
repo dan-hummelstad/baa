@@ -16,7 +16,6 @@
 #include "content/public/browser/web_contents.h"
 
 class ExtensionsContainer;
-class GURL;
 class Profile;
 struct BaaTab;
 struct BaaProfile;
@@ -68,10 +67,7 @@ bool DevtoolsDocking();  // a kDevtoolsFront insertion is in progress
 
 // A page that is not in a tab strip. `close` destroys what holds the contents.
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
-// profile.mm: 0 system, 1 light, 2 dark for a document at `url` of this profile.
-int ColorSchemeFor(Profile* profile, const GURL& url);
 void ReapplyColorSchemes(Profile* profile);  // tab.mm: after the profile's choice changed
-void AnswerPendingOf(Profile* profile);      // settings.mm: clear_done/load_unpacked_done for a closing profile
 void CloseTabsOf(Profile* profile);  // baa_profile_close: every page of it, now
 void BareTabClosedByChrome(BaaTab* tab);
 void CloseBareTabsForQuit();
@@ -124,6 +120,26 @@ bool BrowserIsClosing(BrowserWindowInterface* browser);
 // are already closed).
 void DestroyBrowsersOf(Profile* profile);
 std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
+// ---- requests.mm: calls answered later by id (clear_done, load_unpacked_done), each exactly once,
+// also when the profile closes first.
+enum class RequestKind { kClear, kLoadUnpacked };
+void BeginRequest(RequestKind kind, uint64_t id, Profile* profile);
+// Answers the app unless the request already was (a closed profile answered it); call from a task.
+void FinishRequest(RequestKind kind, uint64_t id, bool ok, const std::string& message);
+void FinishRequestLater(RequestKind kind, uint64_t id, bool ok, const std::string& message);
+void AnswerPendingOf(Profile* profile);  // baa_profile_close
+
+// An off-the-record profile has no defaults of its own (content settings, search engines,
+// zoom): they live on its parent.
+Profile* DefaultsProfile(Profile* profile);
+// profile.mm: installs the colour scheme hook of patches/baa/color-scheme-hook.patch.
+void InstallColorSchemeHook();
+// 0 follows the system, 1 light, 2 dark (anything else is the system's).
+enum class ColorScheme { kSystem, kLight, kDark };
+inline ColorScheme ColorSchemeOf(int value) {
+  return value == 1 ? ColorScheme::kLight : value == 2 ? ColorScheme::kDark : ColorScheme::kSystem;
+}
+
 // profile.mm: sets a bool pref if the profile registers it and the user may change it.
 bool SetPrefBool(Profile* profile, const char* name, bool value);
 

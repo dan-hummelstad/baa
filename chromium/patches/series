@@ -8,3 +8,4 @@ baa/no-views-guards.patch
 baa/baa-otr-browsers.patch
 baa/gpui-main-menu.patch
 baa/context-menu-hook.patch
+baa/color-scheme-hook.patch

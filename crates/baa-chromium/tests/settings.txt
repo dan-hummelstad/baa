@@ -92,14 +92,18 @@ clear cache 0
 sleep 2500
 # search engine: refused without %s, accepted with, and the context menu offers it
 engine Kagi kagi.com https://kagi.com/search
-engine - kagi.com https://kagi.com/search?q=%s
-engine Kagi kagi.com https://kagi.com/search?q=%s
+engine Zed - https://zed.search.test/find?q=%s
 sleep 1500
 eval document.body.innerHTML='<div id=u style="position:fixed;left:0;top:450px;width:400px;height:100px;background:#fcf">select me too</div>'
 sleep 500
 activate
 eval getSelection().selectAllChildren(document.getElementById('u'))
 sleep 300
+menu 100 480
+sleep 2500
+# the same URL again with another name: reused and renamed, not added twice
+engine Zed2 zed2 https://zed.search.test/find?q=%s
+sleep 500
 menu 100 480
 sleep 2500
 # default zoom reaches a fresh page: devicePixelRatio is the display scale times the zoom
@@ -120,6 +124,17 @@ schemes 2 1
 load https://example.com/
 sleep 3000
 eval document.title='site:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+load https://example.com/?next=1
+sleep 3000
+eval document.title='site-nav:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+eval history.pushState({}, '', '/pushed'); document.title='site-push:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+prefi 1 webkit.webprefs.default_font_size 20
+sleep 1500
+eval document.title='site-font:'+matchMedia('(prefers-color-scheme: dark)').matches
 sleep 500
 state
 tab 1 chrome://version/
@@ -159,7 +174,10 @@ state
 zoomdefault 1
 use 0
 profile 1
-# load unpacked: an extension, a missing folder, then the manifest changes and the reload shows it
+# load unpacked: refused without developer mode, then an extension, a missing folder, then the manifest
+# changes and the reload shows it
+unpacked {EXT_COPY}
+sleep 1500
 prefb 1 extensions.ui.developer_mode true
 unpacked {EXT_COPY}
 sleep 3000

@@ -12,6 +12,7 @@
 #include "baa/internal.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "base/files/file_path.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
@@ -19,6 +20,8 @@
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/extensions/extension_view_host_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "chrome/browser/ui/extensions/extension_popup_types.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -35,6 +38,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions_manager.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/extension.h"
@@ -299,7 +303,7 @@ bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id,
       if (!extensions::Manifest::IsUnpackedLocation(ext->location())) {
         return false;
       }
-      registrar->ReloadExtension(id);
+      registrar->ReloadExtensionWithQuietFailure(id);
       return true;
     case BAA_EXTENSION_ENABLE:
       if (value) {
@@ -376,4 +380,28 @@ BaaTab* baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   auto* popup = new baa::Popup(chrome_profile, browser, std::move(host));
   popup->Start();
   return popup->tab();
+}
+
+void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id, const char* path) {
+  Profile* chrome_profile = baa::ChromeProfileOf(profile);
+  baa::BeginRequest(baa::RequestKind::kLoadUnpacked, id, chrome_profile);
+  const char* error = !chrome_profile || !path || !*path ? "No such profile or path"
+                      : !chrome_profile->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode)
+                          ? "Must be in developer mode to load unpacked extensions."
+                          : nullptr;
+  if (error) {
+    baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, false, error);
+    return;
+  }
+  auto installer = extensions::UnpackedInstaller::Create(chrome_profile);
+  installer->set_be_noisy_on_failure(false);
+  // Posted: the installer reports some failures before Load returns.
+  installer->set_completion_callback(base::BindOnce(
+      [](uint64_t id, const extensions::Extension* extension, const base::FilePath&, const std::u16string& error) {
+        std::string message = extension ? extension->id() : base::UTF16ToUTF8(error);
+        baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, extension != nullptr,
+                                message.empty() ? "Could not load the extension" : message);
+      },
+      id));
+  installer->Load(base::FilePath(path));
 }
