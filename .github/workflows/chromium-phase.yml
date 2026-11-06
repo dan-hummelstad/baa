@@ -184,7 +184,8 @@ jobs:
           echo "build_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> stats.txt
           # Why siso ran steps: a resumed phase should not be all "doesn't exist"/"changed".
           E="$_out_dir/siso_explain"
-          [ ! -f "$E" ] || { head -15 "$E" | cut -c1-240; sed -E 's/^(output|deps for) [^ ]+/\1 _/; s/ for [^ ]+$//; s/input .*/input/' "$E" | sort | uniq -c | sort -rn | head; }
+          # Diagnostics only: head closes the pipe early, and under pipefail that SIGPIPE must not end the step before the 124 check.
+          [ ! -f "$E" ] || { head -15 "$E" | cut -c1-240; sed -E 's/^(output|deps for) [^ ]+/\1 _/; s/ for [^ ]+$//; s/input .*/input/' "$E" | sort | uniq -c | sort -rn | head; } || true
           if [ $code -eq 124 ]; then
             [ "${{ inputs.last }}" = false ] || { echo "gave up after phase ${{ inputs.phase }}"; exit 1; }
             # A phase that kept the last one's work ends with far fewer steps left.
