@@ -535,3 +535,20 @@ fn clearing_nothing_calls_nothing(cx: &mut TestAppContext) {
     click(&mut s, "clear-confirm");
     b.read_with(&s, |b, _| assert!(b.host.clears.borrow().is_empty()));
 }
+
+#[gpui::test]
+fn the_site_details_address_opens_one_site_and_sets_its_permission(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    b.update_in(vcx, |b, window, cx| b.open_url("chrome://settings/content/siteDetails?site=https://a.com", window, cx));
+    vcx.run_until_parked();
+    let h = b.read_with(vcx, |b, _| b.settings_window).expect("the settings window opened");
+    assert_eq!(tab(h, vcx), Tab::Sites);
+    let mut s = tall(h, cx);
+    assert!(drawn(&mut s, "site-back") && !drawn(&mut s, "add-rule:site.popups"), "the one-site view, not the list");
+    click(&mut s, "site:site.camera:Block");
+    b.read_with(&s, |b, _| {
+        assert_eq!(b.host.permissions.borrow().last(), Some(&("https://a.com".to_string(), Permission::Camera, PermissionState::Block)));
+    });
+    click(&mut s, "site-back");
+    assert!(drawn(&mut s, "add-rule:site.popups"), "back to the list");
+}

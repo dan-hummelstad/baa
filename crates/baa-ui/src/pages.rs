@@ -10,6 +10,8 @@ use crate::settings::Tab;
 pub(crate) enum Route {
     Settings(Tab, Option<&'static str>),
     Extensions,
+    /// One origin's permissions, in the settings window.
+    Site,
     History,
     Downloads,
     /// Chrome draws it, in a normal tab.
@@ -115,17 +117,28 @@ pub(crate) fn route(url: &str) -> Option<Route> {
     if url == "baa://extensions" || url.starts_with("baa://extensions/") {
         return Some(Route::Extensions);
     }
+    if url == "baa://settings/content/siteDetails" {
+        return Some(Route::Site);
+    }
     all().find(|p| p.url == url).map(|p| p.route).filter(|r| *r != WebUi)
+}
+
+fn query_value(url: &str, key: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// `baa://extensions/?id=…`
 pub(crate) fn extension_id(url: &str) -> Option<String> {
-    let query = url.split_once('?')?.1;
-    query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("id="))
-        .filter(|id| !id.is_empty())
-        .map(String::from)
+    query_value(url, "id")
+}
+
+/// `baa://settings/content/siteDetails?site=…`
+pub(crate) fn site_of(url: &str) -> Option<String> {
+    query_value(url, "site")
 }
 
 /// Whether the command bar should autofill: it starts like an address. A bare "baa" is a search.
@@ -159,6 +172,10 @@ impl<H: baa_web::WebHost> crate::Browser<H> {
                 self.extensions_page.open = extension_id(url);
                 self.open_settings_at(Some(Tab::Extensions), None, cx);
             }
+            Route::Site => match site_of(url) {
+                Some(site) => self.open_site_settings(site, cx),
+                None => self.open_settings_at(Some(Tab::Sites), None, cx),
+            },
             Route::History => self.open_bar(crate::command_bar::Mode::History, window, cx),
             Route::Downloads => self.open_library(crate::library::Section::Downloads, cx),
             Route::WebUi => return false,
@@ -178,6 +195,11 @@ mod tests {
         assert_eq!(route("baa://extensions/?id=x"), Some(Route::Extensions));
         assert_eq!(route("chrome://extensions/shortcuts"), Some(Route::Extensions));
         assert_eq!(route("baa://history"), Some(Route::History));
+        let site = "baa://settings/content/siteDetails?site=https://example.com";
+        assert_eq!(route(site), Some(Route::Site));
+        assert_eq!(route(&site.replace("baa:", "chrome:")), Some(Route::Site));
+        assert_eq!(site_of(site).as_deref(), Some("https://example.com"));
+        assert_eq!(site_of("baa://settings/content/siteDetails?site=https%3A%2F%2Fa.com%3A8080").as_deref(), Some("https://a.com:8080"));
         for webui in ["baa://flags", "baa://settings/fonts", "baa://settings/unknown", "https://example.com/extensions", "baa://nope"] {
             assert_eq!(route(webui), None, "{webui}");
         }

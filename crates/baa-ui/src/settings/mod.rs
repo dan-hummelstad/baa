@@ -70,6 +70,8 @@ pub(crate) struct SettingsView<H: WebHost> {
     flash: Option<&'static str>,
     theme: Theme,
     pub(crate) clear: Option<privacy::ClearSheet>,
+    /// The origin whose own permissions the Sites tab shows instead of the list.
+    site: Option<String>,
     /// The kind whose "add exception" form is open.
     adding: Option<Permission>,
     /// Chrome's rules per kind for `space`, read when needed rather than per frame.
@@ -126,6 +128,28 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
+impl<H: WebHost> Browser<H> {
+    /// Opens settings on the Sites tab, showing only `site`'s permissions.
+    pub(crate) fn open_site_settings(&mut self, site: String, cx: &mut Context<Self>) {
+        self.open_settings_at(Some(Tab::Sites), None, cx);
+        // After open_settings_at's own deferred open, so the window exists by now.
+        let browser = cx.entity();
+        cx.defer(move |cx| {
+            let Some(handle) = browser.read(cx).settings_window else { return };
+            // The site popover's Space, not whichever one settings last showed.
+            let b = browser.read(cx);
+            let space = b.session.active_space().filter(|id| b.session.space(*id).is_some_and(|s| !s.ephemeral));
+            let _ = handle.update(cx, |view, _, cx| {
+                view.site = Some(site);
+                match space {
+                    Some(id) => view.pick_space(id, cx),
+                    None => cx.notify(),
+                }
+            });
+        });
+    }
+}
+
 impl<H: WebHost> SettingsView<H> {
     fn new(browser: Entity<Browser<H>>, tab: Tab, row: Option<&'static str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let default_browser = browser.read(cx).host.is_default_browser();
@@ -158,6 +182,7 @@ impl<H: WebHost> SettingsView<H> {
             flash: None,
             theme,
             clear: None,
+            site: None,
             adding: None,
             rules: HashMap::new(),
             reset: None,
@@ -264,6 +289,7 @@ impl<H: WebHost> SettingsView<H> {
         self.focus_field(Field::Search, cx);
         self.add_error = None;
         self.adding = None;
+        self.site = None;
         self.reset = None;
         self.confirm_delete = None;
         self.renaming = false;

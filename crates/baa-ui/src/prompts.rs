@@ -53,6 +53,13 @@ const SITE_PERMISSIONS: [Permission; 4] = [
     Permission::Notifications,
 ];
 
+/// `https://a.com:8080/x?y` is `https://a.com:8080`; `None` for pages with no origin of their own
+/// (about:blank, file:, data:), which have no site settings.
+fn origin_of(url: &str) -> Option<String> {
+    let origin = url::Url::parse(url).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
 fn permission_icon(kind: Permission) -> &'static str {
     match kind {
         Permission::Camera => "camera",
@@ -843,6 +850,7 @@ impl<H: WebHost> Browser<H> {
         let url = page.read(cx).url();
         let secure = page.read(cx).is_secure();
         let profile = self.active_space()?.profile;
+        let origin = origin_of(&url);
         let rows: Vec<AnyElement> = SITE_PERMISSIONS
             .iter()
             .map(|kind| {
@@ -913,7 +921,26 @@ impl<H: WebHost> Browser<H> {
                             .child(if secure { "Connection is secure" } else { "Connection is not secure" }),
                     )
                     .child(div().mx(px(8.)).h(px(1.)).bg(surface::line()))
-                    .children(rows),
+                    .children(rows)
+                    .when_some(origin, |d, origin| d.child(
+                        div()
+                            .id("site-settings")
+                            .mx(px(8.))
+                            .mt(px(4.))
+                            .h(px(26.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .rounded(r(6.))
+                            .text_size(px(12.))
+                            .text_color(surface::muted())
+                            .hover(|d| d.bg(surface::key()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_overlays(window, cx);
+                                this.open_site_settings(origin.clone(), cx);
+                            }))
+                            .child("Site settings…"),
+                    )),
                 "site-panel",
             )
             .into_any_element(),

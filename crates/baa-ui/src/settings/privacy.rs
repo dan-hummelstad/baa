@@ -215,7 +215,46 @@ impl<H: WebHost> SettingsView<H> {
             .into_any_element()
     }
 
+    /// One origin's permission per kind, in the chosen Space's profile.
+    fn one_site(&self, site: &str, cx: &mut Context<Self>) -> Vec<Item> {
+        let mut out = vec![self.space_picker(cx)];
+        let Some(profile) = self.browser.read(cx).session.space(self.space).map(|s| s.profile) else { return out };
+        let back = self
+            .button("site-back", "Back to all sites", false, cx)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.site = None;
+                // The list's rules were read before this site's changes.
+                this.refresh(cx);
+                cx.notify();
+            }));
+        out.push((
+            None,
+            div()
+                .py(px(8.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(SharedString::from(site.to_string())))
+                .child(back)
+                .into_any_element(),
+        ));
+        for (n, kind) in Permission::SITE_KINDS.into_iter().enumerate() {
+            let current = Some(self.browser.read(cx).host.site_permission(profile, site, kind));
+            let url = site.to_string();
+            let buttons = self.state_buttons(kind, current, "site", n as u64, cx, move |this, st, cx| {
+                this.browser.read(cx).host.set_site_permission(profile, &url, kind, st);
+                cx.notify();
+            });
+            out.push(self.row(site_row(kind), "", buttons));
+        }
+        out
+    }
+
     pub(super) fn sites(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<Item> {
+        if let Some(site) = &self.site {
+            return self.one_site(site, cx);
+        }
         let mut out = vec![self.space_picker(cx)];
         for (n, kind) in Permission::SITE_KINDS.into_iter().enumerate() {
             let id = site_row(kind);
