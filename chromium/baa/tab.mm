@@ -3,6 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -57,15 +58,15 @@ namespace {
 
 // ---- Tabs registry -----------------------------------------------------------
 
-std::map<tabs::TabInterface*, std::unique_ptr<BaaTab>>& Tabs() {
-  static base::NoDestructor<std::map<tabs::TabInterface*, std::unique_ptr<BaaTab>>>
-      tabs;
-  return *tabs;
+// Every page the app holds a handle to. A page outside a tab strip (an
+// extension popup) has no TabInterface: `!tab`.
+std::vector<std::unique_ptr<BaaTab>>& Registry() {
+  static base::NoDestructor<std::vector<std::unique_ptr<BaaTab>>> registry;
+  return *registry;
 }
 
-// Set around baa_tab_create so the insertion it causes is not reported as a
-// tab Chrome made.
-bool g_creating = false;
+// The insertion in progress, set around code that makes a tab inside Chrome.
+baa::ScopedInsertion* g_insertion = nullptr;
 
 uint64_t g_next_id = 1;
 
@@ -78,14 +79,10 @@ struct BaaTab : content::WebContentsObserver,
   explicit BaaTab(tabs::TabInterface* tab) : tab(tab) {}
   ~BaaTab() override = default;
 
-  tabs::TabInterface* const tab;
-  bool closing_by_baa = false;
-  // tab_closed already sent (a tab deleted from a window that is not ours).
-  bool closed_sent = false;
+  tabs::TabInterface* const tab;  // null for a page outside a tab strip
   base::CallbackListSubscription will_detach;
-  // A page that is not in a Browser's tab strip (an extension popup): no
-  // TabInterface; baa_tab_close runs this to destroy what holds the contents.
-  bool bare = false;
+  // A page outside a tab strip: runs when the handle ends, to destroy what
+  // holds the contents.
   base::OnceClosure close_bare;
   // baa_tab_set_init_script / baa_tab_set_color_scheme.
   std::u16string init_script;
@@ -223,29 +220,70 @@ struct BaaTab : content::WebContentsObserver,
   }
 };
 
+namespace baa {
+
 namespace {
 
-// Pages outside a tab strip.
-std::vector<std::unique_ptr<BaaTab>>& BareTabs() {
-  static base::NoDestructor<std::vector<std::unique_ptr<BaaTab>>> bare;
-  return *bare;
+BaaTab* Find(tabs::TabInterface* ti) {
+  for (auto& value : Registry()) {
+    if (ti && value->tab == ti) {
+      return value.get();
+    }
+  }
+  return nullptr;
+}
+
+// The one way a handle ends. Everything that hangs off the tab goes with it;
+// the app hears tab_closed (`tell`) only for closes Chrome made, and only if it
+// knew the tab. Unregistered first, so whatever this or the destruction that
+// follows re-enters finds nothing.
+void Forget(BaaTab* t, bool tell) {
+  auto it = std::find_if(Registry().begin(), Registry().end(),
+                         [&](auto& value) { return value.get() == t; });
+  if (it == Registry().end()) {
+    return;
+  }
+  std::unique_ptr<BaaTab> owned = std::move(*it);
+  Registry().erase(it);
+  tell = tell && t->reported;
+  DropPermissionsOf(t, tell);
+  DropMenusOf(t);
+  ForgetDevtoolsOf(t);
+  DropDialogsOf(t, tell);
+  if (tell) {
+    Callbacks().tab_closed(CallbackContext(), t);
+  }
+  t->Detach();
+  base::OnceClosure close = std::move(t->close_bare);
+  owned.reset();
+  if (close) {
+    std::move(close).Run();
+  }
 }
 
 }  // namespace
 
-namespace baa {
+ScopedInsertion::ScopedInsertion(InsertionKind kind, BaaTab** out)
+    : kind(kind), out(out), prev(g_insertion) {
+  *out = nullptr;
+  g_insertion = this;
+}
+
+ScopedInsertion::~ScopedInsertion() {
+  g_insertion = prev;
+}
+
+bool DevtoolsDocking() {
+  return g_insertion && g_insertion->kind == InsertionKind::kDevtoolsFront;
+}
 
 BaaTab* TabFor(content::WebContents* contents) {
   if (!contents) {
     return nullptr;
   }
-  auto* tab = tabs::TabInterface::MaybeGetFromContents(contents);
-  auto it = Tabs().find(tab);
-  if (it != Tabs().end()) {
-    return it->second.get();
-  }
-  for (auto& value : BareTabs()) {
-    if (value->web_contents() == contents) {
+  auto* ti = tabs::TabInterface::MaybeGetFromContents(contents);
+  for (auto& value : Registry()) {
+    if ((ti && value->tab == ti) || value->web_contents() == contents) {
       return value.get();
     }
   }
@@ -253,12 +291,7 @@ BaaTab* TabFor(content::WebContents* contents) {
 }
 
 bool TabAlive(BaaTab* tab) {
-  for (auto& [key, value] : Tabs()) {
-    if (value.get() == tab) {
-      return true;
-    }
-  }
-  for (auto& value : BareTabs()) {
+  for (auto& value : Registry()) {
     if (value.get() == tab) {
       return true;
     }
@@ -273,7 +306,7 @@ void BaaTab::Attach(content::WebContents* wc) {
   if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(wc)) {
     driver->AddObserver(this);
   }
-  if (bare) {
+  if (!tab) {
     return;  // a popup has no tab helpers: its dialogs are app-modal
   }
   baa::AttachDialogs(wc);
@@ -329,19 +362,17 @@ void OnTabInserted(TabStripModel* model,
                    tabs::TabInterface* tab,
                    int index,
                    bool background) {
-  if (Tabs().count(tab)) {
+  if (Find(tab)) {
     return;  // moved between windows, or ours already
   }
   auto owned = std::make_unique<BaaTab>(tab);
   BaaTab* t = owned.get();
-  Tabs()[tab] = std::move(owned);
+  Registry().push_back(std::move(owned));
   content::WebContents* wc = tab->GetContents();
   t->will_detach = tab->RegisterWillDetach(base::BindRepeating(&OnWillDetach));
   t->Attach(wc);
-  if (g_creating || DevtoolsDocking()) {
-    if (DevtoolsDocking()) {
-      NoteDevtoolsFront(t);
-    }
+  if (g_insertion) {
+    *g_insertion->out = t;  // the app's own insertion: no tab_created
     return;
   }
   t->reported = false;
@@ -357,10 +388,9 @@ void OnTabInserted(TabStripModel* model,
   if (!opener_tab) {
     opener_tab = model->GetOpenerOfTabAt(index);
   }
-  auto opener_it = Tabs().find(opener_tab);
-  if (opener_it != Tabs().end()) {
-    t->opener = opener_it->second->weak_factory.GetWeakPtr();
-    content::WebContents* from = opener_it->second->web_contents();
+  if (BaaTab* from_tab = Find(opener_tab)) {
+    t->opener = WeakTab(from_tab);
+    content::WebContents* from = from_tab->web_contents();
     t->user_gesture = from && (from->HasRecentInteraction() ||
                                from->GetPrimaryMainFrame()->HasTransientUserActivation());
   }
@@ -380,56 +410,30 @@ void OnTabInserted(TabStripModel* model,
   t->TryReport(wc->GetVisibleURL(), false);
 }
 
-// Everything that hangs off a tab, dropped on every way out; the app is told
-// (`tell`) only when it did not close the tab itself.
-void Cleanup(BaaTab* t, bool tell) {
-  tell = tell && t->reported;
-  DropPermissionsOf(t, tell);
-  DropMenusOf(t);
-  ForgetDevtoolsOf(t);
-  DropDialogsOf(t, tell);
-}
-
-void ReportClosed(BaaTab* t) {
-  bool tell = !t->closed_sent && !t->closing_by_baa;
-  t->closed_sent = true;
-  Cleanup(t, tell);
-  if (tell && t->reported) {
-    Callbacks().tab_closed(CallbackContext(), t);
-  }
-}
-
+// Chrome deleting a tab, from any window (a tab reparented into a Chrome-made
+// Browser still dies through here): before its WebContents and NSView go.
 void OnWillDetach(tabs::TabInterface* tab, tabs::TabInterface::DetachReason reason) {
-  auto it = Tabs().find(tab);
-  if (it == Tabs().end() || reason != tabs::TabInterface::DetachReason::kDelete) {
-    return;
+  if (reason == tabs::TabInterface::DetachReason::kDelete) {
+    Forget(Find(tab), /*tell=*/true);
   }
-  ReportClosed(it->second.get());
 }
 
 void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
-  auto it = Tabs().find(tab);
-  if (it == Tabs().end()) {
-    return;
-  }
-  BaaTab* t = it->second.get();
-  if (TabRemoveReasonUtils::WillDeleteTab(reason)) {
-    ReportClosed(t);
-    t->Detach();
-    Tabs().erase(it);
-    return;
+  BaaTab* t = Find(tab);
+  if (!t || TabRemoveReasonUtils::WillDeleteTab(reason)) {
+    return;  // deletion is OnWillDetach's
   }
   // Moving to another strip. If it lands somewhere that is not ours (an app
   // Browser), the app no longer shows it: give Chrome its own dialogs and
   // prompts back, answer what is pending, and forget the handle.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
-                     [](tabs::TabInterface* ti, base::WeakPtr<BaaTab> weak) {
+                     [](base::WeakPtr<BaaTab> weak) {
                        if (!weak) {
                          return;
                        }
                        content::WebContents* wc = weak->web_contents();
-                       BrowserWindowInterface* browser = wc ? ti->GetBrowserWindowInterface() : nullptr;
+                       BrowserWindowInterface* browser = wc ? weak->tab->GetBrowserWindowInterface() : nullptr;
                        if (browser && baa::IsOurBrowser(browser)) {
                          return;
                        }
@@ -437,19 +441,16 @@ void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
                          ReturnDialogsToChrome(weak.get(), wc);
                          RestoreChromePermissions(wc);
                        }
-                       ReportClosed(weak.get());
-                       weak->Detach();
-                       Tabs().erase(ti);
+                       Forget(weak.get(), /*tell=*/true);
                      },
-                     tab, t->weak_factory.GetWeakPtr()));
+                     WeakTab(t)));
 }
 
 void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) {
-  auto it = Tabs().find(tab);
-  if (it == Tabs().end()) {
+  BaaTab* t = Find(tab);
+  if (!t) {
     return;
   }
-  BaaTab* t = it->second.get();
   t->Detach();
   DropMenusOf(t);
   t->icon_url.clear();
@@ -459,33 +460,21 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
 
 }  // namespace baa
 
+// Strip tabs first, then popups (their Browser is the one the strip tabs
+// leave behind).
 void baa::CloseTabsOf(Profile* chrome_profile) {
-  std::vector<tabs::TabInterface*> doomed;
-  for (auto& [key, value] : Tabs()) {
-    content::WebContents* wc = value->web_contents();
-    if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
-      value->closing_by_baa = true;
-      doomed.push_back(key);
+  std::vector<BaaTab*> doomed;
+  for (bool bare : {false, true}) {
+    for (auto& value : Registry()) {
+      content::WebContents* wc = value->web_contents();
+      if (!value->tab == bare && wc &&
+          Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
+        doomed.push_back(value.get());
+      }
     }
   }
-  for (tabs::TabInterface* tab : doomed) {
-    if (!Tabs().count(tab)) {
-      continue;
-    }
-    BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
-    int index = browser ? browser->GetTabStripModel()->GetIndexOfTab(tab) : -1;
-    if (index >= 0) {
-      browser->GetTabStripModel()->DetachAndDeleteWebContentsAt(index);
-    }
-  }
-  for (size_t i = 0; i < BareTabs().size();) {
-    BaaTab* bare = BareTabs()[i].get();
-    content::WebContents* wc = bare->web_contents();
-    if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
-      baa_tab_close(bare);
-    } else {
-      ++i;
-    }
+  for (BaaTab* tab : doomed) {
+    baa_tab_close(tab);
   }
 }
 
@@ -499,52 +488,38 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
   if (!browser) {
     return nullptr;
   }
-  g_creating = true;
-  content::WebContents* wc =
-      chrome::AddAndReturnTabAt(browser, GURL(url), -1, /*foreground=*/false);
-  g_creating = false;
-  BaaTab* tab = baa::TabFor(wc);
+  BaaTab* tab;
+  content::WebContents* wc;
+  {
+    baa::ScopedInsertion insertion(baa::InsertionKind::kBaa, &tab);
+    wc = chrome::AddAndReturnTabAt(browser, GURL(url), -1, /*foreground=*/false);
+  }
   // Navigate sends a URL for an OTR profile to the parent's Browser; a tab
   // in another profile than asked for is not ours to hand out.
-  if (tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != baa::ChromeProfileOf(profile)) {
+  if (wc && tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != baa::ChromeProfileOf(profile)) {
     baa_tab_close(tab);
     return nullptr;
   }
   return tab;
 }
 
-namespace {
-}  // namespace
-
 void baa_tab_close(BaaTab* tab) {
   if (!baa::TabAlive(tab)) {
     return;
   }
-  tab->closing_by_baa = true;
-  if (!tab->tab) {
-    // A popup: destroying what holds the contents closes it.
-    base::OnceClosure close = std::move(tab->close_bare);
-    baa::ReportClosed(tab);  // closing_by_baa: cleanup only, no callbacks
-    tab->Detach();
-    std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
-    if (close) {
-      std::move(close).Run();
-    }
-    return;
+  tabs::TabInterface* ti = tab->tab;
+  // Unregistered before the contents die: the observers that destruction
+  // wakes find nothing, and the app is not told of a close it asked for.
+  baa::Forget(tab, /*tell=*/false);
+  if (!ti) {
+    return;  // a popup: Forget ran the holder's close
   }
-  BrowserWindowInterface* browser = tab->tab->GetBrowserWindowInterface();
+  BrowserWindowInterface* browser = ti->GetBrowserWindowInterface();
   TabStripModel* model = browser ? browser->GetTabStripModel() : nullptr;
-  int index = model ? model->GetIndexOfTab(tab->tab) : -1;
+  int index = model ? model->GetIndexOfTab(ti) : -1;
   if (index >= 0) {
     model->DetachAndDeleteWebContentsAt(index);
-    return;
   }
-  // In no strip (being moved or torn down): nothing of ours can close it, so
-  // the handle just ends here.
-  tabs::TabInterface* ti = tab->tab;
-  baa::ReportClosed(tab);
-  tab->Detach();
-  Tabs().erase(ti);
 }
 
 bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
@@ -691,9 +666,8 @@ content::WebContents* ContentsOf(BaaTab* tab) {
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close) {
   auto owned = std::make_unique<BaaTab>(nullptr);
   BaaTab* tab = owned.get();
-  tab->bare = true;
   tab->close_bare = std::move(close);
-  BareTabs().push_back(std::move(owned));
+  Registry().push_back(std::move(owned));
   tab->Attach(contents);
   return tab;
 }
@@ -705,23 +679,19 @@ void BareTabClosedByChrome(BaaTab* tab) {
     return;
   }
   tab->close_bare = base::OnceClosure();
-  ReportClosed(tab);
-  tab->Detach();
-  std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
+  Forget(tab, /*tell=*/true);
 }
 
 // Quit: popups are not in any tab strip, so nothing else closes them, and a
 // BrowserContext may not die with a WebContents alive.
 void CloseBareTabsForQuit() {
-  while (!BareTabs().empty()) {
-    BaaTab* tab = BareTabs().front().get();
-    base::OnceClosure close = std::move(tab->close_bare);
-    ReportClosed(tab);
-    tab->Detach();
-    BareTabs().erase(BareTabs().begin());
-    if (close) {
-      std::move(close).Run();
+  for (;;) {
+    auto bare = std::find_if(Registry().begin(), Registry().end(),
+                             [](auto& value) { return !value->tab; });
+    if (bare == Registry().end()) {
+      break;
     }
+    Forget(bare->get(), /*tell=*/true);
   }
   // Popups that closed themselves and wait for their deletion task too.
   DestroyAllPopups();

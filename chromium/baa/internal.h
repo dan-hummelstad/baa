@@ -48,6 +48,23 @@ Profile* ChromeProfileOf(BaaProfile* profile);  // null if gone
 BaaProfile* ProfileFor(Profile* profile);       // null if baa never opened it
 BrowserWindowInterface* BrowserOf(BaaProfile* profile);  // made on first need
 BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile);
+// What a tab inserted while one of these lives is: the app made it itself, so
+// it is not reported as a tab Chrome made, and `*out` is the BaaTab it got
+// (null if none). The DevTools kind also makes the DevTools Browser's window a
+// hidden baa one.
+enum class InsertionKind { kBaa, kDevtoolsFront };
+struct ScopedInsertion {
+  ScopedInsertion(InsertionKind kind, BaaTab** out);
+  ~ScopedInsertion();
+  ScopedInsertion(const ScopedInsertion&) = delete;
+  ScopedInsertion& operator=(const ScopedInsertion&) = delete;
+
+  const InsertionKind kind;
+  BaaTab** const out;
+  ScopedInsertion* const prev;
+};
+bool DevtoolsDocking();  // a kDevtoolsFront insertion is in progress
+
 // A page that is not in a tab strip. `close` destroys what holds the contents.
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
 void CloseTabsOf(Profile* profile);  // baa_profile_close: every page of it, now
@@ -69,8 +86,6 @@ void DropPermissionsOf(BaaTab* tab, bool tell);
 // Back to Chrome's own prompt (a tab that left our windows).
 void RestoreChromePermissions(content::WebContents* wc);
 void DropMenusOf(BaaTab* tab);
-bool DevtoolsDocking();
-void NoteDevtoolsFront(BaaTab* front);
 void ForgetDevtoolsOf(BaaTab* tab);
 
 // downloads.mm: observes a profile's DownloadManager for as long as it lives
