@@ -40,6 +40,7 @@ thread_local! {
     static SITE_STATE: Cell<c_int> = const { Cell::new(0) };
     /// What the fake `baa_profile_site_rules` visits.
     static SITE_RULES: RefCell<Vec<(String, c_int)>> = const { RefCell::new(Vec::new()) };
+    static DEFAULT_BROWSER: Cell<bool> = const { Cell::new(false) };
     static POPUP_NULL: Cell<bool> = const { Cell::new(false) };
     /// What the fake `baa_profile_extensions` lists.
     static EXTENSIONS: RefCell<Vec<FakeExtension>> = const { RefCell::new(Vec::new()) };
@@ -154,8 +155,18 @@ extern "C" fn extension_popup(_: *mut Profile, id: *const c_char) -> *mut Tab {
 extern "C" fn tab_set_init_script(t: *mut Tab, script: *const c_char) {
     log(format!("tab_set_init_script {t:?} {}", arg(script)));
 }
-extern "C" fn tab_set_color_scheme(t: *mut Tab, scheme: c_int) {
-    log(format!("tab_set_color_scheme {t:?} {scheme}"));
+extern "C" fn pref_clear(profile: *mut Profile, name: *const c_char) -> bool {
+    log(format!("pref_clear {profile:?} {}", arg(name)));
+    true
+}
+extern "C" fn is_default_browser() -> bool {
+    DEFAULT_BROWSER.with(Cell::get)
+}
+extern "C" fn set_default_browser() {
+    log("set_default_browser".into());
+}
+extern "C" fn profile_set_color_schemes(profile: *mut Profile, website: c_int, webui: c_int) {
+    log(format!("profile_set_color_schemes {profile:?} {website} {webui}"));
 }
 extern "C" fn tab_open_devtools(t: *mut Tab, inspect: bool, x: c_int, y: c_int) -> *mut Tab {
     log(format!("tab_open_devtools {t:?} {inspect} {x} {y}"));
@@ -238,6 +249,10 @@ fn fake_core() -> &'static Core {
         pref_set_bool,
         pref_set_int,
         pref_set_string,
+        pref_clear,
+        is_default_browser,
+        set_default_browser,
+        profile_set_color_schemes,
         profile_set_default_zoom,
         profile_set_search_engine,
         profile_site_permission,
@@ -266,7 +281,6 @@ fn fake_core() -> &'static Core {
         tab_activate,
         tab_focus,
         tab_set_init_script,
-        tab_set_color_scheme,
         tab_open_devtools,
         tab_show_devtools_window,
         permission_answer,
@@ -342,6 +356,7 @@ impl Env {
         QUITTING.with(|q| q.set(false));
         SITE_STATE.with(|s| s.set(0));
         POPUP_NULL.with(|p| p.set(false));
+        DEFAULT_BROWSER.with(|d| d.set(false));
         SITE_RULES.with(|r| r.borrow_mut().clear());
         EXTENSIONS.with(|e| e.borrow_mut().clear());
         let core = fake_core();

@@ -15,11 +15,11 @@ use super::{
     menu,
     page::CorePage,
     profiles::{is_ephemeral, queue_delete},
-    settings::{self, Write},
-    sheet, skin, Core, PageKind,
+    settings::{self, Write, Writes},
+    skin, Core, PageKind,
 };
 use crate::{
-    Callback, ChromeSheet, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
+    Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
     PageHandle, Permission, PermissionState, ProfileId, WebHost,
 };
 
@@ -79,9 +79,11 @@ pub struct CoreWebHost {
     downloads: Entity<Downloads>,
     chrome_tabs: Entity<ChromeTabs>,
     /// What `apply_settings` last sent; none before the first call.
-    applied: RefCell<Option<Vec<Write>>>,
-    /// Per profile, Chrome's settings shown as a sheet.
-    sheets: RefCell<HashMap<ProfileId, sheet::Sheet>>,
+    applied: RefCell<Option<Writes>>,
+    /// Kept as the user chose it until it is sent to the engine.
+    page_scheme: Cell<baa_model::PageScheme>,
+    /// Per Space, so a profile opened later inherits: the css of its Chrome pages, and whether it is dark.
+    skins: RefCell<HashMap<ProfileId, (String, bool)>>,
 }
 
 impl CoreWebHost {
@@ -100,7 +102,8 @@ impl CoreWebHost {
             downloads,
             chrome_tabs,
             applied: RefCell::default(),
-            sheets: RefCell::default(),
+            page_scheme: Cell::default(),
+            skins: RefCell::default(),
         }
     }
 
@@ -114,6 +117,13 @@ impl CoreWebHost {
             return Vec::new();
         }
         extensions::read(self.core, handle)
+    }
+
+    fn send_schemes(&self, id: ProfileId, handle: *mut Profile) {
+        let website = settings::website_scheme(self.page_scheme.get());
+        // Without a skin Chrome's pages keep their own look, in the system's scheme.
+        let webui = self.skins.borrow().get(&id).map_or(0, |(_, dark)| settings::scheme_code(*dark));
+        (self.core.profile_set_color_schemes)(handle, website, webui);
     }
 
     pub(super) fn profile_handle(&self, id: ProfileId) -> *mut Profile {
@@ -130,11 +140,12 @@ impl CoreWebHost {
         } else {
             self.profiles.borrow_mut().insert(id, handle);
             // Before the pins below, so the privacy ones always win.
-            if let Some(list) = self.applied.borrow().as_ref() {
-                for write in list.iter().filter(|w| !w.is_local()) {
+            if let Some(writes) = self.applied.borrow().as_ref() {
+                for write in &writes.profile {
                     settings::apply(self.core, handle, write);
                 }
             }
+            self.send_schemes(id, handle);
             // Most are Helium's defaults already; this pins them if one was flipped in settings.
             for pref in baa_privacy::PREFS_OFF {
                 (self.core.pref_set_bool)(handle, c_string(pref).as_ptr(), false);
@@ -186,6 +197,7 @@ impl WebHost for CoreWebHost {
         } else {
             // A tab Chrome already made for this (window.open) is taken, not duplicated.
             let url = skin::to_baa(url.to_string());
+            let css = self.skins.borrow().get(&profile).map(|(css, _)| css.clone()).unwrap_or_default();
             let pending = self.dispatch.take_pending(handle, &url);
             // Chrome's own pages start blank: the skin script has to be in before their first document.
             let tab = pending.unwrap_or_else(|| {
@@ -193,17 +205,12 @@ impl WebHost for CoreWebHost {
                 (self.core.tab_create)(handle, c_string(first).as_ptr())
             });
             if !tab.is_null() {
-                self.dispatch.prepare_tab(tab, handle, &url, pending.is_some());
+                self.dispatch.prepare_tab(tab, &url, &css, pending.is_some());
             }
             tab
         };
-        let webui = skin::is_webui(url);
         let dispatch = self.dispatch;
-        cx.new(|cx| {
-            let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx);
-            page.shared.webui.set(webui);
-            page
-        })
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))
     }
 
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
@@ -230,7 +237,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn delete_profile(&self, profile: ProfileId) {
-        self.sheets.borrow_mut().remove(&profile);
+        self.skins.borrow_mut().remove(&profile);
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
             self.dispatch.forget_profile(handle);
             (self.core.profile_close)(handle);
@@ -245,29 +252,6 @@ impl WebHost for CoreWebHost {
         let mut infos: Vec<ExtensionInfo> = self.read_extensions(profile).into_iter().map(|(_, info)| info).collect();
         infos.sort_by_key(|info| info.name.to_lowercase());
         done(Some(infos), cx);
-    }
-
-    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool {
-        let mut sheets = self.sheets.borrow_mut();
-        for (id, page) in sheets.iter() {
-            if sheet.is_none() || *id != profile {
-                page.hide();
-            }
-        }
-        let Some(sheet) = sheet else { return true };
-        // Chrome closed it (an extension's chrome.tabs.remove): open a fresh one.
-        if sheets.get(&profile).is_some_and(|page| page.is_gone()) {
-            sheets.remove(&profile);
-        }
-        let page = match sheets.entry(profile) {
-            std::collections::hash_map::Entry::Occupied(page) => page.into_mut(),
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                let handle = self.profile_handle(profile);
-                let Some(page) = sheet::Sheet::open(self.dispatch, handle, &sheet) else { return false };
-                slot.insert(page)
-            }
-        };
-        page.show(&sheet, window)
     }
 
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
@@ -289,9 +273,7 @@ impl WebHost for CoreWebHost {
         if handle.is_null() {
             return done(None);
         }
-        let id = self.dispatch.next_fetch.get();
-        self.dispatch.next_fetch.set(id + 1);
-        self.dispatch.fetches.borrow_mut().insert(id, done);
+        let id = self.dispatch.fetches.add(done);
         (self.core.profile_fetch)(handle, c_string(url).as_ptr(), id);
     }
 
@@ -320,29 +302,22 @@ impl WebHost for CoreWebHost {
     }
 
     fn apply_settings(&self, settings: &baa_model::Settings) {
-        let list = settings::writes(settings);
-        let old = self.applied.replace(Some(list.clone())).unwrap_or_default();
-        let changed: Vec<&Write> = list.iter().filter(|w| !old.contains(w)).collect();
-        // A default that is no longer overridden goes back to Chrome's.
-        let released: Vec<Permission> = old
-            .iter()
-            .filter_map(|w| match w {
-                Write::SiteDefault(kind, _) if !list.iter().any(|n| matches!(n, Write::SiteDefault(k, _) if k == kind)) => Some(*kind),
-                _ => None,
-            })
-            .collect();
-        for write in changed.iter().filter(|w| w.is_local()) {
+        let new = settings::writes(settings);
+        let old = self.applied.replace(Some(new.clone())).unwrap_or_default();
+        for write in new.local.iter().filter(|w| !old.local.contains(w)) {
             settings::apply(self.core, std::ptr::null_mut(), write);
         }
+        let changed: Vec<&Write> = new.profile.iter().filter(|w| !old.profile.contains(w)).collect();
         for &handle in self.profiles.borrow().values() {
-            for write in changed.iter().filter(|w| !w.is_local()) {
+            for write in &changed {
                 settings::apply(self.core, handle, write);
             }
-            for kind in &released {
-                settings::restore_default(self.core, handle, *kind);
+        }
+        if self.page_scheme.replace(settings.page_scheme) != settings.page_scheme {
+            for (&id, &handle) in self.profiles.borrow().iter() {
+                self.send_schemes(id, handle);
             }
         }
-        self.dispatch.set_page_scheme(settings::page_scheme_code(settings.page_scheme));
     }
 
     fn site_rules(&self, profile: ProfileId, kind: Permission) -> Vec<(String, PermissionState)> {
@@ -361,11 +336,14 @@ impl WebHost for CoreWebHost {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
         let code = state.map_or(ffi::SITE_UNSET, state_code);
-        (self.core.profile_set_site_rule)(handle, bit, c_string(pattern).as_ptr(), code);
+        // ponytail: the trait has no way to say Chrome refused (a bad pattern); it is logged.
+        if !(self.core.profile_set_site_rule)(handle, bit, c_string(pattern).as_ptr(), code) {
+            log::warn!("Chrome refused the {kind:?} rule {pattern:?}");
+        }
     }
 
     fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, _cx: &mut App, done: Callback<()>) {
-        let id = self.dispatch.begin_clear(done);
+        let id = self.dispatch.clears.add(done);
         let handle = self.profile_handle(profile);
         if handle.is_null() {
             return self.dispatch.finish_clear(id);
@@ -386,7 +364,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn load_unpacked(&self, profile: ProfileId, path: &std::path::Path, _cx: &mut App, done: Callback<Result<String, String>>) {
-        let id = self.dispatch.begin_unpacked(done);
+        let id = self.dispatch.unpacked.add(done);
         let handle = if is_ephemeral(profile) { std::ptr::null_mut() } else { self.profile_handle(profile) };
         if handle.is_null() {
             return self.dispatch.finish_unpacked(id, Err("This Space cannot have extensions".into()));
@@ -395,17 +373,20 @@ impl WebHost for CoreWebHost {
     }
 
     fn is_default_browser(&self) -> bool {
-        super::native::is_default_browser()
+        (self.core.is_default_browser)()
     }
 
     fn make_default_browser(&self) {
-        super::native::make_default_browser();
+        (self.core.set_default_browser)();
     }
 
     fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool) {
-        let handle = self.profile_handle(profile);
-        if !handle.is_null() {
-            self.dispatch.set_skin(handle, css, dark);
+        let unchanged = self.skins.borrow_mut().insert(profile, (css.clone(), dark)).is_some_and(|old| old == (css.clone(), dark));
+        // A Space that is not open picks the skin up when it opens.
+        let handle = self.profiles.borrow().get(&profile).copied();
+        if let Some(handle) = handle.filter(|_| !unchanged) {
+            self.dispatch.restyle_profile(handle, &css);
+            self.send_schemes(profile, handle);
         }
     }
 }

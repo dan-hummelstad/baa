@@ -1,40 +1,40 @@
-//! Chrome's own pages (`baa://…`) in normal tabs: the url mapping, baa's skin
-//! script, and the colour scheme a page gets.
+//! Chrome's own pages (`baa://…`) in normal tabs: the url mapping and baa's
+//! skin script. Colour schemes are the engine's job (`set_color_schemes`).
 
 use super::{
-    c_string, dispatch::Dispatch, ffi::Profile,
+    c_string,
+    dispatch::Dispatch,
+    ffi::{Profile, Tab},
+    PageKind,
 };
 
 /// Helium's own scheme is not rewritten by a plain load, so loads go out as `chrome://`.
 pub fn to_chrome(url: &str) -> String {
-    url.replacen("baa://", "chrome://", 1)
+    match url.strip_prefix("baa://") {
+        Some(rest) => format!("chrome://{rest}"),
+        None => url.to_string(),
+    }
 }
 
 /// The UI sees only `baa://`.
 pub fn to_baa(url: String) -> String {
-    if url.starts_with("chrome://") { url.replacen("chrome://", "baa://", 1) } else { url }
+    match url.strip_prefix("chrome://") {
+        Some(rest) => format!("baa://{rest}"),
+        None => url,
+    }
 }
 
 pub fn is_webui(url: &str) -> bool {
     url.starts_with("baa://") || url.starts_with("chrome://")
 }
 
-/// `baa_tab_set_color_scheme` value for a Chrome page: the skin decides.
-fn webui_scheme(dark: bool) -> i32 {
-    if dark { 2 } else { 1 }
-}
-
 /// Runs on every document of the tab; websites pay for the first line only.
+/// The stylesheet is in the script itself, so no flash and nothing stored.
 pub fn loader(css: &str) -> String {
     let css = serde_json::to_string(css).unwrap_or_default();
-    let token = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
     format!(
         r#"(() => {{
   if (location.protocol !== 'chrome:' && location.protocol !== 'baa:') return;
-  const token = '{token}';
   const apply = css => {{
     // Before the document has a root, wait for it.
     const root = document.head || document.documentElement;
@@ -50,36 +50,26 @@ pub fn loader(css: &str) -> String {
     }}
     s.textContent = css;
   }};
-  window.__baaSkin = css => {{
-    try {{ localStorage.setItem('baa-skin', JSON.stringify({{ token, css }})); }} catch {{}}
-    apply(css);
-  }};
-  let saved = null;
-  try {{ saved = JSON.parse(localStorage.getItem('baa-skin')); }} catch {{}}
-  apply(saved && saved.token === token ? saved.css : {css});
+  window.__baaSkin = apply;
+  apply({css});
 }})();"#
     )
 }
 
-impl Dispatch {
-    /// The scheme for a page of `profile`: Chrome's own follow the skin, websites the user's choice.
-    pub(super) fn scheme_for(&self, profile: *mut Profile, webui: bool) -> i32 {
-        if !webui {
-            return self.page_scheme.get();
-        }
-        webui_scheme(self.skins.borrow().get(&profile).is_some_and(|(_, dark)| *dark))
-    }
+/// Re-skins a page that is up: only Chrome's own define `__baaSkin`.
+fn restyle(css: &str) -> String {
+    let css = serde_json::to_string(css).unwrap_or_default();
+    format!("if (location.protocol === 'chrome:' || location.protocol === 'baa:') window.__baaSkin && __baaSkin({css})")
+}
 
-    /// The init script and scheme of a tab baa takes over. A fresh Chrome page
-    /// is created blank so the script is in before its first document; one
-    /// Chrome made (`adopted`) is on its way already and gets the skin once.
-    pub(super) fn prepare_tab(&self, tab: *mut super::ffi::Tab, profile: *mut Profile, url: &str, adopted: bool) {
-        let webui = is_webui(url);
-        let css = self.skins.borrow().get(&profile).map(|(css, _)| css.clone()).unwrap_or_default();
-        let script = loader(&css);
+impl Dispatch {
+    /// The init script of a tab baa takes over. A fresh Chrome page is created
+    /// blank so the script is in before its first document; one Chrome made
+    /// (`adopted`) is on its way already and gets the skin once.
+    pub(super) fn prepare_tab(&self, tab: *mut Tab, url: &str, css: &str, adopted: bool) {
+        let script = loader(css);
         (self.core.tab_set_init_script)(tab, c_string(&script).as_ptr());
-        (self.core.tab_set_color_scheme)(tab, self.scheme_for(profile, webui));
-        if !webui {
+        if !is_webui(url) {
             return;
         }
         if adopted {
@@ -89,38 +79,32 @@ impl Dispatch {
         }
     }
 
-    /// New css for `profile`'s Chrome pages, live ones and later ones.
-    pub(super) fn set_skin(&self, profile: *mut Profile, css: String, dark: bool) {
-        if self.skins.borrow_mut().insert(profile, (css.clone(), dark)).is_some_and(|old| old == (css.clone(), dark)) {
-            return;
-        }
-        let script = loader(&css);
-        let apply = format!("window.__baaSkin && __baaSkin({})", serde_json::to_string(&css).unwrap_or_default());
+    /// New css for the tabs of `profile`, for their next documents and the one they show.
+    pub(super) fn restyle_profile(&self, profile: *mut Profile, css: &str) {
+        let (script, now) = (loader(css), restyle(css));
         for live in self.tabs.borrow().values() {
             let shared = &live.shared;
-            if shared.profile != profile || shared.kind != super::PageKind::Tab {
-                continue;
+            if shared.profile == profile && shared.kind == PageKind::Tab {
+                shared.run(|core, tab| {
+                    (core.tab_set_init_script)(tab, c_string(&script).as_ptr());
+                    (core.tab_eval)(tab, c_string(&now).as_ptr(), false);
+                });
             }
-            shared.run(|core, tab| {
-                (core.tab_set_init_script)(tab, c_string(&script).as_ptr());
-                if shared.webui.get() {
-                    (core.tab_eval)(tab, c_string(&apply).as_ptr(), false);
-                    (core.tab_set_color_scheme)(tab, webui_scheme(dark));
-                }
-            });
         }
     }
+}
 
-    /// What websites see as prefers-color-scheme: 0 system, 1 light, 2 dark.
-    pub(super) fn set_page_scheme(&self, scheme: i32) {
-        if self.page_scheme.replace(scheme) == scheme {
-            return;
-        }
-        for live in self.tabs.borrow().values() {
-            let shared = &live.shared;
-            if shared.kind == super::PageKind::Tab && !shared.webui.get() {
-                shared.run(|core, tab| (core.tab_set_color_scheme)(tab, scheme));
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_leading_scheme_is_mapped() {
+        assert_eq!(to_chrome("baa://settings"), "chrome://settings");
+        assert_eq!(to_chrome("https://a.test/?next=baa://x#baa://y"), "https://a.test/?next=baa://x#baa://y");
+        assert_eq!(to_chrome("baa://flags/?u=baa://x"), "chrome://flags/?u=baa://x");
+        assert_eq!(to_baa("chrome://flags/?u=chrome://x".into()), "baa://flags/?u=chrome://x");
+        assert_eq!(to_baa("https://a.test/?next=chrome://x".into()), "https://a.test/?next=chrome://x");
+        assert_eq!(to_baa("chrome-extension://abc/p.html".into()), "chrome-extension://abc/p.html");
     }
 }

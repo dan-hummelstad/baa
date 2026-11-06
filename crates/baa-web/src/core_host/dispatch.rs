@@ -37,8 +37,28 @@ struct Pending {
     seq: u64,
 }
 
-/// What `WebHost::fetch` waits with.
-type FetchDone = Box<dyn FnOnce(Option<String>)>;
+/// Calls Chrome has not answered yet, by the id it was given.
+pub(super) struct Waiting<T> {
+    next: Cell<u64>,
+    by_id: RefCell<HashMap<u64, T>>,
+}
+
+impl<T> Waiting<T> {
+    fn new() -> Self {
+        Self { next: Cell::new(1), by_id: RefCell::default() }
+    }
+
+    pub(super) fn add(&self, waiting: T) -> u64 {
+        let id = self.next.replace(self.next.get() + 1);
+        self.by_id.borrow_mut().insert(id, waiting);
+        id
+    }
+
+    /// An id nobody waits for (answered already, or never asked) gives none.
+    fn take(&self, id: u64) -> Option<T> {
+        self.by_id.borrow_mut().remove(&id)
+    }
+}
 
 /// A tab baa shows: its shared half, and its gpui entity unless it has none
 /// (the settings sheet), when only its view is followed.
@@ -59,16 +79,9 @@ pub(super) struct Dispatch {
     pending: RefCell<Vec<Pending>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
-    pub(super) fetches: RefCell<HashMap<u64, FetchDone>>,
-    pub(super) next_fetch: Cell<u64>,
-    /// `WebHost::clear_data` and `load_unpacked` calls Chrome has not answered.
-    pending_clears: RefCell<HashMap<u64, Callback<()>>>,
-    pending_unpacked: RefCell<HashMap<u64, Callback<Result<String, String>>>>,
-    next_op: Cell<u64>,
-    /// Per profile, the css of its Chrome pages and whether it is dark.
-    pub(super) skins: RefCell<HashMap<*mut Profile, (String, bool)>>,
-    /// prefers-color-scheme of websites: 0 system, 1 light, 2 dark.
-    pub(super) page_scheme: Cell<i32>,
+    pub(super) fetches: Waiting<Box<dyn FnOnce(Option<String>)>>,
+    pub(super) clears: Waiting<Callback<()>>,
+    pub(super) unpacked: Waiting<Callback<Result<String, String>>>,
     next_seq: Cell<u64>,
     /// `--user-data-dir`.
     pub(super) root: OnceCell<PathBuf>,
@@ -83,13 +96,9 @@ impl Dispatch {
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
-            fetches: RefCell::default(),
-            next_fetch: Cell::new(1),
-            pending_clears: RefCell::default(),
-            pending_unpacked: RefCell::default(),
-            next_op: Cell::new(1),
-            skins: RefCell::default(),
-            page_scheme: Cell::new(0),
+            fetches: Waiting::new(),
+            clears: Waiting::new(),
+            unpacked: Waiting::new(),
             next_seq: Cell::new(0),
             root: OnceCell::new(),
         }
@@ -102,23 +111,11 @@ impl Dispatch {
         }
     }
 
-    pub(super) fn begin_clear(&self, done: Callback<()>) -> u64 {
-        let id = self.next_op.replace(self.next_op.get() + 1);
-        self.pending_clears.borrow_mut().insert(id, done);
-        id
-    }
-
-    pub(super) fn begin_unpacked(&self, done: Callback<Result<String, String>>) -> u64 {
-        let id = self.next_op.replace(self.next_op.get() + 1);
-        self.pending_unpacked.borrow_mut().insert(id, done);
-        id
-    }
-
     /// Next turn, so the answer never lands inside the call that asked. An id
     /// nobody waits for is ignored.
     pub(super) fn finish_clear(&'static self, id: u64) {
         self.queue(move |cx| {
-            let done = self.pending_clears.borrow_mut().remove(&id);
+            let done = self.clears.take(id);
             if let Some(done) = done {
                 cx.update(|cx| done((), cx));
             }
@@ -127,7 +124,7 @@ impl Dispatch {
 
     pub(super) fn finish_unpacked(&'static self, id: u64, result: Result<String, String>) {
         self.queue(move |cx| {
-            let done = self.pending_unpacked.borrow_mut().remove(&id);
+            let done = self.unpacked.take(id);
             if let Some(done) = done {
                 cx.update(|cx| done(result, cx));
             }
@@ -262,7 +259,6 @@ impl Dispatch {
     /// The profile is going away with its tabs, which Chrome may not report.
     pub(super) fn forget_profile(&self, profile: *mut Profile) {
         self.pending.borrow_mut().retain(|p| p.profile != profile);
-        self.skins.borrow_mut().remove(&profile);
         let gone: Vec<_> =
             self.tabs.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
         for tab in gone {
@@ -424,7 +420,7 @@ pub(super) fn callbacks() -> Callbacks {
             .then(|| String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(body.cast::<u8>(), len) }).into_owned());
         let d = unsafe { dispatch(ctx) };
         d.queue(move |_| {
-            let done = d.fetches.borrow_mut().remove(&id);
+            let done = d.fetches.take(id);
             if let Some(done) = done {
                 done(body);
             }

@@ -9,7 +9,7 @@ fn writes_logged() -> Vec<String> {
         c.borrow()
             .iter()
             .filter(|c| {
-                ["pref_set_", "profile_set_default_zoom", "profile_set_search_engine", "profile_set_site_rule"]
+                ["pref_set_", "pref_clear", "profile_set_default_zoom", "profile_set_search_engine", "profile_set_site_rule"]
                     .iter()
                     .any(|p| c.starts_with(p))
             })
@@ -40,7 +40,9 @@ fn settings_go_to_every_open_profile_and_local_state_once(cx: &mut TestAppContex
     let local: Vec<_> = logged.iter().filter(|c| c.contains(" 0x0 ")).collect();
     assert_eq!(local.len(), 4, "{local:?}");
     assert!(local.iter().any(|c| c.ends_with("dns_over_https.mode automatic")));
-    let per_profile = super::super::settings::writes(&Settings::default()).iter().filter(|w| !w.is_local()).count();
+    let at = |name: &str| logged.iter().position(|c| c.contains(name)).unwrap();
+    assert!(at("dns_over_https.templates") < at("dns_over_https.mode"), "templates before mode");
+    let per_profile = super::super::settings::writes(&Settings::default()).profile.len();
     assert_eq!(logged.len(), 4 + 2 * per_profile, "every other write goes to both profiles");
     assert!(logged.iter().any(|c| c.starts_with("profile_set_search_engine Google  https://www.google.com")));
     assert_eq!(logged.iter().filter(|c| c.starts_with("profile_set_default_zoom 1")).count(), 2);
@@ -95,19 +97,32 @@ fn a_site_default_that_is_no_longer_set_goes_back_to_chromes(cx: &mut TestAppCon
     clear_log();
     env.host.apply_settings(&Settings::default());
     assert!(writes_logged().contains(&"profile_set_site_rule 1024 * -1".to_string()));
+
+    // A profile that opens after the release is told too: the list is total.
+    clear_log();
+    env.page(2, "https://b.test", cx);
+    assert!(writes_logged().contains(&"profile_set_site_rule 1024 * -1".to_string()));
+    assert!(writes_logged().iter().any(|c| c.starts_with("pref_clear ") && c.ends_with("intl.accept_languages")));
 }
 
 #[gpui::test]
-fn page_scheme_reaches_websites_but_not_chrome_pages(cx: &mut TestAppContext) {
+fn color_schemes_go_to_each_profile_when_it_opens_and_when_they_change(cx: &mut TestAppContext) {
     let env = Env::new(cx);
-    let site = env.page(1, "https://a.test", cx);
-    let own = env.page(1, "baa://flags", cx);
-    let (site_tab, own_tab) = (env.tab_of(&site, cx), env.tab_of(&own, cx));
-    clear_log();
+    env.page(1, "https://a.test", cx);
+    assert_eq!(calls("profile_set_color_schemes").len(), 1);
+    assert!(calls("profile_set_color_schemes")[0].ends_with(" 0 0"), "system, system");
+    env.page(1, "https://b.test", cx);
+    assert_eq!(calls("profile_set_color_schemes").len(), 1, "once per profile, not per page");
 
+    clear_log();
     env.host.apply_settings(&with(|s| s.page_scheme = PageScheme::Dark));
-    assert_eq!(calls("tab_set_color_scheme"), [format!("tab_set_color_scheme {site_tab:?} 2")]);
-    assert!(!calls("tab_set_color_scheme").iter().any(|c| c.contains(&format!("{own_tab:?}"))));
+    assert_eq!(calls("profile_set_color_schemes").len(), 1);
+    assert!(calls("profile_set_color_schemes")[0].ends_with(" 2 0"));
+    env.host.apply_settings(&with(|s| s.page_scheme = PageScheme::Dark));
+    assert_eq!(calls("profile_set_color_schemes").len(), 1, "unchanged");
+
+    env.page(2, "https://c.test", cx);
+    assert!(calls("profile_set_color_schemes")[1].ends_with(" 2 0"), "a later profile starts with the setting");
 }
 
 #[gpui::test]
@@ -195,8 +210,12 @@ fn load_unpacked_resolves_with_the_id_or_chromes_error(cx: &mut TestAppContext) 
     assert_eq!(calls("profile_load_unpacked").len(), 2);
 }
 
-#[test]
-fn the_default_browser_query_runs() {
-    // A test binary is nobody's default browser; this proves the selectors exist.
-    assert!(!super::super::native::is_default_browser());
+#[gpui::test]
+fn default_browser_asks_and_sets_through_the_core(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    assert!(!env.host.is_default_browser());
+    DEFAULT_BROWSER.with(|d| d.set(true));
+    assert!(env.host.is_default_browser());
+    env.host.make_default_browser();
+    assert_eq!(calls("set_default_browser"), ["set_default_browser"]);
 }

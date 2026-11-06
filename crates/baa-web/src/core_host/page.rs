@@ -94,10 +94,6 @@ impl CorePage {
             return;
         }
         let old = std::mem::replace(&mut self.state, new.clone());
-        // Chrome may reset the scheme when a document commits, so it is set again each time.
-        if self.shared.kind == PageKind::Tab && (new.url != old.url || new.loading != old.loading) {
-            self.apply_scheme(skin::is_webui(&new.url));
-        }
         self.emit_changes(&old, &new, cx);
         // Each DevTools document (the dock script reloads it once) gets its half.
         if self.shared.kind == PageKind::DevTools
@@ -112,13 +108,6 @@ impl CorePage {
         if view_changed {
             cx.notify();
         }
-    }
-
-    /// prefers-color-scheme for what the page shows or is about to show.
-    fn apply_scheme(&self, webui: bool) {
-        self.shared.webui.set(webui);
-        let scheme = self.dispatch.scheme_for(self.shared.profile, webui);
-        self.shared.run(|core, tab| (core.tab_set_color_scheme)(tab, scheme));
     }
 
     fn emit_changes(&self, old: &Snapshot, new: &Snapshot, cx: &mut Context<Self>) {
@@ -224,9 +213,6 @@ impl Render for CorePage {
 
 impl PageHandle for CorePage {
     fn load_url(&self, url: &str) {
-        if self.shared.kind == PageKind::Tab {
-            self.apply_scheme(skin::is_webui(url));
-        }
         self.shared.run(|core, tab| (core.tab_load_url)(tab, c_string(&skin::to_chrome(url)).as_ptr()));
     }
     fn reload(&self) {
