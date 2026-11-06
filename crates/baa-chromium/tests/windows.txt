@@ -1,4 +1,4 @@
-# window.open / popup / cmd-click / extension / window.close (driven by /tmp-style win.sh: see crates/baa-chromium/tests/win.sh)
+# window.open / popup / cmd-click / window.close; windows.expect probes the extension over CDP
 load https://example.com/
 sleep 3000
 activate
@@ -20,4 +20,4 @@ geval window.close()
 sleep 3000
 use 0
 history
-sleep 120000
+sleep 30000

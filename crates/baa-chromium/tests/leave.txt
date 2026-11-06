@@ -1,4 +1,4 @@
-# "leave site?" (run with BAA_HARNESS_DIALOG=cancel, then =ok): beforeunload arrives as kind 3, reload as kind 4
+# "leave site?" (leave-cancel.expect and leave-ok.expect): beforeunload arrives as kind 3, reload as kind 4
 load https://example.com/
 sleep 3000
 activate

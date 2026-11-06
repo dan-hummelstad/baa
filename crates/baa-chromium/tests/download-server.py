@@ -1,4 +1,5 @@
-import http.server, time, os
+# Local server for downloads.txt: /small and /slow are attachments. Usage: download-server.py [port]
+import http.server, sys, time
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -35,4 +36,4 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-http.server.ThreadingHTTPServer(('127.0.0.1', 8123), H).serve_forever()
+http.server.ThreadingHTTPServer(('127.0.0.1', int(sys.argv[1]) if len(sys.argv) > 1 else 8123), H).serve_forever()

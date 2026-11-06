@@ -142,6 +142,11 @@ pub struct Core {
     pub download_cancel: extern "C" fn(u32),
 }
 
+/// A symbol as the function pointer type it is declared as in baa.h.
+unsafe fn cast<T>(symbol: *mut c_void) -> T {
+    std::mem::transmute_copy(&symbol)
+}
+
 static CORE: OnceLock<Core> = OnceLock::new();
 
 pub fn core() -> &'static Core {
@@ -169,45 +174,45 @@ pub fn load() -> &'static Core {
             assert!(!f.is_null(), "BaaCore lacks {name:?}");
             f
         };
-        let version: extern "C" fn() -> c_int = std::mem::transmute(sym(c"baa_abi_version"));
+        let version: extern "C" fn() -> c_int = cast(sym(c"baa_abi_version"));
         assert_eq!(version(), ABI_VERSION, "BaaCore ABI mismatch");
         let core = Core {
-            install_app: std::mem::transmute(sym(c"baa_install_app")),
-            exit_code: std::mem::transmute(sym(c"baa_exit_code")),
-            is_quitting: std::mem::transmute(sym(c"baa_is_quitting")),
-            profile_open: std::mem::transmute(sym(c"baa_profile_open")),
-            profile_open_ephemeral: std::mem::transmute(sym(c"baa_profile_open_ephemeral")),
-            profile_close: std::mem::transmute(sym(c"baa_profile_close")),
-            profile_set_pref_bool: std::mem::transmute(sym(c"baa_profile_set_pref_bool")),
-            profile_site_permission: std::mem::transmute(sym(c"baa_profile_site_permission")),
-            profile_set_site_permission: std::mem::transmute(sym(c"baa_profile_set_site_permission")),
-            profile_fetch: std::mem::transmute(sym(c"baa_profile_fetch")),
-            profile_extensions: std::mem::transmute(sym(c"baa_profile_extensions")),
-            profile_extension_change: std::mem::transmute(sym(c"baa_profile_extension_change")),
-            extension_popup: std::mem::transmute(sym(c"baa_extension_popup")),
-            tab_create: std::mem::transmute(sym(c"baa_tab_create")),
-            tab_close: std::mem::transmute(sym(c"baa_tab_close")),
-            tab_get_state: std::mem::transmute(sym(c"baa_tab_get_state")),
-            tab_load_url: std::mem::transmute(sym(c"baa_tab_load_url")),
-            tab_reload: std::mem::transmute(sym(c"baa_tab_reload")),
-            tab_stop: std::mem::transmute(sym(c"baa_tab_stop")),
-            tab_go_to_offset: std::mem::transmute(sym(c"baa_tab_go_to_offset")),
-            tab_history: std::mem::transmute(sym(c"baa_tab_history")),
-            tab_eval: std::mem::transmute(sym(c"baa_tab_eval")),
-            tab_set_zoom: std::mem::transmute(sym(c"baa_tab_set_zoom")),
-            tab_find: std::mem::transmute(sym(c"baa_tab_find")),
-            tab_print: std::mem::transmute(sym(c"baa_tab_print")),
-            tab_set_muted: std::mem::transmute(sym(c"baa_tab_set_muted")),
-            tab_activate: std::mem::transmute(sym(c"baa_tab_activate")),
-            tab_focus: std::mem::transmute(sym(c"baa_tab_focus")),
-            tab_set_init_script: std::mem::transmute(sym(c"baa_tab_set_init_script")),
-            tab_set_color_scheme: std::mem::transmute(sym(c"baa_tab_set_color_scheme")),
-            tab_open_devtools: std::mem::transmute(sym(c"baa_tab_open_devtools")),
-            tab_show_devtools_window: std::mem::transmute(sym(c"baa_tab_show_devtools_window")),
-            dialog_answer: std::mem::transmute(sym(c"baa_dialog_answer")),
-            permission_answer: std::mem::transmute(sym(c"baa_permission_answer")),
-            context_menu_done: std::mem::transmute(sym(c"baa_context_menu_done")),
-            download_cancel: std::mem::transmute(sym(c"baa_download_cancel")),
+            install_app: cast(sym(c"baa_install_app")),
+            exit_code: cast(sym(c"baa_exit_code")),
+            is_quitting: cast(sym(c"baa_is_quitting")),
+            profile_open: cast(sym(c"baa_profile_open")),
+            profile_open_ephemeral: cast(sym(c"baa_profile_open_ephemeral")),
+            profile_close: cast(sym(c"baa_profile_close")),
+            profile_set_pref_bool: cast(sym(c"baa_profile_set_pref_bool")),
+            profile_site_permission: cast(sym(c"baa_profile_site_permission")),
+            profile_set_site_permission: cast(sym(c"baa_profile_set_site_permission")),
+            profile_fetch: cast(sym(c"baa_profile_fetch")),
+            profile_extensions: cast(sym(c"baa_profile_extensions")),
+            profile_extension_change: cast(sym(c"baa_profile_extension_change")),
+            extension_popup: cast(sym(c"baa_extension_popup")),
+            tab_create: cast(sym(c"baa_tab_create")),
+            tab_close: cast(sym(c"baa_tab_close")),
+            tab_get_state: cast(sym(c"baa_tab_get_state")),
+            tab_load_url: cast(sym(c"baa_tab_load_url")),
+            tab_reload: cast(sym(c"baa_tab_reload")),
+            tab_stop: cast(sym(c"baa_tab_stop")),
+            tab_go_to_offset: cast(sym(c"baa_tab_go_to_offset")),
+            tab_history: cast(sym(c"baa_tab_history")),
+            tab_eval: cast(sym(c"baa_tab_eval")),
+            tab_set_zoom: cast(sym(c"baa_tab_set_zoom")),
+            tab_find: cast(sym(c"baa_tab_find")),
+            tab_print: cast(sym(c"baa_tab_print")),
+            tab_set_muted: cast(sym(c"baa_tab_set_muted")),
+            tab_activate: cast(sym(c"baa_tab_activate")),
+            tab_focus: cast(sym(c"baa_tab_focus")),
+            tab_set_init_script: cast(sym(c"baa_tab_set_init_script")),
+            tab_set_color_scheme: cast(sym(c"baa_tab_set_color_scheme")),
+            tab_open_devtools: cast(sym(c"baa_tab_open_devtools")),
+            tab_show_devtools_window: cast(sym(c"baa_tab_show_devtools_window")),
+            dialog_answer: cast(sym(c"baa_dialog_answer")),
+            permission_answer: cast(sym(c"baa_permission_answer")),
+            context_menu_done: cast(sym(c"baa_context_menu_done")),
+            download_cancel: cast(sym(c"baa_download_cancel")),
         };
         CORE.get_or_init(|| core)
     }

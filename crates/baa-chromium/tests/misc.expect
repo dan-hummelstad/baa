@@ -1,0 +1,3 @@
+# renderer crash, download from a data: URL, file chooser, right click, onbeforeunload page closed by baa
+script: misc.txt
+must: title="alive-after-crash"

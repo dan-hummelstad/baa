@@ -1,0 +1,7 @@
+# two disk profiles and one ephemeral: cookies do not leak, close all tabs and reopen
+script: profiles.txt
+must: get_state ok=true url=https://example.com/ title="cookie:c=space1"
+count: 2 get_state ok=true url=https://example.com/ title="cookie:"
+must: get_state ok=true url=https://example.org/ title="Example Domain"
+exists: space-1
+exists: space-2

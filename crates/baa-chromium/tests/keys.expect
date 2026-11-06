@@ -1,0 +1,8 @@
+# key routing: command keys go to gpui, edit keys reach the page (phase 2 self-test)
+script: keys.txt
+env: BAA_SPIKE_SELFTEST=1
+cdp-after: 12
+cdp-settle: 1
+cdp: file :: ({value: document.querySelector("textarea").value}) ==> "value":"hello"
+must: spike: gpui action NewTab
+must: spike: gpui action FocusBar

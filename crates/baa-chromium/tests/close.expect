@@ -1,0 +1,7 @@
+# closing an ephemeral profile with live tabs, a new tab in the same step as the last one's close
+script: close.txt
+must: get_state ok=true url=https://example.net/
+must: get_state ok=true url=https://example.org/
+must: get_state ok=true url=https://example.com/
+must: script: tab 6 =
+must: tab_closed tab=0

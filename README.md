@@ -89,6 +89,16 @@ Development loop: `cargo check -p <crate>` and `cargo test -p <crate>`. A full `
 is slow; run it once at the end. CI runs `cargo test --release --workspace` and
 `cargo clippy --release --workspace --all-targets -- -D warnings`.
 
+The `//baa` layer (permissions, dialogs, menus, downloads, DevTools, extensions, tab and window
+events) is tested by a harness, not by hand: `crates/baa-chromium` is a small gpui app that drives
+BaaCore through the C ABI and logs every callback. `crates/baa-chromium/ci.sh [--engine DIR] [--only NAME]`
+bundles it into an engine (same engine search as `cargo bundle`), runs every `tests/*.expect` with a
+fresh profile, a local download server and the test extension, and exits non-zero with what differed.
+A test is a harness script (`tests/<name>.txt`, steps documented in `src/main.rs`) plus an `.expect`
+file (patterns that must or must not appear in the log, CDP probes; syntax at the top of `ci.py`).
+It opens real windows and needs `node` and network. CI runs it in `ci.yml` and `chromium.yml` on the
+release engine of the commit's `chromium/` tree.
+
 Useful environment variables when running the bundle:
 
 | Variable | Effect |

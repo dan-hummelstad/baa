@@ -1,4 +1,4 @@
-# permissions (no auto-answer, or deny): getUserMedia is one ask for both kinds; navigating away closes it
+# permissions (no auto-answer): getUserMedia is one ask for both kinds; navigating away closes it
 load https://example.com/
 sleep 3000
 activate

@@ -33,4 +33,4 @@ load https://example.org/
 sleep 1000
 state
 use 0
-sleep 120000
+quit

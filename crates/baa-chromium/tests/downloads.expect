@@ -1,0 +1,8 @@
+# downloads start, report progress and the source tab, finish; a slow one is cancelled
+script: downloads.txt
+server: yes
+env: BAA_HARNESS_DOWNLOAD_CANCEL=2000000
+must: baa: download tab=0 id=1 url=\S+/small path=\S+ received=18000 total=18000 state=1
+must: baa: download_cancel id=2
+must: baa: download tab=0 id=2 .* state=2
+mustnot: baa: download tab=0 id=2 .* state=1

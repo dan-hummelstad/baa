@@ -1,6 +1,6 @@
 [package]
 name = "baa-chromium"
-description = "Phase 2 spike: gpui shell on baa's own Chromium (BaaCore.framework). See PLAN-chromium-phase2.md."
+description = "Test harness for //baa: a gpui shell that drives BaaCore.framework (ci.sh runs tests/*.expect against it)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ path = "src/main.rs"
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
-# Same versions as vendor/gpui-cef: gpui's NSView, the punch-hole surface, objc calls.
+# gpui's NSView, the punch-hole surface, objc calls (the versions baa-web uses).
 raw-window-handle = "0.6"
 core-video = "0.5.2"
 core-foundation = "0.10"

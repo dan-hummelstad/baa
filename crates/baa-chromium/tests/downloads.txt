@@ -1,6 +1,5 @@
-# downloads (needs `python3 /tmp/bt/srv.py`-style server on :8123: /small and /slow attachment responses;
-# run with BAA_HARNESS_DOWNLOAD_CANCEL=2000000 for the cancel half). Source tab must be reported.
-load http://127.0.0.1:8123/
+# downloads: {SERVER} is tests/download-server.py (/small and /slow attachments); downloads.expect cancels the slow one
+load {SERVER}/
 sleep 2500
 activate
 eval document.body.innerHTML='<a id=s href="/small" download style="position:fixed;left:0;top:0;width:400px;height:100px;background:#ccf;display:block">small</a><a id=b href="/slow" download style="position:fixed;left:0;top:200px;width:400px;height:100px;background:#fcc;display:block">slow</a>'

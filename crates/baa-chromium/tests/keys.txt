@@ -1,0 +1,2 @@
+# the phase 2 self-test needs no steps: BAA_SPIKE_SELFTEST drives the keys
+sleep 14000

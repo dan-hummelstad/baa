@@ -7,13 +7,13 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - `cargo check -p <crate>` for your crate. Full `cargo build -p baa` is slow (gpui); run it once at the end, not per edit.
 - macOS app only starts bundled: `cargo bundle --run` (needs an engine, README "Build").
 - Never run two Chromium builds (`pgrep -x siso`); never remove the hand-off guards in `chromium-phase.yml`.
-- Tests: `cargo test -p <crate>`.
+- Tests: `cargo test -p <crate>`. `//baa` changes are tested by `crates/baa-chromium/ci.sh` (CI runs it; it opens real windows, so agents do not run it unasked).
 
 ## Ownership (one crate per orchestrator; do not edit outside yours)
 - `crates/baa-model`   data + SQLite + settings
 - `crates/baa-privacy` switches, prefs, proxy allowlist
 - `crates/baa-web`     BaaCore host (`WebHost` in lib.rs is the contract; UI codes against it)
-- `crates/baa-chromium` test harness for `//baa` (spike binary), engine orchestrator; delete when the C++ tests no longer need it
+- `crates/baa-chromium` the `//baa` test harness: a gpui shell (`spike`) plus `tests/*.expect`, run by `ci.sh` against an engine; engine orchestrator
 - `chromium/baa`, `chromium/patches`: engine orchestrator; `chromium/helium*`: changes only through a Helium bump or the engine orchestrator
 - `vendor/gpui_apple`  baa-web orchestrator
 - `crates/baa-ui`      GPUI views, theme, motion

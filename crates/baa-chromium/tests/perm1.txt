@@ -1,4 +1,4 @@
-# permissions (run with BAA_HARNESS_PERMISSION=allow): ask once, remembered, site settings, block
+# permissions (perm1.expect answers allow): ask once, remembered, site settings, block
 load https://example.com/
 sleep 3000
 activate

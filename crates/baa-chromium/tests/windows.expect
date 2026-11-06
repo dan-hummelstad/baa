@@ -1,0 +1,13 @@
+# window.open, popup, cmd-click, extension tabs.create, window.close; the extension sees every tab
+script: windows.txt
+ext: yes
+cdp-after: 48
+cdp-settle: 5
+cdp: sw.js :: probe() ==> "type":"popup"
+cdp: sw.js :: probe() ==> "url":"https://www\.iana\.org/"
+cdp: sw.js :: chrome.tabs.create({url:"https://example.com/?ext"}).then(t=>t.id) ==> ^\d+
+must: tab_created tab=1 opener=0 profile=Some\(0\) url=https://example.org/ background=false gesture=true
+must: tab_created tab=2 opener=0 .* url=https://example.net/
+must: tab_created tab=3 .* url=https://www.iana.org/ background=true
+must: tab_created tab=4 opener=NULL .* url=https://example.com/\?ext
+must: tab_closed tab=1

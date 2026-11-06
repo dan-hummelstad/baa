@@ -4,7 +4,7 @@
 // "chrome-extension" picks the test extension's service worker.
 // With that switch and --no-startup-window, Chrome keeps itself alive until a
 // DevTools client sends Browser.close (chrome_devtools_manager_delegate.cc),
-// so such a run does not quit on ⌘Q; smoke.sh then kills it after 30 s.
+// so such a run does not quit on ⌘Q; ci.py ends it with `Browser.close`.
 // Pass the expression "Browser.close" to end such a run.
 //   node crates/baa-chromium/cdp.mjs <port> '<expression>' [filter]
 const [port, expression, filter] = process.argv.slice(2);

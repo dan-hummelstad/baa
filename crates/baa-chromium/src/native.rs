@@ -1,11 +1,11 @@
-//! The page's NSView under gpui's view, as in the CEF backend.
+//! The page's NSView under gpui's view.
 //!
 //! The window's content view holds a clipping container ordered below gpui's
 //! view; gpui punches a transparent hole where the page goes. gpui keeps the
 //! mouse and hands the original NSEvent on; keyboard and IME go to Chromium
 //! natively as first responder.
-// ponytail: trimmed copy of vendor/gpui-cef/.../platform/cef/native.rs.
-// gpui-cef goes away in phase 5; then this is the only copy.
+// ponytail: a trimmed copy of baa-web's core_host/native.rs (the harness is its own crate
+// so cargo never links it into the app).
 
 use std::{
     cell::{Cell, RefCell},

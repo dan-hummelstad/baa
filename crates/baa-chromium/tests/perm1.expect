@@ -1,0 +1,9 @@
+# permission ask once and remembered, site settings, block
+script: perm1.txt
+env: BAA_HARNESS_PERMISSION=allow
+count: 1 baa: permission tab=
+must: baa: permission tab=0 id=1 origin=https://example.com/ kinds=0x4
+must: site location https://example.com/ = allow
+must: site location https://example.com/ block = block
+must: title="geo3-err:1"
+must: title="notif:denied"

@@ -1,0 +1,4 @@
+# getUserMedia is one ask for both kinds; navigating away closes it
+script: perm2.txt
+must: baa: permission tab=0 id=1 origin=https://example.com/ kinds=0x3
+must: baa: permission_closed tab=0 id=1

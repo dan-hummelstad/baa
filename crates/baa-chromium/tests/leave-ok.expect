@@ -1,0 +1,5 @@
+# "leave site?" answered OK: beforeunload is kind 3, the page leaves
+script: leave.txt
+env: BAA_HARNESS_DIALOG=ok
+must: baa: dialog tab=0 id=1 kind=3
+must: get_state ok=true url=https://example.org/

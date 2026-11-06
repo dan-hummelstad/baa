@@ -1,5 +1,5 @@
 //! Phase 2 spike: a gpui window with a bar and one Chromium page from
-//! BaaCore.framework. Run it with `crates/baa-chromium/spike.sh`.
+//! BaaCore.framework. Run it with `crates/baa-chromium/ci.sh`.
 //! Start-up order and why: PLAN-chromium-phase2.md.
 
 #[cfg(target_os = "macos")]
@@ -88,7 +88,7 @@ mod app {
             if let Ok(path) = std::env::var("BAA_SPIKE_SCRIPT") {
                 run_script(path, cx);
             }
-            // BAA_SPIKE_QUIT_AFTER=<s>: quit the way ⌘Q does, for smoke.sh.
+            // BAA_SPIKE_QUIT_AFTER=<s>: quit the way ⌘Q does.
             if let Some(secs) = std::env::var("BAA_SPIKE_QUIT_AFTER").ok().and_then(|s| s.parse().ok()) {
                 cx.spawn(async move |cx| {
                     cx.background_executor().timer(std::time::Duration::from_secs(secs)).await;
@@ -287,7 +287,7 @@ mod app {
     }
 
     extern "C" fn on_tab_closed(_: *mut c_void, tab: ffi::Tab) {
-        eprintln!("baa: tab_closed tab={}", tab_index(tab));
+        eprintln!("baa: tab_closed tab={} quitting={}", tab_index(tab), (ffi::core().is_quitting)());
         if tab_index(tab) == "0" {
             PAGE_CLOSED.with(|c| c.set(true));
         }
