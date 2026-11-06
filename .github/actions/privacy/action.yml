@@ -1,0 +1,39 @@
+# PLAN.md §5.3: bundle a release engine with the Rust app and launch it behind
+# mitmproxy for 60 s; any host outside baa_privacy::PROXY_ALLOWLIST fails the job.
+# Needs a checkout and the setup action first, on macOS.
+name: privacy
+description: Run the proxy privacy test on a baa-engine artifact
+inputs:
+  run-id:
+    description: workflow run that holds the engine artifact
+    required: true
+  artifact:
+    description: engine artifact name (baa-engine-<tree>)
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
+        path: target/engine
+    - shell: bash
+      run: |
+        zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
+        # A runner has no signing identity: "-" signs ad hoc.
+        BAA_SIGN_IDENTITY=- cargo bundle --release --engine target/engine
+        cargo run --release -p baa-privacy --example proxy_allowlist > proxy-allowlist.txt
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.13"
+    - shell: bash
+      run: |
+        pip install mitmproxy
+        python3 xtask/privacy_test.py target/bundle/baa.app proxy-allowlist.txt --seconds 60 --netlog netlog.json
+    - if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: privacy-netlog
+        path: netlog.json

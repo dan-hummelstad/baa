@@ -33,6 +33,12 @@ permissions:
   contents: read
   actions: read
 
+# One chain per mode at a time (two builds on one tree would clash); a waiting
+# run is replaced by a newer one, never a running one cancelled.
+concurrency:
+  group: chromium-${{ inputs.mode }}
+  cancel-in-progress: false
+
 jobs:
   phase_01:
     uses: ./.github/workflows/chromium-phase.yml
@@ -165,3 +171,19 @@ jobs:
       runner: ${{ inputs.runner }}
       xcode: ${{ inputs.xcode }}
       budget_minutes: ${{ inputs.budget_minutes }}
+
+  # §5.3 on the engine this run built: a release engine that contacts a host
+  # outside baa_privacy::PROXY_ALLOWLIST fails the run.
+  privacy:
+    needs: [phase_01, phase_02, phase_03, phase_04, phase_05, phase_06, phase_07, phase_08, phase_09, phase_10, phase_11, phase_12]
+    if: always() && inputs.mode != 'dev' && contains(needs.*.outputs.status, 'finished')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - id: engine
+        run: echo "name=baa-engine-$(git rev-parse HEAD:chromium)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/privacy
+        with:
+          run-id: ${{ github.run_id }}
+          artifact: ${{ steps.engine.outputs.name }}

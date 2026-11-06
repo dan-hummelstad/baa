@@ -1,0 +1,31 @@
+# Finds the release engine (baa-engine-<tree>) built from this checkout's chromium/
+# tree. Equal tree hashes mean the same baa.h ABI and patches. Empty `run` when
+# no unexpired artifact exists. Needs a checkout first.
+name: engine
+description: Find the baa-engine artifact for this commit's chromium/ tree
+outputs:
+  run:
+    description: workflow run id that holds the artifact, empty if none
+    value: ${{ steps.find.outputs.run }}
+  name:
+    description: artifact name
+    value: ${{ steps.find.outputs.name }}
+  tree:
+    description: git tree hash of chromium/
+    value: ${{ steps.find.outputs.tree }}
+runs:
+  using: composite
+  steps:
+    - id: find
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        T=$(git rev-parse HEAD:chromium)
+        run=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=baa-engine-$T" \
+          -q '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+        {
+          echo "tree=$T"
+          echo "name=baa-engine-$T"
+          echo "run=$run"
+        } >> "$GITHUB_OUTPUT"
