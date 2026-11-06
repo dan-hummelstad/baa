@@ -7,6 +7,7 @@ mod extensions;
 mod ffi;
 mod menu;
 mod native;
+mod sheet;
 #[cfg(test)]
 mod tests;
 
@@ -16,7 +17,7 @@ use std::{
     ffi::{c_char, c_int, c_void, CStr, CString},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, Once},
+    sync::Arc,
     time::Duration,
 };
 
@@ -40,7 +41,7 @@ const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
 
 /// Chrome's command line for baa: the user's `-` arguments from `args`
 /// (`args[0]` is the executable), no window of its own, baa's privacy
-/// switches. URLs in `args` are not passed on.
+/// switches (the short core list). URLs in `args` are not passed on.
 pub fn chrome_argv(args: &[String], user_data_dir: &Path) -> Vec<String> {
     let mut out = vec![args[0].clone()];
     let mut disabled = String::new();
@@ -58,13 +59,19 @@ pub fn chrome_argv(args: &[String], user_data_dir: &Path) -> Vec<String> {
     if !out.iter().any(|a| a.starts_with("--user-data-dir=")) {
         out.push(format!("--user-data-dir={}", user_data_dir.display()));
     }
-    for switch in ["no-first-run"].iter().chain(baa_privacy::SWITCHES) {
+    for switch in ["no-first-run"].iter().chain(baa_privacy::CORE_SWITCHES) {
         let switch = format!("--{switch}");
         if !out.contains(&switch) {
             out.push(switch);
         }
     }
-    out.push(format!("--disable-features={}", baa_privacy::merge_disabled_features(&disabled)));
+    let mut features: Vec<&str> = disabled.split(',').filter(|f| !f.is_empty()).collect();
+    for feature in baa_privacy::CORE_DISABLED_FEATURES {
+        if !features.contains(feature) {
+            features.push(feature);
+        }
+    }
+    out.push(format!("--disable-features={}", features.join(",")));
     out
 }
 
@@ -182,6 +189,9 @@ struct Pending {
     seq: u64,
 }
 
+/// What `WebHost::fetch` waits with.
+type FetchDone = Box<dyn FnOnce(Option<String>)>;
+
 /// What a `BaaTab` is: any WebContents baa shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PageKind {
@@ -245,6 +255,10 @@ struct Dispatch {
     pending: RefCell<Vec<Pending>>,
     chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     downloads: RefCell<Option<WeakEntity<Downloads>>>,
+    /// Tabs without a gpui entity (the settings sheet): only their view is followed.
+    bare: RefCell<HashMap<*mut Tab, Rc<Shared>>>,
+    fetches: RefCell<HashMap<u64, FetchDone>>,
+    next_fetch: Cell<u64>,
     next_seq: Cell<u64>,
     /// `--user-data-dir`.
     root: OnceCell<PathBuf>,
@@ -259,6 +273,9 @@ impl Dispatch {
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
+            bare: RefCell::default(),
+            fetches: RefCell::default(),
+            next_fetch: Cell::new(1),
             next_seq: Cell::new(0),
             root: OnceCell::new(),
         }
@@ -345,14 +362,14 @@ impl Dispatch {
     /// A tab's snapshot. A changed view is swapped in now: Chrome frees the
     /// old one as soon as this callback returns.
     fn tab_state(&self, tab: *mut Tab, snapshot: Snapshot) {
-        let Some((shared, page)) = self.pages.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone())) else {
+        let live = self.pages.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
+        let Some((shared, page)) = live else {
+            if let Some(shared) = self.bare.borrow().get(&tab) {
+                Self::swap_view(shared, snapshot.view);
+            }
             return;
         };
-        let view_changed = snapshot.view != shared.view.get();
-        if view_changed {
-            shared.container.swap_page(shared.view.replace(snapshot.view), snapshot.view);
-            shared.container.page_created(snapshot.view);
-        }
+        let view_changed = Self::swap_view(&shared, snapshot.view);
         self.queue(move |cx| {
             page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
         });
@@ -390,9 +407,25 @@ impl Dispatch {
         });
     }
 
+    fn swap_view(shared: &Shared, view: *mut AnyObject) -> bool {
+        let changed = view != shared.view.get();
+        if changed {
+            shared.container.swap_page(shared.view.replace(view), view);
+            shared.container.page_created(view);
+        }
+        changed
+    }
+
     /// The profile is going away with its tabs, which Chrome may not report.
     fn forget_profile(&self, profile: *mut Profile) {
         self.pending.borrow_mut().retain(|p| p.profile != profile);
+        self.bare.borrow_mut().retain(|_, shared| {
+            let keep = shared.profile != profile;
+            if !keep {
+                shared.release();
+            }
+            keep
+        });
         let gone: Vec<_> =
             self.pages.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
         for tab in gone {
@@ -411,6 +444,10 @@ impl Dispatch {
 
     fn tab_closed(&self, tab: *mut Tab) {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
+        if let Some(shared) = self.bare.borrow_mut().remove(&tab) {
+            shared.release();
+            return;
+        }
         let Some(live) = self.pages.borrow_mut().remove(&tab) else { return };
         // Now, not next turn: the handle is dead, its address may be reused, and
         // its view is freed once this callback returns.
@@ -608,7 +645,17 @@ fn callbacks() -> Callbacks {
             }
         });
     }
-    extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
+    extern "C" fn fetch_done(ctx: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize) {
+        let body = (ok && !body.is_null())
+            .then(|| String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(body.cast::<u8>(), len) }).into_owned());
+        let d = unsafe { dispatch(ctx) };
+        d.queue(move |_| {
+            let done = d.fetches.borrow_mut().remove(&id);
+            if let Some(done) = done {
+                done(body);
+            }
+        });
+    }
     Callbacks {
         key,
         tab_created,
@@ -656,6 +703,8 @@ pub struct CoreWebHost {
     next_ephemeral: Cell<u64>,
     downloads: Entity<Downloads>,
     chrome_tabs: Entity<ChromeTabs>,
+    /// Per profile, Chrome's settings shown as a sheet.
+    sheets: RefCell<HashMap<ProfileId, sheet::Sheet>>,
 }
 
 impl CoreWebHost {
@@ -673,6 +722,7 @@ impl CoreWebHost {
             next_ephemeral: Cell::new(u64::MAX),
             downloads,
             chrome_tabs,
+            sheets: RefCell::default(),
         }
     }
 
@@ -698,6 +748,10 @@ impl CoreWebHost {
             log::error!("profile {id:?}: Chrome refused it");
         } else {
             self.profiles.borrow_mut().insert(id, handle);
+            // Most are Helium's defaults already; this pins them if one was flipped in settings.
+            for pref in baa_privacy::PREFS_OFF {
+                (self.core.profile_set_pref_bool)(handle, c_string(pref).as_ptr(), false);
+            }
         }
         handle
     }
@@ -784,6 +838,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn delete_profile(&self, profile: ProfileId) {
+        self.sheets.borrow_mut().remove(&profile);
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
             self.dispatch.forget_profile(handle);
             (self.core.profile_close)(handle);
@@ -800,10 +855,23 @@ impl WebHost for CoreWebHost {
         done(Some(infos), cx);
     }
 
-    fn show_chrome_page(&self, _profile: ProfileId, _sheet: Option<ChromeSheet>, _window: &mut Window) -> bool {
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| log::info!("Chrome's own pages are not shown yet (M2)"));
-        true
+    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool {
+        let mut sheets = self.sheets.borrow_mut();
+        for (id, page) in sheets.iter() {
+            if sheet.is_none() || *id != profile {
+                page.hide();
+            }
+        }
+        let Some(sheet) = sheet else { return true };
+        let page = match sheets.entry(profile) {
+            std::collections::hash_map::Entry::Occupied(page) => page.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                let handle = self.profile_handle(profile);
+                let Some(page) = sheet::Sheet::open(self.dispatch, handle, &sheet) else { return false };
+                slot.insert(page)
+            }
+        };
+        page.show(&sheet, window)
     }
 
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
@@ -822,8 +890,15 @@ impl WebHost for CoreWebHost {
         list
     }
 
-    fn fetch(&self, _profile: ProfileId, _url: &str, done: Box<dyn FnOnce(Option<String>)>) {
-        done(None);
+    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return done(None);
+        }
+        let id = self.dispatch.next_fetch.get();
+        self.dispatch.next_fetch.set(id + 1);
+        self.dispatch.fetches.borrow_mut().insert(id, done);
+        (self.core.profile_fetch)(handle, c_string(url).as_ptr(), id);
     }
 
     fn downloads(&self) -> Entity<Downloads> {

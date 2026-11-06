@@ -533,7 +533,7 @@ struct ChromeSheetPage {
 /// A skin changed since (`__baaSkin`) is kept in the page's storage under this
 /// run's token, so the next page in the sheet starts in it and a later run
 /// starts from `css`.
-fn skin_loader(css: &str) -> String {
+pub(crate) fn skin_loader(css: &str) -> String {
     let css = serde_json::to_string(css).unwrap_or_default();
     let token = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

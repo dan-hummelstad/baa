@@ -55,6 +55,7 @@ unsafe impl Encode for CGRect {
 }
 
 const NS_WINDOW_BELOW: isize = -1;
+const NS_WINDOW_ABOVE: isize = 1;
 /// NSViewWidthSizable | NSViewHeightSizable.
 const FILL: usize = 2 | 16;
 /// NSViewMinYMargin: in an unflipped superview, keeps the top-left corner put.
@@ -172,6 +173,21 @@ impl Container {
         }
         self.placed.set(None);
         self.gpui_view.set(gpui_view);
+    }
+
+    /// Over gpui's view instead of under it: a page that is an overlay on the
+    /// UI (the settings sheet) rather than a hole in it. Mouse and keys go to
+    /// the page natively.
+    pub fn move_above(&self, gpui_view: *mut AnyObject) {
+        if gpui_view.is_null() {
+            return;
+        }
+        unsafe {
+            let content: *mut AnyObject = msg_send![gpui_view, superview];
+            let _: () = msg_send![self.view, removeFromSuperview];
+            let _: () = msg_send![content, addSubview: self.view, positioned: NS_WINDOW_ABOVE, relativeTo: gpui_view];
+        }
+        self.placed.set(None);
     }
 
     pub fn set_floating(&self, floating: bool) {

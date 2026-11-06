@@ -248,6 +248,8 @@ impl FakeExtension {
     }
 }
 
+type Fetched = (u32, Option<String>);
+
 struct Root;
 
 impl Render for Root {
@@ -569,7 +571,7 @@ fn chrome_gets_user_flags_our_switches_and_no_urls() {
     let argv = chrome_argv(&args, Path::new("/data/chromium"));
     assert_eq!(argv[0], "baa");
     assert_eq!(argv[1], "--proxy-server=p");
-    for flag in ["--no-startup-window", "--no-first-run", "--user-data-dir=/data/chromium", "--disable-sync"] {
+    for flag in ["--no-startup-window", "--no-first-run", "--user-data-dir=/data/chromium", "--no-pings", "--disable-background-networking"] {
         assert_eq!(argv.iter().filter(|a| *a == flag).count(), 1, "{flag}");
     }
     assert!(!argv.iter().any(|a| a.contains("x.test")));
@@ -1008,4 +1010,66 @@ fn a_popup_url_names_its_extension() {
     assert_eq!(extensions::id_of("chrome-extension://abc/popup.html"), Some("abc"));
     assert_eq!(extensions::id_of("https://abc/popup.html"), None);
     assert_eq!(extensions::id_of("chrome-extension:///x"), None);
+}
+
+#[gpui::test]
+fn each_fetch_answers_its_own_closure_once(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let got: Rc<RefCell<Vec<Fetched>>> = Rc::default();
+    for n in 0..2u32 {
+        let sink = got.clone();
+        env.host.fetch(ProfileId(1), &format!("https://s.test/{n}"), Box::new(move |body| sink.borrow_mut().push((n, body))));
+    }
+    assert_eq!(calls("profile_fetch"), ["profile_fetch https://s.test/0 1", "profile_fetch https://s.test/1 2"]);
+
+    (env.callbacks.fetch_done)(env.ctx(), 2, false, std::ptr::null(), 0);
+    (env.callbacks.fetch_done)(env.ctx(), 1, true, c"[1,2]".as_ptr(), 5);
+    (env.callbacks.fetch_done)(env.ctx(), 1, true, c"again".as_ptr(), 5);
+    assert!(got.borrow().is_empty(), "not inside the callback");
+    cx.run_until_parked();
+    assert_eq!(*got.borrow(), [(1, None), (0, Some("[1,2]".to_string()))], "id 2 was fetch 1; a repeated id does nothing");
+}
+
+#[gpui::test]
+fn every_opened_profile_gets_its_prefs_pinned_off(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    env.page(1, "https://a.test", cx);
+    env.page(1, "https://b.test", cx);
+    let calls = calls("profile_set_pref_bool");
+    assert_eq!(calls.len(), baa_privacy::PREFS_OFF.len(), "once per profile, not per page");
+    assert!(calls[0].ends_with("alternate_error_pages.enabled false"));
+}
+
+#[gpui::test]
+fn the_settings_sheet_is_one_skinned_tab_per_profile(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let sheet = |url: &str, css: &str, dark| crate::ChromeSheet {
+        url: url.into(),
+        bounds: gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), gpui::size(gpui::px(100.), gpui::px(100.))),
+        corner_radius: 8.,
+        css: css.into(),
+        dark,
+    };
+    let show = |s: Option<crate::ChromeSheet>, cx: &mut TestAppContext| {
+        env.window.update(cx, |_, window, _| env.host.show_chrome_page(ProfileId(1), s, window)).unwrap()
+    };
+
+    assert!(show(Some(sheet("baa://settings", "a{}", true)), cx));
+    let calls_now = |prefix: &str| calls(prefix);
+    assert_eq!(calls_now("tab_create").len(), 1);
+    assert!(calls_now("tab_create")[0].ends_with("about:blank"));
+    assert!(calls_now("tab_set_init_script")[0].contains("__baaSkin"), "the skin is in before the page loads");
+    assert!(calls_now("tab_load_url")[0].ends_with("chrome://settings"), "baa:// is Chrome's page");
+    assert!(calls_now("tab_set_color_scheme")[0].ends_with(" 2"));
+
+    assert!(show(Some(sheet("baa://settings/privacy", "b{}", false)), cx));
+    assert_eq!(calls_now("tab_create").len(), 1, "same tab");
+    assert!(calls_now("tab_load_url")[1].ends_with("chrome://settings/privacy"));
+    assert!(calls_now("tab_eval")[0].contains("__baaSkin") && calls_now("tab_eval")[0].contains("b{}"));
+    assert!(calls_now("tab_set_color_scheme")[1].ends_with(" 1"));
+
+    assert!(show(None, cx));
+    assert_eq!(calls_now("tab_close"), Vec::<String>::new(), "hidden, not closed");
+    env.host.delete_profile(ProfileId(1));
+    assert_eq!(calls_now("tab_close").len(), 1);
 }

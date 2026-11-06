@@ -3,7 +3,10 @@
 
 mod chromium;
 
-pub use chromium::{block_browser_request, merge_disabled_features, PREFS_OFF, PROXY_ALLOWLIST, SWITCHES};
+pub use chromium::{
+    block_browser_request, merge_disabled_features, CORE_DISABLED_FEATURES, CORE_SWITCHES, PREFS_OFF, PROXY_ALLOWLIST,
+    SWITCHES,
+};
 
 /// `cef_resource_type_t`, one variant each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

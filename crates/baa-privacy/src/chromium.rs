@@ -29,6 +29,13 @@ pub const SWITCHES: &[&str] = &[
     "no-pings",
 ];
 
+/// What the own Chromium build (BaaCore) still needs on its command line; the rest of
+/// [`SWITCHES`] is compiled out or patched in the tree (PLAN-chromium-phase4.md, step 7).
+pub const CORE_SWITCHES: &[&str] = &["disable-background-networking", "no-pings"];
+
+/// Features the own build still turns off, in `--disable-features`.
+pub const CORE_DISABLED_FEATURES: &[&str] = &["MediaRouter", "OptimizationHints", "AutofillServerCommunication", "AimEnabled"];
+
 // Unknown names are ignored by Chromium, so a feature renamed in a later CEF only stops working;
 // the CI proxy test is what catches that.
 const DISABLED_FEATURES: &[&str] = &[
