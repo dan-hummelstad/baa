@@ -272,25 +272,57 @@ pub fn load() -> &'static Core {
 mod tests {
     use super::*;
 
-    /// `NAME = value` pairs of the header's enums; values are numbers or `1 << n`.
+    fn strip_comments(header: &str) -> String {
+        let mut out = String::new();
+        let mut rest = header;
+        while let Some(at) = rest.find("/*") {
+            out.push_str(&rest[..at]);
+            let end = rest[at..].find("*/").expect("unterminated /* in baa.h");
+            rest = &rest[at + end + 2..];
+        }
+        out.push_str(rest);
+        out.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n")
+    }
+
+    /// One number: decimal, hex or `a << b`, optionally negative.
+    fn term(text: &str) -> Option<i64> {
+        let text = text.trim();
+        if let Some((a, b)) = text.split_once("<<") {
+            return Some(term(a)? << term(b)?);
+        }
+        let (negative, digits) = text.strip_prefix('-').map_or((false, text), |d| (true, d.trim()));
+        let value = match digits.strip_prefix("0x") {
+            Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+            None => digits.parse().ok()?,
+        };
+        Some(if negative { -value } else { value })
+    }
+
+    /// Every constant of every `enum { ... }` of the header with its value.
+    /// One whose value is implicit or not a plain expression fails the test: a
+    /// value this parser cannot read is a value nobody checks.
     fn header_constants(header: &str) -> Vec<(String, i64)> {
-        let code: Vec<&str> = header.lines().map(|l| l.split("//").next().unwrap_or("")).collect();
-        code.join("\n")
-            .split(['{', '}', ',', ';'])
-            .filter_map(|part| {
-                let (name, value) = part.trim().split_once('=')?;
+        let code = strip_comments(header);
+        let mut out = Vec::new();
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find("enum") {
+            let after = &rest[at + 4..];
+            let Some(open) = after.find('{') else { break };
+            let close = after[open..].find('}').expect("unterminated enum in baa.h") + open;
+            for entry in after[open + 1..close].split(',').map(str::trim).filter(|e| !e.is_empty()) {
+                let (name, value) = entry.split_once('=').unwrap_or_else(|| panic!("`{entry}` has an implicit value"));
                 let name = name.trim();
-                if !name.starts_with("BAA_") || name.contains(char::is_whitespace) {
-                    return None;
-                }
-                let value = value.trim();
-                let value = match value.split_once("<<") {
-                    Some((a, b)) => a.trim().parse::<i64>().ok()? << b.trim().parse::<u32>().ok()?,
-                    None => value.parse().ok()?,
-                };
-                Some((name.to_string(), value))
-            })
-            .collect()
+                assert!(name.starts_with("BAA_"), "`{name}` is not a BAA_ constant");
+                // `A | B` ORs terms.
+                let value = value
+                    .split('|')
+                    .map(|t| term(t).unwrap_or_else(|| panic!("{name}: cannot read `{}`", value.trim())))
+                    .fold(0, |a, b| a | b);
+                out.push((name.to_string(), value));
+            }
+            rest = &after[close + 1..];
+        }
+        out
     }
 
     #[test]

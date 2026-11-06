@@ -7,6 +7,10 @@
 #[allow(dead_code)] // the harness drives a subset of the ABI
 mod ffi;
 #[cfg(target_os = "macos")]
+mod harness;
+#[cfg(target_os = "macos")]
+#[path = "../../baa-web/src/core_host/native.rs"]
+#[allow(dead_code)] // the harness uses part of what the app needs
 mod native;
 
 #[cfg(not(target_os = "macos"))]
@@ -33,7 +37,7 @@ mod app {
     };
     use objc2::runtime::AnyObject;
 
-    use crate::{ffi, native};
+    use crate::{ffi, harness, native};
 
     actions!(spike, [Quit, FocusBar, NewTab]);
 
@@ -144,16 +148,16 @@ mod app {
                     window.activate_window();
                     window.focus(&spike.page_focus, cx);
                     (core().tab_focus)(spike.page.tab);
-                    native::window_number(spike.page.view)
+                    harness::window_number(spike.page.view)
                 })
                 .unwrap();
             wait(500).await;
             // Into the textarea the way a user gets there: a click.
             let view = spike.update(cx, |spike, _, _| spike.page.view).unwrap();
-            native::post_click(view, 200., 140., false, false);
+            harness::post_click(view, 200., 140., false, false);
             wait(500).await;
             for &(code, chars, command) in PAGE {
-                native::post_key(window_number, code, chars, command);
+                harness::post_key(window_number, code, chars, command);
                 wait(150).await;
             }
             wait(500).await;
@@ -170,11 +174,11 @@ mod app {
     extern "C" fn on_key(_: *mut c_void, event: *mut c_void, after_page: bool) -> bool {
         let event = event.cast::<AnyObject>();
         if !after_page {
-            return native::offer_key_equivalent(GPUI_VIEW.with(Cell::get), event);
+            return native::offer_key_equivalent(event);
         }
-        match native::edit_command(event) {
+        match harness::edit_command(event) {
             Some(command) => {
-                native::send_edit_action(command);
+                harness::send_edit_action(command);
                 true
             }
             None => false,
@@ -459,7 +463,7 @@ mod app {
                         let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             let (x, y) = arg.split_once(' ').unwrap();
-                            native::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), false, true);
+                            harness::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), false, true);
                         }
                     }
                     // devtools [inspect <x> <y>]: docked DevTools for the current tab.
@@ -547,7 +551,7 @@ mod app {
                     "escape" => {
                         let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
-                            native::post_key(native::window_number(s.view.cast()), 53, "\u{1b}", false);
+                            harness::post_key(harness::window_number(s.view.cast()), 53, "\u{1b}", false);
                         }
                     }
                     "screenshot" => {
@@ -560,7 +564,7 @@ mod app {
                         let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             let (x, y) = arg.split_once(' ').unwrap();
-                            native::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), verb == "cmdclick", verb == "rclick");
+                            harness::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), verb == "cmdclick", verb == "rclick");
                         }
                     }
                     "tab" => {
@@ -800,7 +804,7 @@ mod app {
             _: &mut App,
         ) -> Hitbox {
             let visible = bounds.intersect(&window.content_mask().bounds);
-            if !PAGE_CLOSED.with(Cell::get) && self.page.container.place(self.page.view, bounds, visible) {
+            if !PAGE_CLOSED.with(Cell::get) && self.page.container.place(bounds, visible) {
                 window.request_animation_frame();
             }
             window.insert_hitbox(bounds, HitboxBehavior::Normal)
@@ -817,7 +821,7 @@ mod app {
             _: &mut App,
         ) {
             let radius = (10. * window.scale_factor()).round() as usize;
-            if let Some(hole) = native::punch_buffer(radius) {
+            if let Some(hole) = native::punch_buffer(radius, 0) {
                 window.paint_surface(bounds, hole);
             }
 
