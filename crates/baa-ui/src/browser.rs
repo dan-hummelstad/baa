@@ -879,9 +879,6 @@ impl<H: WebHost> Render for Browser<H> {
             (Some(sidebar), Some(self.render_reveal(None, &theme)))
         };
         let peek = self.render_peek(window, cx);
-        if let Some(bar) = &self.bar {
-            self.motion.to(("bar-sel", 0), Feel::Glide, bar.selected as f32);
-        }
         let bar = match (&self.bar, &self.closing_bar) {
             (Some(bar), _) => Some(self.render_command_bar(bar, true, &theme, window, cx)),
             (None, Some(bar)) => Some(self.render_command_bar(bar, false, &theme, window, cx)),

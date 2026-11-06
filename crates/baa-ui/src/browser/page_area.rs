@@ -299,6 +299,10 @@ impl<H: WebHost> Browser<H> {
         let reduce = cx.reduce_motion();
         let mut moving = false;
         self.reveal_w.set_target(self.sidebar_width());
+        // Retargeted before the tick, so a key press that moves the selection asks for a frame.
+        if let Some(bar) = &self.bar {
+            self.motion.to(("bar-sel", 0), Feel::Glide, bar.selected as f32);
+        }
         for spring in [
             &mut self.sidebar_w,
             &mut self.reveal_w,
