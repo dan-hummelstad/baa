@@ -1,0 +1,8 @@
+# Chrome's own DevTools window (no docking flag): a views window appears, no crash
+load https://example.com/
+sleep 3000
+activate
+devtools-window
+sleep 5000
+screenshot
+quit

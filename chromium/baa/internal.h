@@ -65,6 +65,7 @@ BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile);
 // A page that is not in a tab strip. `close` destroys what holds the contents.
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
 void BareTabClosedByChrome(BaaTab* tab);
+void CloseBareTabsForQuit();
 void SendTabState(BaaTab* tab);
 
 // ---- permissions.mm / menu.mm / downloads.mm / devtools.mm

@@ -1,0 +1,34 @@
+# step 7: fetch (ok and failing), init script on a chrome:// page, color scheme, pref
+load https://example.com/
+sleep 3000
+activate
+fetch https://suggestqueries.google.com/complete/search?client=firefox&q=a
+fetch https://nonexistent.invalid/x
+fetch not-a-url
+sleep 4000
+tab 1 chrome://settings/
+sleep 4500
+use 1
+initscript window.__baa='skin-ran'
+reload
+sleep 3500
+eval document.title='init:'+window.__baa
+sleep 500
+state
+scheme 2
+eval document.title='dark:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+scheme 1
+eval document.title='light-dark:'+matchMedia('(prefers-color-scheme: dark)').matches
+sleep 500
+state
+# a pref that this profile registers
+pref search.suggest_enabled false
+pref no.such.pref true
+load chrome://prefs-internals/
+sleep 3500
+eval document.title='suggest:'+(document.body.innerText.match(/"suggest_enabled":\s*(true|false)/)||[])[1]
+sleep 500
+state
+quit

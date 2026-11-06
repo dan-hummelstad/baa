@@ -51,7 +51,10 @@ bool Terminating() {
 void WatchTermination() {
   static base::NoDestructor<base::CallbackListSubscription> on_terminating(
       browser_shutdown::AddAppTerminatingCallback(
-          base::BindOnce([] { g_terminating = true; })));
+          base::BindOnce([] {
+        g_terminating = true;
+        CloseBareTabsForQuit();
+      })));
   // The post-install dialog dereferences a null BrowserView when it closes
   // (extension_install_ui_desktop.cc); the install prompt itself still shows.
   static base::NoDestructor<base::AutoReset<bool>> no_install_ui(

@@ -1022,7 +1022,8 @@ bool SetPrefBool(Profile* profile, const char* name, bool value) {
 
 void baa_profile_set_pref_bool(BaaProfile* profile, const char* name, bool value) {
   if (AliveProfile(profile)) {
-    baa::SetPrefBool(profile->profile, name, value);
+    LOG(INFO) << "baa: set_pref_bool " << name << " = " << value << " -> "
+              << baa::SetPrefBool(profile->profile, name, value);
   }
 }
 
@@ -1082,6 +1083,21 @@ void BareTabClosedByChrome(BaaTab* tab) {
   ReportClosed(tab);
   tab->Detach();
   std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
+}
+
+// Quit: popups are not in any tab strip, so nothing else closes them, and a
+// BrowserContext may not die with a WebContents alive.
+void CloseBareTabsForQuit() {
+  while (!BareTabs().empty()) {
+    BaaTab* tab = BareTabs().front().get();
+    base::OnceClosure close = std::move(tab->close_bare);
+    ReportClosed(tab);
+    tab->Detach();
+    BareTabs().erase(BareTabs().begin());
+    if (close) {
+      std::move(close).Run();
+    }
+  }
 }
 
 // Sends the first state of a page nobody told the app about yet.

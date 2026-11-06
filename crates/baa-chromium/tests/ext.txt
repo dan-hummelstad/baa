@@ -1,0 +1,23 @@
+# extensions (run through tx.sh: test-ext loaded into the Default profile, BAA_SPIKE_PROFILE=Default):
+# list, popup acting on the real active tab (no shim), alert in the popup, access, disable, remove
+load https://example.com/
+sleep 3000
+activate
+extensions
+popup heocdabdebijkpiffempgfdmmpbgenmk
+sleep 3500
+use 1
+state
+eval setTimeout(()=>alert('from popup'),100)
+sleep 1500
+use 0
+ext heocdabdebijkpiffempgfdmmpbgenmk access 1
+extensions
+ext heocdabdebijkpiffempgfdmmpbgenmk access 3
+extensions
+ext heocdabdebijkpiffempgfdmmpbgenmk disable
+extensions
+ext heocdabdebijkpiffempgfdmmpbgenmk enable
+ext heocdabdebijkpiffempgfdmmpbgenmk remove
+extensions
+quit
