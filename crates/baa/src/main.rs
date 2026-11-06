@@ -96,22 +96,13 @@ fn launch<H: WebHost>(
     cx: &mut App,
 ) {
     baa_ui::init(cx);
-    if let Ok(json) = std::fs::read_to_string(dir.join("keymap.json")) {
-        if let Err(e) = baa_ui::actions::bind_keymap(&json, cx) {
-            log::error!("{e:#}");
-        }
-    }
+    // Also tells the settings window where "Edit keymap.json…" goes.
+    baa_ui::load_user_keymap(dir.join("keymap.json"), cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     cx.set_menus([Menu::new("baa").items([MenuItem::action("Quit baa", Quit)])]);
     // ponytail: gpui does not read the OS reduce-motion flag and we do not
     // either yet; Settings.reduce_motion is the only switch.
-    cx.on_window_closed(|cx, _| {
-        if cx.windows().is_empty() {
-            cx.quit();
-        }
-    })
-    .detach();
 
     let bounds = Bounds::centered(None, size(px(1280.), px(860.)), cx);
     let options = WindowOptions {
@@ -131,6 +122,13 @@ fn launch<H: WebHost>(
         .open_window(options, |window, cx| cx.new(|cx| Browser::new(host, store, window, cx)))
         .unwrap_or_else(|e| fail("opening the window", e));
     cx.activate(true);
+    // The settings window cannot outlive the browser window it belongs to.
+    cx.on_window_closed(move |cx, _| {
+        if window.update(cx, |_, _, _| ()).is_err() {
+            cx.quit();
+        }
+    })
+    .detach();
 
     // Links from other apps open in lil-baa, not the browser (Arc's Little Arc).
     cx.spawn(async move |cx| {
