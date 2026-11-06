@@ -31,7 +31,12 @@ downloads kept across launches and archived tabs, a header downloads button, his
 (in ⌘T, and ⌘Y), permission prompts and per-site settings, page dialogs drawn over the page,
 print, view source, reader mode, Picture in Picture, translate, tab mute, Settings (⌘,), and import
 of Arc's Spaces and other browsers' history. Extensions have a toolbar and popups, and Chrome's
-`chrome://settings` shows as a sheet in baa's skin. DevTools dock beside the page. Password managers
+`chrome://settings` shows as a sheet in baa's skin. DevTools dock beside the page. Chrome's own
+prompts (HTTP auth, external-protocol links, hung or crashed pages, extension install) are drawn by
+baa on the tab, page fullscreen fills the window, find shows `3/12`, tabs in a folder are a Chrome
+tab group (an extension's `chrome.tabs.group` fills a folder), and the command bar ranks with
+Chrome's omnibox (ABI 6). Not yet (M4): `chrome.commands` shortcuts, `chrome.action.openPopup`,
+action badges, the screen-share picker. Password managers
 work through their Chrome extensions; Apple's iCloud Passwords cannot (macOS only lets Chrome and
 Edge start its helper). The UI follows the pen.dev mocks. Still to come from milestone 4: split view.
 

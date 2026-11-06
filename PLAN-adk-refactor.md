@@ -68,7 +68,7 @@ The implementation still carries M1/M2 debt that makes every new delegate expens
    - This deletes `closing_by_baa`, `closed_sent`, `bare`, `g_creating`, `g_docking` and `g_front`.
 9. Fix the handle-lifetime text in baa.h.
 
-### At M3 start (one ABI 5 bump, both sides together)
+### At M3 start (one ABI 5 bump, both sides together; steps 10–12 done 2026-11-06 in ABI 6)
 
 10. A `requests.mm` registry for every id-answered ask, plus one `request_closed` callback replacing
     `dialog_closed`/`permission_closed`. `PageEvent::Dialog` carries an id, which deletes

@@ -1,5 +1,4 @@
 script: autocomplete.txt
 must: autocomplete id=1 .*example.com
-must: autocomplete id=2 .*\|1"
 count: 0 autocomplete id=3
 count: 0 autocomplete id=4

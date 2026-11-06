@@ -1,6 +1,9 @@
-# M3: ABI 6, Chrome's dialogs in GPUI, tab groups, omnibox ranking (draft, 2026-11-06)
+# M3: ABI 6, Chrome's dialogs in GPUI, tab groups, omnibox ranking (built, 2026-11-06)
 
-Spec, not built. Written against Chromium 156: the Helium tree is at
+Status: all packages (WP-0 to WP-Z) are committed on `adk`; `cargo build/test/clippy` are green; the
+harness files and manual checks in WP-Z are still for the user to run.
+
+Was the spec. Written against Chromium 156: the Helium tree is at
 `/Users/Shared/hb/helium-macos/build/src` with baa's patches applied (`/Users/Shared/hb/src` does not
 exist). Paths that start with `chrome/`, `components/`, `content/` or `extensions/` are in that tree.
 The base is ABI 5 (`chromium/baa/baa.h`) and the ADK refactor steps 1–9 (`PLAN-adk-refactor.md`).
