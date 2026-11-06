@@ -1,0 +1,22 @@
+# permissions (run with BAA_HARNESS_PERMISSION=allow): ask once, remembered, site settings, block
+load https://example.com/
+sleep 3000
+activate
+geval navigator.geolocation.getCurrentPosition(p=>{document.title='geo-ok'},e=>{document.title='geo-err:'+e.code})
+sleep 3000
+state
+# remembered: no second `permission` line
+geval navigator.geolocation.getCurrentPosition(p=>{document.title='geo2-ok'},e=>{document.title='geo2-err:'+e.code})
+sleep 2500
+state
+site location https://example.com/
+site location https://example.com/ block
+geval navigator.geolocation.getCurrentPosition(p=>{document.title='geo3-ok'},e=>{document.title='geo3-err:'+e.code})
+sleep 2500
+state
+site location https://example.com/ ask
+site notifications https://example.com/ block
+geval Notification.requestPermission().then(r=>{document.title='notif:'+r})
+sleep 2500
+state
+quit

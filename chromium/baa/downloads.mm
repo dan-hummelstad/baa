@@ -1,0 +1,141 @@
+// Downloads: one observer per profile, one per in-progress item.
+// PLAN-chromium-phase4.md step 4.
+
+#import <Cocoa/Cocoa.h>
+
+#include <map>
+#include <memory>
+#include <string>
+
+#include "baa/baa.h"
+#include "baa/internal.h"
+#include "base/no_destructor.h"
+#include "components/download/public/common/download_item.h"
+#include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/web_contents.h"
+
+namespace baa {
+namespace {
+
+uint32_t g_next_download = 1;
+
+class ItemWatch;
+std::map<uint32_t, ItemWatch*>& Items() {
+  static base::NoDestructor<std::map<uint32_t, ItemWatch*>> items;
+  return *items;
+}
+
+class ItemWatch : public download::DownloadItem::Observer {
+ public:
+  explicit ItemWatch(download::DownloadItem* item) : item_(item), id_(g_next_download++) {
+    item->AddObserver(this);
+    Items()[id_] = this;
+  }
+  ~ItemWatch() override {
+    Items().erase(id_);
+    if (item_) {
+      item_->RemoveObserver(this);
+    }
+  }
+
+  void Send() {
+    if (!item_ || !Callbacks().download) {
+      return;
+    }
+    // Chrome shows no prompt; keeping every file is what CEF did.
+    if (item_->IsDangerous()) {
+      item_->ValidateDangerousDownload();
+    }
+    if (item_->IsInsecure()) {
+      item_->ValidateInsecureDownload();
+    }
+    std::string url = item_->GetURL().spec();
+    std::string path = (item_->GetTargetFilePath().empty() ? item_->GetFullPath()
+                                                           : item_->GetTargetFilePath())
+                           .AsUTF8Unsafe();
+    BaaDownload download = {};
+    download.id = id_;
+    download.url = url.c_str();
+    download.path = path.c_str();
+    download.received_bytes = item_->GetReceivedBytes();
+    download.total_bytes = item_->GetTotalBytes();
+    download.state = item_->GetState() == download::DownloadItem::IN_PROGRESS ? BAA_DOWNLOAD_IN_PROGRESS
+                     : item_->GetState() == download::DownloadItem::COMPLETE   ? BAA_DOWNLOAD_COMPLETE
+                                                                                : BAA_DOWNLOAD_CANCELED;
+    content::WebContents* wc = content::DownloadItemUtils::GetWebContents(item_);
+    // A tab the app knows of, else NULL (a service worker, a closed tab).
+    BaaTab* tab = wc ? TabFor(wc) : nullptr;
+    Callbacks().download(CallbackContext(), tab && TabAnnounced(tab) ? tab : nullptr, &download);
+  }
+
+  void Cancel() {
+    if (item_ && item_->GetState() == download::DownloadItem::IN_PROGRESS) {
+      item_->Cancel(/*user_cancel=*/true);
+    }
+  }
+
+  void OnDownloadUpdated(download::DownloadItem*) override { Send(); }
+  void OnDownloadDestroyed(download::DownloadItem*) override {
+    item_ = nullptr;
+    delete this;
+  }
+
+ private:
+  raw_ptr<download::DownloadItem> item_;
+  const uint32_t id_;
+};
+
+class ManagerWatch : public content::DownloadManager::Observer {
+ public:
+  explicit ManagerWatch(content::DownloadManager* manager) : manager_(manager) {
+    manager->AddObserver(this);
+  }
+  ~ManagerWatch() override {
+    if (manager_) {
+      manager_->RemoveObserver(this);
+    }
+  }
+  void OnDownloadCreated(content::DownloadManager*, download::DownloadItem* item) override {
+    // Items loaded from history arrive finished; baa-model keeps its own list.
+    if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
+      return;
+    }
+    // Owns itself until the item is destroyed.
+    (new ItemWatch(item))->Send();
+  }
+  void ManagerGoingDown(content::DownloadManager*) override {
+    manager_ = nullptr;
+    watches_gone_ = true;
+  }
+  bool gone() const { return watches_gone_; }
+
+ private:
+  raw_ptr<content::DownloadManager> manager_;
+  bool watches_gone_ = false;
+};
+
+std::vector<std::unique_ptr<ManagerWatch>>& Managers() {
+  static base::NoDestructor<std::vector<std::unique_ptr<ManagerWatch>>> managers;
+  return *managers;
+}
+
+}  // namespace
+
+// Called once per profile (disk or ephemeral), after it exists.
+void WatchDownloads(Profile* profile) {
+  std::erase_if(Managers(), [](auto& m) { return m->gone(); });
+  if (auto* manager = profile->GetDownloadManager()) {
+    Managers().push_back(std::make_unique<ManagerWatch>(manager));
+  }
+}
+
+}  // namespace baa
+
+void baa_download_cancel(uint32_t id) {
+  auto it = baa::Items().find(id);
+  if (it != baa::Items().end()) {
+    it->second->Cancel();
+  }
+}

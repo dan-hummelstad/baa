@@ -14,6 +14,7 @@
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/browser/ui/extensions/extension_install_ui.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "chrome/browser/lifetime/termination_notification.h"
@@ -51,6 +52,10 @@ void WatchTermination() {
   static base::NoDestructor<base::CallbackListSubscription> on_terminating(
       browser_shutdown::AddAppTerminatingCallback(
           base::BindOnce([] { g_terminating = true; })));
+  // The post-install dialog dereferences a null BrowserView when it closes
+  // (extension_install_ui_desktop.cc); the install prompt itself still shows.
+  static base::NoDestructor<base::AutoReset<bool>> no_install_ui(
+      ExtensionInstallUI::disable_ui_for_tests(true));
   static base::NoDestructor<PrefChangeRegistrar> pin;
   if (!pin->prefs() && g_browser_process && g_browser_process->local_state()) {
     PrefService* local_state = g_browser_process->local_state();

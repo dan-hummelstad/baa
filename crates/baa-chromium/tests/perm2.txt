@@ -1,0 +1,11 @@
+# permissions (no auto-answer, or deny): getUserMedia is one ask for both kinds; navigating away closes it
+load https://example.com/
+sleep 3000
+activate
+geval navigator.mediaDevices.getUserMedia({audio:true,video:true}).then(()=>{document.title='gum-ok'},e=>{document.title='gum:'+e.name})
+sleep 3000
+state
+load https://example.org/
+sleep 3000
+state
+quit

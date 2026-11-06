@@ -55,6 +55,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
+#include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom.h"
 #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -183,7 +186,7 @@ std::map<uint64_t, std::unique_ptr<DialogView>>& Dialogs() {
   static base::NoDestructor<std::map<uint64_t, std::unique_ptr<DialogView>>> d;
   return *d;
 }
-uint64_t g_next_dialog_id = 1;
+uint64_t g_next_id = 1;
 
 BaaTab* TabOf(content::WebContents* contents);
 bool AliveTab(BaaTab* tab);
@@ -244,6 +247,13 @@ struct BaaTab : content::WebContentsObserver,
   // tab_closed already sent (a tab deleted from a window that is not ours).
   bool closed_sent = false;
   base::CallbackListSubscription will_detach;
+  // A page that is not in a Browser's tab strip (an extension popup): no
+  // TabInterface; baa_tab_close runs this to destroy what holds the contents.
+  bool bare = false;
+  base::OnceClosure close_bare;
+  // baa_tab_set_init_script / baa_tab_set_color_scheme.
+  std::u16string init_script;
+  int color_scheme = 0;
   // Chrome-made tabs are announced (tab_created) once their URL is known;
   // until then they are silent.
   bool reported = true;
@@ -259,6 +269,7 @@ struct BaaTab : content::WebContentsObserver,
   content::WebContents* contents() const { return web_contents(); }
 
   void Attach(content::WebContents* wc);
+  void ApplyColorScheme();
   void Detach();
 
   BaaTabState Snapshot(std::string& url, std::string& title, std::string& icon) {
@@ -320,6 +331,26 @@ struct BaaTab : content::WebContentsObserver,
     }
     SendState();
   }
+  void PrimaryMainDocumentElementAvailable() override {
+    ApplyColorScheme();
+    if (!init_script.empty()) {
+      web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(init_script, base::NullCallback());
+    }
+  }
+  // Pages tell the app things through console.debug("baa:..."), e.g. the
+  // DevTools dock picker.
+  void OnDidAddMessageToConsole(content::RenderFrameHost*,
+                                blink::mojom::ConsoleMessageLevel,
+                                const std::u16string& message,
+                                int32_t,
+                                const std::u16string&,
+                                const std::optional<std::u16string>&) override {
+    constexpr std::u16string_view kPrefix = u"baa:";
+    if (message.starts_with(kPrefix) && reported && baa::Callbacks().page_message) {
+      std::string rest = base::UTF16ToUTF8(message.substr(kPrefix.size()));
+      baa::Callbacks().page_message(baa::CallbackContext(), this, rest.c_str());
+    }
+  }
   void WebContentsDestroyed() override { Detach(); }
 
   // favicon::FaviconDriverObserver:
@@ -362,10 +393,24 @@ struct BaaTab : content::WebContentsObserver,
 
 namespace {
 
+// Pages outside a tab strip.
+std::vector<std::unique_ptr<BaaTab>>& BareTabs() {
+  static base::NoDestructor<std::vector<std::unique_ptr<BaaTab>>> bare;
+  return *bare;
+}
+
 BaaTab* TabOf(content::WebContents* contents) {
   auto* tab = tabs::TabInterface::MaybeGetFromContents(contents);
   auto it = Tabs().find(tab);
-  return it == Tabs().end() ? nullptr : it->second.get();
+  if (it != Tabs().end()) {
+    return it->second.get();
+  }
+  for (auto& value : BareTabs()) {
+    if (value->web_contents() == contents) {
+      return value.get();
+    }
+  }
+  return nullptr;
 }
 
 bool AliveTab(BaaTab* tab) {
@@ -374,49 +419,12 @@ bool AliveTab(BaaTab* tab) {
       return true;
     }
   }
+  for (auto& value : BareTabs()) {
+    if (value.get() == tab) {
+      return true;
+    }
+  }
   return false;
-}
-
-// Chrome's permission bubble null-derefs without a BrowserView, and a request
-// with no prompt stays pending, so requests are answered "ignored" (the page
-// sees a dismissal, nothing is stored). M2 asks the app instead.
-class IgnoringPrompt : public permissions::PermissionPrompt {
- public:
-  bool UpdateAnchor() override { return true; }
-  TabSwitchingBehavior GetTabSwitchingBehavior() override {
-    return kDestroyPromptAndIgnoreRequest;
-  }
-  permissions::PermissionPromptDisposition GetPromptDisposition()
-      const override {
-    return permissions::PermissionPromptDisposition::NONE_VISIBLE;
-  }
-  bool IsAskPrompt() const override { return true; }
-  std::optional<gfx::Rect> GetViewBoundsInScreen() const override {
-    return std::nullopt;
-  }
-  std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
-      const override {
-    return {};
-  }
-  std::optional<permissions::feature_params::PermissionElementPromptPosition>
-  GetPromptPosition() const override {
-    return std::nullopt;
-  }
-};
-
-std::unique_ptr<permissions::PermissionPrompt> MakeIgnoringPrompt(
-    content::WebContents*,
-    permissions::PermissionPrompt::Delegate* delegate) {
-  // Not inside the factory call: the manager has not stored the view yet.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(
-                     [](base::WeakPtr<permissions::PermissionPrompt::Delegate> d) {
-                       if (d) {
-                         d->Ignore(std::monostate());
-                       }
-                     },
-                     delegate->GetWeakPtr()));
-  return std::make_unique<IgnoringPrompt>();
 }
 
 int KindOf(int type) {
@@ -439,7 +447,7 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
       content::JavaScriptDialogManager::DialogClosedCallback callback,
       base::OnceClosure) override {
     BaaTab* tab = TabOf(wc_);
-    uint64_t id = g_next_dialog_id++;
+    uint64_t id = baa::NextId();
     auto view = std::make_unique<DialogView>(id, tab, default_text,
                                              std::move(callback));
     auto weak = view->GetWeakPtr();
@@ -485,15 +493,25 @@ void BaaTab::Attach(content::WebContents* wc) {
   if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(wc)) {
     driver->AddObserver(this);
   }
+  if (bare) {
+    return;  // a popup has no tab helpers: its dialogs are app-modal
+  }
   // Chrome's views dialog CHECK-crashes with our window; the app draws them.
   wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
       wc, std::make_unique<DialogDelegate>(wc));
-  if (auto* manager =
-          permissions::PermissionRequestManager::FromWebContents(wc)) {
-    manager->set_view_factory_for_testing(
-        base::BindRepeating(&MakeIgnoringPrompt));
+  baa::AttachPermissions(wc);
+}
+
+void BaaTab::ApplyColorScheme() {
+  content::WebContents* wc = web_contents();
+  if (!wc || color_scheme == 0) {
+    return;
   }
+  blink::web_pref::WebPreferences prefs = wc->GetOrCreateWebPreferences();
+  prefs.preferred_color_scheme = color_scheme == 2 ? blink::mojom::PreferredColorScheme::kDark
+                                                   : blink::mojom::PreferredColorScheme::kLight;
+  wc->SetWebPreferences(prefs);
 }
 
 void BaaTab::Detach() {
@@ -553,7 +571,10 @@ void OnTabInserted(TabStripModel* model,
   content::WebContents* wc = tab->GetContents();
   t->will_detach = tab->RegisterWillDetach(base::BindRepeating(&OnWillDetach));
   t->Attach(wc);
-  if (g_creating) {
+  if (g_creating || DevtoolsDocking()) {
+    if (DevtoolsDocking()) {
+      NoteDevtoolsFront(t);
+    }
     return;
   }
   t->reported = false;
@@ -600,6 +621,9 @@ void ReportClosed(BaaTab* t) {
     return;
   }
   t->closed_sent = true;
+  DropPermissionsOf(t);
+  DropMenusOf(t);
+  ForgetDevtoolsOf(t);
   for (auto d = Dialogs().begin(); d != Dialogs().end();) {
     if (d->second->tab() == t) {
       uint64_t id = d->first;
@@ -663,6 +687,7 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
   }
   BaaTab* t = it->second.get();
   t->Detach();
+  DropMenusOf(t);
   t->icon_url.clear();
   t->Attach(new_contents);
   t->SendState();
@@ -699,6 +724,8 @@ BaaProfile* baa_profile_open(const char* dir_name) {
   }
   LOG(INFO) << "baa: profile_open " << name << " took "
             << timer.Elapsed().InMilliseconds() << " ms";
+  baa::InstallAppModalFactory();
+  baa::WatchDownloads(profile);
   auto owned = std::make_unique<BaaProfile>(profile, /*ephemeral=*/false);
   owned->name = name;
   Profiles().push_back(std::move(owned));
@@ -726,6 +753,8 @@ BaaProfile* baa_profile_open_ephemeral(void) {
   if (!profile) {
     return nullptr;
   }
+  baa::InstallAppModalFactory();
+  baa::WatchDownloads(profile);
   Profiles().push_back(std::make_unique<BaaProfile>(profile, /*ephemeral=*/true));
   return Profiles().back().get();
 }
@@ -751,6 +780,15 @@ void baa_profile_close(BaaProfile* profile) {
     int index = browser ? browser->GetTabStripModel()->GetIndexOfTab(tab) : -1;
     if (index >= 0) {
       browser->GetTabStripModel()->DetachAndDeleteWebContentsAt(index);
+    }
+  }
+  for (size_t i = 0; i < BareTabs().size();) {
+    BaaTab* bare = BareTabs()[i].get();
+    content::WebContents* wc = bare->web_contents();
+    if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
+      baa_tab_close(bare);
+    } else {
+      ++i;
     }
   }
   bool ephemeral = profile->ephemeral;
@@ -801,6 +839,18 @@ void baa_tab_close(BaaTab* tab) {
     return;
   }
   tab->closing_by_baa = true;
+  if (!tab->tab) {
+    // A popup: destroying what holds the contents closes it.
+    base::OnceClosure close = std::move(tab->close_bare);
+    baa::DropPermissionsOf(tab);
+    baa::DropMenusOf(tab);
+    tab->Detach();
+    std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
+    if (close) {
+      std::move(close).Run();
+    }
+    return;
+  }
   BrowserWindowInterface* browser = tab->tab->GetBrowserWindowInterface();
   if (!browser) {
     return;
@@ -920,7 +970,13 @@ void baa_tab_activate(BaaTab* tab) {
   if (!Contents(tab)) {
     return;
   }
+  if (!tab->tab) {
+    return;
+  }
   BrowserWindowInterface* browser = tab->tab->GetBrowserWindowInterface();
+  if (!browser) {
+    return;
+  }
   TabStripModel* model = browser->GetTabStripModel();
   int index = model->GetIndexOfTab(tab->tab);
   if (index >= 0) {
@@ -938,6 +994,7 @@ void baa_tab_focus(BaaTab* tab) {
 void baa_dialog_answer(uint64_t id, bool ok, const char* text) {
   auto it = Dialogs().find(id);
   if (it == Dialogs().end()) {
+    baa::AnswerAppModal(id, ok, base::UTF8ToUTF16(text ? text : ""));
     return;
   }
   // Forgotten before the callback runs: the manager answers by closing the
@@ -966,5 +1023,92 @@ bool SetPrefBool(Profile* profile, const char* name, bool value) {
 void baa_profile_set_pref_bool(BaaProfile* profile, const char* name, bool value) {
   if (AliveProfile(profile)) {
     baa::SetPrefBool(profile->profile, name, value);
+  }
+}
+
+namespace baa {
+
+uint64_t NextId() {
+  return g_next_id++;
+}
+
+BaaTab* TabFor(content::WebContents* contents) {
+  return contents ? TabOf(contents) : nullptr;
+}
+
+bool TabAnnounced(BaaTab* tab) {
+  return tab && tab->reported;
+}
+
+bool TabAlive(BaaTab* tab) {
+  return AliveTab(tab);
+}
+
+content::WebContents* ContentsOf(BaaTab* tab) {
+  return AliveTab(tab) ? tab->web_contents() : nullptr;
+}
+
+Profile* ChromeProfileOf(BaaProfile* profile) {
+  return AliveProfile(profile) ? profile->profile.get() : nullptr;
+}
+
+BaaProfile* ProfileFor(Profile* profile) {
+  return ProfileOf(profile);
+}
+
+BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile) {
+  return AliveProfile(profile) && profile->browser && !BrowserIsClosing(profile->browser)
+             ? profile->browser.get()
+             : nullptr;
+}
+
+BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close) {
+  auto owned = std::make_unique<BaaTab>(nullptr);
+  BaaTab* tab = owned.get();
+  tab->bare = true;
+  tab->close_bare = std::move(close);
+  BareTabs().push_back(std::move(owned));
+  tab->Attach(contents);
+  return tab;
+}
+
+// The holder closed the page itself (a popup's window.close(), its extension
+// unloaded): tab_closed once, then the handle is dead.
+void BareTabClosedByChrome(BaaTab* tab) {
+  if (!AliveTab(tab)) {
+    return;
+  }
+  tab->close_bare = base::OnceClosure();
+  ReportClosed(tab);
+  tab->Detach();
+  std::erase_if(BareTabs(), [&](auto& t) { return t.get() == tab; });
+}
+
+// Sends the first state of a page nobody told the app about yet.
+void SendTabState(BaaTab* tab) {
+  if (AliveTab(tab)) {
+    tab->SendState();
+  }
+}
+
+}  // namespace baa
+
+void baa_tab_set_init_script(BaaTab* tab, const char* script) {
+  if (AliveTab(tab)) {
+    tab->init_script = base::UTF8ToUTF16(script ? script : "");
+  }
+}
+
+void baa_tab_set_color_scheme(BaaTab* tab, int scheme) {
+  if (!AliveTab(tab)) {
+    return;
+  }
+  tab->color_scheme = scheme;
+  if (content::WebContents* wc = tab->web_contents()) {
+    if (scheme == 0) {
+      wc->OnWebPreferencesChanged();  // back to what the system says
+    } else {
+      tab->ApplyColorScheme();
+    }
   }
 }

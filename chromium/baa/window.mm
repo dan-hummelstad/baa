@@ -16,7 +16,9 @@
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
 #include "chrome/browser/ui/unload_controller.h"
+#include "chrome/browser/ui/extensions/extensions_container.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
@@ -368,8 +370,13 @@ std::unique_ptr<content::EyeDropper> Window::OpenEyeDropper(
   return nullptr;
 }
 
-Window::Window(BrowserWindowInterface* browser)
-    : browser_(browser), location_bar_(std::make_unique<StubLocationBar>()) {
+Window::Window(BrowserWindowInterface* browser, bool hidden)
+    : browser_(browser), location_bar_(std::make_unique<StubLocationBar>()), hidden_(hidden) {
+  // Without one registered, extension context menus and the CDP extensions
+  // handler dereference null.
+  extensions_container_ = MakeExtensionsContainer(browser);
+  extensions_registration_ = std::make_unique<ui::ScopedUnownedUserData<ExtensionsContainer>>(
+      browser->GetUnownedUserDataHost(), *extensions_container_);
   // The Browser's TabStripModel exists already (browser.cc builds it before
   // the window), so nothing is missed.
   browser->GetTabStripModel()->AddObserver(this);
@@ -395,6 +402,9 @@ BrowserWindow* Window::Create(BrowserWindowInterface* browser,
     case BrowserWindowInterface::TYPE_NORMAL:
     case BrowserWindowInterface::TYPE_POPUP:
       return new Window(browser);
+    case BrowserWindowInterface::TYPE_DEVTOOLS:
+      // Docked: the app shows the front-end. Otherwise Chrome's views window.
+      return DevtoolsDocking() ? new Window(browser, /*hidden=*/true) : nullptr;
     default:
       return nullptr;
   }
@@ -468,6 +478,9 @@ bool Window::IsVisible() const {
 }
 
 void Window::Activate() {
+  if (hidden_) {
+    return;  // extensions' "current window" must stay the page's
+  }
   if (g_active == this) {
     return;
   }
@@ -553,10 +566,17 @@ gfx::NativeView Window::GetHostView() const {
   return gfx::NativeView(ActiveView());
 }
 
+// The views dialogs of M2 (HTTP auth, install prompts) become top-level
+// windows that are not children of ours, so the position is in screen
+// coordinates: centred at the top of the page.
 gfx::Point Window::GetDialogPosition(const gfx::Size& size) {
   NSView* view = ActiveView();
-  int width = view ? static_cast<int>(view.bounds.size.width) : size.width();
-  return gfx::Point(std::max(0, (width - size.width()) / 2), 0);
+  if (!view || !view.window) {
+    return gfx::Point();
+  }
+  NSRect in_window = [view convertRect:view.bounds toView:nil];
+  gfx::Rect screen = gfx::ScreenRectFromNSRect([view.window convertRectToScreen:in_window]);
+  return gfx::Point(screen.x() + std::max(0, (screen.width() - size.width()) / 2), screen.y());
 }
 
 gfx::Size Window::GetMaximumDialogSize() {

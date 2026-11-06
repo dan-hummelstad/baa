@@ -2,6 +2,9 @@
   "manifest_version": 3,
   "name": "baa probe",
   "version": "1",
-  "permissions": ["tabs"],
-  "background": { "service_worker": "sw.js" }
+  "description": "Probe for baa's harness",
+  "permissions": ["tabs", "activeTab", "contextMenus"],
+  "host_permissions": ["https://*/*"],
+  "background": { "service_worker": "sw.js" },
+  "action": { "default_popup": "popup.html" }
 }

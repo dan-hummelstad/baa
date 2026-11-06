@@ -1,4 +1,4 @@
-//! BaaCore's C ABI (`chromium/baa/baa.h`, version 3), loaded with dlopen like
+//! BaaCore's C ABI (`chromium/baa/baa.h`, version 4), loaded with dlopen like
 //! Chrome's own launcher does, so cargo never links against the Chromium build.
 
 use std::{
@@ -9,7 +9,7 @@ use std::{
 pub type Tab = *mut c_void;
 pub type Profile = *mut c_void;
 
-pub const ABI_VERSION: c_int = 3;
+pub const ABI_VERSION: c_int = 4;
 
 pub const EDIT_COPY: c_int = 0;
 pub const EDIT_CUT: c_int = 1;
@@ -48,6 +48,42 @@ impl TabState {
 }
 
 #[repr(C)]
+pub struct MenuItem {
+    pub label: *const c_char,
+    pub command: c_int,
+    pub depth: u8,
+    pub kind: u8,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+#[repr(C)]
+pub struct Download {
+    pub id: u32,
+    pub url: *const c_char,
+    pub path: *const c_char,
+    pub received_bytes: i64,
+    pub total_bytes: i64,
+    pub state: c_int,
+}
+
+#[repr(C)]
+pub struct Extension {
+    pub id: *const c_char,
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub version: *const c_char,
+    pub icon_path: *const c_char,
+    pub popup_url: *const c_char,
+    pub options_url: *const c_char,
+    pub permissions: *const c_char,
+    pub site_access: c_int,
+    pub enabled: bool,
+}
+
+pub type ExtensionVisitor = extern "C" fn(*mut c_void, *const Extension);
+
+#[repr(C)]
 pub struct Callbacks {
     pub key: extern "C" fn(*mut c_void, *mut c_void, bool) -> bool,
     pub tab_created: extern "C" fn(*mut c_void, Tab, Tab, Profile, *const c_char, bool, bool),
@@ -56,6 +92,13 @@ pub struct Callbacks {
     pub dialog: extern "C" fn(*mut c_void, Tab, u64, c_int, *const c_char, *const c_char),
     pub dialog_closed: extern "C" fn(*mut c_void, Tab, u64),
     pub tab_closed: extern "C" fn(*mut c_void, Tab),
+    pub permission: extern "C" fn(*mut c_void, Tab, u64, *const c_char, u32),
+    pub permission_closed: extern "C" fn(*mut c_void, Tab, u64),
+    pub context_menu: extern "C" fn(*mut c_void, Tab, u64, f32, f32, *const MenuItem, usize),
+    pub download: extern "C" fn(*mut c_void, Tab, *const Download),
+    pub resized: extern "C" fn(*mut c_void, Tab, c_int, c_int),
+    pub page_message: extern "C" fn(*mut c_void, Tab, *const c_char),
+    pub fetch_done: extern "C" fn(*mut c_void, u64, bool, *const c_char, usize),
 }
 
 pub type HistoryVisitor = extern "C" fn(*mut c_void, *const c_char, *const c_char);
@@ -63,9 +106,17 @@ pub type HistoryVisitor = extern "C" fn(*mut c_void, *const c_char, *const c_cha
 pub struct Core {
     pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,
+    pub is_quitting: extern "C" fn() -> bool,
     pub profile_open: extern "C" fn(*const c_char) -> Profile,
     pub profile_open_ephemeral: extern "C" fn() -> Profile,
     pub profile_close: extern "C" fn(Profile),
+    pub profile_set_pref_bool: extern "C" fn(Profile, *const c_char, bool),
+    pub profile_site_permission: extern "C" fn(Profile, *const c_char, u32) -> c_int,
+    pub profile_set_site_permission: extern "C" fn(Profile, *const c_char, u32, c_int),
+    pub profile_fetch: extern "C" fn(Profile, *const c_char, u64),
+    pub profile_extensions: extern "C" fn(Profile, ExtensionVisitor, *mut c_void) -> c_int,
+    pub profile_extension_change: extern "C" fn(Profile, *const c_char, c_int, c_int) -> bool,
+    pub extension_popup: extern "C" fn(Profile, *const c_char) -> Tab,
     pub tab_create: extern "C" fn(Profile, *const c_char) -> Tab,
     pub tab_close: extern "C" fn(Tab),
     pub tab_get_state: extern "C" fn(Tab, *mut TabState) -> bool,
@@ -81,7 +132,14 @@ pub struct Core {
     pub tab_set_muted: extern "C" fn(Tab, bool),
     pub tab_activate: extern "C" fn(Tab),
     pub tab_focus: extern "C" fn(Tab),
+    pub tab_set_init_script: extern "C" fn(Tab, *const c_char),
+    pub tab_set_color_scheme: extern "C" fn(Tab, c_int),
+    pub tab_open_devtools: extern "C" fn(Tab, bool, c_int, c_int) -> Tab,
+    pub tab_show_devtools_window: extern "C" fn(Tab, bool, c_int, c_int),
     pub dialog_answer: extern "C" fn(u64, bool, *const c_char),
+    pub permission_answer: extern "C" fn(u64, bool),
+    pub context_menu_done: extern "C" fn(u64, c_int),
+    pub download_cancel: extern "C" fn(u32),
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -116,9 +174,17 @@ pub fn load() -> &'static Core {
         let core = Core {
             install_app: std::mem::transmute(sym(c"baa_install_app")),
             exit_code: std::mem::transmute(sym(c"baa_exit_code")),
+            is_quitting: std::mem::transmute(sym(c"baa_is_quitting")),
             profile_open: std::mem::transmute(sym(c"baa_profile_open")),
             profile_open_ephemeral: std::mem::transmute(sym(c"baa_profile_open_ephemeral")),
             profile_close: std::mem::transmute(sym(c"baa_profile_close")),
+            profile_set_pref_bool: std::mem::transmute(sym(c"baa_profile_set_pref_bool")),
+            profile_site_permission: std::mem::transmute(sym(c"baa_profile_site_permission")),
+            profile_set_site_permission: std::mem::transmute(sym(c"baa_profile_set_site_permission")),
+            profile_fetch: std::mem::transmute(sym(c"baa_profile_fetch")),
+            profile_extensions: std::mem::transmute(sym(c"baa_profile_extensions")),
+            profile_extension_change: std::mem::transmute(sym(c"baa_profile_extension_change")),
+            extension_popup: std::mem::transmute(sym(c"baa_extension_popup")),
             tab_create: std::mem::transmute(sym(c"baa_tab_create")),
             tab_close: std::mem::transmute(sym(c"baa_tab_close")),
             tab_get_state: std::mem::transmute(sym(c"baa_tab_get_state")),
@@ -134,7 +200,14 @@ pub fn load() -> &'static Core {
             tab_set_muted: std::mem::transmute(sym(c"baa_tab_set_muted")),
             tab_activate: std::mem::transmute(sym(c"baa_tab_activate")),
             tab_focus: std::mem::transmute(sym(c"baa_tab_focus")),
+            tab_set_init_script: std::mem::transmute(sym(c"baa_tab_set_init_script")),
+            tab_set_color_scheme: std::mem::transmute(sym(c"baa_tab_set_color_scheme")),
+            tab_open_devtools: std::mem::transmute(sym(c"baa_tab_open_devtools")),
+            tab_show_devtools_window: std::mem::transmute(sym(c"baa_tab_show_devtools_window")),
             dialog_answer: std::mem::transmute(sym(c"baa_dialog_answer")),
+            permission_answer: std::mem::transmute(sym(c"baa_permission_answer")),
+            context_menu_done: std::mem::transmute(sym(c"baa_context_menu_done")),
+            download_cancel: std::mem::transmute(sym(c"baa_download_cancel")),
         };
         CORE.get_or_init(|| core)
     }

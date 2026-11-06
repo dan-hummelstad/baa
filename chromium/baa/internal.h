@@ -31,8 +31,17 @@
 
 @class NSView;
 
+class ExtensionsContainer;
 class LocationBarTesting;
+namespace ui {
+template <typename T>
+class ScopedUnownedUserData;
+}
 class OmniboxView;
+
+struct BaaTab;
+struct BaaProfile;
+class Profile;
 
 namespace baa {
 
@@ -42,6 +51,32 @@ void* CallbackContext();
 // True once Chrome began terminating: no new Browsers or tabs, no new work.
 bool Terminating();
 void WatchTermination();
+
+// ---- tab.mm: handles and lookups the other files share. A BaaTab is any page
+// the app shows: a tab in a Browser, a popup, a DevTools front-end.
+uint64_t NextId();  // dialogs, permission asks and menus share one counter
+BaaTab* TabFor(content::WebContents* contents);  // null if not a baa page
+bool TabAnnounced(BaaTab* tab);  // the app knows the handle
+bool TabAlive(BaaTab* tab);
+content::WebContents* ContentsOf(BaaTab* tab);  // null if gone
+Profile* ChromeProfileOf(BaaProfile* profile);  // null if gone
+BaaProfile* ProfileFor(Profile* profile);       // null if baa never opened it
+BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile);
+// A page that is not in a tab strip. `close` destroys what holds the contents.
+BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close);
+void BareTabClosedByChrome(BaaTab* tab);
+void SendTabState(BaaTab* tab);
+
+// ---- permissions.mm / menu.mm / downloads.mm / devtools.mm
+void AttachPermissions(content::WebContents* wc);
+void DropPermissionsOf(BaaTab* tab);
+void InstallAppModalFactory();
+bool AnswerAppModal(uint64_t id, bool ok, const std::u16string& text);
+void DropMenusOf(BaaTab* tab);
+void WatchDownloads(Profile* profile);
+bool DevtoolsDocking();
+void NoteDevtoolsFront(BaaTab* front);
+void ForgetDevtoolsOf(BaaTab* tab);
 
 // window.mm -> tab.mm: what the window's tab strip observer found.
 void OnTabInserted(TabStripModel* model,
@@ -60,6 +95,7 @@ bool BrowserIsClosing(BrowserWindowInterface* browser);
 // Destroys, now, every Browser of `profile` that has a baa window (their tabs
 // are already closed).
 void DestroyBrowsersOf(Profile* profile);
+std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
 // tab.mm: sets a bool pref if the profile registers it and the user may change it.
 bool SetPrefBool(Profile* profile, const char* name, bool value);
 
@@ -75,7 +111,8 @@ class Window : public BrowserWindow,
                public web_modal::WebContentsModalDialogHost,
                public ExclusiveAccessContext {
  public:
-  explicit Window(BrowserWindowInterface* browser);
+  // `hidden`: the DevTools Browser of a docked front-end: never shown or active.
+  explicit Window(BrowserWindowInterface* browser, bool hidden = false);
   Window(const Window&) = delete;
   Window& operator=(const Window&) = delete;
   ~Window() override;
@@ -268,7 +305,10 @@ class Window : public BrowserWindow,
   raw_ptr<BrowserWindowInterface> browser_;
   std::unique_ptr<StubLocationBar> location_bar_;
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
+  const bool hidden_;
   bool closing_ = false;
+  std::unique_ptr<ExtensionsContainer> extensions_container_;
+  std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;
   base::WeakPtrFactory<Window> weak_factory_{this};
 };
 
