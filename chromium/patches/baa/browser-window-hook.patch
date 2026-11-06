@@ -1,0 +1,61 @@
+--- a/chrome/browser/ui/views/frame/browser_window_factory.cc
++++ b/chrome/browser/ui/views/frame/browser_window_factory.cc
+@@ -7,6 +7,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/browser_window_deleter.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
++#include "chrome/browser/ui/views/frame/baa_browser_window_hook.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget_factory.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
+@@ -27,11 +28,20 @@
+ #include "chromeos/components/kiosk/kiosk_utils.h"
+ #endif
+ 
++BaaCreateBrowserWindowFn g_baa_create_browser_window = nullptr;
++
+ // static
+ std::unique_ptr<BrowserWindow, BrowserWindowDeleter>
+ BrowserWindow::CreateBrowserWindow(BrowserWindowInterface* browser,
+                                    bool user_gesture,
+                                    bool in_tab_dragging) {
++  // baa: the embedding app supplies its own window (null = Chrome's).
++  if (g_baa_create_browser_window) {
++    if (BrowserWindow* window =
++            g_baa_create_browser_window(browser, user_gesture)) {
++      return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(window);
++    }
++  }
+   if (webui_browser::IsWebUIBrowserEnabled() &&
+       browser->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
+     return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -966,7 +966,10 @@
+ }
+ 
+ source_set("browser_window_factory") {
+-  sources = [ "browser_window_factory.cc" ]
++  sources = [
++    "baa_browser_window_hook.h",
++    "browser_window_factory.cc",
++  ]
+ 
+   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+ 
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/baa_browser_window_hook.h
+@@ -0,0 +1,13 @@
++// baa: lets the embedding app (//baa) supply BrowserWindows. //chrome cannot
++// depend on //baa, so //baa sets this pointer.
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BAA_BROWSER_WINDOW_HOOK_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_BAA_BROWSER_WINDOW_HOOK_H_
++
++class BrowserWindow;
++class BrowserWindowInterface;
++
++using BaaCreateBrowserWindowFn = BrowserWindow* (*)(BrowserWindowInterface*,
++                                                    bool user_gesture);
++extern BaaCreateBrowserWindowFn g_baa_create_browser_window;
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BAA_BROWSER_WINDOW_HOOK_H_

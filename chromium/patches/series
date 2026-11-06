@@ -3,3 +3,6 @@ baa/no-crash-uploads.patch
 baa/add-baa-layer.patch
 baa/rename-framework-baacore.patch
 baa/embed-in-gpui.patch
+baa/browser-window-hook.patch
+baa/no-views-guards.patch
+baa/baa-otr-browsers.patch

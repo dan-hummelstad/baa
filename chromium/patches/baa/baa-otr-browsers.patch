@@ -1,0 +1,13 @@
+--- a/chrome/browser/profiles/profile.cc
++++ b/chrome/browser/profiles/profile.cc
+@@ -126,7 +126,9 @@
+   // CaptivePortal::Signin are exceptions to this ban.
+   if (*this == PrimaryID() || IsDevTools() ||
+       base::StartsWith(profile_id_, kMediaRouterOTRProfileIDPrefix,
+-                       base::CompareCase::SENSITIVE)) {
++                       base::CompareCase::SENSITIVE) ||
++      // baa: ephemeral Spaces are separate OTR profiles with their own Browser.
++      base::StartsWith(profile_id_, "baa::", base::CompareCase::SENSITIVE)) {
+     return true;
+   }
+ #if BUILDFLAG(IS_CHROMEOS)
