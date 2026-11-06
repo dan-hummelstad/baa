@@ -1,3 +1,4 @@
+targets = ["aarch64-apple-darwin"]
 accepted = [
     "Apache-2.0",
     "MIT",
@@ -16,3 +17,18 @@ accepted = [
     "OFL-1.1",
     "LicenseRef-UFL-1.0",
 ]
+
+# Zed's crates without a license field: Apache-2.0, as the rest of gpui.
+[gpui_util.clarify]
+license = "Apache-2.0"
+[[gpui_util.clarify.files]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+
+[gpui_shared_string.clarify]
+license = "Apache-2.0"
+[[gpui_shared_string.clarify.files]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"

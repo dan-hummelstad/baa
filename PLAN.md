@@ -178,16 +178,15 @@ The OSR phases below are history: pages are native views (§1). Input still desc
 - win: `OnAcceleratedPaint` gives a D3D11 shared NT handle → `OpenSharedResource1` in GPUI's DirectX renderer → draw as texture. Needs a new `surface()` equivalent on the Windows backend. Note CEF issue #4057 (null handle on CEF 143, Windows); verify on 154+ before depending on it.
 - Fall back to Phase 1 automatically if the accelerated path fails.
 
-**Input**
-- Mouse: GPUI `on_mouse_*` on the element → `SendMouseClickEvent/MoveEvent/WheelEvent` with view-local coordinates.
-- Keyboard: `RAWKEYDOWN`/`KEYUP` only; text via `EntityInputHandler` → `ImeCommitText` (gpui-cef's design, avoids double chars and makes IME work).
-- Scroll: GPUI `ScrollEvent` (renamed from `ScrollWheelEvent` in 2026) with phase → `SendMouseWheelEvent`. Precise deltas preserved so pages scroll like Chrome.
-- Cursor: `OnCursorChange` → `window.set_cursor_style`. Custom cursors → arrow (accepted).
-- Focus: `SetFocus(true/false)` tied to GPUI focus handle so ⌘L steals focus from the page correctly.
-- Context menus: `CefContextMenuHandler` → render our own GPUI menu (OSR has no native one).
-- Popups (`window.open`, select dropdowns): OSR delivers `<select>` popups via `OnPopupShow/OnPopupSize/OnPaint(PET_POPUP)`; composite as a second image layered above. `window.open` → new tab in same Space (or Peek when from pinned).
-- Drag & drop: deferred (gpui-cef has none). Files dropped on page = v1.1.
-- Find in page, zoom, print, dev tools (`ShowDevTools` into a separate CEF window, windowed mode is fine there), downloads via `CefDownloadHandler` with a GPUI download tray.
+**Input** (the page is a native NSView under gpui's layer)
+- Keyboard and IME go to Chromium natively: the page view is first responder. Shortcuts are offered to GPUI first; unhandled keys reach the page.
+- Mouse: gpui keeps the mouse where the page hitbox is not occluded and hands the original NSEvent on; clicks and moves reach the page as native events.
+- Scroll: native to Chromium (display link, momentum, precise deltas).
+- Cursor and focus: Chromium sets its own cursor; focus follows the GPUI focus handle, so ⌘L takes it from the page.
+- Context menus: `//baa` reports the menu; baa draws it as a native NSMenu (`WebHost::show_menu`).
+- Popups (`window.open`, select dropdowns): `window.open` becomes a tab of the same Space; Chrome's own popups are native.
+- Drag & drop: not yet. Files dropped on a page = v1.1.
+- Find in page, zoom, print, DevTools (docked beside the page or in a window) and downloads (a GPUI tray) go through `PageHandle` / `WebHost`.
 
 **Process model**
 - mac: `baa.app/Contents/MacOS/baa` (the Rust binary) + `Contents/Frameworks/BaaCore.framework` (`BaaCore`, `Helpers/` renderer, GPU and plain helper apps, `Libraries/*.dylib`). Chromium's own signer (`sign_chrome.py`) signs inside-out with the entitlements in `PLAN-chromium-phase5.md`; the DMG is notarised with `notarytool`.
@@ -225,7 +224,7 @@ Browser-standard keys (⌘R, ⌘+/-/0, ⌘P, ⌘⇧N incognito space) included. 
 
 ## 9. Gestures
 
-- **Two-finger swipe left/right over the page** → back/forward with the rubber-band arrow, driven by `ScrollEvent` phases (began/changed/ended/momentum) on macOS. GPUI already handles NSEvent swipes (PR #23332 merged Jan 2025) for mice emulating swipes; we extend to trackpad phases. Only triggers when the page's `scrollLeft` is at the edge, checked via a cheap `eval` cache or by letting CEF consume the wheel event first and acting on the unconsumed delta.
+- **Two-finger swipe left/right over the page** → back/forward with the rubber-band arrow, driven by `ScrollEvent` phases (began/changed/ended/momentum) on macOS. GPUI already handles NSEvent swipes (PR #23332 merged Jan 2025) for mice emulating swipes; we extend to trackpad phases. Only triggers when the page's `scrollLeft` is at the edge, checked via a cheap `eval` cache or by letting Chromium consume the wheel event first and acting on the unconsumed delta.
 - **Two-finger swipe over the sidebar** → previous/next Space, interactive (content tracks finger, springs to nearest).
 - **Peek dismiss** → vertical swipe/drag on the Peek sheet.
 - Pinch-to-zoom → page zoom (`SetZoomLevel`) with a GPUI zoom badge.
@@ -269,7 +268,7 @@ Total ≈ 15 weeks to a shippable v0.1 with zero-copy. Milestones 0–3 are the 
 
 You said "macOS & Android" for later; I read that as **iOS & Android**, since macOS is already in v1.
 - **iOS**: App Store rules require WebKit; the page host becomes `WKWebView`. GPUI has an iOS backend in progress (zed PR #63068). The shell (`baa-ui`, `baa-model`) ports; `baa-web` gets a `wk` backend behind the same `WebHost` trait. No per-space storage isolation beyond `WKWebsiteDataStore(forIdentifier:)` (iOS 17+), which does map onto our profile model.
-- **Android**: system WebView is Chromium, so a `WebHost` backend on `android.webkit.WebView` (or CEF's experimental Android support if it matures). GPUI has no Android backend; that is the real blocker.
+- **Android**: system WebView is Chromium, so a `WebHost` backend on `android.webkit.WebView` . GPUI has no Android backend; that is the real blocker.
 - **What to do now**: keep all engine types behind `baa-web::WebHost` (one trait, two methods groups: lifecycle/navigation and frame/input). Do not let `cef::*` leak into `baa-ui`. That is the only concession v1 makes; it costs nothing.
 
 ---

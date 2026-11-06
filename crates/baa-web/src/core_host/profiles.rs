@@ -96,36 +96,66 @@ pub fn purge_deleted_profiles(root: &Path) {
 /// Moves `<data>/profile/space-*` (the CEF layout) to `<data>/chromium/`, once.
 /// Cookies do not survive: CEF encrypted them with the mock keychain key, and
 /// Chromium drops what it cannot decrypt, so sites ask to sign in again.
+/// User data is never deleted: if a Space was skipped, `profile` is renamed to
+/// `profile-cef-backup`; if anything failed, it stays for the next launch.
 // ponytail: delete this function in the first release after v0.2.
 pub fn migrate_cef_profiles(data: &Path) {
     let old = data.join("profile");
     if !old.exists() {
         return;
     }
-    // Spaces deleted under CEF stay deleted.
+    // Spaces deleted under CEF stay deleted; one whose delete failed is not carried over.
+    let queued: Vec<String> = std::fs::read_to_string(old.join(PENDING_DELETES))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse::<u64>().ok())
+        .map(|id| format!("space-{id}"))
+        .collect();
     purge_deleted_profiles(&old);
     let new = data.join("chromium");
+    let entries = match std::fs::read_dir(&old) {
+        Ok(entries) => entries,
+        Err(err) => return log::warn!("could not read {}: {err}", old.display()),
+    };
     let mut failed = false;
-    for entry in std::fs::read_dir(&old).into_iter().flatten().flatten() {
+    let mut kept = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                log::warn!("could not read an entry of {}: {err}", old.display());
+                failed = true;
+                continue;
+            }
+        };
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with("space-") || !entry.path().is_dir() {
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("space-") || !entry.path().is_dir() {
             continue;
         }
-        // A dev's earlier test data wins.
-        if new.join(&name).exists() {
+        // A dev's earlier test data wins; a failed delete is not migrated.
+        if new.join(&name).exists() || queued.iter().any(|q| *q == name_str) {
+            kept = true;
             continue;
         }
         let moved = std::fs::create_dir_all(&new).and_then(|()| std::fs::rename(entry.path(), new.join(&name)));
         match moved {
-            Ok(()) => log::info!("migrated {}", name.to_string_lossy()),
+            Ok(()) => log::info!("migrated {name_str}"),
             Err(err) => {
-                log::warn!("could not migrate {}: {err}", name.to_string_lossy());
+                log::warn!("could not migrate {name_str}: {err}");
                 failed = true;
             }
         }
     }
-    // Never delete before every move has succeeded.
-    if !failed {
+    if failed {
+        return;
+    }
+    if kept {
+        if let Err(err) = std::fs::rename(&old, data.join("profile-cef-backup")) {
+            log::warn!("could not move {} aside: {err}", old.display());
+        }
+    } else {
+        // Only files CEF itself wrote (caches, Local State) are left.
         let _ = std::fs::remove_dir_all(&old);
     }
 }
@@ -191,7 +221,9 @@ mod tests {
         assert!(data.join("chromium/space-1/Extensions").is_dir());
         assert_eq!(read("chromium/space-2/Preferences"), "new");
         assert!(!data.join("chromium/space-3").exists());
+        // space-2 was skipped, so its data is kept, not deleted.
         assert!(!old.exists());
+        assert_eq!(read("profile-cef-backup/space-2/Preferences"), "space-2");
 
         // A second call has nothing to do.
         migrate_cef_profiles(&data);

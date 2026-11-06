@@ -74,7 +74,7 @@ fn parse_bundle(args: &[&str]) -> Result<Bundle> {
 /// local Chromium tree, `target/engine`.
 fn find_engine(arg: Option<PathBuf>) -> Result<PathBuf> {
     let shared = PathBuf::from(SHARED_ENGINE);
-    let candidates = [arg, env::var_os("BAA_ENGINE").map(PathBuf::from), Some(shared), Some(target_dir().join("engine"))];
+    let candidates = [arg, env::var_os("BAA_ENGINE").map(PathBuf::from), Some(shared), Some(workspace_root().join("target/engine"))];
     for dir in candidates.into_iter().flatten() {
         if dir.join("baa.app").is_dir() {
             return Ok(dir);
@@ -107,7 +107,9 @@ fn bundle(b: Bundle) -> Result<()> {
     let component = fs::read_to_string(engine.join("args.gn")).is_ok_and(|a| a.replace(' ', "").contains("is_component_build=true"));
     let source = engine.join("baa.app");
     let app = if component { engine.join("baa Dev.app") } else { target_dir().join("bundle/baa.app") };
-    let stale = !app.join(FRAMEWORK).exists() || modified(&source.join(FRAMEWORK)) > modified(&app.join(FRAMEWORK));
+    // Compare the framework binary: a directory's mtime moves for unrelated reasons.
+    let core = |app: &Path| app.join(FRAMEWORK).join("BaaCore");
+    let stale = !core(&app).exists() || modified(&core(&source)) > modified(&core(&app));
     // An official bundle is always fresh: old helpers and signatures must not stay.
     if stale || !component {
         if app.exists() {
@@ -118,7 +120,10 @@ fn bundle(b: Bundle) -> Result<()> {
     }
 
     let binary = target_dir().join(if b.release { "release" } else { "debug" }).join("baa");
-    fs::copy(&binary, app.join("Contents/MacOS/baa")).with_context(|| format!("copying {}", binary.display()))?;
+    // A copy over a hard link (ditto of an engine) would write through to the engine.
+    let dest = app.join("Contents/MacOS/baa");
+    let _ = fs::remove_file(&dest);
+    fs::copy(&binary, &dest).with_context(|| format!("copying {}", binary.display()))?;
     let plist = app.join("Contents/Info.plist");
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
         run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;

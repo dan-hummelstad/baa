@@ -38,20 +38,23 @@ Edge start its helper). The UI follows the pen.dev mocks. Still to come from mil
 ## Build
 
 baa needs an engine: a directory with `baa.app` (BaaCore.framework and Chromium's helpers). There are
-two ways to get one. Both need macOS with Xcode `27.2` and `rustup toolchain install stable`.
+two ways to get one. Both need macOS, `rustup toolchain install stable` and the GitHub CLI (`gh`, logged in).
+Only the second needs Xcode `27.2`.
 
 **Rust-only work.** Download a release engine for your `chromium/` tree (about 350 MB, needs no
-Xcode match):
+Xcode):
 
 ```sh
-brew install zstd
+brew install zstd gh
 T=$(git rev-parse HEAD:chromium)
-RUN=$(gh api "repos/{owner}/{repo}/actions/artifacts?name=baa-engine-$T" -q '[.artifacts[]|select(.expired|not)][0].workflow_run.id')
+RUN=$(gh api "repos/{owner}/{repo}/actions/artifacts?name=baa-engine-$T" -q '[.artifacts[]|select(.expired|not)][0].workflow_run.id // empty')
+[ -n "$RUN" ] || { echo "no engine for tree $T; start one (below)"; exit 1; }
 gh run download "$RUN" -n "baa-engine-$T" -D target/engine
 zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
 ```
 
-If no artifact exists, start one: `gh workflow run chromium.yml -f mode=release` (one to two days).
+If no artifact exists (the check above stops), start one with
+`gh workflow run chromium.yml -f mode=release` (one to two days), or use the second way.
 
 **C++ / `//baa` work.** Download the newest `chromium-tree-xcode27.2` artifact of a successful
 `chromium dev` run, unpack it at `/Users/Shared/hb`, then build incrementally:
@@ -59,6 +62,8 @@ If no artifact exists, start one: `gh workflow run chromium.yml -f mode=release`
 ```sh
 brew install coreutils zstd gnu-tar rsync
 pip3 install --user pillow requests
+gh run download <run> -n chromium-tree-xcode27.2 -D /Users/Shared/dl
+zstd -dc /Users/Shared/dl/tree.tar.zst | gtar -xf - -C /Users/Shared
 chromium/local-build.sh
 ```
 
@@ -81,8 +86,8 @@ ad hoc. A stable identity keeps the Keychain's "Always Allow" for "baa Storage K
 from asking for Documents access on every rebuild.
 
 Development loop: `cargo check -p <crate>` and `cargo test -p <crate>`. A full `cargo build -p baa`
-is slow; run it once at the end. `cargo test --workspace` and
-`cargo clippy --workspace --all-targets -- -D warnings` are what CI runs.
+is slow; run it once at the end. CI runs `cargo test --release --workspace` and
+`cargo clippy --release --workspace --all-targets -- -D warnings`.
 
 Useful environment variables when running the bundle:
 
@@ -134,7 +139,7 @@ the Space name.
 
 ## Third-party notices
 
-Chromium's and Helium's notices are in the app at `chrome://credits`; the Rust crates' are in
+Chromium's and Helium's notices are in the app at `baa://credits`; the Rust crates' are in
 `Contents/Resources/rust-credits.html`. GPUI is Apache-2.0.
 
 ## Licence

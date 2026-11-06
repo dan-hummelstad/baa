@@ -93,8 +93,11 @@ jobs:
         run: |
           set -eux
           python3 "target/bundle/baa Packaging/sign_chrome.py" --input target/bundle \
-            --output target/bundle/signed --identity "$MACOS_SIGN_IDENTITY" --disable-packaging
-          # Path per Helium's sign_and_package_app.sh; check on the first run.
+            --output target/bundle/signed --identity "$MACOS_SIGN_IDENTITY" --disable-packaging \
+            --notarize staple --notary-arg=--apple-id="$APPLE_ID" --notary-arg=--team-id="$APPLE_TEAM_ID" \
+            --notary-arg=--password="$APPLE_APP_PASSWORD"
+          # The signer adds the secure timestamp only with --notarize; it staples the app.
+          # Path per Helium's sign_and_package_app.sh (out/Default/signed/stable/); check on the first run.
           APP=$(find target/bundle/signed -name baa.app -maxdepth 3 | head -1)
           codesign -dv "$APP" 2>&1 | grep -E 'flags=|TeamIdentifier='
           # The signed app, as shipped.
@@ -105,8 +108,6 @@ jobs:
           DMG="baa-$VER-macos-arm64.dmg"
           hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -format ULMO "$DMG"
           cargo run --release -p xtask -- sign "$DMG"
-          # ponytail: only the dmg is notarized and stapled; the app inside relies on the
-          # ticket of the stapled dmg. Staple the .app too if offline first launch matters.
           cargo run --release -p xtask -- notarize "$DMG"
       - uses: actions/upload-artifact@v7
         with:

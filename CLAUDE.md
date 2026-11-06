@@ -11,7 +11,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 
 ## Ownership (one crate per orchestrator; do not edit outside yours)
 - `crates/baa-model`   data + SQLite + settings
-- `crates/baa-privacy` switches, host blocklist
+- `crates/baa-privacy` switches, prefs, proxy allowlist
 - `crates/baa-web`     BaaCore host (`WebHost` in lib.rs is the contract; UI codes against it)
 - `crates/baa-chromium` test harness for `//baa` (spike binary), engine orchestrator; delete when the C++ tests no longer need it
 - `chromium/baa`, `chromium/patches`: engine orchestrator; `chromium/helium*`: changes only through a Helium bump or the engine orchestrator
