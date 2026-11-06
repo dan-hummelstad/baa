@@ -3,6 +3,10 @@
 //! tabs, Spaces and quick commands, each with its keyboard shortcut.
 
 use crate::theme::r;
+use crate::{
+    pages::{self, Page},
+    settings::Row as SettingRow,
+};
 use baa_model::{parse_suggestions, HistoryItem, Session, Settings, SpaceId, TabId};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, relative, Context, Hsla, SharedString, Window};
@@ -19,6 +23,10 @@ use crate::{
 
 const MAX_ROWS: usize = 9;
 const MAX_SUGGESTIONS: usize = 4;
+/// Pages listed under a typed address.
+const MAX_PAGES: usize = 6;
+/// Pages and settings rows that join a plain-word search, each.
+const MAX_EXTRA: usize = 3;
 /// Visited pages listed under a typed query.
 const MAX_HISTORY: usize = 3;
 /// Typing pauses this long before asking the search engine.
@@ -64,12 +72,10 @@ pub enum Command {
     Settings,
     ImportFromArc,
     SetUpPasswords,
-    /// Chrome's settings page at this address, in its sheet.
-    ChromeSettings(&'static str),
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 34] = [
+const COMMANDS: [(Command, &str); 27] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -93,17 +99,10 @@ const COMMANDS: [(Command, &str); 34] = [
     (Command::SiteSettings, "Site Settings"),
     (Command::Downloads, "Downloads"),
     (Command::History, "History"),
-    (Command::ClearHistory, "Clear Browsing History"),
+    (Command::ClearHistory, "Clear Browsing Data…"),
     (Command::Settings, "Settings"),
     (Command::ImportFromArc, "Import Spaces from Arc"),
     (Command::SetUpPasswords, "Password Manager Extensions"),
-    (Command::ChromeSettings("chrome://settings/privacy"), "Privacy and Security"),
-    (Command::ChromeSettings("chrome://settings/content"), "Site Settings for All Sites"),
-    (Command::ChromeSettings("chrome://settings/clearBrowserData"), "Clear Browsing Data…"),
-    (Command::ChromeSettings("chrome://settings/autofill"), "Autofill and Passwords"),
-    (Command::ChromeSettings("chrome://settings/languages"), "Languages and Spell Check"),
-    (Command::ChromeSettings("chrome://settings/performance"), "Performance"),
-    (Command::ChromeSettings("chrome://settings"), "Chrome Settings"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -154,24 +153,27 @@ impl Command {
             Command::Settings => "settings",
             Command::ImportFromArc => "import",
             Command::SetUpPasswords => "key-round",
-            Command::ChromeSettings(_) => "settings",
             _ => "sliders-horizontal",
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Item {
+pub(crate) enum Item {
     /// Go to this URL (typed, or a search).
     Open(String),
     Tab(TabId),
     /// A Space, with its position for the ⌃n shortcut.
     Space(SpaceId, usize),
     Command(Command),
+    /// A first-party or WebUI page, found by its address.
+    Page(&'static Page),
+    /// A row of the settings window.
+    Setting(&'static SettingRow),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Row {
+pub(crate) struct Row {
     pub item: Item,
     pub label: String,
     pub detail: String,
@@ -238,7 +240,7 @@ fn row(item: Item, label: impl Into<String>, detail: impl Into<String>) -> Row {
 /// What the bar lists. Empty: recent tabs, then quick commands. Typed: the
 /// URL or search first, the engine's suggestions, then the best fuzzy matches
 /// across tabs (all Spaces), Spaces and commands.
-pub fn rows(
+pub(crate) fn rows(
     query: &str,
     session: &Session,
     settings: &Settings,
@@ -271,6 +273,13 @@ pub fn rows(
 
     let mut out = Vec::new();
     let url = settings.resolve_input(query);
+    // Typing an address: the pages it could be, then the plain "Open".
+    let looks_like_page = pages::looks_like_page(query);
+    if looks_like_page {
+        out.extend(pages::complete(query, MAX_PAGES).into_iter().map(|p| row(Item::Page(p), p.label, p.url)));
+        out.push(row(Item::Open(url.clone()), url, "— Open"));
+        return out;
+    }
     let search_prefix = settings.search_engine.url.split("%s").next().unwrap_or_default();
     if url.starts_with(search_prefix) {
         out.push(row(Item::Open(url), query, format!("— Search {}", settings.search_engine.name)));
@@ -301,6 +310,30 @@ pub fn rows(
             scored.push((score, row(Item::Command(command), label, "")));
         }
     }
+    // After commands, so equal scores keep: tabs, Spaces, commands, pages, settings.
+    let best = |mut hits: Vec<(u32, Row)>| {
+        hits.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        hits.truncate(MAX_EXTRA);
+        hits
+    };
+    scored.extend(best(
+        pages::PAGES
+            .iter()
+            .filter_map(|p| {
+                let score = fuzzy::score(query, p.label).max(fuzzy::score(query, p.keywords))?;
+                Some((score, row(Item::Page(p), p.label, p.url)))
+            })
+            .collect(),
+    ));
+    scored.extend(best(
+        crate::settings::rows::ROWS
+            .iter()
+            .filter_map(|r| {
+                let score = fuzzy::score(query, r.label).max(r.keywords.split(' ').filter_map(|w| fuzzy::score(query, w)).max())?;
+                Some((score, row(Item::Setting(r), r.label, format!("Settings › {}", r.tab.title()))))
+            })
+            .collect(),
+    ));
     // Stable sort keeps sidebar order among equal scores.
     scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     // Visited pages come after open tabs and commands: those are one step away.
@@ -341,6 +374,14 @@ pub(crate) fn on_key<H: WebHost>(
                 request_suggestions(this, cx);
             }
         }
+        Key::Complete => {
+            // The autofill: the selected page's address replaces what was typed.
+            let rows = bar.rows(&this.session, &this.settings);
+            if let Some(Item::Page(page)) = rows.get(bar.selected).map(|r| &r.item) {
+                bar.field = TextField { text: page.url.into(), all_selected: false };
+                bar.selected = 0;
+            }
+        }
         Key::Up => bar.selected = bar.selected.saturating_sub(1),
         Key::Down => bar.selected = (bar.selected + 1).min(count.saturating_sub(1)),
         Key::Cancel => this.close_overlays(window, cx),
@@ -375,7 +416,7 @@ fn request_suggestions<H: WebHost>(this: &mut Browser<H>, cx: &mut Context<Brows
     bar.seq += 1;
     let seq = bar.seq;
     let query = bar.field.text.trim().to_string();
-    let url = (this.settings.search_suggest && !query.is_empty() && !query.contains("://"))
+    let url = (this.settings.search_suggest && !query.is_empty() && !query.contains("://") && !pages::looks_like_page(&query))
         .then(|| this.settings.suggest_url(&query))
         .flatten();
     let (Some(url), Some(profile)) = (url, profile) else {
@@ -434,6 +475,8 @@ fn submit<H: WebHost>(
         Item::Command(c) => this.run_command(c, window, cx),
         Item::Tab(id) => this.activate_tab(id, window, cx),
         Item::Space(id, _) => this.activate_space(id, window, cx),
+        Item::Page(page) => this.navigate(page.url, mode == Mode::Address, window, cx),
+        Item::Setting(r) => this.open_settings_at(Some(r.tab), Some(r.id), cx),
     }
 }
 
@@ -448,19 +491,16 @@ impl<H: WebHost> Browser<H> {
             Command::ChangeSpaceColor => self.cycle_space_color(window, cx),
             Command::DeleteSpace => self.delete_active_space(window, cx),
             Command::SwapSidebarSide => self.swap_sidebar_side(cx),
-            Command::Extensions => self.open_extensions("chrome://extensions/", window, cx),
+            Command::Extensions => self.open_extensions("baa://extensions", window, cx),
             Command::ExtensionStore => {
                 self.close_overlays(window, cx);
                 self.open_url("https://chromewebstore.google.com/", window, cx)
             }
             Command::TranslatePage => self.translate_page(window, cx),
             Command::SiteSettings => self.toggle_popover(crate::prompts::Popover::Site, window, cx),
-            Command::ClearHistory => self.clear_history(cx),
+            Command::ClearHistory => self.open_settings_at(Some(crate::settings::Tab::Privacy), Some("clear_data"), cx),
             Command::ImportFromArc => self.import_arc(window, cx),
             Command::SetUpPasswords => self.set_up_passwords(window, cx),
-            Command::ChromeSettings(url) => {
-                self.open_own_page(url, window, cx);
-            }
             // The rest have actions, dispatched above.
             _ => {}
         }
@@ -468,7 +508,7 @@ impl<H: WebHost> Browser<H> {
 }
 
 /// A shortcut as the mock draws it: one chip per modifier, then the key.
-fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
+pub(crate) fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
     let mut out = Vec::new();
     for stroke in binding.keystrokes() {
         let k = stroke.inner();
@@ -549,6 +589,8 @@ impl<H: WebHost> Browser<H> {
                     ))
                     .into_any_element(),
                 Item::Command(c) => icon(c.icon(), 18., icon_color).into_any_element(),
+                Item::Page(p) if matches!(p.route, pages::Route::WebUi) => icon("globe", 18., icon_color).into_any_element(),
+                Item::Page(_) | Item::Setting(_) => icon("settings", 18., icon_color).into_any_element(),
                 Item::Open(_) if row.history => icon("history", 18., icon_color).into_any_element(),
                 Item::Open(_) if row.suggestion || i == 0 && row.detail.starts_with("— Search") => {
                     icon("search", 18., icon_color).into_any_element()
@@ -567,6 +609,8 @@ impl<H: WebHost> Browser<H> {
                 Item::Tab(_) => "Switch to Tab",
                 Item::Space(..) => "Switch",
                 Item::Command(_) => "Run",
+                Item::Page(_) => "Open",
+                Item::Setting(_) => "Show",
             };
             let row_el = div()
                 .id(("bar-row", i))

@@ -18,8 +18,6 @@ pub struct MockHost {
     pub chrome_tabs: Entity<baa_web::ChromeTabs>,
     pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
     pub extension_changes: RefCell<Vec<(String, baa_web::ExtensionChange)>>,
-    /// What the Chrome settings sheet last showed.
-    pub chrome_sheet: RefCell<Option<baa_web::ChromeSheet>>,
     /// (popup url, the tab it was opened for).
     pub popups: RefCell<Vec<String>>,
     /// The menus shown, and the item id the next one picks.
@@ -144,7 +142,6 @@ impl MockHost {
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
             extension_details: RefCell::default(),
             extension_changes: RefCell::default(),
-            chrome_sheet: RefCell::default(),
             popups: RefCell::default(),
             menus: RefCell::default(),
             menu_pick: Cell::default(),
@@ -210,10 +207,6 @@ impl WebHost for MockHost {
         done: baa_web::Callback<Option<Vec<baa_web::ExtensionInfo>>>,
     ) {
         done(Some(self.extension_details.borrow().clone()), cx)
-    }
-    fn show_chrome_page(&self, _: ProfileId, sheet: Option<baa_web::ChromeSheet>, _: &mut Window) -> bool {
-        *self.chrome_sheet.borrow_mut() = sheet;
-        true
     }
     fn change_extension(
         &self,

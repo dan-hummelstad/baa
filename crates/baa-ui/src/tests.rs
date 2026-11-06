@@ -493,7 +493,7 @@ fn copying_the_url_flashes_a_check(cx: &mut TestAppContext) {
         Some("https://a.example/")
     );
     let copied = |cx: &mut VisualTestContext| {
-        b.read_with(cx, |b, _| b.motion.springs_target(("copied", 0), crate::motion::Feel::Glide))
+        b.read_with(cx, |b, _| b.motion.target(("copied", 0), crate::motion::Feel::Glide))
     };
     assert_eq!(copied(cx), Some(1.0));
     cx.executor().advance_clock(std::time::Duration::from_millis(1300));
@@ -590,7 +590,7 @@ fn visits_are_remembered_and_searchable(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn downloads_show_in_the_header_and_settings_open(cx: &mut TestAppContext) {
+fn downloads_show_in_the_header(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let list = b.read_with(cx, |b, _| b.host.downloads());
     list.update(cx, |list, cx| {
@@ -606,8 +606,6 @@ fn downloads_show_in_the_header_and_settings_open(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     b.read_with(cx, |b, _| assert_eq!(b.downloads_seen, 1));
-    cx.dispatch_action(OpenSettings);
-    b.read_with(cx, |b, _| assert!(b.settings_open));
 }
 
 #[gpui::test]
@@ -768,61 +766,6 @@ fn tabs_chrome_opens_itself_open_in_baa(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(urls(&b, Zone::Today, cx), ["chrome-extension://op/welcome.html"]);
     assert!(tabs.read_with(cx, |tabs, _| tabs.0.is_empty()));
-}
-
-#[gpui::test]
-fn chromes_extensions_page_is_baas_own_tab(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    let info = baa_web::ExtensionInfo {
-        id: "ubo".into(),
-        name: "uBO Lite".into(),
-        enabled: true,
-        ..Default::default()
-    };
-    b.update(cx, |b, _| {
-        *b.host.extension_details.borrow_mut() = vec![info.clone()];
-        *b.host.extensions.borrow_mut() = vec![baa_web::Extension {
-            id: "ubo".into(),
-            name: "uBO Lite".into(),
-            icon: None,
-            popup: None,
-            options: None,
-        }];
-    });
-    let created = b.read_with(cx, |b, _| b.host.created.borrow().len());
-    b.update_in(cx, |b, window, cx| b.open_url("chrome://extensions/?id=ubo", window, cx));
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| {
-        assert_eq!(b.active_tab_url().as_deref(), Some("baa://extensions"));
-        assert_eq!(b.host.created.borrow().len(), created, "no web page for it");
-        assert_eq!(b.extensions_page.list.as_deref(), Some(&[info][..]));
-        assert_eq!(b.extensions_page.open.as_deref(), Some("ubo"));
-    });
-    // Opening it again goes back to the same tab.
-    b.update_in(cx, |b, window, cx| b.open_url("chrome://extensions/", window, cx));
-    assert_eq!(urls(&b, Zone::Today, cx), ["baa://extensions"]);
-
-    // Switched off, it leaves the toolbar; Chrome is told.
-    b.update(cx, |b, cx| b.change_extension("ubo", baa_web::ExtensionChange::Enable(false), cx));
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| {
-        assert_eq!(*b.host.extension_changes.borrow(), [("ubo".to_string(), baa_web::ExtensionChange::Enable(false))]);
-        assert!(!b.extension_enabled("ubo"));
-    });
-}
-
-#[gpui::test]
-fn chrome_settings_open_skinned_in_a_sheet(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    b.update_in(cx, |b, window, cx| b.open_url("chrome://settings/privacy", window, cx));
-    cx.run_until_parked();
-    let sheet = b.read_with(cx, |b, _| b.host.chrome_sheet.borrow().clone()).expect("shown");
-    assert_eq!(sheet.url, "chrome://settings/privacy");
-    assert!(sheet.css.contains("--cr-fallback-color-primary"), "skinned");
-    assert!(urls(&b, Zone::Today, cx).is_empty(), "a sheet, not a tab");
-    b.update_in(cx, |b, window, cx| b.close_overlays(window, cx));
-    cx.run_until_parked();
-    assert!(b.read_with(cx, |b, _| b.host.chrome_sheet.borrow().is_none()), "hidden again");
 }
 
 #[gpui::test]

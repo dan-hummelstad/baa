@@ -13,6 +13,8 @@ pub enum Key {
     Cancel,
     Up,
     Down,
+    /// Tab, or → at the end: take the suggestion.
+    Complete,
     Ignored,
 }
 
@@ -38,6 +40,8 @@ impl TextField {
             "escape" => return Key::Cancel,
             "up" => return Key::Up,
             "down" => return Key::Down,
+            "tab" if !m.control && !m.platform && !m.alt => return Key::Complete,
+            "right" if !m.control && !m.platform && !m.alt && !m.shift => return Key::Complete,
             "backspace" if self.all_selected || m.secondary() || m.alt => {
                 self.text.clear();
                 Key::Edited

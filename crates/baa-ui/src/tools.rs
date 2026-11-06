@@ -147,13 +147,6 @@ impl<H: WebHost> Browser<H> {
         self.navigate(&target, true, window, cx);
     }
 
-    pub(crate) fn clear_history(&mut self, cx: &mut Context<Self>) {
-        match self.store().map(|s| s.clear_history()) {
-            Some(Err(e)) => log::error!("clearing history: {e}"),
-            _ => self.show_toast("Browsing history cleared", cx),
-        }
-    }
-
     /// Arc's Spaces, pinned tabs, folders and favourites, as new Spaces.
     pub(crate) fn import_arc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let arc = import::arc_sidebar_path().ok_or_else(|| "Arc's data was not found".into()).and_then(|p| import::read_arc_sidebar(&p));

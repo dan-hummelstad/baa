@@ -137,8 +137,8 @@ impl Motion {
         self.springs.insert((key, feel), spring);
     }
 
-    #[cfg(test)]
-    pub fn springs_target(&self, key: Key, feel: Feel) -> Option<f32> {
+    /// Where the spring is heading, if there is one.
+    pub fn target(&self, key: Key, feel: Feel) -> Option<f32> {
         self.springs.get(&(key, feel)).map(Spring::target)
     }
 

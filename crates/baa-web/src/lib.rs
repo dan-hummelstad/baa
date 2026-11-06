@@ -181,10 +181,6 @@ pub trait WebHost: 'static {
     /// Everything Chrome's extensions page shows about `profile`'s extensions,
     /// for baa's own; `done` gets `None` if it could not be read.
     fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>);
-    /// Chrome's own page (`chrome://settings…`) over part of `window`,
-    /// restyled with `sheet.css`; `None` hides it. False while it is not up
-    /// yet: call again.
-    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool;
     /// Carries out `change`; `done` once it has, with whether it worked.
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>);
     /// Extensions installed in `profile`, for the toolbar.
@@ -234,19 +230,6 @@ pub struct ClearData {
     /// Cookies, storage, service workers.
     pub site_data: bool,
     pub cache: bool,
-}
-
-/// Where and how [`WebHost::show_chrome_page`] shows Chrome's page.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChromeSheet {
-    pub url: String,
-    /// In window coordinates.
-    pub bounds: gpui::Bounds<gpui::Pixels>,
-    pub corner_radius: f32,
-    /// A stylesheet over Chrome's own: baa's skin.
-    pub css: String,
-    /// Whether the skin is dark, so Chrome's own light/dark rules match it.
-    pub dark: bool,
 }
 
 /// Called once with the answer, on the main thread.

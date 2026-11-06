@@ -11,7 +11,7 @@ use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, Session, SidebarSid
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
-    relative, rgb, AnyElement, AnyWindowHandle, BoxShadow, ClipboardItem, Context, Entity,
+    relative, rgb, AnyElement, AnyWindowHandle, WindowHandle, BoxShadow, ClipboardItem, Context, Entity,
     Animation, AnimationExt, Div, ElementId, Transformation, FocusHandle, Hsla, KeyDownEvent, MouseButton, Pixels, Point, Rgba,
     SharedString, Stateful, Subscription, Window,
 };
@@ -126,7 +126,8 @@ pub struct Browser<H: WebHost> {
     /// Downloads the user cleared from the list.
     pub(crate) cleared_downloads: HashSet<u32>,
     pub(crate) downloads_seen: usize,
-    pub(crate) settings_open: bool,
+    /// The settings window, once opened (it may since have been closed).
+    pub(crate) settings_window: Option<WindowHandle<crate::settings::SettingsView<H>>>,
     /// The Library, shown in the sidebar instead of the Space.
     pub(crate) library: Option<crate::library::Library>,
     pub(crate) library_focus: FocusHandle,
@@ -139,15 +140,15 @@ pub struct Browser<H: WebHost> {
     pub(crate) toasts: u64,
     _downloads: Subscription,
     _chrome_tabs: Subscription,
-    pub(crate) extensions_page: crate::extensions::ExtensionsPage,
-    /// Chrome's settings page shown in a sheet, by its address.
-    pub(crate) chrome_sheet: Option<String>,
+    pub(crate) extensions_page: crate::settings::ExtensionsPage,
+    /// The skin last sent to the engine: Space profile and the colours it was made from.
+    skin_sent: Option<(baa_model::ProfileId, u64)>,
     /// Back/forward pressed and held: which way, and when.
     pub(crate) nav_press: Option<(bool, Instant)>,
     pub(crate) history_menu: Option<HistoryMenu>,
     /// Two-finger swipe across the chrome, in sidebar widths, while one is on.
     swipe: Option<f32>,
-    window: AnyWindowHandle,
+    pub(crate) window: AnyWindowHandle,
     focus: FocusHandle,
     /// Shared by the command bar and find bar; only one is open at a time.
     pub(crate) input_focus: FocusHandle,
@@ -182,8 +183,14 @@ impl<H: WebHost> Browser<H> {
                 (Session::first_run(), None)
             }
         };
+        // The extensions page is the settings window's tab now; a restored tab for it has no page.
+        session.drop_tabs(|t| crate::pages::normalize(&t.url).starts_with("baa://extensions"));
         // ponytail: auto-archive runs at launch and on Space switch only; a timer comes with milestone 4.
         session.archive_expired(now(), settings.archive_after_hours);
+        if !settings.restore_today {
+            session.archive_today(now());
+        }
+        host.apply_settings(&settings);
         // Spaces from before gradient themes get the palette, in order.
         let ids: Vec<SpaceId> = session.spaces().iter().map(|s| s.id).collect();
         for (i, id) in ids.into_iter().enumerate() {
@@ -251,7 +258,7 @@ impl<H: WebHost> Browser<H> {
             popover: None,
             cleared_downloads: HashSet::new(),
             downloads_seen: 0,
-            settings_open: false,
+            settings_window: None,
             library: None,
             library_focus: cx.focus_handle(),
             saved_downloads,
@@ -261,7 +268,7 @@ impl<H: WebHost> Browser<H> {
             _downloads: downloads,
             _chrome_tabs: chrome_tabs,
             extensions_page: Default::default(),
-            chrome_sheet: None,
+            skin_sent: None,
             nav_press: None,
             history_menu: None,
             swipe: None,
@@ -363,6 +370,7 @@ impl<H: WebHost> Browser<H> {
             log::error!("saving settings: {e}");
         }
         cx.set_reduce_motion(self.settings.reduce_motion);
+        self.host.apply_settings(&self.settings);
         cx.notify();
     }
 
@@ -421,13 +429,9 @@ impl<H: WebHost> Browser<H> {
                 }
             }
             self.shown_tab = active;
-            if self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u)) {
-                self.refresh_extensions(cx);
-            }
         }
         self.track_rows();
-        let own = self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u));
-        if let Some(id) = active.filter(|id| !own && !self.pages.contains_key(id)) {
+        if let Some(id) = active.filter(|id| !self.pages.contains_key(id)) {
             self.create_page(id, window, cx);
         }
         for (id, (page, _)) in &self.pages {
@@ -577,8 +581,11 @@ impl<H: WebHost> Browser<H> {
                     self.open_background_tab(space, url);
                 } else {
                     // Arc's Peek: a link that would open a tab (or a shift-click)
-                    // previews over the page instead.
+                    // previews over the page instead, unless settings say tab.
                     let url = url.clone();
+                    if !self.settings.peek_links {
+                        return self.open_url_in(space, &url, window, cx);
+                    }
                     return self.open_peek(space, &url, window, cx);
                 }
             }
@@ -904,6 +911,13 @@ impl<H: WebHost> Browser<H> {
         let Some(space) = self.session.active_space() else {
             return;
         };
+        if self.settings.external_links == baa_model::ExternalLinks::Tab {
+            let (url, window, browser) = (url.to_string(), self.window, cx.entity());
+            cx.defer(move |cx| {
+                window.update(cx, |_, window, cx| browser.update(cx, |b, cx| b.open_url_in(space, &url, window, cx))).ok();
+            });
+            return;
+        }
         let Some(profile) = self.session.space(space).map(|s| s.profile) else {
             return;
         };
@@ -930,6 +944,19 @@ impl<H: WebHost> Browser<H> {
         if let Err(e) = opened {
             log::error!("opening lil-baa: {e}");
         }
+    }
+
+    /// Tells the engine the skin for the active Space's Chrome pages when it changed.
+    fn push_webui_skin(&mut self) {
+        let Some(profile) = self.active_space().map(|s| s.profile) else { return };
+        let ((top, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
+        let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(ascii as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
+        if self.skin_sent == Some((profile, key)) {
+            return;
+        }
+        self.skin_sent = Some((profile, key));
+        let css = crate::skin::chrome_skin(&Theme::from_gradient(top, bottom));
+        self.host.set_webui_skin(profile, css, ascii);
     }
 
     pub(crate) fn window_handle(&self) -> AnyWindowHandle {
@@ -1031,9 +1058,12 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn delete_active_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.session.active_space() else {
-            return;
-        };
+        if let Some(id) = self.session.active_space() {
+            self.delete_space(id, window, cx);
+        }
+    }
+
+    pub(crate) fn delete_space(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.spaces().len() < 2 {
             return;
         }
@@ -1047,11 +1077,13 @@ impl<H: WebHost> Browser<H> {
 
     /// "🐑 Work" sets icon and name; plain "Work" keeps the icon.
     pub(crate) fn rename_active_space(&mut self, text: &str) {
-        let Some(space) = self
-            .session
-            .active_space()
-            .and_then(|id| self.session.space_mut(id))
-        else {
+        if let Some(id) = self.session.active_space() {
+            self.rename_space(id, text);
+        }
+    }
+
+    pub(crate) fn rename_space(&mut self, id: SpaceId, text: &str) {
+        let Some(space) = self.session.space_mut(id) else {
             return;
         };
         let text = text.trim();
@@ -1071,11 +1103,13 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn cycle_space_color(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(space) = self
-            .session
-            .active_space()
-            .and_then(|id| self.session.space_mut(id))
-        else {
+        if let Some(id) = self.session.active_space() {
+            self.cycle_color_of(id, window, cx);
+        }
+    }
+
+    pub(crate) fn cycle_color_of(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = self.session.space_mut(id) else {
             return;
         };
         let next = PALETTE
@@ -1102,10 +1136,6 @@ impl<H: WebHost> Browser<H> {
     /// Chrome's extensions page at `url` (maybe `?id=`), drawn by baa.
     pub(crate) fn open_extensions(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_own_page(url, window, cx);
-    }
-
-    pub(crate) fn active_tab_url(&self) -> Option<String> {
-        self.active_tab().and_then(|id| self.session.tab(id)).map(|t| t.url.clone())
     }
 
     pub(crate) fn swap_sidebar_side(&mut self, cx: &mut Context<Self>) {
@@ -1238,8 +1268,6 @@ impl<H: WebHost> Browser<H> {
             self.closing_bar = Some(bar);
         }
         self.popover = None;
-        self.settings_open = false;
-        self.chrome_sheet = None;
         self.motion.forget("menu");
         self.motion.forget("bar-row");
         self.motion.forget("bar-sel");
@@ -1332,13 +1360,14 @@ impl<H: WebHost> Browser<H> {
     /// `step` moves along the ladder; `0` resets to 100%.
     fn zoom_by(&mut self, step: isize, cx: &mut Context<Self>) {
         let Some(id) = self.active_tab() else { return };
-        let current = self.zoom.get(&id).copied().unwrap_or(1.0);
+        let base = self.settings.web.default_zoom;
+        let current = self.zoom.get(&id).copied().unwrap_or(base);
         let i = ZOOM_LEVELS
             .iter()
             .position(|z| *z >= current)
             .unwrap_or(ZOOM_LEVELS.len() - 1);
         let level = match step {
-            0 => 1.0,
+            0 => base,
             _ => ZOOM_LEVELS[i.saturating_add_signed(step).min(ZOOM_LEVELS.len() - 1)],
         };
         self.zoom.insert(id, level);
@@ -1440,7 +1469,7 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
-        .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
+        .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))
         .on_action(cx.listener(|this, _: &NewIncognitoSpace, window, cx| {
             this.new_incognito_space(window, cx)
         }))
@@ -1747,9 +1776,7 @@ impl<H: WebHost> Browser<H> {
         if let Some(page) = &page {
             page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
         }
-        let own = self.active_tab_url().is_some_and(|u| crate::extensions::is_own(&u));
         let content = match page {
-            _ if own => self.render_extensions_page(theme, cx),
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
             None => crate::start::render(theme).into_any_element(),
         };
@@ -2384,6 +2411,7 @@ impl<H: WebHost> Render for Browser<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.tick_motion(window, cx);
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
+        self.push_webui_skin();
         let theme = self.theme();
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);
@@ -2412,7 +2440,6 @@ impl<H: WebHost> Render for Browser<H> {
         let right = self.side() == SidebarSide::Right;
 
         let header = self.render_header(&theme, cx);
-        let chrome_sheet = self.render_chrome_sheet(&theme, window, cx);
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
@@ -2463,8 +2490,6 @@ impl<H: WebHost> Render for Browser<H> {
             .children(peek)
             .children(bar)
             .children(self.render_toast())
-            .children(self.render_settings(&theme, cx))
-            .children(chrome_sheet)
             .children(popover)
             .children(history);
         let root = self.register_actions(root, cx);
@@ -2475,7 +2500,7 @@ impl<H: WebHost> Render for Browser<H> {
                 }
             }))
             .on_action(cx.listener(|this, _: &ExpandPeek, window, cx| this.expand_peek(window, cx)))
-        } else if self.popover.is_some() || self.settings_open || self.chrome_sheet.is_some() {
+        } else if self.popover.is_some() {
             // Escape; bound only while there is something to close, so pages keep it otherwise.
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| this.close_overlays(window, cx)))
         } else {
