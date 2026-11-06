@@ -1,4 +1,4 @@
-# Local server for downloads.txt: /small and /slow are attachments. Usage: download-server.py [port]
+# Local server for downloads.txt and asks.txt: /small and /slow are attachments, /auth wants Basic u:p. Usage: download-server.py [port]
 import http.server, sys, time
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -17,6 +17,16 @@ class H(http.server.BaseHTTPRequestHandler):
                     time.sleep(0.2)
             except Exception:
                 pass
+        elif self.path.startswith('/auth'):
+            ok = self.headers.get('Authorization') == 'Basic dTpw'
+            body = b'<html><head><title>authed</title></head><body>ok</body></html>' if ok else b'denied'
+            self.send_response(200 if ok else 401)
+            if not ok:
+                self.send_header('WWW-Authenticate', 'Basic realm="baa"')
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path.startswith('/small'):
             body = b'baa-download-test\n' * 1000
             self.send_response(200)

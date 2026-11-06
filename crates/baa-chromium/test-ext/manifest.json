@@ -4,6 +4,7 @@
   "version": "1",
   "description": "Probe for baa's harness",
   "permissions": ["tabs", "tabGroups", "activeTab", "contextMenus"],
+  "optional_permissions": ["bookmarks"],
   "host_permissions": ["https://*/*"],
   "background": { "service_worker": "sw.js" },
   "action": { "default_popup": "popup.html" }

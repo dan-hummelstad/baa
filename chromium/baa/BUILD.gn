@@ -3,6 +3,7 @@
 # linked into BaaCore.framework (libchrome_dll.dylib in component builds).
 source_set("baa") {
   sources = [
+    "asks.mm",
     "autocomplete.mm",
     "app_mac.mm",
     "baa.h",
@@ -26,6 +27,7 @@ source_set("baa") {
     "//chrome/browser",
     "//chrome/browser/lifetime:termination_notification",
     "//chrome/browser/autocomplete",
+    "//chrome/browser/hang_monitor",
     "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame:browser_window_factory",
     "//components/content_settings/core/browser",

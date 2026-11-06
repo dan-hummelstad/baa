@@ -1,0 +1,12 @@
+# auth (answered through baa_answer), external protocol, extension install, hung page
+script: asks.txt
+server: yes
+ext: yes
+secs: 120
+must: baa: dialog tab=0 id=\d+ kind=5
+must: title="authed"
+must: baa: dialog tab=0 id=\d+ kind=6
+must: baa: dialog tab=1 id=\d+ kind=8
+must: title="perm:false"
+must: baa: dialog tab=0 id=\d+ kind=7
+must: baa: tab_crashed tab=0

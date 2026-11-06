@@ -54,6 +54,7 @@ void EnsureStarted() {
   }
   done = true;
   InstallColorSchemeHook();
+  InstallDialogHooks();
   // Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
   // close through BrowserCloseManager (our windows' Close), and later calls from
   // the UI on a gone handle do nothing.

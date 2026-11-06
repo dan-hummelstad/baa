@@ -202,6 +202,7 @@ void AttachDialogs(content::WebContents* wc) {
   wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
       wc, std::make_unique<DialogDelegate>(wc));
+  AttachTabDialogs(wc);
 }
 
 // A tab that left our windows: pending page dialogs say "no" so the page does
@@ -215,6 +216,7 @@ void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc) {
   wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
       wc, std::make_unique<JavaScriptTabModalDialogManagerDelegateDesktop>(wc));
+  RestoreTabDialogs(wc);
 }
 
 void ShowPendingDialogsOf(BaaTab* tab) {

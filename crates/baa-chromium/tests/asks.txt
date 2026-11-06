@@ -1,0 +1,30 @@
+# Chrome's own dialogs in the app: HTTP auth, external protocol, extension permissions, hung page.
+# {SERVER} is tests/download-server.py (/auth wants Basic u:p). Hung page goes last: it crashes tab 0.
+load {SERVER}/auth
+sleep 3000
+answer last 1 u p
+sleep 3000
+state
+# the checkbox stays off, and never answer 1: it would launch Mail
+geval location.href='mailto:a@b.test'
+sleep 2000
+answer last 0
+sleep 1000
+# permissions.request from an extension page: Chrome's permission lines in the sheet
+tab 1 chrome-extension://{EXT_ID}/popup.html
+sleep 3000
+use 1
+geval chrome.permissions.request({permissions:['bookmarks']}).then(r=>{document.title='perm:'+r})
+sleep 2000
+answer last 0
+sleep 1500
+state
+use 0
+# an input event on a busy page starts the hang monitor (about 15 s)
+eval setTimeout(()=>{for(;;){}},100)
+sleep 1000
+click 50 50
+sleep 22000
+answer last 1
+sleep 4000
+quit

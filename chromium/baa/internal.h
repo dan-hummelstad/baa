@@ -85,6 +85,11 @@ void AttachDialogs(content::WebContents* wc);
 void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc);
 void ShowPendingDialogsOf(BaaTab* tab);  // asked before the app knew the tab
 
+// ---- asks.mm: Chrome's own dialogs drawn by the app
+void InstallDialogHooks();  // the g_baa_* hooks of patches/baa/dialog-hooks.patch
+void AttachTabDialogs(content::WebContents* wc);  // the hung-page prompt
+void RestoreTabDialogs(content::WebContents* wc);
+
 // ---- permissions.mm / menu.mm / devtools.mm
 void AttachPermissions(content::WebContents* wc);
 // Back to Chrome's own prompt (a tab that left our windows).
