@@ -168,6 +168,11 @@ impl Store {
         self.conn.execute("DELETE FROM history", []).map(drop)
     }
 
+    /// Removes rows last visited at or after `since` (unix seconds, like the rows).
+    pub fn clear_history_since(&self, since: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM history WHERE last_visit >= ?1", [since]).map(drop)
+    }
+
     /// Merges into what is there: visit counts add up, the newest visit wins, a known
     /// title is kept. Non-http(s) URLs are skipped.
     pub fn import_history(&self, items: &[HistoryItem]) -> Result<()> {
@@ -223,6 +228,11 @@ impl Store {
         rows.collect()
     }
 
+    /// Removes records finished at or after `since` (unix seconds).
+    pub fn clear_downloads_since(&self, since: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM downloads WHERE finished_at >= ?1", [since]).map(drop)
+    }
+
     pub fn remove_download(&self, path: &str) -> Result<()> {
         self.conn.execute("DELETE FROM downloads WHERE path = ?1", [path]).map(drop)
     }
@@ -245,6 +255,22 @@ mod tests {
         assert_eq!(store.downloads().unwrap().len(), 1);
     }
     use crate::{ProfileId, SidebarSide, Zone};
+
+    #[test]
+    fn clear_since_keeps_older_rows() {
+        let store = Store::open(":memory:").unwrap();
+        store.record_visit("https://old.example", "", 100).unwrap();
+        store.record_visit("https://new.example", "", 200).unwrap();
+        store.clear_history_since(150).unwrap();
+        let urls: Vec<String> = store.recent_history(10).unwrap().into_iter().map(|h| h.url).collect();
+        assert_eq!(urls, ["https://old.example"]);
+        let rec = |path: &str, at| DownloadRecord { path: path.into(), url: "https://a.example/f".into(), bytes: 3, finished_at: at };
+        store.record_download(&rec("/d/old", 100)).unwrap();
+        store.record_download(&rec("/d/new", 200)).unwrap();
+        store.clear_downloads_since(150).unwrap();
+        let paths: Vec<String> = store.downloads().unwrap().into_iter().map(|d| d.path).collect();
+        assert_eq!(paths, ["/d/old"]);
+    }
 
     #[test]
     fn favicons_round_trip() {

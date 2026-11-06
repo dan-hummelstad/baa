@@ -336,4 +336,19 @@ mod tests {
         assert_eq!(s.search_engine.name, "Google");
         assert_eq!(s.archive_after_hours, 12);
     }
+
+    #[test]
+    fn old_json_loads_and_new_fields_round_trip() {
+        let s: Settings = serde_json::from_str(r#"{"search_engine":{"name":"Kagi","url":"https://kagi.com/?q=%s"},"chrome":"Ascii"}"#).unwrap();
+        assert_eq!(s.web, WebPrefs::default());
+        assert!(s.restore_today && s.peek_links);
+        let mut s = Settings::default();
+        s.web.secure_dns = SecureDns::Custom("https://dns.quad9.net/dns-query".into());
+        s.web.site_defaults = vec![(crate::Permission::Popups, crate::PermissionState::Allow)];
+        s.web.developer_mode = true;
+        s.web.download_dir = Some("/tmp/dl".into());
+        s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+    }
 }
