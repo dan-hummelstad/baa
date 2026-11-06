@@ -29,7 +29,7 @@ use objc2::runtime::AnyObject;
 use self::ffi::{Callbacks, Core, Profile, Tab, TabState};
 use crate::{
     cef_host::{installed_extensions, is_ephemeral, profile_dir, queue_delete},
-    Callback, ChromeSheet, ChromeTabs, DialogKind, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone,
+    Callback, ChromeSheet, ChromeTabs, DialogKind, Downloads, DownloadState, Extension, ExtensionChange, ExtensionInfo, MenuDone,
     MenuItem, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost,
 };
 
@@ -242,6 +242,7 @@ struct Dispatch {
     pages: RefCell<HashMap<*mut Tab, Live>>,
     pending: RefCell<Vec<Pending>>,
     chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
+    downloads: RefCell<Option<WeakEntity<Downloads>>>,
     next_seq: Cell<u64>,
     /// `--user-data-dir`.
     root: OnceCell<PathBuf>,
@@ -255,6 +256,7 @@ impl Dispatch {
             pages: RefCell::default(),
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
+            downloads: RefCell::default(),
             next_seq: Cell::new(0),
             root: OnceCell::new(),
         }
@@ -351,6 +353,27 @@ impl Dispatch {
         }
         self.queue(move |cx| {
             page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
+        });
+    }
+
+    /// A download started or changed. The first sight of one also tells the
+    /// page it came from.
+    fn download(&'static self, tab: *mut Tab, download: crate::Download) {
+        let page = self.pages.borrow().get(&tab).map(|live| live.page.clone());
+        self.queue(move |cx| {
+            let list = self.downloads.borrow().clone();
+            let new = list.and_then(|list| {
+                list.update(cx, |list, cx| {
+                    let new = list.items.iter().all(|d| d.id != download.id);
+                    list.upsert(download);
+                    cx.notify();
+                    new
+                })
+                .ok()
+            });
+            if let (Some(true), Some(page)) = (new, page) {
+                page.update(cx, |_, cx| cx.emit(PageEvent::DownloadStarted)).ok();
+            }
         });
     }
 
@@ -554,7 +577,22 @@ fn callbacks() -> Callbacks {
     ) {
         unsafe { dispatch(ctx) }.context_menu(tab, id, x, y, Row::from_c(items, count));
     }
-    extern "C" fn download(_: *mut c_void, _: *mut Tab, _: *const ffi::Download) {}
+    extern "C" fn download(ctx: *mut c_void, tab: *mut Tab, download: *const ffi::Download) {
+        let download = unsafe { &*download };
+        let download = crate::Download {
+            id: download.id,
+            url: unsafe { from_c(download.url) },
+            path: unsafe { from_c(download.path) },
+            received_bytes: download.received_bytes,
+            total_bytes: download.total_bytes,
+            state: match download.state {
+                0 => DownloadState::InProgress,
+                1 => DownloadState::Complete,
+                _ => DownloadState::Canceled,
+            },
+        };
+        unsafe { dispatch(ctx) }.download(tab, download);
+    }
     extern "C" fn resized(_: *mut c_void, _: *mut Tab, _: c_int, _: c_int) {}
     extern "C" fn page_message(_: *mut c_void, _: *mut Tab, _: *const c_char) {}
     extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
@@ -611,6 +649,8 @@ impl CoreWebHost {
     fn new(core: &'static Core, dispatch: &'static Dispatch, root: PathBuf, cx: &mut App) -> Self {
         let chrome_tabs = cx.new(|_| ChromeTabs::default());
         *dispatch.chrome_tabs.borrow_mut() = Some(chrome_tabs.downgrade());
+        let downloads = cx.new(|_| Downloads::default());
+        *dispatch.downloads.borrow_mut() = Some(downloads.downgrade());
         *dispatch.app.borrow_mut() = Some(cx.to_async());
         Self {
             core,
@@ -618,7 +658,7 @@ impl CoreWebHost {
             root,
             profiles: RefCell::default(),
             next_ephemeral: Cell::new(u64::MAX),
-            downloads: cx.new(|_| Downloads::default()),
+            downloads,
             chrome_tabs,
         }
     }
@@ -747,7 +787,9 @@ impl WebHost for CoreWebHost {
         self.chrome_tabs.clone()
     }
 
-    fn cancel_download(&self, _id: u32) {}
+    fn cancel_download(&self, id: u32) {
+        (self.core.download_cancel)(id);
+    }
 
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
         let handle = self.profile_handle(profile);
