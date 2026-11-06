@@ -118,10 +118,14 @@ class Spec:
             sys.exit(f"{path}: no script:")
 
 
+# The files the tests download, by exact name; nothing else in ~/Downloads is ever touched.
+TEST_DOWNLOADS = ("baa-small.bin", "baa-slow.bin", "baa-download.txt")
+
+
 def clean_downloads():
-    for f in glob.glob(os.path.expanduser("~/Downloads/baa-*")):
+    for name in TEST_DOWNLOADS:
         try:
-            os.remove(f)
+            os.remove(os.path.join(os.path.expanduser("~/Downloads"), name))
         except OSError:
             pass
 
