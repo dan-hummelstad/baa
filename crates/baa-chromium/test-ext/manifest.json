@@ -3,7 +3,7 @@
   "name": "baa probe",
   "version": "1",
   "description": "Probe for baa's harness",
-  "permissions": ["tabs", "activeTab", "contextMenus"],
+  "permissions": ["tabs", "tabGroups", "activeTab", "contextMenus"],
   "host_permissions": ["https://*/*"],
   "background": { "service_worker": "sw.js" },
   "action": { "default_popup": "popup.html" }

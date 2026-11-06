@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
 #include "chrome/browser/ui/unload_controller.h"
@@ -306,7 +307,7 @@ ui::mojom::WindowShowState Window::GetWindowShowState() const {
 }
 
 bool Window::IsFullscreen() const {
-  return false;
+  return fullscreen_;
 }
 
 bool Window::UpdateToolbarSecurityState() {
@@ -616,18 +617,46 @@ void Window::RemoveObserver(web_modal::ModalDialogHostObserver* observer) {
   observers_.RemoveObserver(observer);
 }
 
-// ponytail: page fullscreen is M2 (toggle the gpui window, then
-// fullscreen_controller()->WindowFullscreenStateChanged()).
 ExclusiveAccessContext* Window::GetExclusiveAccessContext() {
   return this;
 }
 Profile* Window::GetProfile() {
   return browser_->GetProfile();
 }
+// ponytail: Chrome is told "fullscreen" at once, not after the app window's animation; the page
+// lays out once at the old size meanwhile.
 void Window::EnterFullscreen(const url::Origin&,
                              ExclusiveAccessBubbleType,
-                             FullscreenTabParams) {}
-void Window::ExitFullscreen() {}
+                             FullscreenTabParams) {
+  if (fullscreen_) {
+    return;
+  }
+  fullscreen_ = true;
+  fullscreen_tab_ = baa::IdOf(baa::TabFor(GetWebContentsForExclusiveAccess()));
+  baa::Callbacks().fullscreen(baa::CallbackContext(), fullscreen_tab_, true);
+  NotifyFullscreenChanged();
+}
+void Window::ExitFullscreen() {
+  if (!fullscreen_) {
+    return;
+  }
+  fullscreen_ = false;
+  baa::Callbacks().fullscreen(baa::CallbackContext(), fullscreen_tab_, false);
+  NotifyFullscreenChanged();
+}
+// Chrome's controller waits for this call before it counts the window as (not) fullscreen.
+void Window::NotifyFullscreenChanged() {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<Window> self) {
+                       // Null in a Browser's teardown: its features go before its window.
+                       auto* manager = self ? ExclusiveAccessManager::From(self->browser_) : nullptr;
+                       if (manager) {
+                         manager->fullscreen_controller()->WindowFullscreenStateChanged();
+                       }
+                     },
+                     weak_factory_.GetWeakPtr()));
+}
 void Window::UpdateExclusiveAccessBubble(
     const ExclusiveAccessBubbleParams&,
     ExclusiveAccessBubbleHideCallback first_hide_callback) {

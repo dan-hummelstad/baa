@@ -1,9 +1,11 @@
-// Calls the app is answered for later by its own id: baa_profile_clear_data and
-// baa_profile_load_unpacked. Each is answered exactly once, even when the profile closes first.
+// The ids the app answers later (Request: asks and menus, by baa_answer and baa_context_menu_done)
+// and the ones it is answered for later (baa_profile_clear_data, baa_profile_load_unpacked; exactly
+// once, even when the profile closes first).
 
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "baa/baa.h"
 #include "baa/internal.h"
@@ -30,7 +32,73 @@ void Deliver(RequestKind kind, uint64_t id, bool ok, const std::string& message)
   }
 }
 
+std::map<uint64_t, Request*>& Registry() {
+  static base::NoDestructor<std::map<uint64_t, Request*>> registry;
+  return *registry;
+}
+
 }  // namespace
+
+Request::Request(uint64_t tab, Role role) : id_(NextId()), tab_(tab), role_(role) {
+  Registry()[id_] = this;
+}
+
+Request::~Request() {
+  Unregister();
+}
+
+void Request::Unregister() {
+  Registry().erase(id_);
+}
+
+Request* FindRequest(uint64_t id) {
+  auto it = Registry().find(id);
+  return it == Registry().end() ? nullptr : it->second;
+}
+
+void WithdrawRequest(uint64_t id) {
+  Request* request = FindRequest(id);
+  if (!request) {
+    return;
+  }
+  uint64_t tab = request->tab();
+  request->Unregister();
+  if (TabAnnounced(TabFromId(tab))) {
+    Callbacks().request_closed(CallbackContext(), tab, id);
+  }
+}
+
+void DropRequestsOf(uint64_t tab, bool tell, bool menus_only) {
+  std::vector<uint64_t> ids;
+  for (auto& [id, request] : Registry()) {
+    if (request->tab() == tab && (!menus_only || request->role() == Request::Role::kMenu)) {
+      ids.push_back(id);
+    }
+  }
+  for (uint64_t id : ids) {
+    Request* request = FindRequest(id);
+    if (!request) {
+      continue;
+    }
+    bool ask = request->role() != Request::Role::kMenu;
+    request->Unregister();
+    // Before the app hears of it: nothing the callback re-enters can reach the request then.
+    request->Drop();
+    if (tell && ask) {
+      Callbacks().request_closed(CallbackContext(), tab, id);
+    }
+  }
+}
+
+std::vector<uint64_t> DialogsOf(uint64_t tab) {
+  std::vector<uint64_t> ids;
+  for (auto& [id, request] : Registry()) {
+    if (request->tab() == tab && request->role() == Request::Role::kDialog) {
+      ids.push_back(id);
+    }
+  }
+  return ids;
+}
 
 void BeginRequest(RequestKind kind, uint64_t id, Profile* profile) {
   Pending()[{kind, id}] = profile;
@@ -63,3 +131,17 @@ void AnswerPendingOf(Profile* profile) {
 }
 
 }  // namespace baa
+
+void baa_answer(uint64_t id, const BaaAnswer* answer) {
+  baa::Request* request = baa::FindRequest(id);
+  if (answer && request && request->role() != baa::Request::Role::kMenu) {
+    request->Answer(*answer);
+  }
+}
+
+void baa_context_menu_done(uint64_t id, int command) {
+  baa::Request* request = baa::FindRequest(id);
+  if (request && request->role() == baa::Request::Role::kMenu) {
+    request->Command(command);
+  }
+}

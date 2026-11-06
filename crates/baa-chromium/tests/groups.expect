@@ -1,0 +1,11 @@
+# set_group makes a Chrome group the extension sees; an extension's chrome.tabs.group reports a
+# chrome key; the app's set_group never echoes; ungrouping from the app empties chrome.tabGroups
+script: groups.txt
+ext: yes
+cdp-after: 12
+cdp-settle: 5
+cdp: sw.js :: chrome.tabGroups.query({}).then(g=>g.map(x=>x.title)) ==> "Work"
+cdp: sw.js :: chrome.tabs.create({url:"https://example.com/?g"}).then(t=>chrome.tabs.group({tabIds:[t.id]})) ==> ^\d+
+cdp: sw.js :: new Promise(r=>setTimeout(r,16000)).then(()=>chrome.tabGroups.query({title:"Work"})).then(g=>g.length) ==> ^0$
+must: tab_group tab=1 group=9223372036854775\d+ title=""
+count: 0 tab_group tab=0

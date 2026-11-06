@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "baa/baa.h"
 #include "base/functional/callback.h"
@@ -47,6 +48,7 @@ bool TabAlive(BaaTab* tab);
 // What long-lived holders keep instead of a raw handle: null once the tab is gone.
 base::WeakPtr<BaaTab> WeakTab(BaaTab* tab);
 content::WebContents* ContentsOf(BaaTab* tab);  // null if gone
+tabs::TabInterface* TabInterfaceOf(BaaTab* tab);  // null for a popup or a gone tab
 Profile* ChromeProfileOf(BaaProfile* profile);  // null if gone
 BaaProfile* ProfileFor(Profile* profile);       // null if baa never opened it
 BrowserWindowInterface* BrowserOf(BaaProfile* profile);  // made on first need
@@ -82,15 +84,11 @@ void AttachDialogs(content::WebContents* wc);
 // A tab that left our windows: pending dialogs answer "no", Chrome's come back.
 void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc);
 void ShowPendingDialogsOf(BaaTab* tab);  // asked before the app knew the tab
-void DropDialogsOf(BaaTab* tab, bool tell);
 
 // ---- permissions.mm / menu.mm / devtools.mm
 void AttachPermissions(content::WebContents* wc);
-void DropPermissionsOf(BaaTab* tab, bool tell);
-bool AnswerPermission(uint64_t id, bool allow);  // false: not a permission ask
 // Back to Chrome's own prompt (a tab that left our windows).
 void RestoreChromePermissions(content::WebContents* wc);
-void DropMenusOf(BaaTab* tab);
 void ForgetDevtoolsOf(BaaTab* tab);
 void SetDockSide(BaaTab* front, const char* side);  // tab.mm: for the front's dock script
 
@@ -125,7 +123,42 @@ bool BrowserIsClosing(BrowserWindowInterface* browser);
 // are already closed).
 void DestroyBrowsersOf(Profile* profile);
 std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
-// ---- requests.mm: calls answered later by id (clear_done, load_unpacked_done), each exactly once,
+// ---- requests.mm: what the app answers later by id. Asks (dialogs, permissions) and context
+// menus register themselves here; baa_answer and baa_context_menu_done look the id up, and
+// request_closed leaves from WithdrawRequest and DropRequestsOf only. Not owning: each subclass
+// has its own lifetime and is unregistered silently by ~Request.
+class Request {
+ public:
+  enum class Role { kDialog, kPermission, kMenu };
+  Request(uint64_t tab, Role role);  // `tab` is 0 for a page the app has no handle for
+  virtual ~Request();
+  Request(const Request&) = delete;
+  Request& operator=(const Request&) = delete;
+  uint64_t id() const { return id_; }
+  uint64_t tab() const { return tab_; }
+  Role role() const { return role_; }
+  // Idempotent. Call before running what could close the ask, so that closing reads as answered.
+  void Unregister();
+  virtual void Answer(const BaaAnswer&) {}  // asks
+  virtual void Command(int command) {}      // menus
+  // The tab is gone or leaves our windows (already unregistered): let go of it, never touch the
+  // app. Delete this if nothing else owns it.
+  virtual void Drop() = 0;
+
+ private:
+  const uint64_t id_;
+  const uint64_t tab_;
+  const Role role_;
+};
+Request* FindRequest(uint64_t id);
+// Chrome dropped the ask: unregisters it and sends request_closed if the app knows the tab.
+void WithdrawRequest(uint64_t id);
+// Forget(): every request of the tab is unregistered and dropped; asks (not menus) are reported
+// closed when `tell`. `menus_only` is the tab keeping its contents (a replace).
+void DropRequestsOf(uint64_t tab, bool tell, bool menus_only = false);
+std::vector<uint64_t> DialogsOf(uint64_t tab);
+
+// Calls answered later by id (clear_done, load_unpacked_done), each exactly once,
 // also when the profile closes first.
 enum class RequestKind { kClear, kLoadUnpacked };
 void BeginRequest(RequestKind kind, uint64_t id, Profile* profile);
@@ -144,6 +177,18 @@ enum class ColorScheme { kSystem, kLight, kDark };
 inline ColorScheme ColorSchemeOf(int value) {
   return value == 1 ? ColorScheme::kLight : value == 2 ? ColorScheme::kDark : ColorScheme::kSystem;
 }
+
+// autocomplete.mm: a profile's omnibox controller (BaaProfile owns one, made on first use).
+class Autocomplete {
+ public:
+  explicit Autocomplete(Profile* profile);
+  ~Autocomplete();
+  void Start(uint64_t id, const std::string& text);  // "" only stops
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 // profile.mm: sets a bool pref if the profile registers it and the user may change it.
 bool SetPrefBool(Profile* profile, const char* name, bool value);

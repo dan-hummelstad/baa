@@ -27,6 +27,7 @@
 #include "chrome/browser/ui/tabs/tab_muted_utils.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver_observer.h"
+#include "components/find_in_page/find_result_observer.h"
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
 #include "components/permissions/permission_prompt.h"
@@ -75,7 +76,8 @@ uint64_t g_next_id = 1;
 // ---- BaaTab ------------------------------------------------------------------
 
 struct BaaTab : content::WebContentsObserver,
-                favicon::FaviconDriverObserver {
+                favicon::FaviconDriverObserver,
+                find_in_page::FindResultObserver {
   explicit BaaTab(tabs::TabInterface* tab) : id(baa::NextId()), tab(tab) {}
   ~BaaTab() override = default;
 
@@ -100,6 +102,7 @@ struct BaaTab : content::WebContentsObserver,
   std::string icon_url;
   // Storage behind get_state's strings.
   std::string url_s, title_s, icon_s;
+  raw_ptr<find_in_page::FindTabHelper> find_helper;
   base::WeakPtrFactory<BaaTab> weak_factory{this};
 
   content::WebContents* contents() const { return web_contents(); }
@@ -200,6 +203,19 @@ struct BaaTab : content::WebContentsObserver,
   }
   void WebContentsDestroyed() override { Detach(); }
 
+  // find_in_page::FindResultObserver:
+  void OnFindResultAvailable(content::WebContents* wc) override {
+    if (auto* helper = find_in_page::FindTabHelper::FromWebContents(wc)) {
+      const auto& r = helper->find_result();
+      baa::Callbacks().find_result(baa::CallbackContext(), id, r.active_match_ordinal(),
+                                   r.number_of_matches());
+    }
+  }
+  void OnFindEmptyText(content::WebContents*) override {
+    baa::Callbacks().find_result(baa::CallbackContext(), id, 0, 0);
+  }
+  void OnFindTabHelperDestroyed(find_in_page::FindTabHelper*) override { find_helper = nullptr; }
+
   // favicon::FaviconDriverObserver:
   void OnFaviconUpdated(favicon::FaviconDriver*,
                         NotificationIconType,
@@ -262,10 +278,8 @@ void Forget(BaaTab* t, int reason) {
   Registry().erase(it);
   bool tell = t->reported;
   bool tell_asks = tell && reason != BAA_CLOSED_BY_APP;
-  DropPermissionsOf(t, tell_asks);
-  DropMenusOf(t);
+  DropRequestsOf(t->id, tell_asks);
   ForgetDevtoolsOf(t);
-  DropDialogsOf(t, tell_asks);
   if (tell) {
     Callbacks().tab_closed(CallbackContext(), t->id, reason);
   }
@@ -331,6 +345,10 @@ void BaaTab::Attach(content::WebContents* wc) {
   }
   baa::AttachDialogs(wc);
   baa::AttachPermissions(wc);
+  if (auto* helper = find_in_page::FindTabHelper::FromWebContents(wc)) {
+    find_helper = helper;
+    helper->AddObserver(this);
+  }
 }
 
 // A DevTools front-end needs its dock picker switched on, and Chrome only does that for DevTools
@@ -383,6 +401,10 @@ void BaaTab::Detach() {
   }
   if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(wc)) {
     driver->RemoveObserver(this);
+  }
+  if (find_helper) {
+    find_helper->RemoveObserver(this);
+    find_helper = nullptr;
   }
   Observe(nullptr);
 }
@@ -505,7 +527,7 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
     return;
   }
   t->Detach();
-  DropMenusOf(t);
+  DropRequestsOf(t->id, false, /*menus_only=*/true);
   t->icon_url.clear();
   t->Attach(new_contents);
   t->SendState();
@@ -720,9 +742,11 @@ void baa_tab_activate(BaaTabId tab_id) {
   baa::ActivateBrowser(browser);
 }
 
-// ponytail: M3 stubs (WP-C3, WP-C4); the callbacks fullscreen and tab_group are not sent yet.
-void baa_tab_exit_fullscreen(BaaTabId) {}
-void baa_tab_set_group(BaaTabId, uint64_t, const char*) {}
+void baa_tab_exit_fullscreen(BaaTabId tab_id) {
+  if (content::WebContents* wc = baa::ContentsOf(baa::TabFromId(tab_id))) {
+    wc->ExitFullscreen(/*will_cause_resize=*/true);
+  }
+}
 
 void baa_tab_focus(BaaTabId tab_id) {
   BaaTab* tab = baa::TabFromId(tab_id);
@@ -760,6 +784,10 @@ bool TabAnnounced(BaaTab* tab) {
 
 content::WebContents* ContentsOf(BaaTab* tab) {
   return TabAlive(tab) ? tab->web_contents() : nullptr;
+}
+
+tabs::TabInterface* TabInterfaceOf(BaaTab* tab) {
+  return TabAlive(tab) ? tab->tab : nullptr;
 }
 
 BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close) {

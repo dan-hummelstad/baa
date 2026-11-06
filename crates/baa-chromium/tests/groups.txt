@@ -1,0 +1,7 @@
+# tab groups: the app groups tab 0 as "Work"; at ~25 s it takes the tab out again
+load https://example.com/
+sleep 3000
+group 0 7 Work
+sleep 20000
+group 0 0 -
+sleep 30000

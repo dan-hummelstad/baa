@@ -56,6 +56,7 @@ struct BaaProfile : ProfileObserver {
 
   void OnProfileWillBeDestroyed(Profile*) override {
     observation.Reset();
+    autocomplete.reset();  // its providers hold the profile
     profile = nullptr;
     browser = nullptr;
     browser_closed = {};
@@ -101,6 +102,7 @@ struct BaaProfile : ProfileObserver {
   std::string name;
   std::unique_ptr<ScopedProfileKeepAlive> keep_alive;
   baa::DownloadWatch downloads{profile};
+  std::unique_ptr<baa::Autocomplete> autocomplete;
   raw_ptr<BrowserWindowInterface> browser;
   base::CallbackListSubscription browser_closed;
   base::ScopedObservation<Profile, ProfileObserver> observation{this};
@@ -203,8 +205,21 @@ void baa_profile_close(BaaProfile* profile) {
   }
 }
 
-// ponytail: M3 stub (WP-C5); autocomplete is not sent yet.
-void baa_profile_autocomplete(BaaProfile*, uint64_t, const char*) {}
+void baa_profile_autocomplete(BaaProfile* profile, uint64_t id, const char* text) {
+  // A later call stops earlier ones in every profile (the command bar moved to another Space).
+  for (auto& p : Profiles()) {
+    if (p.get() != profile && p->autocomplete) {
+      p->autocomplete->Start(0, "");
+    }
+  }
+  if (!AliveProfile(profile) || !profile->profile) {
+    return;
+  }
+  if (!profile->autocomplete) {
+    profile->autocomplete = std::make_unique<baa::Autocomplete>(profile->profile);
+  }
+  profile->autocomplete->Start(id, text ? text : "");
+}
 
 
 namespace {

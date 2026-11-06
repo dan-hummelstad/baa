@@ -38,6 +38,13 @@ class OmniboxView;
 
 namespace baa {
 
+// groups.mm: the observer forwards (PLAN-m3.md 2.4).
+void GroupsTabGrouped(TabStripModel* model,
+                      std::optional<tab_groups::TabGroupId> old_group,
+                      std::optional<tab_groups::TabGroupId> new_group,
+                      tabs::TabInterface* tab);
+void GroupsChanged(const TabGroupChange& change);
+
 // The BrowserWindow of every baa Browser: Chrome's logic with no views behind
 // it, drawn by the embedding app. The body is TestBrowserWindow's long tail of
 // no-ops plus the getters Chrome dereferences (PLAN-chromium-phase3.md 15a).
@@ -206,6 +213,16 @@ class Window : public BrowserWindow,
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
+  void TabGroupedStateChanged(TabStripModel* model,
+                              std::optional<tab_groups::TabGroupId> old_group,
+                              std::optional<tab_groups::TabGroupId> new_group,
+                              tabs::TabInterface* tab,
+                              int index) override {
+    GroupsTabGrouped(model, old_group, new_group, tab);
+  }
+  void OnTabGroupChanged(const TabGroupChange& change) override {
+    GroupsChanged(change);
+  }
 
   // web_modal::WebContentsModalDialogHost:
   gfx::NativeView GetHostView() const override;
@@ -231,6 +248,7 @@ class Window : public BrowserWindow,
 
  protected:
   void DeleteBrowserWindow() final;
+  void NotifyFullscreenChanged();
 
  private:
   class StubLocationBar;
@@ -242,6 +260,8 @@ class Window : public BrowserWindow,
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
   const bool hidden_;
   bool closing_ = false;
+  bool fullscreen_ = false;
+  uint64_t fullscreen_tab_ = 0;  // the tab fullscreen(on) was sent for
   base::CallbackListSubscription close_cancelled_;
   std::unique_ptr<ExtensionsContainer> extensions_container_;
   std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;

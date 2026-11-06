@@ -1,0 +1,12 @@
+# page fullscreen and find counts
+load https://example.com/
+sleep 3000
+geval document.body.requestFullscreen()
+sleep 1500
+eval document.title='fs:'+!!document.fullscreenElement
+sleep 500
+state
+fsexit
+sleep 1500
+find Example
+sleep 1500

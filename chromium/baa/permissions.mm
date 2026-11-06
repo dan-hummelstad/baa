@@ -25,12 +25,6 @@
 namespace baa {
 namespace {
 
-class Prompt;
-std::map<uint64_t, Prompt*>& Prompts() {
-  static base::NoDestructor<std::map<uint64_t, Prompt*>> prompts;
-  return *prompts;
-}
-
 uint32_t KindBit(permissions::RequestType type) {
   switch (type) {
     case permissions::RequestType::kCameraStream:
@@ -51,32 +45,39 @@ uint32_t KindBit(permissions::RequestType type) {
 }
 
 // What the manager holds while a request waits for the app. Accept/Deny delete
-// it (FinalizeCurrentRequests), so answering looks it up by id, forgets it
-// first and never touches it afterwards.
-class Prompt : public permissions::PermissionPrompt {
+// it (FinalizeCurrentRequests), so answering unregisters it first and never
+// touches it afterwards.
+class Prompt : public permissions::PermissionPrompt, public Request {
  public:
   Prompt(BaaTab* tab, Delegate* delegate)
-      : tab_(WeakTab(tab)), delegate_(delegate->GetWeakPtr()), id_(NextId()) {
+      : Request(IdOf(tab), Role::kPermission), delegate_(delegate->GetWeakPtr()) {
     uint32_t kinds = 0;
     for (const auto& request : delegate->Requests()) {
       kinds |= KindBit(request->request_type());
     }
     origin_ = delegate->GetRequestingOrigin().spec();
-    Prompts()[id_] = this;
-    kinds_ = kinds;
-    Callbacks().permission(CallbackContext(), IdOf(tab_.get()), id_, origin_.c_str(), kinds_);
+    Callbacks().permission(CallbackContext(), Request::tab(), id(), origin_.c_str(), kinds);
   }
 
   ~Prompt() override {
     // Still waiting: Chrome dropped the request (navigation, tab closed).
-    BaaTab* tab = tab_.get();
-    if (Prompts().erase(id_) && tab && TabAnnounced(tab)) {
-      Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
-    }
+    WithdrawRequest(id());
   }
 
-  base::WeakPtr<Delegate> delegate() const { return delegate_; }
-  BaaTab* tab() const { return tab_.get(); }
+  void Answer(const BaaAnswer& answer) override {
+    Unregister();
+    auto delegate = delegate_;
+    if (!delegate) {
+      return;
+    }
+    if (answer.ok) {
+      delegate->Accept(std::monostate());
+    } else {
+      delegate->Deny(std::monostate());
+    }
+  }
+  // Chrome still owns it and drops it with the tab.
+  void Drop() override {}
 
   bool UpdateAnchor() override { return true; }
   // The app keeps asks per tab.
@@ -95,11 +96,8 @@ class Prompt : public permissions::PermissionPrompt {
   }
 
  private:
-  base::WeakPtr<BaaTab> tab_;
   base::WeakPtr<Delegate> delegate_;
-  const uint64_t id_;
   std::string origin_;
-  uint32_t kinds_ = 0;
 };
 
 class SilentPrompt : public permissions::PermissionPrompt {
@@ -231,42 +229,6 @@ void RestoreChromePermissions(content::WebContents* wc) {
   if (auto* manager = permissions::PermissionRequestManager::FromWebContents(wc)) {
     manager->set_view_factory_for_testing(base::BindRepeating(&permissions::PermissionPrompt::Create));
   }
-}
-
-void DropPermissionsOf(BaaTab* tab, bool tell) {
-  for (auto it = Prompts().begin(); it != Prompts().end();) {
-    if (it->second->tab() == tab) {
-      uint64_t id = it->first;
-      it = Prompts().erase(it);
-      if (tell) {
-        Callbacks().request_closed(CallbackContext(), IdOf(tab), id);
-      }
-    } else {
-      ++it;
-    }
-  }
-}
-
-}  // namespace baa
-
-namespace baa {
-
-bool AnswerPermission(uint64_t id, bool allow) {
-  auto it = Prompts().find(id);
-  if (it == Prompts().end()) {
-    return false;
-  }
-  auto delegate = it->second->delegate();
-  Prompts().erase(it);
-  if (!delegate) {
-    return true;
-  }
-  if (allow) {
-    delegate->Accept(std::monostate());
-  } else {
-    delegate->Deny(std::monostate());
-  }
-  return true;
 }
 
 }  // namespace baa

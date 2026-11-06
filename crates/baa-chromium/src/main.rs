@@ -412,10 +412,9 @@ mod app {
     }
 
     extern "C" fn on_autocomplete(_: *mut c_void, id: u64, matches: *const ffi::Match, count: usize, done: bool) {
-        eprintln!("baa: autocomplete id={id} count={count} done={done}");
-        for m in unsafe { std::slice::from_raw_parts(matches, count) } {
-            eprintln!("baa:   match url={} contents={:?} description={:?} search={}", text(m.url), text(m.contents), text(m.description), m.search);
-        }
+        let ms = if count == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(matches, count) } };
+        let first = ms.first().map_or(String::new(), |m| format!("{}|{}|{}", text(m.url), text(m.contents), m.search as u8));
+        eprintln!("baa: autocomplete id={id} n={count} done={done} first={first:?}");
     }
 
     extern "C" fn on_clear_done(_: *mut c_void, id: u64) {
@@ -508,7 +507,19 @@ mod app {
                     }
                     "eval" => (core.tab_eval)(tab, c(arg).as_ptr(), false),
                     "geval" => (core.tab_eval)(tab, c(arg).as_ptr(), true),
+                    "ac" => {
+                        let (id, q) = arg.split_once(' ').unwrap_or((arg, ""));
+                        (core.profile_autocomplete)(profile_for("1"), id.parse().unwrap(), c(q.trim_matches('"')).as_ptr());
+                    }
                     "find" => (core.tab_find)(tab, c(arg).as_ptr(), true),
+                    // group <tab index> <key> <title>; title "-" is empty
+                    "group" => {
+                        let mut p = arg.splitn(3, ' ');
+                        let (i, key, title) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap_or("-"));
+                        let t = TABS.with(|t| t.borrow().get(i.parse::<usize>().unwrap()).copied()).unwrap_or(0);
+                        (core.tab_set_group)(t, key.parse().unwrap(), c(if title == "-" { "" } else { title }).as_ptr());
+                    }
+                    "fsexit" => (core.tab_exit_fullscreen)(tab),
                     "zoom" => (core.tab_set_zoom)(tab, arg.parse().unwrap()),
                     "mute" => (core.tab_set_muted)(tab, true),
                     "unmute" => (core.tab_set_muted)(tab, false),

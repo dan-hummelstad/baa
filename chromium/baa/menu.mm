@@ -25,15 +25,26 @@ namespace {
 
 // ---- Context menus ----------------------------------------------------------
 
-struct PendingMenu {
-  std::unique_ptr<RenderViewContextMenuBase> menu;
-  BaaTab* tab;
-};
+// Deleted by the answer or by Drop (the menu is just destroyed then, not closed).
+class PendingMenu : public Request {
+ public:
+  PendingMenu(uint64_t tab, std::unique_ptr<RenderViewContextMenuBase> menu)
+      : Request(tab, Role::kMenu), menu_(std::move(menu)) {}
 
-std::map<uint64_t, PendingMenu>& Menus() {
-  static base::NoDestructor<std::map<uint64_t, PendingMenu>> menus;
-  return *menus;
-}
+  void Command(int command) override {
+    Unregister();
+    if (command >= 0 && menu_->IsCommandIdEnabled(command)) {
+      // Before closing: a page's own items need the menu's client.
+      menu_->ExecuteCommand(command, 0);
+    }
+    menu_->MenuClosed(const_cast<ui::SimpleMenuModel*>(&menu_->menu_model()));
+    delete this;
+  }
+  void Drop() override { delete this; }
+
+ private:
+  std::unique_ptr<RenderViewContextMenuBase> menu_;
+};
 
 struct Row {
   std::string label;
@@ -97,13 +108,12 @@ bool ShowContextMenu(std::unique_ptr<RenderViewContextMenuBase>& menu) {
     menu.reset();
     return true;
   }
-  uint64_t id = NextId();
   RenderViewContextMenuBase* raw = menu.get();
   raw->OnMenuWillShow(const_cast<ui::SimpleMenuModel*>(&raw->menu_model()));
   std::vector<Row> rows;
   Flatten(const_cast<ui::SimpleMenuModel*>(&raw->menu_model()), 0, rows);
   float x = raw->params().x, y = raw->params().y;
-  Menus()[id] = {std::move(menu), tab};
+  uint64_t id = (new PendingMenu(IdOf(tab), std::move(menu)))->id();
 
   std::vector<BaaMenuItem> items;
   items.reserve(rows.size());
@@ -120,29 +130,4 @@ void InstallContextMenuHook() {
   g_baa_show_context_menu = &ShowContextMenu;
 }
 
-// The tab is going away: menus not yet answered are dropped, not run.
-void DropMenusOf(BaaTab* tab) {
-  for (auto it = Menus().begin(); it != Menus().end();) {
-    if (it->second.tab == tab) {
-      it = Menus().erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
 }  // namespace baa
-
-void baa_context_menu_done(uint64_t id, int command) {
-  auto it = baa::Menus().find(id);
-  if (it == baa::Menus().end()) {
-    return;
-  }
-  std::unique_ptr<RenderViewContextMenuBase> menu = std::move(it->second.menu);
-  baa::Menus().erase(it);
-  if (command >= 0 && menu->IsCommandIdEnabled(command)) {
-    // Before closing: a page's own items need the menu's client.
-    menu->ExecuteCommand(command, 0);
-  }
-  menu->MenuClosed(const_cast<ui::SimpleMenuModel*>(&menu->menu_model()));
-}

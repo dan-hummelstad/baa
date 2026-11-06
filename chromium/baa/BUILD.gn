@@ -3,12 +3,14 @@
 # linked into BaaCore.framework (libchrome_dll.dylib in component builds).
 source_set("baa") {
   sources = [
+    "autocomplete.mm",
     "app_mac.mm",
     "baa.h",
     "devtools.mm",
     "dialogs.mm",
     "downloads.mm",
     "extensions.mm",
+    "groups.mm",
     "internal.h",
     "menu.mm",
     "permissions.mm",
@@ -23,6 +25,7 @@ source_set("baa") {
     "//base",
     "//chrome/browser",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/autocomplete",
     "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame:browser_window_factory",
     "//components/content_settings/core/browser",
@@ -30,6 +33,7 @@ source_set("baa") {
     "//components/favicon/content",
     "//components/find_in_page",
     "//components/input",
+    "//components/omnibox/browser",
     "//components/javascript_dialogs",
     "//components/permissions",
     "//components/renderer_context_menu",

@@ -35,8 +35,6 @@ void SendDialog(uint64_t tab, uint64_t id, int kind, const std::string& message,
   Callbacks().dialog(CallbackContext(), tab, id, &dialog);
 }
 
-bool AnswerDialog(uint64_t id, bool ok, const std::u16string& answer);
-
 int DialogKind(content::JavaScriptDialogType type,
                bool before_unload = false,
                bool reload = false) {
@@ -51,40 +49,53 @@ int DialogKind(content::JavaScriptDialogType type,
 // ---- Tab-modal dialogs ---------------------------------------------------------
 
 // The "view" Chrome's dialog manager holds: nothing is drawn here, the app
-// shows the dialog and answers through baa_dialog_answer.
-class DialogView : public javascript_dialogs::TabModalDialogView {
+// shows the dialog and answers through baa_answer. Owns itself.
+class DialogView : public javascript_dialogs::TabModalDialogView, public Request {
  public:
-  DialogView(uint64_t id,
-             BaaTab* tab,
+  DialogView(BaaTab* tab,
              int kind,
              std::string message,
              std::u16string default_text,
              content::JavaScriptDialogManager::DialogClosedCallback callback)
-      : id_(id),
-        tab_(WeakTab(tab)),
+      : Request(IdOf(tab), Role::kDialog),
         kind_(kind),
         message_(std::move(message)),
         default_text_(std::move(default_text)),
         callback_(std::move(callback)) {}
 
   // The manager makes the dialog go away (navigation, tab hidden, a newer
-  // dialog). Not called back for answers, which forget the id first.
-  void CloseDialogWithoutCallback() override;
+  // dialog). Not called back for answers, which unregister first.
+  void CloseDialogWithoutCallback() override {
+    if (answered_) {
+      return;
+    }
+    WithdrawRequest(id());
+    delete this;
+  }
   std::u16string GetUserInput() override { return default_text_; }
 
-  base::WeakPtr<DialogView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
-  content::JavaScriptDialogManager::DialogClosedCallback TakeCallback() {
-    return std::move(callback_);
+  // The tab is gone or left: Chrome's callback is never run.
+  void Drop() override { delete this; }
+  void Answer(const BaaAnswer& answer) override {
+    if (answered_) {
+      return;
+    }
+    // Unregistered before the callback runs: the manager answers by closing the
+    // dialog, which must not read as the page going away.
+    answered_ = true;
+    Unregister();
+    auto callback = std::move(callback_);
+    std::move(callback).Run(answer.ok, base::UTF8ToUTF16(answer.text ? answer.text : ""));
+    delete this;
   }
-  void MarkAnswered() { answered_ = true; }
-  BaaTab* tab() const { return tab_.get(); }
-  uint64_t id() const { return id_; }
+
+  base::WeakPtr<DialogView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   // Tells the app about it (again, once the tab is announced).
-  void Show(BaaTab* tab) const { SendDialog(IdOf(tab), id_, kind_, message_, base::UTF16ToUTF8(default_text_)); }
+  void Show(BaaTab* tab) const {
+    SendDialog(IdOf(tab), id(), kind_, message_, base::UTF16ToUTF8(default_text_));
+  }
 
  private:
-  const uint64_t id_;
-  base::WeakPtr<BaaTab> tab_;
   const int kind_;
   std::string message_;
   std::u16string default_text_;
@@ -92,28 +103,6 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
   bool answered_ = false;
   base::WeakPtrFactory<DialogView> weak_factory_{this};
 };
-
-std::map<uint64_t, std::unique_ptr<DialogView>>& Dialogs() {
-  static base::NoDestructor<std::map<uint64_t, std::unique_ptr<DialogView>>> d;
-  return *d;
-}
-
-void DialogView::CloseDialogWithoutCallback() {
-  if (answered_) {
-    return;
-  }
-  auto it = Dialogs().find(id_);
-  if (it == Dialogs().end()) {
-    return;
-  }
-  // Destroys this; nothing after.
-  std::unique_ptr<DialogView> self = std::move(it->second);
-  Dialogs().erase(it);
-  BaaTab* tab = tab_.get();
-  if (TabAnnounced(tab)) {
-    Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
-  }
-}
 
 class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
  public:
@@ -129,19 +118,19 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
       content::JavaScriptDialogManager::DialogClosedCallback callback,
       base::OnceClosure) override {
     BaaTab* tab = TabFor(wc_);
-    uint64_t id = NextId();
-    auto view = std::make_unique<DialogView>(id, tab, DialogKind(type),
-                                             base::UTF16ToUTF8(message),
-                                             default_text, std::move(callback));
+    auto* view = new DialogView(tab, DialogKind(type), base::UTF16ToUTF8(message), default_text,
+                                std::move(callback));
     auto weak = view->GetWeakPtr();
-    DialogView* raw = view.get();
-    Dialogs()[id] = std::move(view);
     if (!tab) {
       // A page nobody shows (its tab handle is gone): answer "no" so it does not hang.
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce([](uint64_t id) { AnswerDialog(id, false, std::u16string()); }, id));
+          FROM_HERE, base::BindOnce([](uint64_t id) {
+            if (Request* request = FindRequest(id)) {
+              request->Answer(BaaAnswer{});
+            }
+          }, view->id()));
     } else if (TabAnnounced(tab)) {
-      raw->Show(tab);
+      view->Show(tab);
     }
     return weak;
   }
@@ -152,38 +141,45 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
 
 // ---- App-modal dialogs ---------------------------------------------------------
 
-class AppModal;
-std::map<uint64_t, AppModal*>& AppModals() {
-  static base::NoDestructor<std::map<uint64_t, AppModal*>> modals;
-  return *modals;
-}
-
-class AppModal : public javascript_dialogs::AppModalDialogView {
+class AppModal : public javascript_dialogs::AppModalDialogView, public Request {
  public:
   AppModal(std::unique_ptr<javascript_dialogs::AppModalDialogController> controller, BaaTab* tab)
-      : controller_(std::move(controller)), tab_(WeakTab(tab)), id_(NextId()) {}
+      : Request(IdOf(tab), Role::kDialog), controller_(std::move(controller)) {}
 
   void ShowAppModalDialog() override {
-    AppModals()[id_] = this;
     int kind = DialogKind(controller_->javascript_dialog_type(),
                           controller_->is_before_unload_dialog(), controller_->is_reload());
-    SendDialog(IdOf(tab_.get()), id_, kind, base::UTF16ToUTF8(controller_->message_text()),
+    SendDialog(tab(), id(), kind, base::UTF16ToUTF8(controller_->message_text()),
                base::UTF16ToUTF8(controller_->default_prompt_text()));
   }
   void ActivateAppModalDialog() override {}
   // Chrome closes it (the page navigated or went away); OnClose before deleting.
   void CloseAppModalDialog() override {
-    Forget(/*tell_app=*/true);
+    WithdrawRequest(id());
     controller_->OnClose();
     delete this;
   }
   // CDP's Page.handleJavaScriptDialog.
-  void AcceptAppModalDialog() override { Answer(true, controller_->default_prompt_text(), true); }
-  void CancelAppModalDialog() override { Answer(false, std::u16string(), true); }
+  void AcceptAppModalDialog() override {
+    WithdrawRequest(id());
+    Finish(true, controller_->default_prompt_text());
+  }
+  void CancelAppModalDialog() override {
+    WithdrawRequest(id());
+    Finish(false, std::u16string());
+  }
   bool IsShowing() const override { return true; }
 
-  void Answer(bool ok, const std::u16string& text, bool tell_app) {
-    Forget(tell_app);
+  void Answer(const BaaAnswer& answer) override {
+    Unregister();
+    Finish(answer.ok, base::UTF8ToUTF16(answer.text ? answer.text : ""));
+  }
+  // The tab is gone: Chrome still closes the dialog (CloseAppModalDialog), which deletes it.
+  void Drop() override {}
+
+ private:
+  // Deletes this.
+  void Finish(bool ok, const std::u16string& text) {
     if (ok) {
       controller_->OnAccept(text, false);
     } else {
@@ -196,39 +192,8 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
     delete this;
   }
 
- private:
-  void Forget(bool tell_app) {
-    BaaTab* tab = tab_.get();
-    if (AppModals().erase(id_) && tell_app && TabAnnounced(tab)) {
-      Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
-    }
-  }
-
   std::unique_ptr<javascript_dialogs::AppModalDialogController> controller_;
-  base::WeakPtr<BaaTab> tab_;
-  const uint64_t id_;
 };
-
-// WP-C1b replaces these maps with the request registry.
-bool AnswerDialog(uint64_t id, bool ok, const std::u16string& answer) {
-  auto it = Dialogs().find(id);
-  if (it == Dialogs().end()) {
-    auto modal = AppModals().find(id);
-    if (modal == AppModals().end()) {
-      return false;
-    }
-    // Answering deletes it.
-    modal->second->Answer(ok, answer, /*tell_app=*/false);
-    return true;
-  }
-  // Forgotten before the callback runs: the manager answers by closing the
-  // dialog, which must not read as the page going away.
-  std::unique_ptr<DialogView> view = std::move(it->second);
-  Dialogs().erase(it);
-  view->MarkAnswered();
-  view->TakeCallback().Run(ok, answer);
-  return true;
-}
 
 }  // namespace
 
@@ -242,14 +207,10 @@ void AttachDialogs(content::WebContents* wc) {
 // A tab that left our windows: pending page dialogs say "no" so the page does
 // not hang, and Chrome's own dialogs come back.
 void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc) {
-  std::vector<uint64_t> pending;
-  for (auto& [id, view] : Dialogs()) {
-    if (view->tab() == tab) {
-      pending.push_back(id);
+  for (uint64_t id : DialogsOf(IdOf(tab))) {
+    if (Request* request = FindRequest(id)) {
+      request->Answer(BaaAnswer{});
     }
-  }
-  for (uint64_t id : pending) {
-    AnswerDialog(id, false, std::u16string());
   }
   wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
@@ -257,23 +218,11 @@ void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc) {
 }
 
 void ShowPendingDialogsOf(BaaTab* tab) {
-  for (auto& [id, view] : Dialogs()) {
-    if (view->tab() == tab) {
-      view->Show(tab);
-    }
-  }
-}
-
-void DropDialogsOf(BaaTab* tab, bool tell) {
-  for (auto d = Dialogs().begin(); d != Dialogs().end();) {
-    if (d->second->tab() == tab) {
-      uint64_t id = d->first;
-      d = Dialogs().erase(d);
-      if (tell) {
-        Callbacks().request_closed(CallbackContext(), IdOf(tab), id);
-      }
-    } else {
-      ++d;
+  for (uint64_t id : DialogsOf(IdOf(tab))) {
+    // Only a DialogView can be waiting for the app to know its tab: AppModal exists only for an
+    // announced one. (Chrome builds without RTTI.)
+    if (Request* request = FindRequest(id)) {  // an earlier Show's answer may have closed it
+      static_cast<DialogView*>(request)->Show(tab);
     }
   }
 }
@@ -298,12 +247,3 @@ void InstallAppModalFactory() {
 }
 
 }  // namespace baa
-
-void baa_answer(uint64_t id, const BaaAnswer* answer) {
-  if (!answer) {
-    return;
-  }
-  if (!baa::AnswerDialog(id, answer->ok, base::UTF8ToUTF16(answer->text ? answer->text : ""))) {
-    baa::AnswerPermission(id, answer->ok);
-  }
-}
