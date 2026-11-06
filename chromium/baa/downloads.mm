@@ -41,7 +41,7 @@ class ItemWatch : public download::DownloadItem::Observer {
   }
 
   void Send() {
-    if (!item_ || !Callbacks().download) {
+    if (!item_) {
       return;
     }
     // Chrome shows no prompt; keeping every file is what CEF did.
@@ -88,56 +88,31 @@ class ItemWatch : public download::DownloadItem::Observer {
   const uint32_t id_;
 };
 
-class ManagerWatch : public content::DownloadManager::Observer {
- public:
-  explicit ManagerWatch(content::DownloadManager* manager) : manager_(manager) {
-    manager->AddObserver(this);
-  }
-  ~ManagerWatch() override {
-    if (manager_) {
-      manager_->RemoveObserver(this);
-    }
-  }
-  void OnDownloadCreated(content::DownloadManager*, download::DownloadItem* item) override {
-    // Items loaded from history arrive finished; baa-model keeps its own list.
-    if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
-      return;
-    }
-    // Owns itself until the item is destroyed.
-    (new ItemWatch(item))->Send();
-  }
-  void ManagerGoingDown(content::DownloadManager*) override {
-    manager_ = nullptr;
-    watches_gone_ = true;
-  }
-  bool gone() const { return watches_gone_; }
-  content::DownloadManager* manager() const { return manager_; }
-
- private:
-  raw_ptr<content::DownloadManager> manager_;
-  bool watches_gone_ = false;
-};
-
-std::vector<std::unique_ptr<ManagerWatch>>& Managers() {
-  static base::NoDestructor<std::vector<std::unique_ptr<ManagerWatch>>> managers;
-  return *managers;
-}
-
 }  // namespace
 
-// Called once per profile (disk or ephemeral), after it exists.
-void WatchDownloads(Profile* profile) {
-  std::erase_if(Managers(), [](auto& m) { return m->gone(); });
-  if (auto* manager = profile->GetDownloadManager()) {
-    // The Default profile and its incognito twin share nothing, but a profile
-    // opened twice must not be watched twice.
-    for (auto& m : Managers()) {
-      if (m->manager() == manager) {
-        return;
-      }
-    }
-    Managers().push_back(std::make_unique<ManagerWatch>(manager));
+DownloadWatch::DownloadWatch(Profile* profile) : manager_(profile->GetDownloadManager()) {
+  if (manager_) {
+    manager_->AddObserver(this);
   }
+}
+
+DownloadWatch::~DownloadWatch() {
+  if (manager_) {
+    manager_->RemoveObserver(this);
+  }
+}
+
+void DownloadWatch::OnDownloadCreated(content::DownloadManager*, download::DownloadItem* item) {
+  // Items loaded from history arrive finished; baa-model keeps its own list.
+  if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
+    return;
+  }
+  // Owns itself until the item is destroyed.
+  (new ItemWatch(item))->Send();
+}
+
+void DownloadWatch::ManagerGoingDown(content::DownloadManager*) {
+  manager_ = nullptr;
 }
 
 }  // namespace baa

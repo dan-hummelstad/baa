@@ -64,16 +64,13 @@ class Prompt : public permissions::PermissionPrompt {
     origin_ = delegate->GetRequestingOrigin().spec();
     Prompts()[id_] = this;
     kinds_ = kinds;
-    if (Callbacks().permission) {
-      BaaTab* tab = tab_.get();
-      Callbacks().permission(CallbackContext(), tab, id_, origin_.c_str(), kinds_);
-    }
+    Callbacks().permission(CallbackContext(), tab_.get(), id_, origin_.c_str(), kinds_);
   }
 
   ~Prompt() override {
     // Still waiting: Chrome dropped the request (navigation, tab closed).
     BaaTab* tab = tab_.get();
-    if (Prompts().erase(id_) && tab && TabAnnounced(tab) && Callbacks().permission_closed) {
+    if (Prompts().erase(id_) && tab && TabAnnounced(tab)) {
       Callbacks().permission_closed(CallbackContext(), tab, id_);
     }
   }
@@ -184,7 +181,7 @@ void DropPermissionsOf(BaaTab* tab, bool tell) {
     if (it->second->tab() == tab) {
       uint64_t id = it->first;
       it = Prompts().erase(it);
-      if (tell && Callbacks().permission_closed) {
+      if (tell) {
         Callbacks().permission_closed(CallbackContext(), tab, id);
       }
     } else {

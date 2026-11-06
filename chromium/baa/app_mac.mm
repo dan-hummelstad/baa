@@ -7,8 +7,10 @@
 
 #include "baa/baa.h"
 #include "baa/internal.h"
+#include "baa/window.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
@@ -43,16 +45,16 @@ const BaaCallbacks& Callbacks() {
 void* CallbackContext() {
   return g_ctx;
 }
-bool Terminating() {
-  return g_terminating;
-}
 
-// Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
-// close through BrowserCloseManager (our windows' Close), and later calls from
-// the UI on a gone handle do nothing. Also keeps Chrome's "last used profile"
-// on Default: it follows whichever Space was active, and a deleted Space's
-// directory would be recreated by the next start-up. Called once Chrome is up.
-void WatchTermination() {
+void EnsureStarted() {
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+  // Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
+  // close through BrowserCloseManager (our windows' Close), and later calls from
+  // the UI on a gone handle do nothing.
   static base::NoDestructor<base::CallbackListSubscription> on_terminating(
       browser_shutdown::AddAppTerminatingCallback(
           base::BindOnce([] {
@@ -65,18 +67,21 @@ void WatchTermination() {
   // (extension_install_ui_desktop.cc); the install prompt itself still shows.
   static base::NoDestructor<base::AutoReset<bool>> no_install_ui(
       ExtensionInstallUI::disable_ui_for_tests(true));
-  PrefChangeRegistrar* pin = &PinRegistrar();
-  if (!pin->prefs() && g_browser_process && g_browser_process->local_state()) {
-    PrefService* local_state = g_browser_process->local_state();
-    auto reset = [](PrefService* local_state) {
-      if (local_state->GetString(prefs::kProfileLastUsed) != chrome::kInitialProfile) {
-        local_state->SetString(prefs::kProfileLastUsed, chrome::kInitialProfile);
-      }
-    };
-    pin->Init(local_state);
-    pin->Add(prefs::kProfileLastUsed, base::BindRepeating(reset, local_state));
-    reset(local_state);
-  }
+  // Keeps Chrome's "last used profile" on Default: it follows whichever Space
+  // was active, and a deleted Space's directory would be recreated by the next
+  // start-up.
+  PrefService* local_state = g_browser_process->local_state();
+  auto reset = [](PrefService* local_state) {
+    if (local_state->GetString(prefs::kProfileLastUsed) != chrome::kInitialProfile) {
+      local_state->SetString(prefs::kProfileLastUsed, chrome::kInitialProfile);
+    }
+  };
+  PinRegistrar().Init(local_state);
+  PinRegistrar().Add(prefs::kProfileLastUsed, base::BindRepeating(reset, local_state));
+  reset(local_state);
+  g_baa_create_browser_window = &Window::Create;
+  InstallContextMenuHook();
+  InstallAppModalFactory();
 }
 }  // namespace baa
 
@@ -105,7 +110,6 @@ void WatchTermination() {
   // Process-wide, and meant for embedders (WebView, Cast): without it
   // RenderFrameHost::ExecuteJavaScript CHECKs outside WebUI. baa_tab_eval needs it.
   content::RenderFrameHost::AllowInjectingJavaScript();
-  g_baa_create_browser_window = &baa::Window::Create;
   g_exit_code = ChromeMain(static_cast<int>(g_argv->size()), g_argv->data());
 }
 
@@ -119,6 +123,23 @@ void baa_install_app(int argc,
                      const char** argv,
                      const BaaCallbacks* callbacks,
                      void* ctx) {
+  // Every callback is called unguarded.
+#define REQUIRE(f) CHECK(callbacks->f) << "BaaCallbacks." #f " is NULL"
+  REQUIRE(key);
+  REQUIRE(tab_created);
+  REQUIRE(tab_state);
+  REQUIRE(tab_favicon);
+  REQUIRE(dialog);
+  REQUIRE(dialog_closed);
+  REQUIRE(tab_closed);
+  REQUIRE(permission);
+  REQUIRE(permission_closed);
+  REQUIRE(context_menu);
+  REQUIRE(download);
+  REQUIRE(resized);
+  REQUIRE(page_message);
+  REQUIRE(fetch_done);
+#undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;
   g_ctx = ctx;

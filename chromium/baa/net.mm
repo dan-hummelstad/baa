@@ -31,16 +31,11 @@ std::map<uint64_t, std::unique_ptr<network::SimpleURLLoader>>& Loaders() {
 
 // A failure that never started a loader: it must not erase one in flight under a reused id.
 void Fail(uint64_t id) {
-  if (baa::Callbacks().fetch_done) {
-    baa::Callbacks().fetch_done(baa::CallbackContext(), id, false, nullptr, 0);
-  }
+  baa::Callbacks().fetch_done(baa::CallbackContext(), id, false, nullptr, 0);
 }
 
 void Done(uint64_t id, std::optional<std::string> body) {
   Loaders().erase(id);
-  if (!baa::Callbacks().fetch_done) {
-    return;
-  }
   if (body.has_value()) {
     baa::Callbacks().fetch_done(baa::CallbackContext(), id, true, body->c_str(), body->size());
   } else {

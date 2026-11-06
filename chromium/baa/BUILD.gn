@@ -13,6 +13,7 @@ source_set("baa") {
     "net.mm",
     "permissions.mm",
     "tab.mm",
+    "window.h",
     "window.mm",
   ]
   deps = [

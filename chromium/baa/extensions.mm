@@ -155,7 +155,7 @@ class Popup : public extensions::ExtensionView,
   // extensions::ExtensionView:
   gfx::NativeView GetNativeView() override { return host_->host_contents()->GetNativeView(); }
   void ResizeDueToAutoResize(content::WebContents*, const gfx::Size& size) override {
-    if (Callbacks().resized && tab_) {
+    if (tab_) {
       Callbacks().resized(CallbackContext(), tab_, size.width(), size.height());
     }
   }

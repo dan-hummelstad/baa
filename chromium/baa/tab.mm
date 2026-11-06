@@ -133,6 +133,7 @@ struct BaaProfile : ProfileObserver {
   const bool ephemeral;
   std::string name;
   std::unique_ptr<ScopedProfileKeepAlive> keep_alive;
+  baa::DownloadWatch downloads{profile};
   raw_ptr<BrowserWindowInterface> browser;
   base::CallbackListSubscription browser_closed;
   base::ScopedObservation<Profile, ProfileObserver> observation{this};
@@ -149,15 +150,6 @@ BaaProfile* AliveProfile(BaaProfile* profile) {
   for (auto& p : Profiles()) {
     if (p.get() == profile) {
       return profile;
-    }
-  }
-  return nullptr;
-}
-
-BaaProfile* ProfileOf(Profile* profile) {
-  for (auto& p : Profiles()) {
-    if (p->profile == profile) {
-      return p.get();
     }
   }
   return nullptr;
@@ -187,9 +179,6 @@ std::map<uint64_t, std::unique_ptr<DialogView>>& Dialogs() {
   return *d;
 }
 uint64_t g_next_id = 1;
-
-BaaTab* TabOf(content::WebContents* contents);
-bool AliveTab(BaaTab* tab);
 
 // The "view" Chrome's dialog manager holds: nothing is drawn here, the app
 // shows the dialog and answers through baa_dialog_answer.
@@ -261,7 +250,6 @@ struct BaaTab : content::WebContentsObserver,
   bool user_gesture = false;
   base::WeakPtr<BaaTab> opener;
   std::string icon_url;
-  std::u16string find_text;
   // Storage behind get_state's strings.
   std::string url_s, title_s, icon_s;
   base::WeakPtrFactory<BaaTab> weak_factory{this};
@@ -291,7 +279,7 @@ struct BaaTab : content::WebContentsObserver,
   }
 
   void SendState() {
-    if (!reported || !web_contents() || !baa::Callbacks().tab_state) {
+    if (!reported || !web_contents()) {
       return;
     }
     std::string url, title, icon;
@@ -346,7 +334,7 @@ struct BaaTab : content::WebContentsObserver,
                                 const std::u16string&,
                                 const std::optional<std::u16string>&) override {
     constexpr std::u16string_view kPrefix = u"baa:";
-    if (message.starts_with(kPrefix) && reported && baa::Callbacks().page_message) {
+    if (message.starts_with(kPrefix) && reported) {
       std::string rest = base::UTF16ToUTF8(message.substr(kPrefix.size()));
       baa::Callbacks().page_message(baa::CallbackContext(), this, rest.c_str());
     }
@@ -367,9 +355,6 @@ struct BaaTab : content::WebContentsObserver,
       return;
     }
     SendState();
-    if (!baa::Callbacks().tab_favicon) {
-      return;
-    }
     // 2x when the site has it.
     SkBitmap bitmap = image.AsImageSkia().GetRepresentation(2.0f).GetBitmap();
     std::vector<uint8_t> png;
@@ -399,7 +384,14 @@ std::vector<std::unique_ptr<BaaTab>>& BareTabs() {
   return *bare;
 }
 
-BaaTab* TabOf(content::WebContents* contents) {
+}  // namespace
+
+namespace baa {
+
+BaaTab* TabFor(content::WebContents* contents) {
+  if (!contents) {
+    return nullptr;
+  }
   auto* tab = tabs::TabInterface::MaybeGetFromContents(contents);
   auto it = Tabs().find(tab);
   if (it != Tabs().end()) {
@@ -413,7 +405,7 @@ BaaTab* TabOf(content::WebContents* contents) {
   return nullptr;
 }
 
-bool AliveTab(BaaTab* tab) {
+bool TabAlive(BaaTab* tab) {
   for (auto& [key, value] : Tabs()) {
     if (value.get() == tab) {
       return true;
@@ -426,6 +418,10 @@ bool AliveTab(BaaTab* tab) {
   }
   return false;
 }
+
+}  // namespace baa
+
+namespace {
 
 int KindOf(int type) {
   return type == content::JAVASCRIPT_DIALOG_TYPE_CONFIRM  ? BAA_DIALOG_CONFIRM
@@ -446,7 +442,7 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
       const std::u16string& default_text,
       content::JavaScriptDialogManager::DialogClosedCallback callback,
       base::OnceClosure) override {
-    BaaTab* tab = TabOf(wc_);
+    BaaTab* tab = baa::TabFor(wc_);
     uint64_t id = baa::NextId();
     auto view = std::make_unique<DialogView>(id, tab, default_text,
                                              std::move(callback));
@@ -457,7 +453,7 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
       // A page nobody shows (its tab handle is gone): answer "no" so it does not hang.
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce([](uint64_t id) { baa_dialog_answer(id, false, ""); }, id));
-    } else if (tab->reported && baa::Callbacks().dialog) {
+    } else if (tab->reported) {
       int kind = KindOf(type);
       baa::Callbacks().dialog(baa::CallbackContext(), tab, id, kind,
                               base::UTF16ToUTF8(message).c_str(),
@@ -484,7 +480,7 @@ void DialogView::CloseDialogWithoutCallback() {
   std::unique_ptr<DialogView> self = std::move(it->second);
   Dialogs().erase(it);
   BaaTab* tab = tab_.get();
-  if (tab && tab->reported && baa::Callbacks().dialog_closed) {
+  if (tab && tab->reported) {
     baa::Callbacks().dialog_closed(baa::CallbackContext(), tab, id_);
   }
 }
@@ -534,21 +530,16 @@ void BaaTab::TryReport(const GURL& url, bool force) {
     return;
   }
   reported = true;
-  if (!baa::Callbacks().tab_created) {
-    return;
-  }
   BaaTab* opener_tab = opener.get();
-  BaaProfile* profile = ProfileOf(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
+  BaaProfile* profile = baa::ProfileFor(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
   std::string spec = url.spec();
   baa::Callbacks().tab_created(baa::CallbackContext(), this, opener_tab,
                                profile, spec.c_str(), background, user_gesture);
   // A dialog the page raised before the app knew the tab.
-  if (baa::Callbacks().dialog) {
-    for (auto& [id, view] : Dialogs()) {
-      if (view->tab() == this) {
-        baa::Callbacks().dialog(baa::CallbackContext(), this, id, KindOf(view->type_),
-                                view->message_.c_str(), view->default_s_.c_str());
-      }
+  for (auto& [id, view] : Dialogs()) {
+    if (view->tab() == this) {
+      baa::Callbacks().dialog(baa::CallbackContext(), this, id, KindOf(view->type_),
+                              view->message_.c_str(), view->default_s_.c_str());
     }
   }
 }
@@ -614,9 +605,6 @@ void OnTabInserted(TabStripModel* model,
   t->TryReport(wc->GetVisibleURL(), false);
 }
 
-// The tab is going away for good, from any window (a tab reparented into a
-// Chrome-made Browser still dies through here): tab_closed once, before its
-// WebContents and NSView are destroyed.
 // Everything that hangs off a tab, dropped on every way out; the app is told
 // (`tell`) only when it did not close the tab itself.
 void Cleanup(BaaTab* t, bool tell) {
@@ -628,7 +616,7 @@ void Cleanup(BaaTab* t, bool tell) {
     if (d->second->tab() == t) {
       uint64_t id = d->first;
       d = Dialogs().erase(d);
-      if (tell && Callbacks().dialog_closed) {
+      if (tell) {
         Callbacks().dialog_closed(CallbackContext(), t, id);
       }
     } else {
@@ -641,7 +629,7 @@ void ReportClosed(BaaTab* t) {
   bool tell = !t->closed_sent && !t->closing_by_baa;
   t->closed_sent = true;
   Cleanup(t, tell);
-  if (tell && t->reported && Callbacks().tab_closed) {
+  if (tell && t->reported) {
     Callbacks().tab_closed(CallbackContext(), t);
   }
 }
@@ -721,13 +709,13 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
 // ---- C ABI: profiles -----------------------------------------------------------
 
 BaaProfile* baa_profile_open(const char* dir_name) {
-  baa::WatchTermination();
   std::string name = dir_name ? dir_name : "";
   if (!g_browser_process || !g_browser_process->profile_manager() ||
       baa_is_quitting() || name.empty() || name.find('/') != std::string::npos ||
       name.find("..") != std::string::npos) {
     return nullptr;
   }
+  baa::EnsureStarted();
   for (auto& p : Profiles()) {
     if (!p->ephemeral && p->name == name && p->profile) {
       return p.get();
@@ -747,8 +735,6 @@ BaaProfile* baa_profile_open(const char* dir_name) {
   }
   LOG(INFO) << "baa: profile_open " << name << " took "
             << timer.Elapsed().InMilliseconds() << " ms";
-  baa::InstallAppModalFactory();
-  baa::WatchDownloads(profile);
   auto owned = std::make_unique<BaaProfile>(profile, /*ephemeral=*/false);
   owned->name = name;
   Profiles().push_back(std::move(owned));
@@ -756,11 +742,11 @@ BaaProfile* baa_profile_open(const char* dir_name) {
 }
 
 BaaProfile* baa_profile_open_ephemeral(void) {
-  baa::WatchTermination();
   if (!g_browser_process || !g_browser_process->profile_manager() ||
       baa_is_quitting()) {
     return nullptr;
   }
+  baa::EnsureStarted();
   base::ScopedAllowBlockingForTesting allow_blocking;
   // The Default profile, never GetLastUsedProfile(): Chrome moves that to
   // whatever Space was active.
@@ -776,8 +762,6 @@ BaaProfile* baa_profile_open_ephemeral(void) {
   if (!profile) {
     return nullptr;
   }
-  baa::InstallAppModalFactory();
-  baa::WatchDownloads(profile);
   Profiles().push_back(std::make_unique<BaaProfile>(profile, /*ephemeral=*/true));
   return Profiles().back().get();
 }
@@ -840,7 +824,7 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
   content::WebContents* wc =
       chrome::AddAndReturnTabAt(browser, GURL(url), -1, /*foreground=*/false);
   g_creating = false;
-  BaaTab* tab = wc ? TabOf(wc) : nullptr;
+  BaaTab* tab = baa::TabFor(wc);
   // Navigate sends a URL for an OTR profile to the parent's Browser; a tab
   // in another profile than asked for is not ours to hand out.
   if (tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != profile->profile) {
@@ -851,14 +835,10 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
 }
 
 namespace {
-// Null unless the handle is live and has contents.
-content::WebContents* Contents(BaaTab* tab) {
-  return AliveTab(tab) ? tab->web_contents() : nullptr;
-}
 }  // namespace
 
 void baa_tab_close(BaaTab* tab) {
-  if (!AliveTab(tab)) {
+  if (!baa::TabAlive(tab)) {
     return;
   }
   tab->closing_by_baa = true;
@@ -885,11 +865,11 @@ void baa_tab_close(BaaTab* tab) {
   tabs::TabInterface* ti = tab->tab;
   baa::ReportClosed(tab);
   tab->Detach();
-  baa::Tabs_Erase(ti);
+  Tabs().erase(ti);
 }
 
 bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
-  if (!Contents(tab)) {
+  if (!baa::ContentsOf(tab)) {
     return false;
   }
   *state = tab->Snapshot(tab->url_s, tab->title_s, tab->icon_s);
@@ -897,7 +877,7 @@ bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
 }
 
 void baa_tab_load_url(BaaTab* tab, const char* url) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     content::NavigationController::LoadURLParams params{GURL(url)};
     params.transition_type = ui::PAGE_TRANSITION_TYPED;
     wc->GetController().LoadURLWithParams(params);
@@ -905,19 +885,19 @@ void baa_tab_load_url(BaaTab* tab, const char* url) {
 }
 
 void baa_tab_reload(BaaTab* tab) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->GetController().Reload(content::ReloadType::NORMAL, true);
   }
 }
 
 void baa_tab_stop(BaaTab* tab) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->Stop();
   }
 }
 
 void baa_tab_go_to_offset(BaaTab* tab, int offset) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     if (wc->GetController().CanGoToOffset(offset)) {
       wc->GetController().GoToOffset(offset);
     }
@@ -925,7 +905,7 @@ void baa_tab_go_to_offset(BaaTab* tab, int offset) {
 }
 
 int baa_tab_history(BaaTab* tab, BaaHistoryVisitor visit, void* ctx) {
-  content::WebContents* wc = Contents(tab);
+  content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return -1;
   }
@@ -940,7 +920,7 @@ int baa_tab_history(BaaTab* tab, BaaHistoryVisitor visit, void* ctx) {
 }
 
 void baa_tab_eval(BaaTab* tab, const char* script, bool user_gesture) {
-  content::WebContents* wc = Contents(tab);
+  content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return;
   }
@@ -953,7 +933,7 @@ void baa_tab_eval(BaaTab* tab, const char* script, bool user_gesture) {
 }
 
 void baa_tab_set_zoom(BaaTab* tab, double factor) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     if (auto* zoom = zoom::ZoomController::FromWebContents(wc)) {
       zoom->SetZoomLevel(blink::ZoomFactorToZoomLevel(factor));
     }
@@ -961,7 +941,7 @@ void baa_tab_set_zoom(BaaTab* tab, double factor) {
 }
 
 void baa_tab_find(BaaTab* tab, const char* text, bool forward) {
-  content::WebContents* wc = Contents(tab);
+  content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return;
   }
@@ -971,29 +951,27 @@ void baa_tab_find(BaaTab* tab, const char* text, bool forward) {
   }
   std::u16string query = base::UTF8ToUTF16(text);
   if (query.empty()) {
-    tab->find_text.clear();
     helper->StopFinding(find_in_page::SelectionAction::kClear);
     return;
   }
-  tab->find_text = query;
   helper->StartFinding(query, forward, /*case_sensitive=*/false,
                        /*find_match=*/true);
 }
 
 void baa_tab_print(BaaTab* tab) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     printing::StartBasicPrint(wc);
   }
 }
 
 void baa_tab_set_muted(BaaTab* tab, bool muted) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     SetTabAudioMuted(wc, muted, TabMutedReason::kAudioIndicator, "");
   }
 }
 
 void baa_tab_activate(BaaTab* tab) {
-  if (!Contents(tab)) {
+  if (!baa::ContentsOf(tab)) {
     return;
   }
   if (!tab->tab) {
@@ -1012,7 +990,7 @@ void baa_tab_activate(BaaTab* tab) {
 }
 
 void baa_tab_focus(BaaTab* tab) {
-  if (content::WebContents* wc = Contents(tab)) {
+  if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->Focus();
   }
 }
@@ -1059,20 +1037,12 @@ uint64_t NextId() {
   return g_next_id++;
 }
 
-BaaTab* TabFor(content::WebContents* contents) {
-  return contents ? TabOf(contents) : nullptr;
-}
-
 bool TabAnnounced(BaaTab* tab) {
   return tab && tab->reported;
 }
 
-bool TabAlive(BaaTab* tab) {
-  return AliveTab(tab);
-}
-
 content::WebContents* ContentsOf(BaaTab* tab) {
-  return AliveTab(tab) ? tab->web_contents() : nullptr;
+  return TabAlive(tab) ? tab->web_contents() : nullptr;
 }
 
 Profile* ChromeProfileOf(BaaProfile* profile) {
@@ -1080,7 +1050,12 @@ Profile* ChromeProfileOf(BaaProfile* profile) {
 }
 
 BaaProfile* ProfileFor(Profile* profile) {
-  return ProfileOf(profile);
+  for (auto& p : Profiles()) {
+    if (p->profile == profile) {
+      return p.get();
+    }
+  }
+  return nullptr;
 }
 
 BrowserWindowInterface* ExistingBrowserOf(BaaProfile* profile) {
@@ -1101,12 +1076,8 @@ BaaTab* CreateBareTab(content::WebContents* contents, base::OnceClosure close) {
 
 // The holder closed the page itself (a popup's window.close(), its extension
 // unloaded): tab_closed once, then the handle is dead.
-void Tabs_Erase(tabs::TabInterface* ti) {
-  Tabs().erase(ti);
-}
-
 void BareTabClosedByChrome(BaaTab* tab) {
-  if (!AliveTab(tab)) {
+  if (!baa::TabAlive(tab)) {
     return;
   }
   tab->close_bare = base::OnceClosure();
@@ -1134,7 +1105,7 @@ void CloseBareTabsForQuit() {
 
 // Sends the first state of a page nobody told the app about yet.
 void SendTabState(BaaTab* tab) {
-  if (AliveTab(tab)) {
+  if (baa::TabAlive(tab)) {
     tab->SendState();
   }
 }
@@ -1142,13 +1113,13 @@ void SendTabState(BaaTab* tab) {
 }  // namespace baa
 
 void baa_tab_set_init_script(BaaTab* tab, const char* script) {
-  if (AliveTab(tab)) {
+  if (baa::TabAlive(tab)) {
     tab->init_script = base::UTF8ToUTF16(script ? script : "");
   }
 }
 
 void baa_tab_set_color_scheme(BaaTab* tab, int scheme) {
-  if (!AliveTab(tab)) {
+  if (!baa::TabAlive(tab)) {
     return;
   }
   tab->color_scheme = scheme;

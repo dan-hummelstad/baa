@@ -97,7 +97,7 @@ void Flatten(ui::MenuModel* model, int depth, std::vector<Row>& rows) {
 bool ShowContextMenu(std::unique_ptr<RenderViewContextMenuBase>& menu) {
   content::WebContents* wc = menu->GetWebContents();
   BaaTab* tab = TabFor(wc);
-  if (!tab || !TabAnnounced(tab) || !Callbacks().context_menu) {
+  if (!tab || !TabAnnounced(tab)) {
     return false;
   }
   // A second "show" before the first menu closed (the renderer repeats it).
@@ -137,9 +137,6 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
 
   void ShowAppModalDialog() override {
     AppModals()[id_] = this;
-    if (!Callbacks().dialog) {
-      return;
-    }
     int kind = controller_->is_before_unload_dialog()
                    ? (controller_->is_reload() ? BAA_DIALOG_BEFOREUNLOAD_RELOAD
                                                : BAA_DIALOG_BEFOREUNLOAD)
@@ -181,7 +178,7 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
  private:
   void Forget(bool tell_app) {
     BaaTab* tab = tab_.get();
-    if (AppModals().erase(id_) && tell_app && tab && TabAnnounced(tab) && Callbacks().dialog_closed) {
+    if (AppModals().erase(id_) && tell_app && tab && TabAnnounced(tab)) {
       Callbacks().dialog_closed(CallbackContext(), tab, id_);
     }
   }
@@ -197,11 +194,6 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
 // baa_profile_open): pages of the app get the app's dialog, anything else
 // (a Chrome-made window) keeps Chrome's.
 void InstallAppModalFactory() {
-  static bool done = false;
-  if (done) {
-    return;
-  }
-  done = true;
   auto* manager = javascript_dialogs::AppModalDialogManager::GetInstance();
   auto chrome_factory = *manager->view_factory();
   manager->SetNativeDialogFactory(base::BindRepeating(
@@ -215,6 +207,9 @@ void InstallAppModalFactory() {
         return new AppModal(std::move(controller), tab);
       },
       chrome_factory));
+}
+
+void InstallContextMenuHook() {
   g_baa_show_context_menu = &ShowContextMenu;
 }
 

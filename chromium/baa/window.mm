@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "baa/internal.h"
+#include "baa/window.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
@@ -679,8 +680,7 @@ void Window::OnTabStripModelChanged(TabStripModel* model,
 // The app's shortcuts get the first look, as with CEF's on_pre_key_event;
 // Escape too, so an overlay over the page can close.
 bool OfferKey(const input::NativeWebKeyboardEvent& event, bool after_page) {
-  if (!Callbacks().key ||
-      event.GetType() != blink::WebInputEvent::Type::kRawKeyDown) {
+  if (event.GetType() != blink::WebInputEvent::Type::kRawKeyDown) {
     return false;
   }
   const int shortcut =
