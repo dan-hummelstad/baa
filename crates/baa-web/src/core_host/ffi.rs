@@ -82,6 +82,13 @@ pub struct Core {
     pub dialog_answer: extern "C" fn(u64, bool, *const c_char),
 }
 
+/// # Safety
+/// `F` is the `extern "C" fn` type of the symbol `ptr`.
+unsafe fn fn_ptr<F: Copy>(ptr: *mut c_void) -> F {
+    debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*mut c_void>());
+    unsafe { std::mem::transmute_copy(&ptr) }
+}
+
 /// Loads `../Frameworks/BaaCore.framework` next to the executable. Call it
 /// first in `main`: PartitionAlloc installs its malloc zone when the framework
 /// loads, which is only safe while the process has one thread.
@@ -100,11 +107,11 @@ pub fn load() -> &'static Core {
             assert!(!f.is_null(), "BaaCore lacks {name:?}");
             f
         };
-        let version: extern "C" fn() -> c_int = std::mem::transmute(sym(c"baa_abi_version"));
+        let version: extern "C" fn() -> c_int = fn_ptr(sym(c"baa_abi_version"));
         assert_eq!(version(), ABI_VERSION, "BaaCore ABI mismatch");
         macro_rules! core {
             ($($field:ident),* $(,)?) => {
-                Core { $($field: std::mem::transmute(sym(
+                Core { $($field: fn_ptr(sym(
                     CStr::from_bytes_with_nul(concat!("baa_", stringify!($field), "\0").as_bytes()).unwrap()
                 ))),* }
             };
