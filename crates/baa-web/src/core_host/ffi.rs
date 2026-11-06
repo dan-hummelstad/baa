@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 3;
+pub const ABI_VERSION: c_int = 4;
 
 #[repr(C)]
 pub struct Profile {
@@ -27,6 +27,47 @@ pub struct TabState {
     pub audible: bool,
     pub secure: bool,
 }
+
+/// One row of a context menu, depth-first (`BaaMenuItem`).
+#[repr(C)]
+pub struct MenuItem {
+    pub label: *const c_char,
+    pub command: c_int,
+    pub depth: u8,
+    pub kind: u8,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+pub const MENU_SEPARATOR: u8 = 1;
+pub const MENU_SUBMENU: u8 = 2;
+pub const MENU_INSPECT: u8 = 3;
+
+#[repr(C)]
+pub struct Download {
+    pub id: u32,
+    pub url: *const c_char,
+    pub path: *const c_char,
+    pub received_bytes: i64,
+    pub total_bytes: i64,
+    pub state: c_int,
+}
+
+#[repr(C)]
+pub struct Extension {
+    pub id: *const c_char,
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub version: *const c_char,
+    pub icon_path: *const c_char,
+    pub popup_url: *const c_char,
+    pub options_url: *const c_char,
+    pub permissions: *const c_char,
+    pub site_access: c_int,
+    pub enabled: bool,
+}
+
+pub type ExtensionVisitor = extern "C" fn(ctx: *mut c_void, extension: *const Extension);
 
 pub type HistoryVisitor = extern "C" fn(ctx: *mut c_void, title: *const c_char, url: *const c_char);
 
@@ -55,6 +96,22 @@ pub struct Callbacks {
     ),
     pub dialog_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64),
     pub tab_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab),
+    pub permission:
+        extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64, origin: *const c_char, kinds: u32),
+    pub permission_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64),
+    pub context_menu: extern "C" fn(
+        ctx: *mut c_void,
+        tab: *mut Tab,
+        id: u64,
+        x: f32,
+        y: f32,
+        items: *const MenuItem,
+        count: usize,
+    ),
+    pub download: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, download: *const Download),
+    pub resized: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, width: c_int, height: c_int),
+    pub page_message: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, message: *const c_char),
+    pub fetch_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -66,6 +123,13 @@ pub struct Core {
     pub profile_open: extern "C" fn(*const c_char) -> *mut Profile,
     pub profile_open_ephemeral: extern "C" fn() -> *mut Profile,
     pub profile_close: extern "C" fn(*mut Profile),
+    pub profile_set_pref_bool: extern "C" fn(*mut Profile, *const c_char, bool),
+    pub profile_site_permission: extern "C" fn(*mut Profile, *const c_char, u32) -> c_int,
+    pub profile_set_site_permission: extern "C" fn(*mut Profile, *const c_char, u32, c_int),
+    pub profile_fetch: extern "C" fn(*mut Profile, *const c_char, u64),
+    pub profile_extensions: extern "C" fn(*mut Profile, ExtensionVisitor, *mut c_void) -> c_int,
+    pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
+    pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
     pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
     pub tab_close: extern "C" fn(*mut Tab),
     pub tab_get_state: extern "C" fn(*mut Tab, *mut TabState) -> bool,
@@ -81,6 +145,13 @@ pub struct Core {
     pub tab_set_muted: extern "C" fn(*mut Tab, bool),
     pub tab_activate: extern "C" fn(*mut Tab),
     pub tab_focus: extern "C" fn(*mut Tab),
+    pub tab_set_init_script: extern "C" fn(*mut Tab, *const c_char),
+    pub tab_set_color_scheme: extern "C" fn(*mut Tab, c_int),
+    pub tab_open_devtools: extern "C" fn(*mut Tab, bool, c_int, c_int) -> *mut Tab,
+    pub tab_show_devtools_window: extern "C" fn(*mut Tab, bool, c_int, c_int),
+    pub permission_answer: extern "C" fn(u64, bool),
+    pub context_menu_done: extern "C" fn(u64, c_int),
+    pub download_cancel: extern "C" fn(u32),
     pub dialog_answer: extern "C" fn(u64, bool, *const c_char),
 }
 
@@ -125,6 +196,13 @@ pub fn load() -> &'static Core {
             profile_open,
             profile_open_ephemeral,
             profile_close,
+            profile_set_pref_bool,
+            profile_site_permission,
+            profile_set_site_permission,
+            profile_fetch,
+            profile_extensions,
+            profile_extension_change,
+            extension_popup,
             tab_create,
             tab_close,
             tab_get_state,
@@ -140,6 +218,13 @@ pub fn load() -> &'static Core {
             tab_set_muted,
             tab_activate,
             tab_focus,
+            tab_set_init_script,
+            tab_set_color_scheme,
+            tab_open_devtools,
+            tab_show_devtools_window,
+            permission_answer,
+            context_menu_done,
+            download_cancel,
             dialog_answer,
         )))
     }

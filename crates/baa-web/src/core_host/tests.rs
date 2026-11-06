@@ -15,6 +15,10 @@ thread_local! {
     static FIRST_VIEW: Cell<*mut AnyObject> = const { Cell::new(std::ptr::null_mut()) };
     static FIRST_URL: Cell<&'static CStr> = const { Cell::new(c"") };
     static QUITTING: Cell<bool> = const { Cell::new(false) };
+    static SITE_STATE: Cell<c_int> = const { Cell::new(0) };
+    static POPUP_NULL: Cell<bool> = const { Cell::new(false) };
+    /// What the fake `baa_profile_extensions` lists.
+    static EXTENSIONS: RefCell<Vec<FakeExtension>> = const { RefCell::new(Vec::new()) };
 }
 
 fn log(call: String) {
@@ -57,6 +61,57 @@ extern "C" fn tab_create(profile: *mut Profile, url: *const c_char) -> *mut Tab 
 }
 extern "C" fn tab_close(tab: *mut Tab) {
     log(format!("tab_close {tab:?}"));
+}
+extern "C" fn profile_set_pref_bool(profile: *mut Profile, name: *const c_char, value: bool) {
+    log(format!("profile_set_pref_bool {profile:?} {} {value}", arg(name)));
+}
+extern "C" fn profile_site_permission(_: *mut Profile, url: *const c_char, kind: u32) -> c_int {
+    log(format!("profile_site_permission {} {kind}", arg(url)));
+    SITE_STATE.with(Cell::get)
+}
+extern "C" fn profile_set_site_permission(_: *mut Profile, url: *const c_char, kind: u32, state: c_int) {
+    log(format!("profile_set_site_permission {} {kind} {state}", arg(url)));
+}
+extern "C" fn profile_fetch(_: *mut Profile, url: *const c_char, id: u64) {
+    log(format!("profile_fetch {} {id}", arg(url)));
+}
+extern "C" fn profile_extensions(_: *mut Profile, visit: ffi::ExtensionVisitor, ctx: *mut c_void) -> c_int {
+    EXTENSIONS.with(|list| {
+        for extension in list.borrow().iter() {
+            visit(ctx, &extension.raw().0);
+        }
+        list.borrow().len() as c_int
+    })
+}
+extern "C" fn profile_extension_change(_: *mut Profile, id: *const c_char, change: c_int, value: c_int) -> bool {
+    log(format!("profile_extension_change {} {change} {value}", arg(id)));
+    true
+}
+extern "C" fn extension_popup(_: *mut Profile, id: *const c_char) -> *mut Tab {
+    log(format!("extension_popup {}", arg(id)));
+    if POPUP_NULL.with(Cell::get) { std::ptr::null_mut() } else { fresh() }
+}
+extern "C" fn tab_set_init_script(t: *mut Tab, script: *const c_char) {
+    log(format!("tab_set_init_script {t:?} {}", arg(script)));
+}
+extern "C" fn tab_set_color_scheme(t: *mut Tab, scheme: c_int) {
+    log(format!("tab_set_color_scheme {t:?} {scheme}"));
+}
+extern "C" fn tab_open_devtools(t: *mut Tab, inspect: bool, x: c_int, y: c_int) -> *mut Tab {
+    log(format!("tab_open_devtools {t:?} {inspect} {x} {y}"));
+    fresh()
+}
+extern "C" fn tab_show_devtools_window(t: *mut Tab, inspect: bool, x: c_int, y: c_int) {
+    log(format!("tab_show_devtools_window {t:?} {inspect} {x} {y}"));
+}
+extern "C" fn permission_answer(id: u64, allow: bool) {
+    log(format!("permission_answer {id} {allow}"));
+}
+extern "C" fn context_menu_done(id: u64, command: c_int) {
+    log(format!("context_menu_done {id} {command}"));
+}
+extern "C" fn download_cancel(id: u32) {
+    log(format!("download_cancel {id}"));
 }
 extern "C" fn tab_get_state(_: *mut Tab, state: *mut TabState) -> bool {
     unsafe {
@@ -120,6 +175,13 @@ fn fake_core() -> &'static Core {
         profile_open,
         profile_open_ephemeral,
         profile_close,
+        profile_set_pref_bool,
+        profile_site_permission,
+        profile_set_site_permission,
+        profile_fetch,
+        profile_extensions,
+        profile_extension_change,
+        extension_popup,
         tab_create,
         tab_close,
         tab_get_state,
@@ -135,8 +197,54 @@ fn fake_core() -> &'static Core {
         tab_set_muted,
         tab_activate,
         tab_focus,
+        tab_set_init_script,
+        tab_set_color_scheme,
+        tab_open_devtools,
+        tab_show_devtools_window,
+        permission_answer,
+        context_menu_done,
+        download_cancel,
         dialog_answer,
     }))
+}
+
+struct FakeExtension {
+    id: &'static str,
+    name: &'static str,
+    permissions: &'static str,
+    site_access: c_int,
+    popup: &'static str,
+    enabled: bool,
+}
+
+impl FakeExtension {
+    fn raw(&self) -> (ffi::Extension, Vec<CString>) {
+        let text = |s: &str| CString::new(s).unwrap();
+        let strings = vec![
+            text(self.id),
+            text(self.name),
+            text(""),
+            text("1.0"),
+            text(""),
+            text(self.popup),
+            text(""),
+            text(self.permissions),
+        ];
+        let p = |i: usize| strings[i].as_ptr();
+        let raw = ffi::Extension {
+            id: p(0),
+            name: p(1),
+            description: p(2),
+            version: p(3),
+            icon_path: p(4),
+            popup_url: p(5),
+            options_url: p(6),
+            permissions: p(7),
+            site_access: self.site_access,
+            enabled: self.enabled,
+        };
+        (raw, strings)
+    }
 }
 
 struct Root;
@@ -160,6 +268,9 @@ impl Env {
         FIRST_VIEW.with(|v| v.set(std::ptr::null_mut()));
         FIRST_URL.with(|u| u.set(c""));
         QUITTING.with(|q| q.set(false));
+        SITE_STATE.with(|s| s.set(0));
+        POPUP_NULL.with(|p| p.set(false));
+        EXTENSIONS.with(|e| e.borrow_mut().clear());
         let core = fake_core();
         let dispatch: &'static Dispatch = Box::leak(Box::new(Dispatch::new(core)));
         let host = cx.update(|cx| CoreWebHost::new(core, dispatch, std::env::temp_dir().join("baa-core-host-test"), cx));
@@ -582,4 +693,72 @@ fn devtools_never_adopt_a_pending_tab(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(calls("tab_create").len(), creates + 1);
     assert_ne!(env.tab_of(&devtools, cx), 0x9000 as *mut Tab);
+}
+
+#[gpui::test]
+fn permissions_arrive_in_bit_order_and_are_answered_through_chrome(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let page = env.page(1, "https://a.test", cx);
+    let tab = env.tab_of(&page, cx);
+    let seen = events(&page, cx);
+
+    (env.callbacks.permission)(env.ctx(), tab, 5, c"https://a.test".as_ptr(), 0b100_0011);
+    (env.callbacks.permission_closed)(env.ctx(), tab, 5);
+    cx.run_until_parked();
+    assert_eq!(
+        *seen.borrow(),
+        [
+            PageEvent::PermissionRequested {
+                id: 5,
+                origin: "https://a.test".into(),
+                kinds: vec![Permission::Camera, Permission::Microphone, Permission::Other],
+            },
+            PageEvent::PermissionDismissed(5),
+        ]
+    );
+    page.read_with(cx, |page, _| page.answer_permission(6, true));
+    assert_eq!(calls("permission_answer"), ["permission_answer 6 true"]);
+}
+
+#[gpui::test]
+fn beforeunload_kinds_and_the_quit_fallback(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let page = env.page(1, "https://a.test", cx);
+    let tab = env.tab_of(&page, cx);
+    let seen = events(&page, cx);
+
+    (env.callbacks.dialog)(env.ctx(), tab, 1, 3, c"Leave?".as_ptr(), c"".as_ptr());
+    (env.callbacks.dialog)(env.ctx(), tab, 2, 4, c"Reload?".as_ptr(), c"".as_ptr());
+    cx.run_until_parked();
+    let kinds: Vec<_> = seen
+        .borrow()
+        .iter()
+        .map(|e| match e {
+            PageEvent::Dialog { kind, .. } => *kind,
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(kinds, [DialogKind::BeforeUnload { is_reload: false }, DialogKind::BeforeUnload { is_reload: true }]);
+
+    QUITTING.with(|q| q.set(true));
+    seen.borrow_mut().clear();
+    (env.callbacks.dialog)(env.ctx(), tab, 3, 3, c"Leave?".as_ptr(), c"".as_ptr());
+    cx.run_until_parked();
+    assert!(seen.borrow().is_empty(), "nobody is asked while quitting");
+    assert_eq!(calls("dialog_answer"), ["dialog_answer 3 true "]);
+}
+
+#[gpui::test]
+fn site_permissions_go_through_the_profile(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    SITE_STATE.with(|s| s.set(2));
+    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Location), PermissionState::Block);
+    assert_eq!(calls("profile_site_permission"), ["profile_site_permission https://a.test 4"]);
+    SITE_STATE.with(|s| s.set(1));
+    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Camera), PermissionState::Allow);
+
+    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Notifications, PermissionState::Ask);
+    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::ScreenShare, PermissionState::Block);
+    assert_eq!(calls("profile_set_site_permission"), ["profile_set_site_permission https://a.test 8 0"]);
+    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Other), PermissionState::Ask);
 }

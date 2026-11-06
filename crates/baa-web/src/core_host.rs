@@ -180,9 +180,20 @@ struct Pending {
     seq: u64,
 }
 
+/// What a `BaaTab` is: any WebContents baa shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PageKind {
+    Tab,
+    /// An extension's toolbar popup.
+    Popup,
+    /// A DevTools front-end.
+    DevTools,
+}
+
 /// What callbacks and pages share about one tab. Main thread only.
 struct Shared {
     core: &'static Core,
+    kind: PageKind,
     profile: *mut Profile,
     container: Rc<native::Container>,
     /// Null once the tab is gone (Chrome closed it, or baa did).
@@ -420,12 +431,20 @@ fn callbacks() -> Callbacks {
         default_text: *const c_char,
     ) {
         let (message, default_text) = unsafe { (from_c(message), from_c(default_text)) };
+        let d = unsafe { dispatch(ctx) };
+        if kind >= 3 && (d.core.is_quitting)() {
+            // ⌘Q waits on this; the page may be a hidden tab nobody would answer for.
+            (d.core.dialog_answer)(id, true, c"".as_ptr());
+            return;
+        }
         let kind = match kind {
             1 => DialogKind::Confirm,
             2 => DialogKind::Prompt,
+            3 => DialogKind::BeforeUnload { is_reload: false },
+            4 => DialogKind::BeforeUnload { is_reload: true },
             _ => DialogKind::Alert,
         };
-        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| {
+        d.on_page(tab, move |page, cx| {
             page.shared.dialog.set(Some(id));
             cx.emit(PageEvent::Dialog { kind, message, default_text });
         });
@@ -441,7 +460,55 @@ fn callbacks() -> Callbacks {
     extern "C" fn tab_closed(ctx: *mut c_void, tab: *mut Tab) {
         unsafe { dispatch(ctx) }.tab_closed(tab);
     }
-    Callbacks { key, tab_created, tab_state, tab_favicon, dialog, dialog_closed, tab_closed }
+    extern "C" fn permission(ctx: *mut c_void, tab: *mut Tab, id: u64, origin: *const c_char, kinds: u32) {
+        let origin = unsafe { from_c(origin) };
+        let kinds = permissions_of(kinds);
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
+    }
+    extern "C" fn permission_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionDismissed(id)));
+    }
+    extern "C" fn context_menu(_: *mut c_void, _: *mut Tab, _: u64, _: f32, _: f32, _: *const ffi::MenuItem, _: usize) {}
+    extern "C" fn download(_: *mut c_void, _: *mut Tab, _: *const ffi::Download) {}
+    extern "C" fn resized(_: *mut c_void, _: *mut Tab, _: c_int, _: c_int) {}
+    extern "C" fn page_message(_: *mut c_void, _: *mut Tab, _: *const c_char) {}
+    extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
+    Callbacks {
+        key,
+        tab_created,
+        tab_state,
+        tab_favicon,
+        dialog,
+        dialog_closed,
+        tab_closed,
+        permission,
+        permission_closed,
+        context_menu,
+        download,
+        resized,
+        page_message,
+        fetch_done,
+    }
+}
+
+/// `BAA_PERMISSION_*` bits, in bit order.
+const PERMISSION_BITS: [(u32, Permission); 7] = [
+    (1 << 0, Permission::Camera),
+    (1 << 1, Permission::Microphone),
+    (1 << 2, Permission::Location),
+    (1 << 3, Permission::Notifications),
+    (1 << 4, Permission::Clipboard),
+    (1 << 5, Permission::Midi),
+    (1 << 6, Permission::Other),
+];
+
+fn permissions_of(kinds: u32) -> Vec<Permission> {
+    PERMISSION_BITS.iter().filter(|(bit, _)| kinds & bit != 0).map(|(_, kind)| *kind).collect()
+}
+
+/// The bit a per-site setting exists for; screen sharing and the rest have none.
+fn permission_bit(kind: Permission) -> Option<u32> {
+    PERMISSION_BITS.iter().find(|(_, k)| *k == kind && *k != Permission::Other).map(|(bit, _)| *bit)
 }
 
 pub struct CoreWebHost {
@@ -510,7 +577,7 @@ impl WebHost for CoreWebHost {
             (self.core.tab_create)(handle, c"about:blank".as_ptr())
         };
         let dispatch = self.dispatch;
-        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, window, cx))
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx))
     }
 
     fn show_menu(&self, at: gpui::Point<Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone) {
@@ -528,7 +595,7 @@ impl WebHost for CoreWebHost {
                 .unwrap_or_else(|| (self.core.tab_create)(handle, c_string(url).as_ptr()))
         };
         let dispatch = self.dispatch;
-        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, window, cx))
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))
     }
 
     fn create_popup(
@@ -597,11 +664,26 @@ impl WebHost for CoreWebHost {
 
     fn cancel_download(&self, _id: u32) {}
 
-    fn site_permission(&self, _profile: ProfileId, _url: &str, _kind: Permission) -> PermissionState {
-        PermissionState::Ask
+    fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return PermissionState::Ask };
+        match (self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit) {
+            1 => PermissionState::Allow,
+            2 => PermissionState::Block,
+            _ => PermissionState::Ask,
+        }
     }
 
-    fn set_site_permission(&self, _profile: ProfileId, _url: &str, _kind: Permission, _state: PermissionState) {}
+    fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState) {
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
+        let state = match state {
+            PermissionState::Ask => 0,
+            PermissionState::Allow => 1,
+            PermissionState::Block => 2,
+        };
+        (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state);
+    }
 }
 
 /// One Chrome tab as a gpui entity.
@@ -627,6 +709,7 @@ impl CorePage {
         profile: ProfileId,
         handle: *mut Profile,
         tab: *mut Tab,
+        kind: PageKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -643,6 +726,7 @@ impl CorePage {
         container.page_created(state.view);
         let shared = Rc::new(Shared {
             core: dispatch.core,
+            kind,
             profile: handle,
             container: container.clone(),
             tab: Cell::new(tab),
@@ -831,7 +915,10 @@ impl PageHandle for CorePage {
     fn open_devtools(&self, _inspect_at: Option<(i32, i32)>) {
         log::info!("DevTools: not in M1");
     }
-    fn answer_permission(&self, _id: u64, _allow: bool) {}
+    fn answer_permission(&self, id: u64, allow: bool) {
+        // Ids are global; one Chrome no longer waits on does nothing.
+        (self.dispatch.core.permission_answer)(id, allow);
+    }
     fn answer_dialog(&self, ok: bool, text: &str) {
         if let Some(id) = self.shared.dialog.take() {
             (self.dispatch.core.dialog_answer)(id, ok, c_string(text).as_ptr());
