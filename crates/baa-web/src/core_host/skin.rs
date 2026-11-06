@@ -4,7 +4,7 @@
 use super::{
     c_string,
     dispatch::Dispatch,
-    ffi::{Profile, Tab},
+    ffi::{Profile, TabId},
     PageKind,
 };
 
@@ -66,7 +66,7 @@ impl Dispatch {
     /// The init script of a tab baa takes over. A fresh Chrome page is created
     /// blank so the script is in before its first document; one Chrome made
     /// (`adopted`) is on its way already and gets the skin once.
-    pub(super) fn prepare_tab(&self, tab: *mut Tab, url: &str, css: &str, adopted: bool) {
+    pub(super) fn prepare_tab(&self, tab: TabId, url: &str, css: &str, adopted: bool) {
         let script = loader(css);
         (self.core.tab_set_init_script)(tab, c_string(&script).as_ptr());
         if !is_webui(url) {

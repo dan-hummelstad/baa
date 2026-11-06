@@ -133,15 +133,17 @@ void baa_install_app(int argc,
   REQUIRE(tab_state);
   REQUIRE(tab_favicon);
   REQUIRE(dialog);
-  REQUIRE(dialog_closed);
   REQUIRE(tab_closed);
   REQUIRE(permission);
-  REQUIRE(permission_closed);
+  REQUIRE(request_closed);
   REQUIRE(context_menu);
   REQUIRE(download);
   REQUIRE(resized);
-  REQUIRE(page_message);
-  REQUIRE(fetch_done);
+  REQUIRE(devtools_dock);
+  REQUIRE(fullscreen);
+  REQUIRE(find_result);
+  REQUIRE(tab_group);
+  REQUIRE(autocomplete);
   REQUIRE(clear_done);
   REQUIRE(load_unpacked_done);
 #undef REQUIRE

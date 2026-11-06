@@ -13,14 +13,14 @@ use gpui::{
 use objc2::runtime::AnyObject;
 
 use super::{
-    c_string, devtools,
+    c_string,
     dispatch::{Dispatch, Live},
     from_c,
     menu::{present_menu, Row},
     native,
     skin,
     slot::PageSlot,
-    ffi::{Profile, Tab},
+    ffi::{self, Profile, TabId},
     PageKind, Shared, Snapshot,
 };
 use crate::{PageEvent, PageHandle, ProfileId};
@@ -36,20 +36,17 @@ pub struct CorePage {
     gpui_view: *mut AnyObject,
     corner_radius: Cell<f32>,
     square_corners: Cell<u8>,
-    /// DevTools only: where baa docks it, and the url the dock script last ran for.
-    pub(super) dock_side: String,
-    docked_url: String,
     this: WeakEntity<CorePage>,
     _focus: [Subscription; 2],
 }
 
 impl CorePage {
-    /// `tab` may be null (the app is terminating): the page then renders empty.
+    /// `tab` may be 0 (the app is terminating): the page then renders empty.
     pub(super) fn new(
         dispatch: &'static Dispatch,
         profile: ProfileId,
         handle: *mut Profile,
-        tab: *mut Tab,
+        tab: TabId,
         kind: PageKind,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -57,12 +54,12 @@ impl CorePage {
         let gpui_view = native::gpui_view(window);
         native::install_mouse_forwarding(gpui_view);
         let (shared, state) = Shared::open(dispatch.core, kind, handle, tab, gpui_view, 0.);
-        if !tab.is_null() {
+        if tab != 0 {
             dispatch.tabs.borrow_mut().insert(tab, Live { shared: shared.clone(), page: Some(cx.weak_entity()) });
         }
         let focus_handle = cx.focus_handle();
         let focus = subscribe(&focus_handle, window, cx);
-        if !tab.is_null() {
+        if tab != 0 {
             // An adopted tab already has a url and title: the UI hears them
             // once it has subscribed, which is after this constructor.
             let first = state.clone();
@@ -80,8 +77,6 @@ impl CorePage {
             gpui_view,
             corner_radius: Cell::new(0.),
             square_corners: Cell::new(0),
-            dock_side: String::new(),
-            docked_url: String::new(),
             this: cx.weak_entity(),
             _focus: focus,
         }
@@ -90,21 +85,11 @@ impl CorePage {
     /// Diffs a tab snapshot against the last one and reports what changed.
     /// The view was already swapped by the callback.
     pub(super) fn apply(&mut self, new: Snapshot, view_changed: bool, cx: &mut Context<Self>) {
-        if self.shared.tab.get().is_null() {
+        if self.shared.tab.get() == 0 {
             return;
         }
         let old = std::mem::replace(&mut self.state, new.clone());
         self.emit_changes(&old, &new, cx);
-        // Each DevTools document (the dock script reloads it once) gets its half.
-        if self.shared.kind == PageKind::DevTools
-            && !new.loading
-            && new.url.starts_with("devtools://")
-            && self.docked_url != new.url
-        {
-            let script = devtools::dock_script(&new.url, &self.dock_side);
-            self.docked_url = new.url.clone();
-            self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(&script).as_ptr(), false));
-        }
         if view_changed {
             cx.notify();
         }
@@ -185,7 +170,7 @@ impl Drop for CorePage {
         self.shared.container.set_visible(false);
         let tab = self.shared.tab.get();
         self.shared.release();
-        if !tab.is_null() {
+        if tab != 0 {
             self.dispatch.tabs.borrow_mut().remove(&tab);
             (self.dispatch.core.tab_close)(tab);
         }
@@ -272,14 +257,20 @@ impl PageHandle for CorePage {
     }
     fn answer_permission(&self, id: u64, allow: bool) {
         // Ids are global; one Chrome no longer waits on does nothing.
-        (self.dispatch.core.permission_answer)(id, allow);
+        self.dispatch.core.answer_ok(id, allow);
     }
     fn answer_dialog(&self, id: u64, answer: crate::DialogAnswer) {
-        (self.dispatch.core.dialog_answer)(id, answer.ok, c_string(&answer.text).as_ptr());
+        let (text, password) = (c_string(&answer.text), c_string(&answer.password));
+        let answer = ffi::Answer { ok: answer.ok, text: text.as_ptr(), password: password.as_ptr(), checked: answer.checked };
+        (self.dispatch.core.answer)(id, &answer);
     }
-    // ponytail: ABI 5 has neither; WP-R2 fills them.
-    fn exit_fullscreen(&self) {}
-    fn set_group(&self, _group: Option<(u64, &str)>) {}
+    fn exit_fullscreen(&self) {
+        self.shared.run(|core, tab| (core.tab_exit_fullscreen)(tab));
+    }
+    fn set_group(&self, group: Option<(u64, &str)>) {
+        let (key, title) = group.unwrap_or((0, ""));
+        self.shared.run(|core, tab| (core.tab_set_group)(tab, key, c_string(title).as_ptr()));
+    }
     fn print(&self) {
         self.shared.run(|core, tab| (core.tab_print)(tab));
     }

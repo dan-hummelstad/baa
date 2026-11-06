@@ -3,7 +3,7 @@ script: leave.txt
 env: BAA_HARNESS_DIALOG=cancel
 exit: any
 kill-after: 28
-must: baa: dialog tab=0 id=1 kind=3
-must: baa: dialog tab=0 id=2 kind=4
+must: baa: dialog tab=0 id=\d+ kind=3
+must: baa: dialog tab=0 id=\d+ kind=4
 count: 2 get_state ok=true url=https://example.com/#
 mustnot: get_state ok=true url=https://example.org/

@@ -2,7 +2,6 @@
 //! `chromium/baa/baa.h` (PLAN-chromium-phase3.md). Pages are Chrome tabs whose
 //! NSView sits under gpui's view, seen through the hole each page element punches.
 
-mod devtools;
 mod dispatch;
 mod extensions;
 mod ffi;
@@ -29,7 +28,7 @@ use objc2::runtime::AnyObject;
 
 use self::{
     dispatch::{callbacks, Dispatch},
-    ffi::{Core, Profile, Tab, TabState},
+    ffi::{Core, Profile, TabId, TabState},
 };
 pub use self::{host::CoreWebHost, page::CorePage};
 
@@ -196,8 +195,8 @@ struct Shared {
     profile: *mut Profile,
     /// Holds the tab's NSView.
     container: native::Container,
-    /// Null once the tab is gone (Chrome closed it, or baa did).
-    tab: Cell<*mut Tab>,
+    /// 0 once the tab is gone (Chrome closed it, or baa did).
+    tab: Cell<TabId>,
     /// The view a mouse drag started on, and whether the pointer is over the
     /// page; across frames, so a repaint mid-click loses nothing.
     drag: Cell<Option<*mut AnyObject>>,
@@ -205,18 +204,18 @@ struct Shared {
 }
 
 impl Shared {
-    /// Reads `tab`'s first state (empty for a null tab, as when the app is
+    /// Reads `tab`'s first state (empty for tab 0, as when the app is
     /// terminating) and puts its view in a new container below `gpui_view`.
     fn open(
         core: &'static Core,
         kind: PageKind,
         profile: *mut Profile,
-        tab: *mut Tab,
+        tab: TabId,
         gpui_view: *mut AnyObject,
         corner_radius: f32,
     ) -> (Rc<Self>, Snapshot) {
         let mut state = Snapshot::default();
-        if !tab.is_null() {
+        if tab != 0 {
             let mut raw: TabState = unsafe { std::mem::zeroed() };
             if (core.tab_get_state)(tab, &mut raw) {
                 state = Snapshot::from_c(&raw);
@@ -238,15 +237,15 @@ impl Shared {
     /// container before Chromium frees it. Only AppKit calls, so it is safe
     /// inside a callback.
     fn release(&self) {
-        self.tab.set(std::ptr::null_mut());
+        self.tab.set(0);
         self.container.swap_page(std::ptr::null_mut());
         self.drag.set(None);
         self.inside.set(false);
     }
 
-    fn run(&self, f: impl FnOnce(&Core, *mut Tab)) {
+    fn run(&self, f: impl FnOnce(&Core, TabId)) {
         let tab = self.tab.get();
-        if !tab.is_null() {
+        if tab != 0 {
             f(self.core, tab);
         }
     }

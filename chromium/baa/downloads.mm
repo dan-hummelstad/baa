@@ -19,17 +19,15 @@
 namespace baa {
 namespace {
 
-uint32_t g_next_download = 1;
-
 class ItemWatch;
-std::map<uint32_t, ItemWatch*>& Items() {
-  static base::NoDestructor<std::map<uint32_t, ItemWatch*>> items;
+std::map<uint64_t, ItemWatch*>& Items() {
+  static base::NoDestructor<std::map<uint64_t, ItemWatch*>> items;
   return *items;
 }
 
 class ItemWatch : public download::DownloadItem::Observer {
  public:
-  explicit ItemWatch(download::DownloadItem* item) : item_(item), id_(g_next_download++) {
+  explicit ItemWatch(download::DownloadItem* item) : item_(item), id_(NextId()) {
     item->AddObserver(this);
     Items()[id_] = this;
   }
@@ -65,9 +63,9 @@ class ItemWatch : public download::DownloadItem::Observer {
                      : item_->GetState() == download::DownloadItem::COMPLETE   ? BAA_DOWNLOAD_COMPLETE
                                                                                 : BAA_DOWNLOAD_CANCELED;
     content::WebContents* wc = content::DownloadItemUtils::GetWebContents(item_);
-    // A tab the app knows of, else NULL (a service worker, a closed tab).
+    // A tab the app knows of, else none (a service worker, a closed tab).
     BaaTab* tab = wc ? TabFor(wc) : nullptr;
-    Callbacks().download(CallbackContext(), tab && TabAnnounced(tab) ? tab : nullptr, &download);
+    Callbacks().download(CallbackContext(), tab && TabAnnounced(tab) ? IdOf(tab) : 0, &download);
   }
 
   void Cancel() {
@@ -85,7 +83,7 @@ class ItemWatch : public download::DownloadItem::Observer {
 
  private:
   raw_ptr<download::DownloadItem> item_;
-  const uint32_t id_;
+  const uint64_t id_;
 };
 
 }  // namespace
@@ -117,7 +115,7 @@ void DownloadWatch::ManagerGoingDown(content::DownloadManager*) {
 
 }  // namespace baa
 
-void baa_download_cancel(uint32_t id) {
+void baa_download_cancel(uint64_t id) {
   auto it = baa::Items().find(id);
   if (it != baa::Items().end()) {
     it->second->Cancel();

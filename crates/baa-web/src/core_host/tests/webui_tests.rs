@@ -56,7 +56,7 @@ fn tabs_chrome_made_for_chrome_pages_are_reported_and_adopted_as_baa(cx: &mut Te
     let opener = env.page(1, "https://a.test", cx);
     let opener_tab = env.tab_of(&opener, cx);
     let seen = events(&opener, cx);
-    env.created(0x9000 as *mut Tab, opener_tab, ProfileId(1), "chrome://extensions");
+    env.created(0x9000, opener_tab, ProfileId(1), "chrome://extensions");
     cx.run_until_parked();
     assert_eq!(
         *seen.borrow(),
@@ -64,10 +64,10 @@ fn tabs_chrome_made_for_chrome_pages_are_reported_and_adopted_as_baa(cx: &mut Te
     );
 
     // Nobody asked for this one, so it waits for a page instead of being closed this turn.
-    env.created(0x9010 as *mut Tab, std::ptr::null_mut(), ProfileId(1), "chrome://version");
+    env.created(0x9010, 0, ProfileId(1), "chrome://version");
     let creates = calls("tab_create").len();
     let adopted = env.page(1, "baa://version", cx);
-    assert_eq!(env.tab_of(&adopted, cx), 0x9010 as *mut Tab);
+    assert_eq!(env.tab_of(&adopted, cx), 0x9010);
     assert_eq!(calls("tab_create").len(), creates);
     assert_eq!(calls("tab_load_url"), Vec::<String>::new(), "already on its way");
     let evals = calls("tab_eval");

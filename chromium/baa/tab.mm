@@ -76,9 +76,10 @@ uint64_t g_next_id = 1;
 
 struct BaaTab : content::WebContentsObserver,
                 favicon::FaviconDriverObserver {
-  explicit BaaTab(tabs::TabInterface* tab) : tab(tab) {}
+  explicit BaaTab(tabs::TabInterface* tab) : id(baa::NextId()), tab(tab) {}
   ~BaaTab() override = default;
 
+  const uint64_t id;  // never reused; what the app holds
   tabs::TabInterface* const tab;  // null for a page outside a tab strip
   base::CallbackListSubscription will_detach;
   // A page outside a tab strip: runs when the handle ends, to destroy what
@@ -92,6 +93,10 @@ struct BaaTab : content::WebContentsObserver,
   bool background = false;
   bool user_gesture = false;
   base::WeakPtr<BaaTab> opener;
+  // A DevTools front-end baa docks: where, and the document the dock script last ran for.
+  bool devtools_front = false;
+  std::string dock_side = "right";
+  std::string docked_url;
   std::string icon_url;
   // Storage behind get_state's strings.
   std::string url_s, title_s, icon_s;
@@ -117,6 +122,7 @@ struct BaaTab : content::WebContentsObserver,
     state.can_go_forward = wc->GetController().CanGoForward();
     state.audible = wc->IsCurrentlyAudible();
     state.secure = chrome_security_state::GetSecurityLevel(wc) == security_state::SECURE;
+    state.crashed = wc->IsCrashed();
     return state;
   }
 
@@ -126,14 +132,19 @@ struct BaaTab : content::WebContentsObserver,
     }
     std::string url, title, icon;
     BaaTabState state = Snapshot(url, title, icon);
-    baa::Callbacks().tab_state(baa::CallbackContext(), this, &state);
+    baa::Callbacks().tab_state(baa::CallbackContext(), id, &state);
   }
 
   void TryReport(const GURL& url, bool force);
+  void DockDevtools();
 
   // content::WebContentsObserver:
   void DidStartLoading() override { SendState(); }
-  void DidStopLoading() override { SendState(); }
+  void DidStopLoading() override {
+    SendState();
+    DockDevtools();
+  }
+  void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override { SendState(); }
   void TitleWasSet(content::NavigationEntry*) override { SendState(); }
   void NavigationEntryCommitted(
       const content::LoadCommittedDetails&) override {
@@ -166,18 +177,25 @@ struct BaaTab : content::WebContentsObserver,
       web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(init_script, base::NullCallback());
     }
   }
-  // Pages tell the app things through console.debug("baa:..."), e.g. the
-  // DevTools dock picker.
+  // The DevTools dock picker (see DockDevtools) reports through console.debug.
   void OnDidAddMessageToConsole(content::RenderFrameHost*,
                                 blink::mojom::ConsoleMessageLevel,
                                 const std::u16string& message,
                                 int32_t,
                                 const std::u16string&,
                                 const std::optional<std::u16string>&) override {
-    constexpr std::u16string_view kPrefix = u"baa:";
-    if (message.starts_with(kPrefix) && reported) {
-      std::string rest = base::UTF16ToUTF8(message.substr(kPrefix.size()));
-      baa::Callbacks().page_message(baa::CallbackContext(), this, rest.c_str());
+    constexpr std::u16string_view kPrefix = u"baa:devtools-dock:";
+    if (!devtools_front || !reported || !message.starts_with(kPrefix)) {
+      return;
+    }
+    std::string side = base::UTF16ToUTF8(message.substr(kPrefix.size()));
+    int value = side == "bottom"   ? BAA_DOCK_BOTTOM
+                : side == "left"   ? BAA_DOCK_LEFT
+                : side == "right"  ? BAA_DOCK_RIGHT
+                : side == "undocked" ? BAA_DOCK_UNDOCKED
+                                   : -1;
+    if (value >= 0) {
+      baa::Callbacks().devtools_dock(baa::CallbackContext(), id, value);
     }
   }
   void WebContentsDestroyed() override { Detach(); }
@@ -211,7 +229,7 @@ struct BaaTab : content::WebContentsObserver,
       }
     }
     if (!png.empty()) {
-      baa::Callbacks().tab_favicon(baa::CallbackContext(), this,
+      baa::Callbacks().tab_favicon(baa::CallbackContext(), id,
                                    icon_url.c_str(), png.data(), png.size());
     }
   }
@@ -230,11 +248,11 @@ BaaTab* Find(tabs::TabInterface* ti) {
   return nullptr;
 }
 
-// The one way a handle ends. Everything that hangs off the tab goes with it;
-// the app hears tab_closed (`tell`) only for closes Chrome made, and only if it
-// knew the tab. Unregistered first, so whatever this or the destruction that
+// The one way a handle ends. Everything that hangs off the tab goes with it; the app hears
+// tab_closed(reason) if it knew the tab. Asks the page still had are withdrawn first, except when
+// the app itself closes the tab. Unregistered first, so whatever this or the destruction that
 // follows re-enters finds nothing.
-void Forget(BaaTab* t, bool tell) {
+void Forget(BaaTab* t, int reason) {
   auto it = std::find_if(Registry().begin(), Registry().end(),
                          [&](auto& value) { return value.get() == t; });
   if (it == Registry().end()) {
@@ -242,13 +260,14 @@ void Forget(BaaTab* t, bool tell) {
   }
   std::unique_ptr<BaaTab> owned = std::move(*it);
   Registry().erase(it);
-  tell = tell && t->reported;
-  DropPermissionsOf(t, tell);
+  bool tell = t->reported;
+  bool tell_asks = tell && reason != BAA_CLOSED_BY_APP;
+  DropPermissionsOf(t, tell_asks);
   DropMenusOf(t);
   ForgetDevtoolsOf(t);
-  DropDialogsOf(t, tell);
+  DropDialogsOf(t, tell_asks);
   if (tell) {
-    Callbacks().tab_closed(CallbackContext(), t);
+    Callbacks().tab_closed(CallbackContext(), t->id, reason);
   }
   t->Detach();
   base::OnceClosure close = std::move(t->close_bare);
@@ -256,6 +275,10 @@ void Forget(BaaTab* t, bool tell) {
   if (close) {
     std::move(close).Run();
   }
+}
+
+int ChromeReason() {
+  return baa_is_quitting() ? BAA_CLOSED_BY_QUIT : BAA_CLOSED_BY_CHROME;
 }
 
 }  // namespace
@@ -310,6 +333,49 @@ void BaaTab::Attach(content::WebContents* wc) {
   baa::AttachPermissions(wc);
 }
 
+// A DevTools front-end needs its dock picker switched on, and Chrome only does that for DevTools
+// docked in its own window. baa docks it, so each devtools:// document gets its half of the
+// script: the first load comes back with can_dock=true and the side preselected; after that a
+// change in the picker is reported as console "baa:devtools-dock:<side>". Chrome is always told
+// "not docked": SetIsDocked(true) would hit a DCHECK in a window that cannot dock.
+void BaaTab::DockDevtools() {
+  content::WebContents* wc = web_contents();
+  if (!devtools_front || !wc || wc->IsLoading()) {
+    return;
+  }
+  std::string url = wc->GetLastCommittedURL().spec();
+  if (!url.starts_with("devtools://") || url == docked_url) {
+    return;
+  }
+  docked_url = url;
+  std::string script;
+  if (url.find("can_dock=true") == std::string::npos) {
+    script = R"((() => {
+  InspectorFrontendHost.setPreference('currentDockState', JSON.stringify(')" + dock_side + R"('));
+  const url = new URL(location.href);
+  url.searchParams.delete('dockSide');
+  url.searchParams.set('can_dock', 'true');
+  location.replace(url.href);
+})())";
+  } else {
+    script = R"((() => {
+  const host = InspectorFrontendHost;
+  if (host.__appDock) return;
+  host.__appDock = true;
+  const setIsDocked = host.setIsDocked.bind(host);
+  host.setIsDocked = (docked, done) => {
+    setIsDocked(false, done);
+    host.getPreferences(prefs => {
+      let side = 'right';
+      try { side = JSON.parse(prefs.currentDockState); } catch {}
+      console.debug('baa:devtools-dock:' + (docked ? side : 'undocked'));
+    });
+  };
+})())";
+  }
+  wc->GetPrimaryMainFrame()->ExecuteJavaScript(base::UTF8ToUTF16(script), base::NullCallback());
+}
+
 void BaaTab::Detach() {
   content::WebContents* wc = web_contents();
   if (!wc) {
@@ -332,7 +398,7 @@ void BaaTab::TryReport(const GURL& url, bool force) {
   BaaTab* opener_tab = opener.get();
   BaaProfile* profile = baa::ProfileFor(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
   std::string spec = url.spec();
-  baa::Callbacks().tab_created(baa::CallbackContext(), this, opener_tab,
+  baa::Callbacks().tab_created(baa::CallbackContext(), id, baa::IdOf(opener_tab),
                                profile, spec.c_str(), background, user_gesture);
   // A dialog the page raised before the app knew the tab.
   baa::ShowPendingDialogsOf(this);
@@ -358,6 +424,7 @@ void OnTabInserted(TabStripModel* model,
   t->will_detach = tab->RegisterWillDetach(base::BindRepeating(&OnWillDetach));
   t->Attach(wc);
   if (g_insertion) {
+    t->devtools_front = g_insertion->kind == baa::InsertionKind::kDevtoolsFront;
     *g_insertion->out = t;  // the app's own insertion: no tab_created
     return;
   }
@@ -400,7 +467,7 @@ void OnTabInserted(TabStripModel* model,
 // Browser still dies through here): before its WebContents and NSView go.
 void OnWillDetach(tabs::TabInterface* tab, tabs::TabInterface::DetachReason reason) {
   if (reason == tabs::TabInterface::DetachReason::kDelete) {
-    Forget(Find(tab), /*tell=*/true);
+    Forget(Find(tab), ChromeReason());
   }
 }
 
@@ -427,7 +494,7 @@ void OnTabRemoved(tabs::TabInterface* tab, TabRemovedReason reason) {
                          ReturnDialogsToChrome(weak.get(), wc);
                          RestoreChromePermissions(wc);
                        }
-                       Forget(weak.get(), /*tell=*/true);
+                       Forget(weak.get(), ChromeReason());
                      },
                      WeakTab(t)));
 }
@@ -449,18 +516,18 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
 // Strip tabs first, then popups (their Browser is the one the strip tabs
 // leave behind).
 void baa::CloseTabsOf(Profile* chrome_profile) {
-  std::vector<BaaTab*> doomed;
+  std::vector<uint64_t> doomed;
   for (bool bare : {false, true}) {
     for (auto& value : Registry()) {
       content::WebContents* wc = value->web_contents();
       if ((value->tab == nullptr) == bare && wc &&
           Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
-        doomed.push_back(value.get());
+        doomed.push_back(value->id);
       }
     }
   }
-  for (BaaTab* tab : doomed) {
-    baa_tab_close(tab);
+  for (uint64_t id : doomed) {
+    baa_tab_close(id);
   }
 }
 
@@ -475,13 +542,13 @@ void baa::ReapplyColorSchemes(Profile* chrome_profile) {
 
 // ---- C ABI: tabs ---------------------------------------------------------------
 
-BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
+BaaTabId baa_tab_create(BaaProfile* profile, const char* url) {
   if (baa_is_quitting()) {
-    return nullptr;
+    return 0;
   }
   BrowserWindowInterface* browser = baa::BrowserOf(profile);
   if (!browser) {
-    return nullptr;
+    return 0;
   }
   BaaTab* unused;  // only the DevTools front needs the out-pointer
   content::WebContents* wc;
@@ -493,20 +560,22 @@ BaaTab* baa_tab_create(BaaProfile* profile, const char* url) {
   // Navigate sends a URL for an OTR profile to the parent's Browser; a tab
   // in another profile than asked for is not ours to hand out.
   if (wc && tab && Profile::FromBrowserContext(wc->GetBrowserContext()) != baa::ChromeProfileOf(profile)) {
-    baa_tab_close(tab);
-    return nullptr;
+    tab->reported = false;  // the app never heard of this id: no tab_closed
+    baa_tab_close(baa::IdOf(tab));
+    return 0;
   }
-  return tab;
+  return baa::IdOf(tab);
 }
 
-void baa_tab_close(BaaTab* tab) {
+void baa_tab_close(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (!baa::TabAlive(tab)) {
     return;
   }
   tabs::TabInterface* ti = tab->tab;
   // Unregistered before the contents die: the observers that destruction
-  // wakes find nothing, and the app is not told of a close it asked for.
-  baa::Forget(tab, /*tell=*/false);
+  // wakes find nothing.
+  baa::Forget(tab, BAA_CLOSED_BY_APP);
   if (!ti) {
     return;  // a popup: Forget ran the holder's close
   }
@@ -518,7 +587,8 @@ void baa_tab_close(BaaTab* tab) {
   }
 }
 
-bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
+bool baa_tab_get_state(BaaTabId tab_id, BaaTabState* state) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (!baa::ContentsOf(tab)) {
     return false;
   }
@@ -526,7 +596,8 @@ bool baa_tab_get_state(BaaTab* tab, BaaTabState* state) {
   return true;
 }
 
-void baa_tab_load_url(BaaTab* tab, const char* url) {
+void baa_tab_load_url(BaaTabId tab_id, const char* url) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     content::NavigationController::LoadURLParams params{GURL(url)};
     params.transition_type = ui::PAGE_TRANSITION_TYPED;
@@ -534,19 +605,22 @@ void baa_tab_load_url(BaaTab* tab, const char* url) {
   }
 }
 
-void baa_tab_reload(BaaTab* tab) {
+void baa_tab_reload(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->GetController().Reload(content::ReloadType::NORMAL, true);
   }
 }
 
-void baa_tab_stop(BaaTab* tab) {
+void baa_tab_stop(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->Stop();
   }
 }
 
-void baa_tab_go_to_offset(BaaTab* tab, int offset) {
+void baa_tab_go_to_offset(BaaTabId tab_id, int offset) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     if (wc->GetController().CanGoToOffset(offset)) {
       wc->GetController().GoToOffset(offset);
@@ -554,7 +628,8 @@ void baa_tab_go_to_offset(BaaTab* tab, int offset) {
   }
 }
 
-int baa_tab_history(BaaTab* tab, BaaHistoryVisitor visit, void* ctx) {
+int baa_tab_history(BaaTabId tab_id, BaaHistoryVisitor visit, void* ctx) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return -1;
@@ -569,7 +644,8 @@ int baa_tab_history(BaaTab* tab, BaaHistoryVisitor visit, void* ctx) {
   return controller.GetCurrentEntryIndex();
 }
 
-void baa_tab_eval(BaaTab* tab, const char* script, bool user_gesture) {
+void baa_tab_eval(BaaTabId tab_id, const char* script, bool user_gesture) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return;
@@ -582,7 +658,8 @@ void baa_tab_eval(BaaTab* tab, const char* script, bool user_gesture) {
   frame->ExecuteJavaScript(base::UTF8ToUTF16(script), base::NullCallback());
 }
 
-void baa_tab_set_zoom(BaaTab* tab, double factor) {
+void baa_tab_set_zoom(BaaTabId tab_id, double factor) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     if (auto* zoom = zoom::ZoomController::FromWebContents(wc)) {
       zoom->SetZoomLevel(blink::ZoomFactorToZoomLevel(factor));
@@ -590,7 +667,8 @@ void baa_tab_set_zoom(BaaTab* tab, double factor) {
   }
 }
 
-void baa_tab_find(BaaTab* tab, const char* text, bool forward) {
+void baa_tab_find(BaaTabId tab_id, const char* text, bool forward) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc) {
     return;
@@ -608,19 +686,22 @@ void baa_tab_find(BaaTab* tab, const char* text, bool forward) {
                        /*find_match=*/true);
 }
 
-void baa_tab_print(BaaTab* tab) {
+void baa_tab_print(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     printing::StartBasicPrint(wc);
   }
 }
 
-void baa_tab_set_muted(BaaTab* tab, bool muted) {
+void baa_tab_set_muted(BaaTabId tab_id, bool muted) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     SetTabAudioMuted(wc, muted, TabMutedReason::kAudioIndicator, "");
   }
 }
 
-void baa_tab_activate(BaaTab* tab) {
+void baa_tab_activate(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (!baa::ContentsOf(tab)) {
     return;
   }
@@ -639,7 +720,12 @@ void baa_tab_activate(BaaTab* tab) {
   baa::ActivateBrowser(browser);
 }
 
-void baa_tab_focus(BaaTab* tab) {
+// ponytail: M3 stubs (WP-C3, WP-C4); the callbacks fullscreen and tab_group are not sent yet.
+void baa_tab_exit_fullscreen(BaaTabId) {}
+void baa_tab_set_group(BaaTabId, uint64_t, const char*) {}
+
+void baa_tab_focus(BaaTabId tab_id) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
     wc->Focus();
   }
@@ -649,6 +735,23 @@ namespace baa {
 
 uint64_t NextId() {
   return g_next_id++;
+}
+
+void SetDockSide(BaaTab* front, const char* side) {
+  front->dock_side = side;
+}
+
+uint64_t IdOf(BaaTab* tab) {
+  return tab ? tab->id : 0;
+}
+
+BaaTab* TabFromId(uint64_t id) {
+  for (auto& value : Registry()) {
+    if (value->id == id) {
+      return value.get();
+    }
+  }
+  return nullptr;
 }
 
 bool TabAnnounced(BaaTab* tab) {
@@ -675,7 +778,7 @@ void BareTabClosedByChrome(BaaTab* tab) {
     return;
   }
   tab->close_bare = base::OnceClosure();
-  Forget(tab, /*tell=*/true);
+  Forget(tab, ChromeReason());
 }
 
 // Quit: popups are not in any tab strip, so nothing else closes them, and a
@@ -687,7 +790,7 @@ void CloseBareTabsForQuit() {
     if (bare == Registry().end()) {
       break;
     }
-    Forget(bare->get(), /*tell=*/true);
+    Forget(bare->get(), BAA_CLOSED_BY_QUIT);
   }
   // Popups that closed themselves and wait for their deletion task too.
   DestroyAllPopups();
@@ -702,7 +805,8 @@ void SendTabState(BaaTab* tab) {
 
 }  // namespace baa
 
-void baa_tab_set_init_script(BaaTab* tab, const char* script) {
+void baa_tab_set_init_script(BaaTabId tab_id, const char* script) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   if (baa::TabAlive(tab)) {
     tab->init_script = base::UTF8ToUTF16(script ? script : "");
   }

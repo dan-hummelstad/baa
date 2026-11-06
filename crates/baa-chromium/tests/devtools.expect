@@ -1,9 +1,9 @@
-# docked DevTools: no tab_created, front-end loads devtools://, dock message, inspect, reopen, Chrome's own window
+# docked DevTools: no tab_created, front-end loads devtools://, devtools_dock callback, inspect, reopen, Chrome's own window
 script: devtools.txt
 mustnot: baa: tab_created
 must: baa: devtools 0 -> 1
 must: baa: get_state ok=true url=devtools://devtools/bundled/devtools_app.html
-must: baa: page_message tab=1 devtools-dock:left
+must: baa: devtools_dock tab=1 side=2
 must: baa: devtools 0 -> 2
 must: panel=elements
 must: title="DevTools - example.com/"

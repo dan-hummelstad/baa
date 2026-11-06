@@ -1,11 +1,7 @@
-# step 7: fetch (ok and failing), init script on a chrome:// page, color scheme, pref
+# step 7: init script on a chrome:// page, color scheme, pref
 load https://example.com/
 sleep 3000
 activate
-fetch https://suggestqueries.google.com/complete/search?client=firefox&q=a
-fetch https://nonexistent.invalid/x
-fetch not-a-url
-sleep 4000
 tab 1 chrome://settings/
 sleep 4500
 use 1
@@ -24,11 +20,6 @@ eval document.title='light-dark:'+matchMedia('(prefers-color-scheme: dark)').mat
 sleep 500
 state
 # a pref that this profile registers
-prefb 1 search.suggest_enabled false
+prefb 1 bookmark_bar.show_on_all_tabs false
 prefb 1 no.such.pref true
-load chrome://prefs-internals/
-sleep 3500
-eval document.title='suggest:'+(document.body.innerText.match(/"suggest_enabled":\s*(true|false)/)||[])[1]
-sleep 500
-state
 quit

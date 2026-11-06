@@ -64,7 +64,7 @@ fn a_menu_for_a_page_that_is_gone_is_closed_at_once_and_never_by_the_callback(cx
         enabled: true,
         checked: false,
     }];
-    (env.callbacks.context_menu)(env.ctx(), 0xdead0 as *mut Tab, 9, 1., 2., items.as_ptr(), 1);
+    (env.callbacks.context_menu)(env.ctx(), 0xdead0, 9, 1., 2., items.as_ptr(), 1);
     assert_eq!(calls("context_menu_done"), Vec::<String>::new(), "not inside the callback");
     cx.run_until_parked();
     assert_eq!(calls("context_menu_done"), ["context_menu_done 9 -1"]);
@@ -76,7 +76,7 @@ fn a_download_is_listed_in_place_and_announced_once(cx: &mut TestAppContext) {
     let page = env.page(1, "https://a.test", cx);
     let tab = env.tab_of(&page, cx);
     let seen = events(&page, cx);
-    let send = |tab: *mut Tab, id: u32, received: i64, state: c_int| {
+    let send = |tab: TabId, id: u64, received: i64, state: c_int| {
         let download = ffi::Download {
             id,
             url: c"https://a.test/f.zip".as_ptr(),
@@ -90,7 +90,7 @@ fn a_download_is_listed_in_place_and_announced_once(cx: &mut TestAppContext) {
 
     send(tab, 4, 0, 0);
     send(tab, 4, 5, 0);
-    send(std::ptr::null_mut(), 5, 0, 0);
+    send(0, 5, 0, 0);
     send(tab, 4, 10, 1);
     cx.run_until_parked();
 

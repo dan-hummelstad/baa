@@ -2,7 +2,7 @@
 load https://example.com/
 sleep 3000
 activate
-devtools
+devtools 0
 sleep 4000
 use 1
 state
@@ -12,10 +12,10 @@ sleep 1000
 close
 sleep 1500
 use 0
-devtools inspect 100 100
+devtools 0 inspect 100 100
 sleep 4000
 # opening again while open closes the first
-devtools
+devtools 0
 sleep 4000
 use 3
 state

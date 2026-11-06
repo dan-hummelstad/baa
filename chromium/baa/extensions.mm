@@ -160,7 +160,7 @@ class Popup : public extensions::ExtensionView,
   gfx::NativeView GetNativeView() override { return host_->host_contents()->GetNativeView(); }
   void ResizeDueToAutoResize(content::WebContents*, const gfx::Size& size) override {
     if (tab_) {
-      Callbacks().resized(CallbackContext(), tab_, size.width(), size.height());
+      Callbacks().resized(CallbackContext(), IdOf(tab_), size.width(), size.height());
     }
   }
   void RenderFrameCreated(content::RenderFrameHost* frame) override {
@@ -343,43 +343,43 @@ bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id,
   return false;
 }
 
-BaaTab* baa_extension_popup(BaaProfile* profile, const char* extension_id) {
+BaaTabId baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
   BrowserWindowInterface* browser = baa::ExistingBrowserOf(profile);
   if (!chrome_profile || !browser || !extension_id || baa_is_quitting()) {
-    return nullptr;
+    return 0;
   }
   const extensions::Extension* ext =
       extensions::ExtensionRegistry::Get(chrome_profile)->enabled_extensions().GetByID(extension_id);
   // An OTR profile only runs the extensions the user allowed in incognito.
   if (ext && chrome_profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(ext, chrome_profile)) {
-    return nullptr;
+    return 0;
   }
   content::WebContents* active = browser->GetTabStripModel()->GetActiveWebContents();
   if (!ext || !active) {
-    return nullptr;
+    return 0;
   }
   extensions::ExtensionActionRunner* runner = extensions::ExtensionActionRunner::GetForWebContents(active);
   if (!runner) {
-    return nullptr;
+    return 0;
   }
   if (runner->RunAction(ext, /*grant_tab_permissions=*/true) != extensions::ExtensionAction::ShowAction::kShowPopup) {
-    return nullptr;
+    return 0;
   }
   extensions::ExtensionAction* action =
       extensions::ExtensionActionManager::Get(chrome_profile)->GetExtensionAction(*ext);
   if (!action) {
-    return nullptr;
+    return 0;
   }
   GURL url = action->GetPopupUrl(sessions::SessionTabHelper::IdForTab(active).id());
   std::unique_ptr<extensions::ExtensionViewHost> host =
       extensions::ExtensionViewHostFactory::CreatePopupHost(*ext, url, browser);
   if (!host) {
-    return nullptr;
+    return 0;
   }
   auto* popup = new baa::Popup(chrome_profile, browser, std::move(host));
   popup->Start();
-  return popup->tab();
+  return baa::IdOf(popup->tab());
 }
 
 void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id, const char* path) {

@@ -1,18 +1,18 @@
-# JS dialogs: alert, confirm answered false, dialog_closed on navigation, then close with stale handle
+# JS dialogs: alert, confirm answered false, request_closed on navigation, then close with stale handle
 load https://example.com/
 activate
 sleep 3000
 eval setTimeout(()=>{alert('x'); document.title='after-alert'},100)
 sleep 1500
-answer 1 1
+answer last 1
 sleep 1500
 eval setTimeout(()=>{document.title='confirm:'+confirm('sure?')},100)
 sleep 1500
-answer 2 0
+answer last 0
 sleep 1500
 eval setTimeout(()=>{document.title='prompt:'+prompt('name?','dflt')},100)
 sleep 1500
-answer 3 1 bob
+answer last 1 bob
 sleep 1500
 eval setTimeout(()=>alert('gone'),100)
 sleep 1500

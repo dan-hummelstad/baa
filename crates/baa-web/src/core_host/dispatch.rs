@@ -15,7 +15,7 @@ use gpui::{AsyncApp, Context, WeakEntity};
 use objc2::runtime::AnyObject;
 
 use super::{
-    ffi::{self, Callbacks, Core, Profile, Tab, TabState},
+    ffi::{self, Callbacks, Core, Profile, TabId, TabState},
     from_c,
     host::permissions_of,
     menu::{present_menu, Row},
@@ -30,11 +30,9 @@ pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
 
 /// A tab Chrome opened that baa has not taken yet.
 struct Pending {
-    tab: *mut Tab,
+    tab: TabId,
     profile: *mut Profile,
     url: String,
-    /// Tells this entry from a later tab at the same address, for its timer.
-    seq: u64,
 }
 
 /// Calls Chrome has not answered yet, by the id it was given.
@@ -75,13 +73,12 @@ pub(super) struct Dispatch {
     /// Before [`CoreRuntime::start`] there is none and callbacks do nothing;
     /// Chrome makes no tabs of its own then (`--no-startup-window`).
     pub(super) app: RefCell<Option<AsyncApp>>,
-    pub(super) tabs: RefCell<HashMap<*mut Tab, Live>>,
+    pub(super) tabs: RefCell<HashMap<TabId, Live>>,
     pending: RefCell<Vec<Pending>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) clears: Waiting<Callback<()>>,
     pub(super) unpacked: Waiting<Callback<Result<String, String>>>,
-    next_seq: Cell<u64>,
     /// `--user-data-dir`.
     pub(super) root: OnceCell<PathBuf>,
 }
@@ -97,7 +94,6 @@ impl Dispatch {
             downloads: RefCell::default(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
-            next_seq: Cell::new(0),
             root: OnceCell::new(),
         }
     }
@@ -130,12 +126,12 @@ impl Dispatch {
     }
 
     /// The gpui entity of `tab`; none for an unknown tab or one without.
-    pub(super) fn page_of(&self, tab: *mut Tab) -> Option<WeakEntity<CorePage>> {
+    pub(super) fn page_of(&self, tab: TabId) -> Option<WeakEntity<CorePage>> {
         self.tabs.borrow().get(&tab)?.page.clone()
     }
 
     /// Runs `f` on the page of `tab` next turn; nothing for an unknown tab.
-    pub(super) fn on_page(&self, tab: *mut Tab, f: impl FnOnce(&mut CorePage, &mut Context<CorePage>) + 'static) {
+    pub(super) fn on_page(&self, tab: TabId, f: impl FnOnce(&mut CorePage, &mut Context<CorePage>) + 'static) {
         if let Some(page) = self.page_of(tab) {
             self.queue(move |cx| {
                 page.update(cx, f).ok();
@@ -156,8 +152,8 @@ impl Dispatch {
 
     fn tab_created(
         &'static self,
-        tab: *mut Tab,
-        opener: *mut Tab,
+        tab: TabId,
+        opener: TabId,
         profile: *mut Profile,
         url: String,
         background: bool,
@@ -172,9 +168,7 @@ impl Dispatch {
             });
             return;
         }
-        let seq = self.next_seq.get();
-        self.next_seq.set(seq + 1);
-        self.pending.borrow_mut().push(Pending { tab, profile, url: url.clone(), seq });
+        self.pending.borrow_mut().push(Pending { tab, profile, url: url.clone() });
         let opener = self.page_of(opener);
         self.queue(move |cx| {
             let requested = PageEvent::OpenRequested { url: url.clone(), from_user_gesture, background };
@@ -184,20 +178,21 @@ impl Dispatch {
             } else if !background {
                 // The UI takes it (create_page) while handling the event, or
                 // not at all: a tab nobody shows must not linger.
-                cx.update(|cx| cx.defer(move |_| self.expire(seq)));
+                cx.update(|cx| cx.defer(move |_| self.expire(tab)));
             }
         });
         app.spawn(async move |cx| {
             cx.background_executor().timer(ADOPTION_EXPIRY).await;
-            self.expire(seq);
+            self.expire(tab);
         })
         .detach();
     }
 
-    /// Closes the pending tab `seq` unless it was adopted meanwhile.
-    fn expire(&self, seq: u64) {
+    /// Closes the pending tab unless it was adopted meanwhile; ids are never
+    /// reused, so a late timer cannot hit a later tab.
+    fn expire(&self, tab: TabId) {
         let mut pending = self.pending.borrow_mut();
-        if let Some(at) = pending.iter().position(|p| p.seq == seq) {
+        if let Some(at) = pending.iter().position(|p| p.tab == tab) {
             let expired = pending.remove(at);
             drop(pending);
             (self.core.tab_close)(expired.tab);
@@ -206,7 +201,7 @@ impl Dispatch {
 
     /// A tab's snapshot. A changed view is swapped in now: Chrome frees the
     /// old one as soon as this callback returns.
-    fn tab_state(&self, tab: *mut Tab, snapshot: Snapshot) {
+    fn tab_state(&self, tab: TabId, snapshot: Snapshot) {
         let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
         let Some((shared, page)) = live else { return };
         let view_changed = shared.container.swap_page(snapshot.view);
@@ -219,7 +214,7 @@ impl Dispatch {
 
     /// A download started or changed. The first sight of one also tells the
     /// page it came from.
-    fn download(&'static self, tab: *mut Tab, download: crate::Download) {
+    fn download(&'static self, tab: TabId, download: crate::Download) {
         let page = self.page_of(tab);
         self.queue(move |cx| {
             let list = self.downloads.borrow().clone();
@@ -239,7 +234,7 @@ impl Dispatch {
     }
 
     /// A menu is open in the page; a page that is gone gets it closed.
-    fn context_menu(&'static self, tab: *mut Tab, id: u64, x: f32, y: f32, rows: Vec<Row>) {
+    fn context_menu(&'static self, tab: TabId, id: u64, x: f32, y: f32, rows: Vec<Row>) {
         let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
         self.queue(move |cx| match live {
             Some((_, Some(page))) => {
@@ -254,35 +249,21 @@ impl Dispatch {
         });
     }
 
-    /// The profile is going away with its tabs, which Chrome may not report.
-    pub(super) fn forget_profile(&self, profile: *mut Profile) {
-        self.pending.borrow_mut().retain(|p| p.profile != profile);
-        let gone: Vec<_> =
-            self.tabs.borrow().iter().filter(|(_, l)| l.shared.profile == profile).map(|(tab, _)| *tab).collect();
-        for tab in gone {
-            let live = self.tabs.borrow_mut().remove(&tab);
-            if let Some(live) = live {
-                live.shared.release();
-            }
-        }
-    }
-
-    pub(super) fn take_pending(&self, profile: *mut Profile, url: &str) -> Option<*mut Tab> {
+    pub(super) fn take_pending(&self, profile: *mut Profile, url: &str) -> Option<TabId> {
         let mut pending = self.pending.borrow_mut();
         let at = pending.iter().position(|p| p.profile == profile && p.url == url)?;
         Some(pending.remove(at).tab)
     }
 
-    fn tab_closed(&self, tab: *mut Tab) {
+    fn tab_closed(&self, tab: TabId, reason: c_int) {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
         let Some(live) = self.tabs.borrow_mut().remove(&tab) else { return };
-        // Now, not next turn: the handle is dead, its address may be reused, and
-        // its view is freed once this callback returns.
+        // Now, not next turn: its view is freed once this callback returns.
         live.shared.release();
         // The sheet has no entity to tell; it notices through `Shared::tab`.
         let Some(page) = live.page else { return };
-        if (self.core.is_quitting)() {
-            // ⌘Q closes every tab; the session must keep them.
+        // The UI closed it itself, or ⌘Q closes every tab and the session must keep them.
+        if matches!(reason, ffi::CLOSED_BY_APP | ffi::CLOSED_BY_QUIT) {
             return;
         }
         self.queue(move |cx| {
@@ -306,8 +287,8 @@ pub(super) fn callbacks() -> Callbacks {
     }
     extern "C" fn tab_created(
         ctx: *mut c_void,
-        tab: *mut Tab,
-        opener: *mut Tab,
+        tab: TabId,
+        opener: TabId,
         profile: *mut Profile,
         url: *const c_char,
         background: bool,
@@ -315,70 +296,61 @@ pub(super) fn callbacks() -> Callbacks {
     ) {
         unsafe { dispatch(ctx).tab_created(tab, opener, profile, super::skin::to_baa(from_c(url)), background, user_gesture) }
     }
-    extern "C" fn tab_state(ctx: *mut c_void, tab: *mut Tab, state: *const TabState) {
+    extern "C" fn tab_state(ctx: *mut c_void, tab: TabId, state: *const TabState) {
         let snapshot = Snapshot::from_c(unsafe { &*state });
         unsafe { dispatch(ctx) }.tab_state(tab, snapshot);
     }
-    extern "C" fn tab_favicon(ctx: *mut c_void, tab: *mut Tab, icon_url: *const c_char, png: *const u8, len: usize) {
+    extern "C" fn tab_favicon(ctx: *mut c_void, tab: TabId, icon_url: *const c_char, png: *const u8, len: usize) {
         let url = unsafe { from_c(icon_url) };
         let png = Arc::new(if png.is_null() { Vec::new() } else { unsafe { std::slice::from_raw_parts(png, len) }.to_vec() });
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::FaviconImage { url, png }));
     }
-    extern "C" fn dialog(
-        ctx: *mut c_void,
-        tab: *mut Tab,
-        id: u64,
-        kind: c_int,
-        message: *const c_char,
-        default_text: *const c_char,
-    ) {
-        let (message, default_text) = unsafe { (from_c(message), from_c(default_text)) };
+    extern "C" fn dialog(ctx: *mut c_void, tab: TabId, id: u64, dialog: *const ffi::Dialog) {
+        let dialog = unsafe { &*dialog };
         let d = unsafe { dispatch(ctx) };
-        let kind = dialog_kind(kind);
+        let kind = dialog_kind(dialog.kind);
         let quitting = matches!(kind, DialogKind::BeforeUnload { .. }) && (d.core.is_quitting)();
         if quitting || d.page_of(tab).is_none() {
             // ⌘Q waits on a leave-site question nobody would answer for a hidden
             // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
             // ask. Answered next turn: Chrome is inside its dialog code now,
             // and may not have recorded the id yet.
-            d.queue(move |_| (d.core.dialog_answer)(id, quitting, c"".as_ptr()));
+            d.queue(move |_| d.core.answer_ok(id, quitting));
             return;
         }
-        d.on_page(tab, move |_, cx| {
-            cx.emit(PageEvent::Dialog(crate::Dialog {
+        let dialog = unsafe {
+            crate::Dialog {
                 id,
                 kind,
-                message,
-                default_text,
-                title: String::new(),
-                ok_label: String::new(),
-                cancel_label: String::new(),
-                check_label: String::new(),
-            }));
-        });
+                message: from_c(dialog.message),
+                default_text: from_c(dialog.default_text),
+                title: from_c(dialog.title),
+                ok_label: from_c(dialog.ok_label),
+                cancel_label: from_c(dialog.cancel_label),
+                check_label: from_c(dialog.check_label),
+            }
+        };
+        d.on_page(tab, move |_, cx| cx.emit(PageEvent::Dialog(dialog)));
     }
-    extern "C" fn dialog_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
+    extern "C" fn tab_closed(ctx: *mut c_void, tab: TabId, reason: c_int) {
+        unsafe { dispatch(ctx) }.tab_closed(tab, reason);
     }
-    extern "C" fn tab_closed(ctx: *mut c_void, tab: *mut Tab) {
-        unsafe { dispatch(ctx) }.tab_closed(tab);
-    }
-    extern "C" fn permission(ctx: *mut c_void, tab: *mut Tab, id: u64, origin: *const c_char, kinds: u32) {
+    extern "C" fn permission(ctx: *mut c_void, tab: TabId, id: u64, origin: *const c_char, kinds: u32) {
         let origin = unsafe { from_c(origin) };
         let kinds = permissions_of(kinds);
         let d = unsafe { dispatch(ctx) };
         if d.page_of(tab).is_none() {
-            d.queue(move |_| (d.core.permission_answer)(id, false));
+            d.queue(move |_| d.core.answer_ok(id, false));
             return;
         }
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
     }
-    extern "C" fn permission_closed(ctx: *mut c_void, tab: *mut Tab, id: u64) {
+    extern "C" fn request_closed(ctx: *mut c_void, tab: TabId, id: u64) {
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
     }
     extern "C" fn context_menu(
         ctx: *mut c_void,
-        tab: *mut Tab,
+        tab: TabId,
         id: u64,
         x: f32,
         y: f32,
@@ -387,10 +359,10 @@ pub(super) fn callbacks() -> Callbacks {
     ) {
         unsafe { dispatch(ctx) }.context_menu(tab, id, x, y, Row::from_c(items, count));
     }
-    extern "C" fn download(ctx: *mut c_void, tab: *mut Tab, download: *const ffi::Download) {
+    extern "C" fn download(ctx: *mut c_void, tab: TabId, download: *const ffi::Download) {
         let download = unsafe { &*download };
         let download = crate::Download {
-            id: u64::from(download.id),
+            id: download.id,
             url: unsafe { from_c(download.url) },
             path: unsafe { from_c(download.path) },
             received_bytes: download.received_bytes,
@@ -403,21 +375,24 @@ pub(super) fn callbacks() -> Callbacks {
         };
         unsafe { dispatch(ctx) }.download(tab, download);
     }
-    extern "C" fn resized(ctx: *mut c_void, tab: *mut Tab, width: c_int, height: c_int) {
+    extern "C" fn resized(ctx: *mut c_void, tab: TabId, width: c_int, height: c_int) {
         let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PreferredSize(size)));
     }
-    extern "C" fn page_message(ctx: *mut c_void, tab: *mut Tab, message: *const c_char) {
-        let message = unsafe { from_c(message) };
-        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| {
-            // Only the DevTools front-end's dock picker speaks this.
-            if let Some(side) = message.strip_prefix("devtools-dock:").filter(|_| page.shared.kind == PageKind::DevTools) {
-                cx.emit(PageEvent::DevToolsDock(side.into()));
-            }
-        });
+    extern "C" fn devtools_dock(ctx: *mut c_void, front: TabId, side: c_int) {
+        let side = match side {
+            ffi::DOCK_BOTTOM => "bottom",
+            ffi::DOCK_LEFT => "left",
+            ffi::DOCK_UNDOCKED => "undocked",
+            _ => "right",
+        };
+        unsafe { dispatch(ctx) }.on_page(front, move |_, cx| cx.emit(PageEvent::DevToolsDock(side.into())));
     }
-    // ABI 5 still has the slot; nothing calls it once `fetch` is gone.
-    extern "C" fn fetch_done(_: *mut c_void, _: u64, _: bool, _: *const c_char, _: usize) {}
+    // ponytail: WP-R2 fills these four.
+    extern "C" fn fullscreen(_: *mut c_void, _: TabId, _: bool) {}
+    extern "C" fn find_result(_: *mut c_void, _: TabId, _: c_int, _: c_int) {}
+    extern "C" fn tab_group(_: *mut c_void, _: TabId, _: u64, _: *const c_char) {}
+    extern "C" fn autocomplete(_: *mut c_void, _: u64, _: *const ffi::Match, _: usize, _: bool) {}
     extern "C" fn clear_done(ctx: *mut c_void, id: u64) {
         unsafe { dispatch(ctx) }.finish_clear(id);
     }
@@ -431,15 +406,17 @@ pub(super) fn callbacks() -> Callbacks {
         tab_state,
         tab_favicon,
         dialog,
-        dialog_closed,
         tab_closed,
         permission,
-        permission_closed,
+        request_closed,
         context_menu,
         download,
         resized,
-        page_message,
-        fetch_done,
+        devtools_dock,
+        fullscreen,
+        find_result,
+        tab_group,
+        autocomplete,
         clear_done,
         load_unpacked_done,
     }
@@ -451,6 +428,10 @@ fn dialog_kind(raw: c_int) -> DialogKind {
         ffi::DIALOG_PROMPT => DialogKind::Prompt,
         ffi::DIALOG_BEFOREUNLOAD => DialogKind::BeforeUnload { is_reload: false },
         ffi::DIALOG_BEFOREUNLOAD_RELOAD => DialogKind::BeforeUnload { is_reload: true },
+        ffi::DIALOG_AUTH => DialogKind::Auth,
+        ffi::DIALOG_EXTERNAL_PROTOCOL => DialogKind::ExternalProtocol,
+        ffi::DIALOG_UNRESPONSIVE => DialogKind::Unresponsive,
+        ffi::DIALOG_EXTENSION_INSTALL => DialogKind::ExtensionInstall,
         _ => DialogKind::Alert,
     }
 }

@@ -17,16 +17,26 @@ fn ephemeral_profiles_count_down_and_open_once_each(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn deleting_a_profile_lets_go_of_its_pages_and_pending_tabs(cx: &mut TestAppContext) {
+fn deleting_a_profile_leaves_every_tab_to_chromes_report(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let view = new_view();
     let page = env.page_with_view(view, cx);
-    env.created(0x9000 as *mut Tab, std::ptr::null_mut(), ProfileId(1), "https://p.test");
+    let other = env.page(1, "https://b.test", cx);
+    let (tab, other_tab) = (env.tab_of(&page, cx), env.tab_of(&other, cx));
+    let seen = events(&page, cx);
+    env.created(0x9000, 0, ProfileId(1), "https://p.test");
 
     env.host.delete_profile(ProfileId(1));
-    assert!(superview(view).is_null());
     assert_eq!(calls("profile_close").len(), 1);
-    cx.update(|_| drop(page));
+    // profile_close reports each tab, inside the call.
+    for tab in [tab, other_tab, 0x9000] {
+        (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_APP);
+    }
+    assert!(superview(view).is_null());
+    assert!(env.dispatch.tabs.borrow().is_empty());
+    cx.run_until_parked();
+    assert!(seen.borrow().is_empty());
+    cx.update(|_| drop((page, other)));
     cx.executor().advance_clock(ADOPTION_EXPIRY + Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(calls("tab_close"), Vec::<String>::new(), "Chrome owns those tabs' end now");

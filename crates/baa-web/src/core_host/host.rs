@@ -169,17 +169,21 @@ impl WebHost for CoreWebHost {
         let (profile, inspected) = of.read_with(cx, |page, _| (page.profile, page.shared.tab.get()));
         let handle = self.profile_handle(profile);
         let (x, y) = inspect_at.unwrap_or_default();
-        // NULL: Chrome refused, or the inspected page is gone; the page then closes itself.
-        let tab = if inspected.is_null() {
-            std::ptr::null_mut()
-        } else {
-            (self.core.tab_open_devtools)(inspected, inspect_at.is_some(), x, y)
+        let side = match side {
+            "bottom" => ffi::DOCK_BOTTOM,
+            "left" => ffi::DOCK_LEFT,
+            _ => ffi::DOCK_RIGHT,
         };
-        let (dispatch, side) = (self.dispatch, side.to_string());
+        // 0: Chrome refused, or the inspected page is gone; the page then closes itself.
+        let tab = if inspected == 0 {
+            0
+        } else {
+            (self.core.tab_open_devtools)(inspected, inspect_at.is_some(), x, y, side)
+        };
+        let dispatch = self.dispatch;
         cx.new(|cx| {
-            let mut page = CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx);
-            page.dock_side = side;
-            if tab.is_null() {
+            let page = CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx);
+            if tab == 0 {
                 page.close_soon(cx);
             }
             page
@@ -193,7 +197,7 @@ impl WebHost for CoreWebHost {
     fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
         let handle = self.profile_handle(profile);
         let tab = if handle.is_null() {
-            std::ptr::null_mut()
+            0
         } else {
             // A tab Chrome already made for this (window.open) is taken, not duplicated.
             let url = skin::to_baa(url.to_string());
@@ -204,7 +208,7 @@ impl WebHost for CoreWebHost {
                 let first = if skin::is_webui(&url) { "about:blank" } else { &url };
                 (self.core.tab_create)(handle, c_string(first).as_ptr())
             });
-            if !tab.is_null() {
+            if tab != 0 {
                 self.dispatch.prepare_tab(tab, &url, &css, pending.is_some());
             }
             tab
@@ -218,12 +222,12 @@ impl WebHost for CoreWebHost {
         let handle = self.profile_handle(profile);
         let id = extensions::id_of(url).filter(|_| !handle.is_null());
         // NULL: no popup (the click was all the action did); the Peek card closes.
-        let tab = id.map_or(std::ptr::null_mut(), |id| (self.core.extension_popup)(handle, c_string(id).as_ptr()));
+        let tab = id.map_or(0, |id| (self.core.extension_popup)(handle, c_string(id).as_ptr()));
         let dispatch = self.dispatch;
         cx.new(|cx| {
             let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Popup, window, cx);
             page.set_corner_radius(8.);
-            if tab.is_null() {
+            if tab == 0 {
                 page.close_soon(cx);
             }
             page
@@ -239,7 +243,6 @@ impl WebHost for CoreWebHost {
     fn delete_profile(&self, profile: ProfileId) {
         self.skins.borrow_mut().remove(&profile);
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
-            self.dispatch.forget_profile(handle);
             (self.core.profile_close)(handle);
         }
         if !is_ephemeral(profile) {
@@ -268,7 +271,7 @@ impl WebHost for CoreWebHost {
         list
     }
 
-    // ponytail: ABI 5 has no omnibox entry point; WP-R2 wires `update` to baa_profile_autocomplete.
+    // ponytail: WP-R2 wires `update` to baa_profile_autocomplete.
     fn autocomplete(&self, _profile: ProfileId, _text: &str, _update: crate::SuggestUpdate) {}
 
     fn downloads(&self) -> Entity<Downloads> {
@@ -280,7 +283,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn cancel_download(&self, id: u64) {
-        (self.core.download_cancel)(id as u32);
+        (self.core.download_cancel)(id);
     }
 
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {

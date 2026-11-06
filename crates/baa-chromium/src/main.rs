@@ -191,15 +191,17 @@ mod app {
         tab_state: on_tab_state,
         tab_favicon: on_tab_favicon,
         dialog: on_dialog,
-        dialog_closed: on_dialog_closed,
         tab_closed: on_tab_closed,
         permission: on_permission,
-        permission_closed: on_permission_closed,
+        request_closed: on_request_closed,
         context_menu: on_context_menu,
         download: on_download,
         resized: on_resized,
-        page_message: on_page_message,
-        fetch_done: on_fetch_done,
+        devtools_dock: on_devtools_dock,
+        fullscreen: on_fullscreen,
+        find_result: on_find_result,
+        tab_group: on_tab_group,
+        autocomplete: on_autocomplete,
         clear_done: on_clear_done,
         load_unpacked_done: on_load_unpacked_done,
     };
@@ -237,19 +239,21 @@ mod app {
         static PAGE_CLOSED: Cell<bool> = const { Cell::new(false) };
         /// Tabs the script can address: 0 is the page in the hole, then
         /// script-made and Chrome-made tabs in arrival order.
-        static TABS: RefCell<Vec<*mut ffi::Tab>> = const { RefCell::new(Vec::new()) };
+        static TABS: RefCell<Vec<ffi::TabId>> = const { RefCell::new(Vec::new()) };
         /// space-1, space-2, ephemeral.
         static PROFILES: RefCell<[*mut ffi::Profile; 3]> = const { RefCell::new([std::ptr::null_mut(); 3]) };
+        /// The last `dialog` id: ids come from the shared counter, so scripts say `answer last`.
+        static LAST_DIALOG: Cell<u64> = const { Cell::new(0) };
     }
 
-    fn tab_index(tab: *mut ffi::Tab) -> String {
+    fn tab_index(tab: ffi::TabId) -> String {
         TABS.with(|t| t.borrow().iter().position(|x| *x == tab)).map_or("?".into(), |i| i.to_string())
     }
 
     extern "C" fn on_tab_created(
         _: *mut c_void,
-        tab: *mut ffi::Tab,
-        opener: *mut ffi::Tab,
+        tab: ffi::TabId,
+        opener: ffi::TabId,
         profile: *mut ffi::Profile,
         url: *const c_char,
         background: bool,
@@ -263,13 +267,13 @@ mod app {
         let which = PROFILES.with(|p| p.borrow().iter().position(|x| *x == profile));
         eprintln!(
             "baa: tab_created tab={index} opener={} profile={} url={} background={background} gesture={gesture}",
-            if opener.is_null() { "NULL".into() } else { tab_index(opener) },
+            if opener == 0 { "NULL".into() } else { tab_index(opener) },
             if profile.is_null() { "NULL".into() } else { format!("{which:?}") },
             text(url),
         );
     }
 
-    extern "C" fn on_tab_state(_: *mut c_void, tab: *mut ffi::Tab, s: *const ffi::TabState) {
+    extern "C" fn on_tab_state(_: *mut c_void, tab: ffi::TabId, s: *const ffi::TabState) {
         let s = unsafe { &*s };
         eprintln!(
             "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={}",
@@ -283,52 +287,63 @@ mod app {
             s.audible,
             s.secure
         );
+        if s.crashed {
+            eprintln!("baa: tab_crashed tab={}", tab_index(tab));
+        }
     }
 
-    extern "C" fn on_tab_favicon(_: *mut c_void, tab: *mut ffi::Tab, url: *const c_char, png: *const u8, len: usize) {
+    extern "C" fn on_tab_favicon(_: *mut c_void, tab: ffi::TabId, url: *const c_char, png: *const u8, len: usize) {
         let head = unsafe { std::slice::from_raw_parts(png, len.min(8)) };
         eprintln!("baa: tab_favicon tab={} url={} bytes={len} magic={head:02x?}", tab_index(tab), text(url));
     }
 
-    extern "C" fn on_dialog(_: *mut c_void, tab: *mut ffi::Tab, id: u64, kind: c_int, message: *const c_char, default: *const c_char) {
-        eprintln!("baa: dialog tab={} id={id} kind={kind} message={:?} default={:?}", tab_index(tab), text(message), text(default));
+    extern "C" fn on_dialog(_: *mut c_void, tab: ffi::TabId, id: u64, d: *const ffi::Dialog) {
+        let d = unsafe { &*d };
+        LAST_DIALOG.with(|l| l.set(id));
+        eprintln!(
+            "baa: dialog tab={} id={id} kind={} message={:?} default={:?} title={:?} ok={:?} cancel={:?} check={:?}",
+            tab_index(tab),
+            d.kind,
+            text(d.message),
+            text(d.default_text),
+            text(d.title),
+            text(d.ok_label),
+            text(d.cancel_label),
+            text(d.check_label)
+        );
         // BAA_HARNESS_DIALOG=ok|cancel answers at once (default: only logs).
         if let Ok(answer) = std::env::var("BAA_HARNESS_DIALOG") {
             later(move || {
-                (core().dialog_answer)(id, answer == "ok", c"".as_ptr());
-                eprintln!("baa: dialog_answer id={id} {answer}");
+                core().answer_ok(id, answer == "ok");
+                eprintln!("baa: answer id={id} {answer}");
             });
         }
     }
 
-    extern "C" fn on_dialog_closed(_: *mut c_void, tab: *mut ffi::Tab, id: u64) {
-        eprintln!("baa: dialog_closed tab={} id={id}", tab_index(tab));
-    }
-
-    extern "C" fn on_tab_closed(_: *mut c_void, tab: *mut ffi::Tab) {
-        eprintln!("baa: tab_closed tab={} quitting={}", tab_index(tab), (core().is_quitting)());
+    extern "C" fn on_tab_closed(_: *mut c_void, tab: ffi::TabId, reason: c_int) {
+        eprintln!("baa: tab_closed tab={} reason={reason}", tab_index(tab));
         if tab_index(tab) == "0" {
             PAGE_CLOSED.with(|c| c.set(true));
         }
     }
 
     /// BAA_HARNESS_PERMISSION=allow|deny answers permission asks (default: only logs).
-    extern "C" fn on_permission(_: *mut c_void, tab: *mut ffi::Tab, id: u64, origin: *const c_char, kinds: u32) {
+    extern "C" fn on_permission(_: *mut c_void, tab: ffi::TabId, id: u64, origin: *const c_char, kinds: u32) {
         eprintln!("baa: permission tab={} id={id} origin={} kinds={kinds:#x}", tab_index(tab), text(origin));
         if let Ok(answer) = std::env::var("BAA_HARNESS_PERMISSION") {
             later(move || {
-                (core().permission_answer)(id, answer == "allow");
-                eprintln!("baa: permission_answer id={id} {answer}");
+                core().answer_ok(id, answer == "allow");
+                eprintln!("baa: answer id={id} {answer}");
             });
         }
     }
 
-    extern "C" fn on_permission_closed(_: *mut c_void, tab: *mut ffi::Tab, id: u64) {
-        eprintln!("baa: permission_closed tab={} id={id}", tab_index(tab));
+    extern "C" fn on_request_closed(_: *mut c_void, tab: ffi::TabId, id: u64) {
+        eprintln!("baa: request_closed tab={} id={id}", tab_index(tab));
     }
 
     /// BAA_HARNESS_MENU=<label>|none picks a row by label (or closes with nothing).
-    extern "C" fn on_context_menu(_: *mut c_void, tab: *mut ffi::Tab, id: u64, x: f32, y: f32, items: *const ffi::MenuItem, count: usize) {
+    extern "C" fn on_context_menu(_: *mut c_void, tab: ffi::TabId, id: u64, x: f32, y: f32, items: *const ffi::MenuItem, count: usize) {
         let rows = unsafe { std::slice::from_raw_parts(items, count) };
         let inspect = rows.iter().filter(|r| r.kind == 3).count();
         eprintln!("baa: context_menu tab={} id={id} at={x},{y} rows={count} inspect={inspect}", tab_index(tab));
@@ -353,11 +368,11 @@ mod app {
         }
     }
 
-    extern "C" fn on_download(_: *mut c_void, tab: *mut ffi::Tab, d: *const ffi::Download) {
+    extern "C" fn on_download(_: *mut c_void, tab: ffi::TabId, d: *const ffi::Download) {
         let d = unsafe { &*d };
         eprintln!(
             "baa: download tab={} id={} url={} path={} received={} total={} state={}",
-            if tab.is_null() { "NULL".into() } else { tab_index(tab) },
+            if tab == 0 { "NULL".into() } else { tab_index(tab) },
             d.id,
             text(d.url),
             text(d.path),
@@ -376,17 +391,31 @@ mod app {
         }
     }
 
-    extern "C" fn on_resized(_: *mut c_void, tab: *mut ffi::Tab, w: c_int, h: c_int) {
+    extern "C" fn on_resized(_: *mut c_void, tab: ffi::TabId, w: c_int, h: c_int) {
         eprintln!("baa: resized tab={} {w}x{h}", tab_index(tab));
     }
 
-    extern "C" fn on_page_message(_: *mut c_void, tab: *mut ffi::Tab, message: *const c_char) {
-        eprintln!("baa: page_message tab={} {}", tab_index(tab), text(message));
+    extern "C" fn on_devtools_dock(_: *mut c_void, front: ffi::TabId, side: c_int) {
+        eprintln!("baa: devtools_dock tab={} side={side}", tab_index(front));
     }
 
-    extern "C" fn on_fetch_done(_: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize) {
-        let head = if body.is_null() { String::new() } else { String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(body.cast::<u8>(), len.min(120)) }).into_owned() };
-        eprintln!("baa: fetch_done id={id} ok={ok} len={len} body={head:?}");
+    extern "C" fn on_fullscreen(_: *mut c_void, tab: ffi::TabId, on: bool) {
+        eprintln!("baa: fullscreen tab={} on={on}", tab_index(tab));
+    }
+
+    extern "C" fn on_find_result(_: *mut c_void, tab: ffi::TabId, active: c_int, count: c_int) {
+        eprintln!("baa: find_result tab={} active={active} count={count}", tab_index(tab));
+    }
+
+    extern "C" fn on_tab_group(_: *mut c_void, tab: ffi::TabId, group: u64, title: *const c_char) {
+        eprintln!("baa: tab_group tab={} group={group} title={:?}", tab_index(tab), text(title));
+    }
+
+    extern "C" fn on_autocomplete(_: *mut c_void, id: u64, matches: *const ffi::Match, count: usize, done: bool) {
+        eprintln!("baa: autocomplete id={id} count={count} done={done}");
+        for m in unsafe { std::slice::from_raw_parts(matches, count) } {
+            eprintln!("baa:   match url={} contents={:?} description={:?} search={}", text(m.url), text(m.contents), text(m.description), m.search);
+        }
     }
 
     extern "C" fn on_clear_done(_: *mut c_void, id: u64) {
@@ -439,18 +468,17 @@ mod app {
     ///   mute | unmute | print | activate | focus | close | escape | screenshot | sleep <ms> | quit
     ///   click | cmdclick | rclick <x> <y> (real NSEvents at points from the tab's top left)
     ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
-    ///   menu <x> <y> | devtools [inspect <x> <y>] | devtools-window | popup <ext-id> | extensions
+    ///   menu <x> <y> | devtools <side 0-2> [inspect <x> <y>] | devtools-window | popup <ext-id> | extensions
     ///   ext <id> enable|disable|remove|access <n> | site <kind> <url> [ask|allow|block]
-    ///   fetch <url> | prefb|prefi|prefs <1|local> <name> <value> | zoomdefault <f> | engine <name> <kw> <url>
+    ///   prefb|prefi|prefs <1|local> <name> <value> | zoomdefault <f> | engine <name> <kw> <url>
     ///   rules <kind> | rule <kind> <pattern> <state> | clear <what> <since_ms> | unpacked <path> | reload-ext <id> | initscript <js> | schemes <website> <webui> | profile <1|2|e> | prefclear <1|local> <name> | defaultbrowser
-    ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id> <0|1> [text]
+    ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id|last> <0|1> [text] [password] [checked 0|1]
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         cx.spawn(async move |cx| {
             let executor = cx.background_executor().clone();
             let mut current = 0usize;
             let mut shots = 0;
-            let mut fetches = 0u64;
             let (mut clears, mut unpacked) = (0u64, 0u64);
             let mut which: &str = "1";
             // The page's own tab exists once the window does.
@@ -459,7 +487,7 @@ mod app {
                 let (verb, arg) = line.split_once(' ').unwrap_or((line, ""));
                 eprintln!("script: {line}");
                 let core = core();
-                let tab = TABS.with(|t| t.borrow().get(current).copied()).unwrap_or(std::ptr::null_mut());
+                let tab = TABS.with(|t| t.borrow().get(current).copied()).unwrap_or(0);
                 let c = |s: &str| CString::new(s).unwrap();
                 match verb {
                     "use" => current = arg.parse().unwrap(),
@@ -494,17 +522,19 @@ mod app {
                             harness::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), false, true);
                         }
                     }
-                    // devtools [inspect <x> <y>]: docked DevTools for the current tab.
+                    // devtools <side> [inspect <x> <y>]: docked DevTools for the current tab.
                     "devtools" => {
-                        let at = arg.strip_prefix("inspect ").map(|a| a.split_once(' ').unwrap());
+                        let (side, rest) = arg.split_once(' ').unwrap_or((arg, ""));
+                        let side: c_int = side.parse().unwrap_or(0);
+                        let at = rest.strip_prefix("inspect ").map(|a| a.split_once(' ').unwrap());
                         let (inspect, x, y) = at.map_or((false, 0, 0), |(x, y)| (true, x.parse().unwrap(), y.parse().unwrap()));
-                        let front = (core.tab_open_devtools)(tab, inspect, x, y);
+                        let front = (core.tab_open_devtools)(tab, inspect, x, y, side);
                         let index = TABS.with(|t| {
                             let mut t = t.borrow_mut();
                             t.push(front);
                             t.len() - 1
                         });
-                        eprintln!("baa: devtools {current} -> {} ({front:?})", if front.is_null() { "NULL".into() } else { index.to_string() });
+                        eprintln!("baa: devtools {current} -> {} ({front:?})", if front == 0 { "NULL".into() } else { index.to_string() });
                     }
                     "devtools-window" => (core.tab_show_devtools_window)(tab, false, 0, 0),
                     "popup" => {
@@ -515,7 +545,7 @@ mod app {
                             t.push(popup);
                             t.len() - 1
                         });
-                        eprintln!("baa: popup {arg} -> {} ({popup:?})", if popup.is_null() { "NULL".into() } else { index.to_string() });
+                        eprintln!("baa: popup {arg} -> {} ({popup:?})", if popup == 0 { "NULL".into() } else { index.to_string() });
                     }
                     "extensions" => {
                         let n = (core.profile_extensions)(profile_for("1"), visit_extension, std::ptr::null_mut());
@@ -550,11 +580,6 @@ mod app {
                         }
                         let now = (core.profile_site_permission)(profile_for(which), url.as_ptr(), kind);
                         eprintln!("baa: site {arg} = {}", ["ask", "allow", "block", "session"][now as usize]);
-                    }
-                    "fetch" => {
-                        fetches += 1;
-                        (core.profile_fetch)(profile_for("1"), c(arg).as_ptr(), fetches);
-                        eprintln!("baa: fetch {fetches} {arg}");
                     }
                     // prefb|prefi|prefs <1|local> <name> <value>: `local` is Local State.
                     "prefb" | "prefi" | "prefs" => {
@@ -698,10 +723,15 @@ mod app {
                         eprintln!("script: tab {index} = {new:?}");
                     }
                     "answer" => {
-                        let mut parts = arg.splitn(3, ' ');
-                        let id: u64 = parts.next().unwrap().parse().unwrap();
+                        let mut parts = arg.splitn(5, ' ');
+                        let id = match parts.next().unwrap() {
+                            "last" => LAST_DIALOG.with(Cell::get),
+                            id => id.parse().unwrap(),
+                        };
                         let ok = parts.next() == Some("1");
-                        (core.dialog_answer)(id, ok, c(parts.next().unwrap_or("")).as_ptr());
+                        let (user, password) = (c(parts.next().unwrap_or("")), c(parts.next().unwrap_or("")));
+                        let checked = parts.next() == Some("1");
+                        (core.answer)(id, &ffi::Answer { ok, text: user.as_ptr(), password: password.as_ptr(), checked });
                     }
                     "sleep" => executor.timer(std::time::Duration::from_millis(arg.parse().unwrap())).await,
                     "quit" => {
@@ -766,7 +796,7 @@ mod app {
             let profile = profile_for("1");
             let url = CString::new(url).unwrap();
             let tab = (core().tab_create)(profile, url.as_ptr());
-            assert!(!tab.is_null(), "baa_tab_create failed");
+            assert!(tab != 0, "baa_tab_create failed");
             TABS.with(|t| t.borrow_mut().push(tab));
             let mut state = empty_state();
             assert!((core().tab_get_state)(tab, &mut state));
@@ -851,7 +881,7 @@ mod app {
     }
 
     struct Page {
-        tab: *mut ffi::Tab,
+        tab: ffi::TabId,
         view: *mut AnyObject,
         container: native::Container,
         /// The view a drag started on; the drag stays with it.

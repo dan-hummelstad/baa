@@ -203,6 +203,9 @@ void baa_profile_close(BaaProfile* profile) {
   }
 }
 
+// ponytail: M3 stub (WP-C5); autocomplete is not sent yet.
+void baa_profile_autocomplete(BaaProfile*, uint64_t, const char*) {}
+
 
 namespace {
 

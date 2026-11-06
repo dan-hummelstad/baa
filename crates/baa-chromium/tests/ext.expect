@@ -6,7 +6,7 @@ must: baa: extension id=\w{32} name="baa probe" .*enabled=1
 must: baa: popup \w{32} -> 1
 must: baa: resized tab=1 \d+x\d+
 must: title="active:https://example.com/"
-must: baa: dialog tab=1 id=1 kind=0 message="from popup"
+must: baa: dialog tab=1 id=\d+ kind=0 message="from popup"
 must: ext \w{32} access 1 -> true
 must: site_access=1
 must: enabled=0

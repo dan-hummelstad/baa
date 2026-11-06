@@ -110,7 +110,7 @@ bool ShowContextMenu(std::unique_ptr<RenderViewContextMenuBase>& menu) {
   for (const Row& r : rows) {
     items.push_back({r.label.c_str(), r.command, r.depth, r.type, r.enabled, r.checked});
   }
-  Callbacks().context_menu(CallbackContext(), tab, id, x, y, items.data(), items.size());
+  Callbacks().context_menu(CallbackContext(), IdOf(tab), id, x, y, items.data(), items.size());
   return true;
 }
 

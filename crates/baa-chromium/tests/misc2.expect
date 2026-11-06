@@ -1,9 +1,7 @@
-# fetch ok / failing / invalid, init script on chrome://, color scheme, pref set
+# init script on chrome://, color scheme, pref set
 script: misc2.txt
-must: baa: fetch_done id=1 ok=true
-count: 2 baa: fetch_done id=[23] ok=false
 must: title="init:skin-ran"
 must: title="dark:true"
 must: title="light-dark:false"
-must: set_pref_bool search.suggest_enabled = 0 -> 1
+must: set_pref_bool bookmark_bar.show_on_all_tabs = 0 -> 1
 must: set_pref_bool no.such.pref = 1 -> 0

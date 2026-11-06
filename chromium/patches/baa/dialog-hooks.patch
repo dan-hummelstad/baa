@@ -1,0 +1,158 @@
+--- a/chrome/browser/baa_hooks.h
++++ b/chrome/browser/baa_hooks.h
+@@ -3,17 +3,59 @@
+ #ifndef CHROME_BROWSER_BAA_HOOKS_H_
+ #define CHROME_BROWSER_BAA_HOOKS_H_
+ 
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "chrome/browser/extensions/extension_install_prompt.h"
++#include "content/public/browser/login_delegate.h"
++#include "content/public/browser/weak_document_ptr.h"
+ #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-shared.h"
++#include "url/gurl.h"
++#include "url/origin.h"
+ 
++class ExtensionInstallPromptShowParams;
++class LoginHandler;
++
+ namespace content {
+ class SecurityPrincipal;
+ class WebContents;
+ }  // namespace content
+ 
++namespace extensions {
++class InstallPromptData;
++}  // namespace extensions
++
++namespace net {
++class AuthChallengeInfo;
++}  // namespace net
++
+ // Returns true after setting `*scheme` for a document of `principal` in `contents`.
+ using BaaPreferredColorSchemeFn = bool (*)(content::WebContents* contents,
+                                            const content::SecurityPrincipal& principal,
+                                            blink::mojom::PreferredColorScheme* scheme);
+ extern BaaPreferredColorSchemeFn g_baa_preferred_color_scheme;
++
++// Dialog hooks: //baa draws these in the app's own UI. A hook that does not take the
++// request returns null/false and leaves its arguments untouched, so Chrome's dialog shows.
++using BaaLoginHandlerFn = std::unique_ptr<LoginHandler> (*)(
++    const net::AuthChallengeInfo& auth_info,
++    content::WebContents* web_contents,
++    content::LoginDelegate::LoginAuthRequiredCallback& auth_required_callback);
++extern BaaLoginHandlerFn g_baa_login_handler;
++
++using BaaExternalProtocolFn =
++    bool (*)(const GURL& url,
++             content::WebContents* web_contents,
++             const std::optional<url::Origin>& initiating_origin,
++             content::WeakDocumentPtr initiator_document,
++             const std::u16string& program_name);
++extern BaaExternalProtocolFn g_baa_external_protocol;
++
++using BaaInstallDialogFn = bool (*)(
++    std::unique_ptr<ExtensionInstallPromptShowParams>& show_params,
++    ExtensionInstallPrompt::DoneCallback& done_callback,
++    std::unique_ptr<extensions::InstallPromptData>& prompt);
++extern BaaInstallDialogFn g_baa_install_dialog;
+ 
+ #endif  // CHROME_BROWSER_BAA_HOOKS_H_
+--- a/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc
++++ b/chrome/browser/ui/views/extensions/extension_install_dialog_view.cc
+@@ -12,6 +12,7 @@
+ #include "base/i18n/message_formatter.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/baa_hooks.h"
+ #include "chrome/browser/extensions/extension_install_prompt.h"
+ #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_input_protector.h"
+@@ -64,6 +65,8 @@
+ using content::Referrer;
+ using extensions::InstallPromptData;
+ 
++BaaInstallDialogFn g_baa_install_dialog = nullptr;
++
+ namespace {
+ 
+ // Time delay before the install button is enabled after initial display.
+@@ -87,6 +90,12 @@
+     ExtensionInstallPrompt::DoneCallback done_callback,
+     std::unique_ptr<InstallPromptData> prompt) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++
++  // baa: the embedding app may draw the dialog itself.
++  if (g_baa_install_dialog &&
++      g_baa_install_dialog(show_params, done_callback, prompt)) {
++    return;
++  }
+ 
+   // If the dialog has to be parented to WebContents, force activate the
+   // contents. See crbug.com/40059470.
+--- a/chrome/browser/ui/views/external_protocol_dialog.cc
++++ b/chrome/browser/ui/views/external_protocol_dialog.cc
+@@ -9,6 +9,7 @@
+ #include "base/strings/string_util.h"
+ #include "base/types/optional_util.h"
+ #include "build/build_config.h"
++#include "chrome/browser/baa_hooks.h"
+ #include "chrome/browser/external_protocol/external_protocol_handler.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
+ #include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
+@@ -90,6 +91,8 @@
+   const raw_ptr<ExternalProtocolDialog> dialog_;
+ };
+ 
++BaaExternalProtocolFn g_baa_external_protocol = nullptr;
++
+ #if !BUILDFLAG(IS_CHROMEOS)
+ // static
+ void ExternalProtocolHandler::RunExternalProtocolDialog(
+@@ -105,6 +108,13 @@
+ 
+   if (program_name.empty()) {
+     // ShellExecute won't do anything. Don't bother warning the user.
++    return;
++  }
++
++  // baa: the embedding app may draw the dialog itself.
++  if (g_baa_external_protocol &&
++      g_baa_external_protocol(url, web_contents, initiating_origin,
++                              initiator_document, program_name)) {
+     return;
+   }
+ 
+--- a/chrome/browser/ui/views/login_handler_views.cc
++++ b/chrome/browser/ui/views/login_handler_views.cc
+@@ -7,6 +7,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
++#include "chrome/browser/baa_hooks.h"
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/login/login_handler.h"
+ #include "chrome/browser/ui/views/login_view.h"
+@@ -226,11 +227,20 @@
+   }
+ }
+ 
++BaaLoginHandlerFn g_baa_login_handler = nullptr;
++
+ // static
+ std::unique_ptr<LoginHandler> LoginHandler::Create(
+     const net::AuthChallengeInfo& auth_info,
+     content::WebContents* web_contents,
+     content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++  // baa: the embedding app may draw the prompt itself.
++  if (g_baa_login_handler) {
++    if (auto handler = g_baa_login_handler(auth_info, web_contents,
++                                           auth_required_callback)) {
++      return handler;
++    }
++  }
+   return std::make_unique<LoginHandlerViews>(auth_info, web_contents,
+                                              std::move(auth_required_callback));
+ }

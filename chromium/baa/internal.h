@@ -37,7 +37,10 @@ void InstallAppModalFactory();  // dialogs: after Chrome installed its own
 
 // ---- tab.mm and profile.mm: handles and lookups the other files share. A BaaTab is any page
 // the app shows: a tab in a Browser, a popup, a DevTools front-end.
-uint64_t NextId();  // dialogs, permission asks and menus share one counter
+// Tab ids, asks, downloads and tab-group keys share one counter; ids are never reused.
+uint64_t NextId();
+uint64_t IdOf(BaaTab* tab);  // 0 for null
+BaaTab* TabFromId(uint64_t id);  // null if closed
 BaaTab* TabFor(content::WebContents* contents);  // null if not a baa page
 bool TabAnnounced(BaaTab* tab);  // the app knows the handle
 bool TabAlive(BaaTab* tab);
@@ -84,10 +87,12 @@ void DropDialogsOf(BaaTab* tab, bool tell);
 // ---- permissions.mm / menu.mm / devtools.mm
 void AttachPermissions(content::WebContents* wc);
 void DropPermissionsOf(BaaTab* tab, bool tell);
+bool AnswerPermission(uint64_t id, bool allow);  // false: not a permission ask
 // Back to Chrome's own prompt (a tab that left our windows).
 void RestoreChromePermissions(content::WebContents* wc);
 void DropMenusOf(BaaTab* tab);
 void ForgetDevtoolsOf(BaaTab* tab);
+void SetDockSide(BaaTab* front, const char* side);  // tab.mm: for the front's dock script
 
 // downloads.mm: observes a profile's DownloadManager for as long as it lives
 // (BaaProfile owns one).

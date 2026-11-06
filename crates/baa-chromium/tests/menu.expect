@@ -3,8 +3,8 @@ script: menu.txt
 env: BAA_HARNESS_MENU=Copy Link Address
 clipboard-set: before
 clipboard: https://www.iana.org/
-must: context_menu tab=0 id=1 at=100,100 rows=\d+ inspect=1
-must: baa: context_menu_done id=1 command=50104
+must: context_menu tab=0 id=\d+ at=100,100 rows=\d+ inspect=1
+must: baa: context_menu_done id=\d+ command=50104
 count: 2 baa: context_menu tab=
 must: menu Copy cmd=50150 kind=0 enabled=true
 must: menu   Start Speaking

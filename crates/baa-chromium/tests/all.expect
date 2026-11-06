@@ -5,9 +5,8 @@ env: BAA_HARNESS_PERMISSION=allow
 env: BAA_HARNESS_DIALOG=ok
 env: BAA_HARNESS_MENU=Copy Link Address
 secs: 120
-must: baa: permission_answer id=1 allow
-must: baa: context_menu_done id=2 command=50104
+must: baa: answer id=\d+ allow
+must: baa: context_menu_done id=\d+ command=50104
 must: baa: popup \w{32} -> 2
-must: baa: fetch_done id=1 ok=true
-must: baa: dialog tab=0 id=3 kind=3
-must: baa: tab_closed tab=2
+must: baa: dialog tab=0 id=\d+ kind=3
+must: baa: tab_closed tab=2 reason=\d

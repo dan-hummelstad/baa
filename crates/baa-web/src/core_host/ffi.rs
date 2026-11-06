@@ -3,17 +3,15 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 5;
+pub const ABI_VERSION: c_int = 6;
 
 #[repr(C)]
 pub struct Profile {
     _private: [u8; 0],
 }
 
-#[repr(C)]
-pub struct Tab {
-    _private: [u8; 0],
-}
+/// Never reused within a run; 0 is "none".
+pub type TabId = u64;
 
 #[repr(C)]
 pub struct TabState {
@@ -26,6 +24,7 @@ pub struct TabState {
     pub can_go_forward: bool,
     pub audible: bool,
     pub secure: bool,
+    pub crashed: bool,
 }
 
 /// One row of a context menu, depth-first (`BaaMenuItem`).
@@ -91,6 +90,20 @@ pub const DIALOG_CONFIRM: c_int = 1;
 pub const DIALOG_PROMPT: c_int = 2;
 pub const DIALOG_BEFOREUNLOAD: c_int = 3;
 pub const DIALOG_BEFOREUNLOAD_RELOAD: c_int = 4;
+pub const DIALOG_AUTH: c_int = 5;
+pub const DIALOG_EXTERNAL_PROTOCOL: c_int = 6;
+pub const DIALOG_UNRESPONSIVE: c_int = 7;
+pub const DIALOG_EXTENSION_INSTALL: c_int = 8;
+
+#[allow(dead_code)]
+pub const CLOSED_BY_CHROME: c_int = 0;
+pub const CLOSED_BY_QUIT: c_int = 1;
+pub const CLOSED_BY_APP: c_int = 2;
+
+pub const DOCK_RIGHT: c_int = 0;
+pub const DOCK_BOTTOM: c_int = 1;
+pub const DOCK_LEFT: c_int = 2;
+pub const DOCK_UNDOCKED: c_int = 3;
 
 pub const DOWNLOAD_IN_PROGRESS: c_int = 0;
 pub const DOWNLOAD_COMPLETE: c_int = 1;
@@ -99,12 +112,42 @@ pub const DOWNLOAD_CANCELED: c_int = 2;
 
 #[repr(C)]
 pub struct Download {
-    pub id: u32,
+    pub id: u64,
     pub url: *const c_char,
     pub path: *const c_char,
     pub received_bytes: i64,
     pub total_bytes: i64,
     pub state: c_int,
+}
+
+/// `BaaDialog`: a question the page or Chrome waits on.
+#[repr(C)]
+pub struct Dialog {
+    pub kind: c_int,
+    pub message: *const c_char,
+    pub default_text: *const c_char,
+    pub title: *const c_char,
+    pub ok_label: *const c_char,
+    pub cancel_label: *const c_char,
+    pub check_label: *const c_char,
+}
+
+/// `BaaAnswer`.
+#[repr(C)]
+pub struct Answer {
+    pub ok: bool,
+    pub text: *const c_char,
+    pub password: *const c_char,
+    pub checked: bool,
+}
+
+/// `BaaMatch`: one omnibox match.
+#[repr(C)]
+pub struct Match {
+    pub url: *const c_char,
+    pub contents: *const c_char,
+    pub description: *const c_char,
+    pub search: bool,
 }
 
 #[repr(C)]
@@ -133,42 +176,36 @@ pub struct Callbacks {
     pub key: extern "C" fn(ctx: *mut c_void, ns_event: *mut c_void, after_page: bool) -> bool,
     pub tab_created: extern "C" fn(
         ctx: *mut c_void,
-        tab: *mut Tab,
-        opener: *mut Tab,
+        tab: TabId,
+        opener: TabId,
         profile: *mut Profile,
         url: *const c_char,
         background: bool,
         user_gesture: bool,
     ),
-    pub tab_state: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, state: *const TabState),
+    pub tab_state: extern "C" fn(ctx: *mut c_void, tab: TabId, state: *const TabState),
     pub tab_favicon:
-        extern "C" fn(ctx: *mut c_void, tab: *mut Tab, icon_url: *const c_char, png: *const u8, png_len: usize),
-    pub dialog: extern "C" fn(
-        ctx: *mut c_void,
-        tab: *mut Tab,
-        id: u64,
-        kind: c_int,
-        message: *const c_char,
-        default_text: *const c_char,
-    ),
-    pub dialog_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64),
-    pub tab_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab),
-    pub permission:
-        extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64, origin: *const c_char, kinds: u32),
-    pub permission_closed: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, id: u64),
+        extern "C" fn(ctx: *mut c_void, tab: TabId, icon_url: *const c_char, png: *const u8, png_len: usize),
+    pub dialog: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64, dialog: *const Dialog),
+    pub tab_closed: extern "C" fn(ctx: *mut c_void, tab: TabId, reason: c_int),
+    pub permission: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64, origin: *const c_char, kinds: u32),
+    pub request_closed: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64),
     pub context_menu: extern "C" fn(
         ctx: *mut c_void,
-        tab: *mut Tab,
+        tab: TabId,
         id: u64,
         x: f32,
         y: f32,
         items: *const MenuItem,
         count: usize,
     ),
-    pub download: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, download: *const Download),
-    pub resized: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, width: c_int, height: c_int),
-    pub page_message: extern "C" fn(ctx: *mut c_void, tab: *mut Tab, message: *const c_char),
-    pub fetch_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, body: *const c_char, len: usize),
+    pub download: extern "C" fn(ctx: *mut c_void, tab: TabId, download: *const Download),
+    pub resized: extern "C" fn(ctx: *mut c_void, tab: TabId, width: c_int, height: c_int),
+    pub devtools_dock: extern "C" fn(ctx: *mut c_void, front: TabId, side: c_int),
+    pub fullscreen: extern "C" fn(ctx: *mut c_void, tab: TabId, on: bool),
+    pub find_result: extern "C" fn(ctx: *mut c_void, tab: TabId, active: c_int, count: c_int),
+    pub tab_group: extern "C" fn(ctx: *mut c_void, tab: TabId, group: u64, title: *const c_char),
+    pub autocomplete: extern "C" fn(ctx: *mut c_void, id: u64, matches: *const Match, count: usize, done: bool),
     pub clear_done: extern "C" fn(ctx: *mut c_void, id: u64),
     pub load_unpacked_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, message: *const c_char),
 }
@@ -177,7 +214,7 @@ pub struct Callbacks {
 pub struct Core {
     pub install_app: extern "C" fn(c_int, *const *const c_char, *const Callbacks, *mut c_void),
     pub exit_code: extern "C" fn() -> c_int,
-    /// Chrome is closing every tab for ⌘Q: their `tab_closed` is not the user's doing.
+    /// ⌘Q is closing every tab: a leave-site question would wait on nobody.
     pub is_quitting: extern "C" fn() -> bool,
     pub profile_open: extern "C" fn(*const c_char) -> *mut Profile,
     pub profile_open_ephemeral: extern "C" fn() -> *mut Profile,
@@ -199,34 +236,43 @@ pub struct Core {
     pub profile_site_rules: extern "C" fn(*mut Profile, u32, SiteRuleVisitor, *mut c_void) -> c_int,
     pub profile_set_site_rule: extern "C" fn(*mut Profile, u32, *const c_char, c_int) -> bool,
     pub profile_clear_data: extern "C" fn(*mut Profile, u64, i64, u32),
-    #[allow(dead_code)] // ABI 5 slot; WP-R1 drops it with the header
-    pub profile_fetch: extern "C" fn(*mut Profile, *const c_char, u64),
+    #[allow(dead_code)] // WP-R2
+    pub profile_autocomplete: extern "C" fn(*mut Profile, u64, *const c_char),
     pub profile_extensions: extern "C" fn(*mut Profile, ExtensionVisitor, *mut c_void) -> c_int,
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
     pub profile_load_unpacked: extern "C" fn(*mut Profile, u64, *const c_char),
-    pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
-    pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> *mut Tab,
-    pub tab_close: extern "C" fn(*mut Tab),
-    pub tab_get_state: extern "C" fn(*mut Tab, *mut TabState) -> bool,
-    pub tab_load_url: extern "C" fn(*mut Tab, *const c_char),
-    pub tab_reload: extern "C" fn(*mut Tab),
-    pub tab_stop: extern "C" fn(*mut Tab),
-    pub tab_go_to_offset: extern "C" fn(*mut Tab, c_int),
-    pub tab_history: extern "C" fn(*mut Tab, HistoryVisitor, *mut c_void) -> c_int,
-    pub tab_eval: extern "C" fn(*mut Tab, *const c_char, bool),
-    pub tab_set_zoom: extern "C" fn(*mut Tab, f64),
-    pub tab_find: extern "C" fn(*mut Tab, *const c_char, bool),
-    pub tab_print: extern "C" fn(*mut Tab),
-    pub tab_set_muted: extern "C" fn(*mut Tab, bool),
-    pub tab_activate: extern "C" fn(*mut Tab),
-    pub tab_focus: extern "C" fn(*mut Tab),
-    pub tab_set_init_script: extern "C" fn(*mut Tab, *const c_char),
-    pub tab_open_devtools: extern "C" fn(*mut Tab, bool, c_int, c_int) -> *mut Tab,
-    pub tab_show_devtools_window: extern "C" fn(*mut Tab, bool, c_int, c_int),
-    pub permission_answer: extern "C" fn(u64, bool),
+    pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> TabId,
+    pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> TabId,
+    pub tab_close: extern "C" fn(TabId),
+    pub tab_get_state: extern "C" fn(TabId, *mut TabState) -> bool,
+    pub tab_load_url: extern "C" fn(TabId, *const c_char),
+    pub tab_reload: extern "C" fn(TabId),
+    pub tab_stop: extern "C" fn(TabId),
+    pub tab_go_to_offset: extern "C" fn(TabId, c_int),
+    pub tab_history: extern "C" fn(TabId, HistoryVisitor, *mut c_void) -> c_int,
+    pub tab_eval: extern "C" fn(TabId, *const c_char, bool),
+    pub tab_set_zoom: extern "C" fn(TabId, f64),
+    pub tab_find: extern "C" fn(TabId, *const c_char, bool),
+    pub tab_print: extern "C" fn(TabId),
+    pub tab_set_muted: extern "C" fn(TabId, bool),
+    pub tab_activate: extern "C" fn(TabId),
+    pub tab_focus: extern "C" fn(TabId),
+    pub tab_set_init_script: extern "C" fn(TabId, *const c_char),
+    pub tab_open_devtools: extern "C" fn(TabId, bool, c_int, c_int, c_int) -> TabId,
+    pub tab_show_devtools_window: extern "C" fn(TabId, bool, c_int, c_int),
+    pub tab_exit_fullscreen: extern "C" fn(TabId),
+    pub tab_set_group: extern "C" fn(TabId, u64, *const c_char),
+    /// Answers a dialog or permission ask.
+    pub answer: extern "C" fn(u64, *const Answer),
     pub context_menu_done: extern "C" fn(u64, c_int),
-    pub download_cancel: extern "C" fn(u32),
-    pub dialog_answer: extern "C" fn(u64, bool, *const c_char),
+    pub download_cancel: extern "C" fn(u64),
+}
+
+impl Core {
+    /// An answer that is only yes or no.
+    pub fn answer_ok(&self, id: u64, ok: bool) {
+        (self.answer)(id, &Answer { ok, text: c"".as_ptr(), password: c"".as_ptr(), checked: false });
+    }
 }
 
 /// # Safety
@@ -284,7 +330,7 @@ pub fn load() -> &'static Core {
             profile_site_rules,
             profile_set_site_rule,
             profile_clear_data,
-            profile_fetch,
+            profile_autocomplete,
             profile_extensions,
             profile_extension_change,
             profile_load_unpacked,
@@ -307,10 +353,11 @@ pub fn load() -> &'static Core {
             tab_set_init_script,
             tab_open_devtools,
             tab_show_devtools_window,
-            permission_answer,
+            tab_exit_fullscreen,
+            tab_set_group,
+            answer,
             context_menu_done,
             download_cancel,
-            dialog_answer,
         )))
     }
 }
@@ -424,6 +471,17 @@ mod tests {
             ("BAA_DIALOG_PROMPT", DIALOG_PROMPT as i64),
             ("BAA_DIALOG_BEFOREUNLOAD", DIALOG_BEFOREUNLOAD as i64),
             ("BAA_DIALOG_BEFOREUNLOAD_RELOAD", DIALOG_BEFOREUNLOAD_RELOAD as i64),
+            ("BAA_DIALOG_AUTH", DIALOG_AUTH as i64),
+            ("BAA_DIALOG_EXTERNAL_PROTOCOL", DIALOG_EXTERNAL_PROTOCOL as i64),
+            ("BAA_DIALOG_UNRESPONSIVE", DIALOG_UNRESPONSIVE as i64),
+            ("BAA_DIALOG_EXTENSION_INSTALL", DIALOG_EXTENSION_INSTALL as i64),
+            ("BAA_CLOSED_BY_CHROME", CLOSED_BY_CHROME as i64),
+            ("BAA_CLOSED_BY_QUIT", CLOSED_BY_QUIT as i64),
+            ("BAA_CLOSED_BY_APP", CLOSED_BY_APP as i64),
+            ("BAA_DOCK_RIGHT", DOCK_RIGHT as i64),
+            ("BAA_DOCK_BOTTOM", DOCK_BOTTOM as i64),
+            ("BAA_DOCK_LEFT", DOCK_LEFT as i64),
+            ("BAA_DOCK_UNDOCKED", DOCK_UNDOCKED as i64),
             ("BAA_DOWNLOAD_IN_PROGRESS", DOWNLOAD_IN_PROGRESS as i64),
             ("BAA_DOWNLOAD_COMPLETE", DOWNLOAD_COMPLETE as i64),
             ("BAA_DOWNLOAD_CANCELED", DOWNLOAD_CANCELED as i64),

@@ -4,12 +4,14 @@
 // Rules for both sides:
 // - Threading: every function and every callback runs on the main thread
 //   (Chromium's UI thread). Nothing here is thread-safe.
-// - Handles (BaaProfile*, BaaTab*) are opaque and owned by BaaCore. A call on
-//   a handle that is gone (closed, or the app is terminating) does nothing and
-//   returns NULL/0/false, but only until its address is reused: a new tab or
-//   profile may get the address of a closed one. Never use a handle after
-//   tab_closed, or after your own baa_tab_close / baa_profile_close; drop it
-//   there.
+// - A tab is a BaaTabId: unique for the life of the process, never reused, 0
+//   is "none". Every id gets tab_closed exactly once (also for baa_tab_close and
+//   baa_profile_close, then inside that call). A call with a closed id does
+//   nothing and returns 0/false.
+// - Ask ids (dialog, permission, context_menu), download ids and Chrome's
+//   tab-group keys come from the same counter as tab ids.
+// - BaaProfile* is opaque, valid until baa_profile_close (its tabs get
+//   tab_closed first) or app termination.
 // - Strings in: UTF-8, NUL-terminated, borrowed for the duration of the call.
 // - Strings out: UTF-8, NUL-terminated, borrowed, valid only until the
 //   callback (or the visitor call) returns. Copy what you keep.
@@ -31,14 +33,14 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 5
+#define BAA_ABI_VERSION 6
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
 // Any page baa shows: a tab in a Browser, an extension popup, or a DevTools
-// front-end. Calls that only make sense for a tab (baa_tab_activate) do
-// nothing on the others.
-typedef struct BaaTab BaaTab;
+// front-end. Calls that only make sense for a tab (baa_tab_activate,
+// baa_tab_set_group) do nothing on the others.
+typedef uint64_t BaaTabId;
 
 // What a tab looks like now. Sent whole on every change; the receiver diffs.
 typedef struct {
@@ -53,6 +55,8 @@ typedef struct {
   bool can_go_forward;
   bool audible;
   bool secure;  // committed over valid TLS (security level SECURE)
+  bool crashed;  // the renderer is gone (crash, killed, "Exit page"); a reload
+                 // brings it back
 } BaaTabState;
 
 // One row of a page's context menu, flattened depth-first. A SUBMENU row is
@@ -106,7 +110,7 @@ enum {
 };
 
 typedef struct {
-  uint32_t id;           // unique per run; baa_download_cancel takes it
+  uint64_t id;           // from the shared counter; baa_download_cancel takes it
   const char* url;
   const char* path;      // target file; "" until chosen
   int64_t received_bytes;
@@ -120,6 +124,47 @@ enum {
   BAA_DOWNLOAD_CANCELED = 2,  // also interrupted
 };
 
+enum {
+  BAA_CLOSED_BY_CHROME = 0,  // window.close(), chrome.tabs.remove, a popup closing itself
+  BAA_CLOSED_BY_QUIT = 1,    // the app is quitting (keep it in the session)
+  BAA_CLOSED_BY_APP = 2,     // baa_tab_close or baa_profile_close
+};
+
+enum {
+  BAA_DOCK_RIGHT = 0,
+  BAA_DOCK_BOTTOM = 1,
+  BAA_DOCK_LEFT = 2,
+  BAA_DOCK_UNDOCKED = 3,  // devtools_dock only: the user picked a window
+};
+
+// A question the page or Chrome waits on. JS dialogs (ALERT..BEFOREUNLOAD_RELOAD)
+// leave title and the labels "" (the app words them); Chrome's own fill them in
+// the UI language.
+typedef struct {
+  int kind;                  // BAA_DIALOG_*
+  const char* message;       // may hold '\n'-separated lines
+  const char* default_text;  // PROMPT only
+  const char* title;
+  const char* ok_label;
+  const char* cancel_label;
+  const char* check_label;   // a checkbox's label; "" for none
+} BaaDialog;
+
+typedef struct {
+  bool ok;               // OK / Allow / Open / Sign in / Exit page; false: Cancel, Deny, Wait
+  const char* text;      // PROMPT's text, AUTH's username; NULL means ""
+  const char* password;  // AUTH only
+  bool checked;          // the dialog's checkbox
+} BaaAnswer;
+
+// One omnibox match.
+typedef struct {
+  const char* url;          // where it goes
+  const char* contents;     // the main text (a URL, search terms, "= 4")
+  const char* description;  // the second text (a page title), "" if none
+  bool search;              // a search or calculator result, not a page
+} BaaMatch;
+
 typedef struct {
   // A ⌘/⌃ or Escape key-down in a page. `after_page` is false before the page
   // sees it and true when the page did not consume it. Return true to take
@@ -128,76 +173,86 @@ typedef struct {
 
   // Chrome made a tab baa did not ask for: window.open, target=_blank,
   // ⌘/middle-click, chrome.tabs.create, chrome.windows.create, an options
-  // page. `opener` is the tab it came from, NULL if none (an extension, or a
+  // page. `opener` is the tab it came from, 0 if none (an extension, or a
   // tab baa does not know). `profile` is the BaaProfile it lives in, NULL if
   // it is a profile baa never opened (e.g. Chrome's primary incognito).
   // `background`: it did not become its window's active tab.
   // The tab is live and loading; baa adopts it or closes it.
   void (*tab_created)(void* ctx,
-                      BaaTab* tab,
-                      BaaTab* opener,
+                      BaaTabId tab,
+                      BaaTabId opener,
                       BaaProfile* profile,
                       const char* url,
                       bool background,
                       bool user_gesture);
 
   // Any field of the tab's state may have changed.
-  void (*tab_state)(void* ctx, BaaTab* tab, const BaaTabState* state);
+  void (*tab_state)(void* ctx, BaaTabId tab, const BaaTabState* state);
 
   // The favicon at `icon_url` as PNG (2x when the site has it). `png` is
   // borrowed for the call.
   void (*tab_favicon)(void* ctx,
-                      BaaTab* tab,
+                      BaaTabId tab,
                       const char* icon_url,
                       const uint8_t* png,
                       size_t png_len);
 
-  // A page's alert/confirm/prompt (kind BAA_DIALOG_*). The page is paused
-  // until baa_dialog_answer(id, ...); `dialog_closed` with the same id if the
-  // page went away first (then answering does nothing). beforeunload comes too
-  // (kinds BAA_DIALOG_BEFOREUNLOAD*).
-  void (*dialog)(void* ctx,
-                 BaaTab* tab,
-                 uint64_t id,
-                 int kind,
-                 const char* message,
-                 const char* default_text);
-  void (*dialog_closed)(void* ctx, BaaTab* tab, uint64_t id);
+  // A page dialog or one of Chrome's (auth, external protocol, unresponsive
+  // page, extension install). The asker waits until baa_answer(id, ...) or
+  // request_closed(id). beforeunload comes too (kinds BAA_DIALOG_BEFOREUNLOAD*).
+  void (*dialog)(void* ctx, BaaTabId tab, uint64_t id, const BaaDialog* dialog);
 
   // Chrome closed the tab (window.close(), chrome.tabs.remove, its window
-  // closing, app quit). Not sent for baa_tab_close. The handle is dead after
+  // closing, app quit) or the app did (baa_tab_close, baa_profile_close: inside
+  // that call). Exactly once per id; `reason` BAA_CLOSED_*. The id is dead after
   // this returns; the tab's NSView stays valid until then.
-  void (*tab_closed)(void* ctx, BaaTab* tab);
+  void (*tab_closed)(void* ctx, BaaTabId tab, int reason);
 
   // A site asks for `kinds` (BAA_PERMISSION_* bits; camera + microphone come
-  // as one request). It waits until baa_permission_answer(id, ...);
-  // `permission_closed` with the same id if Chrome dropped the request first
-  // (navigation, tab closed). Only sent while the tab is its window's active
+  // as one request). It waits until baa_answer(id, ...); `request_closed` with
+  // the same id if Chrome dropped the request first (navigation, tab closed).
+  // Only sent while the tab is its window's active
   // tab: Chrome holds requests from background tabs until activation.
-  void (*permission)(void* ctx, BaaTab* tab, uint64_t id, const char* origin,
+  void (*permission)(void* ctx, BaaTabId tab, uint64_t id, const char* origin,
                      uint32_t kinds);
-  void (*permission_closed)(void* ctx, BaaTab* tab, uint64_t id);
+  // Chrome withdrew the dialog or permission ask `id` unanswered (navigation,
+  // tab closed, page responsive again). Never after an answer, never twice.
+  void (*request_closed)(void* ctx, BaaTabId tab, uint64_t id);
 
   // Right-click in a page. (x, y) in the tab's view, points, top-left origin.
   // Answer with baa_context_menu_done(id, command or -1) exactly once; until
   // then the page counts the menu as open.
-  void (*context_menu)(void* ctx, BaaTab* tab, uint64_t id, float x, float y,
+  void (*context_menu)(void* ctx, BaaTabId tab, uint64_t id, float x, float y,
                        const BaaMenuItem* items, size_t count);
 
-  // A download started or changed. `tab` is the page it came from, NULL if
+  // A download started or changed. `tab` is the page it came from, 0 if
   // none (a service worker, a closed tab).
-  void (*download)(void* ctx, BaaTab* tab, const BaaDownload* download);
+  void (*download)(void* ctx, BaaTabId tab, const BaaDownload* download);
 
   // An extension popup's content wants this size (points).
-  void (*resized)(void* ctx, BaaTab* tab, int width, int height);
+  void (*resized)(void* ctx, BaaTabId tab, int width, int height);
 
-  // A console message from the page that starts with "baa:", without the
-  // prefix (DevTools' dock picker sends "devtools-dock:<side>").
-  void (*page_message)(void* ctx, BaaTab* tab, const char* message);
+  // The DevTools front-end `front` was moved with its own dock menu
+  // (BAA_DOCK_*).
+  void (*devtools_dock)(void* ctx, BaaTabId front, int side);
 
-  // baa_profile_fetch finished. `body` is NULL when !ok.
-  void (*fetch_done)(void* ctx, uint64_t id, bool ok, const char* body,
-                     size_t len);
+  // The page went fullscreen (true; Chrome already counts the window as
+  // fullscreen) or left it (false).
+  void (*fullscreen)(void* ctx, BaaTabId tab, bool on);
+
+  // baa_tab_find's progress: the active match (1-based, 0 for none) and the
+  // number found so far.
+  void (*find_result)(void* ctx, BaaTabId tab, int active, int count);
+
+  // Not baa_tab_set_group (an extension) changed the tab's group: `group` is the
+  // app's key, or a new key with the top bit set; 0 for none. `title` is the
+  // group's title.
+  void (*tab_group)(void* ctx, BaaTabId tab, uint64_t group, const char* title);
+
+  // Matches for baa_profile_autocomplete(id), best first, replacing the last
+  // list for id; `done` on the last one. Never inside the call.
+  void (*autocomplete)(void* ctx, uint64_t id, const BaaMatch* matches,
+                       size_t count, bool done);
 
   // baa_profile_clear_data(id, ...) finished (or failed to start: then at once,
   // on a later turn). Sent exactly once per call, never inside it.
@@ -242,7 +297,8 @@ BAA_EXPORT BaaProfile* baa_profile_open(const char* dir_name);
 // persisted. Each call is a separate one.
 BAA_EXPORT BaaProfile* baa_profile_open_ephemeral(void);
 
-// Closes the profile's tabs at once (no beforeunload, no tab_closed), drops
+// Closes the profile's tabs at once (no beforeunload; each gets tab_closed with
+// BAA_CLOSED_BY_APP, inside this call), drops
 // the handle, and destroys an ephemeral profile's storage. A disk profile's
 // directory stays; deleting it is the caller's job (at next launch, before
 // baa_install_app).
@@ -334,10 +390,11 @@ enum {
 BAA_EXPORT void baa_profile_clear_data(BaaProfile* profile, uint64_t id,
                                        int64_t since_ms, uint32_t types);
 
-// GET `url` through the profile's network stack without cookies;
-// fetch_done(id, ...) later, never inside this call.
-BAA_EXPORT void baa_profile_fetch(BaaProfile* profile, const char* url,
-                                  uint64_t id);
+// Starts Chrome's omnibox for `text` (history, search suggestions,
+// calculator); results by autocomplete(id, ...). A later call stops earlier
+// ones (they send nothing more); "" only stops.
+BAA_EXPORT void baa_profile_autocomplete(BaaProfile* profile, uint64_t id,
+                                         const char* text);
 
 // ---- Extensions ------------------------------------------------------------
 
@@ -393,62 +450,64 @@ BAA_EXPORT void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id,
 // Clicks the extension's toolbar action on the profile's active tab (grants
 // activeTab, fires action.onClicked). Returns the popup page when the action
 // has one (it reports tab_state/resized and tab_closed when it closes
-// itself), else NULL.
-BAA_EXPORT BaaTab* baa_extension_popup(BaaProfile* profile,
+// itself), else 0.
+BAA_EXPORT BaaTabId baa_extension_popup(BaaProfile* profile,
                                        const char* extension_id);
 
 // ---- Tabs ------------------------------------------------------------------
 
-// A background tab in `profile`'s browser, loading `url`. NULL when the
+// A background tab in `profile`'s browser, loading `url`. 0 when the
 // profile is gone or the app is terminating. No tab_created for it.
-BAA_EXPORT BaaTab* baa_tab_create(BaaProfile* profile, const char* url);
+BAA_EXPORT BaaTabId baa_tab_create(BaaProfile* profile, const char* url);
 
-// Closes the tab now, skipping beforeunload. No tab_closed for it.
-BAA_EXPORT void baa_tab_close(BaaTab* tab);
+// Closes the tab now, skipping beforeunload. tab_closed(BAA_CLOSED_BY_APP)
+// comes inside this call.
+BAA_EXPORT void baa_tab_close(BaaTabId tab);
 
 // The tab's current state, as in the tab_state callback (an adopted tab's
 // first snapshot). `state`'s strings are valid until the next baa_* call.
-BAA_EXPORT bool baa_tab_get_state(BaaTab* tab, BaaTabState* state);
+BAA_EXPORT bool baa_tab_get_state(BaaTabId tab, BaaTabState* state);
 
-BAA_EXPORT void baa_tab_load_url(BaaTab* tab, const char* url);
-BAA_EXPORT void baa_tab_reload(BaaTab* tab);
-BAA_EXPORT void baa_tab_stop(BaaTab* tab);
+BAA_EXPORT void baa_tab_load_url(BaaTabId tab, const char* url);
+BAA_EXPORT void baa_tab_reload(BaaTabId tab);
+BAA_EXPORT void baa_tab_stop(BaaTabId tab);
 // Moves through history: -1 is back, 1 forward. Out of range does nothing.
-BAA_EXPORT void baa_tab_go_to_offset(BaaTab* tab, int offset);
+BAA_EXPORT void baa_tab_go_to_offset(BaaTabId tab, int offset);
 
 // Calls `visit` once per back/forward entry, oldest first, synchronously;
 // returns the current entry's index (-1 for a gone tab).
 typedef void (*BaaHistoryVisitor)(void* ctx, const char* title, const char* url);
-BAA_EXPORT int baa_tab_history(BaaTab* tab, BaaHistoryVisitor visit, void* ctx);
+BAA_EXPORT int baa_tab_history(BaaTabId tab, BaaHistoryVisitor visit, void* ctx);
 
 // Runs `script` in the main frame's page world; the result is dropped.
 // `user_gesture`: as if the user had just clicked (Picture in Picture,
 // fullscreen).
-BAA_EXPORT void baa_tab_eval(BaaTab* tab, const char* script, bool user_gesture);
+BAA_EXPORT void baa_tab_eval(BaaTabId tab, const char* script, bool user_gesture);
 
 // `factor` 1.0 is 100%.
-BAA_EXPORT void baa_tab_set_zoom(BaaTab* tab, double factor);
+BAA_EXPORT void baa_tab_set_zoom(BaaTabId tab, double factor);
 
 // Highlights `text`; repeating the same text moves to the next (or previous)
-// match. Empty `text` ends the search and clears the highlight.
-BAA_EXPORT void baa_tab_find(BaaTab* tab, const char* text, bool forward);
+// match; counts come by find_result. Empty `text` ends the search and clears
+// the highlight.
+BAA_EXPORT void baa_tab_find(BaaTabId tab, const char* text, bool forward);
 
 // The system print dialog for the page.
-BAA_EXPORT void baa_tab_print(BaaTab* tab);
-BAA_EXPORT void baa_tab_set_muted(BaaTab* tab, bool muted);
+BAA_EXPORT void baa_tab_print(BaaTabId tab);
+BAA_EXPORT void baa_tab_set_muted(BaaTabId tab, bool muted);
 
 // Makes the tab its window's active tab and that window Chrome's last active
 // one, so extensions' "active tab in the current window" is this tab. Call
 // when the tab is shown. Visibility itself follows the NSView (hidden or out
 // of a window = hidden page); there is no call for it.
-BAA_EXPORT void baa_tab_activate(BaaTab* tab);
+BAA_EXPORT void baa_tab_activate(BaaTabId tab);
 
 // Keyboard focus to the page (its view becomes first responder).
-BAA_EXPORT void baa_tab_focus(BaaTab* tab);
+BAA_EXPORT void baa_tab_focus(BaaTabId tab);
 
 // Runs `script` in the main world of every new main-frame document of the
 // tab, as soon as its root element exists. NULL or "" stops it.
-BAA_EXPORT void baa_tab_set_init_script(BaaTab* tab, const char* script);
+BAA_EXPORT void baa_tab_set_init_script(BaaTabId tab, const char* script);
 
 // prefers-color-scheme of the profile's pages: 0 follows the system, 1 light,
 // 2 dark. `webui` applies to Chrome's own pages (chrome: and baa: URLs),
@@ -459,14 +518,26 @@ BAA_EXPORT void baa_profile_set_color_schemes(BaaProfile* profile, int website,
 
 // DevTools for `tab`, to be docked by the caller: returns the front-end page
 // (place its state.view; baa_tab_close closes DevTools). With `inspect`,
-// selects the element at (x, y) in the page's view. Closes DevTools already
-// open for the tab first. NULL if Chrome refused.
-BAA_EXPORT BaaTab* baa_tab_open_devtools(BaaTab* tab, bool inspect, int x,
-                                         int y);
+// selects the element at (x, y) in the page's view. `side` (BAA_DOCK_RIGHT/
+// BOTTOM/LEFT) preselects the front-end's dock menu; a change there comes back
+// as devtools_dock. Closes DevTools already open for the tab first. 0 if
+// Chrome refused.
+BAA_EXPORT BaaTabId baa_tab_open_devtools(BaaTabId tab, bool inspect, int x,
+                                          int y, int side);
 
 // DevTools for `tab` in Chrome's own window.
-BAA_EXPORT void baa_tab_show_devtools_window(BaaTab* tab, bool inspect, int x,
+BAA_EXPORT void baa_tab_show_devtools_window(BaaTabId tab, bool inspect, int x,
                                              int y);
+
+// The user left page fullscreen through the app (the window left macOS
+// fullscreen, a Space switch). fullscreen(tab, false) follows.
+BAA_EXPORT void baa_tab_exit_fullscreen(BaaTabId tab);
+
+// Puts the tab in the tab group `group` (the app's key, top bit clear; or a
+// key from tab_group) titled `title`, making the group if the key has none.
+// 0 takes it out of its group. No tab_group callback for this.
+BAA_EXPORT void baa_tab_set_group(BaaTabId tab, uint64_t group,
+                                  const char* title);
 
 // ---- Dialogs ---------------------------------------------------------------
 
@@ -476,23 +547,24 @@ enum {
   BAA_DIALOG_PROMPT = 2,
   BAA_DIALOG_BEFOREUNLOAD = 3,         // OK leaves the page
   BAA_DIALOG_BEFOREUNLOAD_RELOAD = 4,  // OK reloads it
+  BAA_DIALOG_AUTH = 5,                 // a username and a password field
+  BAA_DIALOG_EXTERNAL_PROTOCOL = 6,    // a link wants an app
+  BAA_DIALOG_UNRESPONSIVE = 7,         // OK ends the page, Cancel waits
+  BAA_DIALOG_EXTENSION_INSTALL = 8,    // also re-enable and permissions.request
 };
 
-// Answers a `dialog` callback: OK (with the prompt's text) or Cancel. Ids are
-// never reused; an unknown or already answered id does nothing.
-BAA_EXPORT void baa_dialog_answer(uint64_t id, bool ok, const char* text);
+// Answers a `dialog` or `permission` ask (for a permission, `ok` allows).
+// Ids are never reused; unknown, answered or withdrawn ids do nothing.
+BAA_EXPORT void baa_answer(uint64_t id, const BaaAnswer* answer);
 
-// ---- Permissions, menus, downloads -----------------------------------------
-
-// Answers `permission`. Unknown or answered ids do nothing.
-BAA_EXPORT void baa_permission_answer(uint64_t id, bool allow);
+// ---- Menus, downloads -------------------------------------------------------
 
 // Closes the menu of a `context_menu` callback; `command` >= 0 runs that
 // item first. Unknown ids do nothing.
 BAA_EXPORT void baa_context_menu_done(uint64_t id, int command);
 
 // Stops a running download; finished ones are left alone.
-BAA_EXPORT void baa_download_cancel(uint32_t id);
+BAA_EXPORT void baa_download_cancel(uint64_t id);
 
 #ifdef __cplusplus
 }

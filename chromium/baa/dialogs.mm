@@ -29,6 +29,14 @@
 namespace baa {
 namespace {
 
+// JS dialogs: the app words title and labels.
+void SendDialog(uint64_t tab, uint64_t id, int kind, const std::string& message, const std::string& default_text) {
+  BaaDialog dialog = {kind, message.c_str(), default_text.c_str(), "", "", "", ""};
+  Callbacks().dialog(CallbackContext(), tab, id, &dialog);
+}
+
+bool AnswerDialog(uint64_t id, bool ok, const std::u16string& answer);
+
 int DialogKind(content::JavaScriptDialogType type,
                bool before_unload = false,
                bool reload = false) {
@@ -72,10 +80,7 @@ class DialogView : public javascript_dialogs::TabModalDialogView {
   BaaTab* tab() const { return tab_.get(); }
   uint64_t id() const { return id_; }
   // Tells the app about it (again, once the tab is announced).
-  void Show(BaaTab* tab) const {
-    Callbacks().dialog(CallbackContext(), tab, id_, kind_, message_.c_str(),
-                       base::UTF16ToUTF8(default_text_).c_str());
-  }
+  void Show(BaaTab* tab) const { SendDialog(IdOf(tab), id_, kind_, message_, base::UTF16ToUTF8(default_text_)); }
 
  private:
   const uint64_t id_;
@@ -106,7 +111,7 @@ void DialogView::CloseDialogWithoutCallback() {
   Dialogs().erase(it);
   BaaTab* tab = tab_.get();
   if (TabAnnounced(tab)) {
-    Callbacks().dialog_closed(CallbackContext(), tab, id_);
+    Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
   }
 }
 
@@ -134,7 +139,7 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
     if (!tab) {
       // A page nobody shows (its tab handle is gone): answer "no" so it does not hang.
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce([](uint64_t id) { baa_dialog_answer(id, false, ""); }, id));
+          FROM_HERE, base::BindOnce([](uint64_t id) { AnswerDialog(id, false, std::u16string()); }, id));
     } else if (TabAnnounced(tab)) {
       raw->Show(tab);
     }
@@ -162,9 +167,8 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
     AppModals()[id_] = this;
     int kind = DialogKind(controller_->javascript_dialog_type(),
                           controller_->is_before_unload_dialog(), controller_->is_reload());
-    Callbacks().dialog(CallbackContext(), tab_.get(), id_,
-                       kind, base::UTF16ToUTF8(controller_->message_text()).c_str(),
-                       base::UTF16ToUTF8(controller_->default_prompt_text()).c_str());
+    SendDialog(IdOf(tab_.get()), id_, kind, base::UTF16ToUTF8(controller_->message_text()),
+               base::UTF16ToUTF8(controller_->default_prompt_text()));
   }
   void ActivateAppModalDialog() override {}
   // Chrome closes it (the page navigated or went away); OnClose before deleting.
@@ -196,7 +200,7 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
   void Forget(bool tell_app) {
     BaaTab* tab = tab_.get();
     if (AppModals().erase(id_) && tell_app && TabAnnounced(tab)) {
-      Callbacks().dialog_closed(CallbackContext(), tab, id_);
+      Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
     }
   }
 
@@ -204,6 +208,27 @@ class AppModal : public javascript_dialogs::AppModalDialogView {
   base::WeakPtr<BaaTab> tab_;
   const uint64_t id_;
 };
+
+// WP-C1b replaces these maps with the request registry.
+bool AnswerDialog(uint64_t id, bool ok, const std::u16string& answer) {
+  auto it = Dialogs().find(id);
+  if (it == Dialogs().end()) {
+    auto modal = AppModals().find(id);
+    if (modal == AppModals().end()) {
+      return false;
+    }
+    // Answering deletes it.
+    modal->second->Answer(ok, answer, /*tell_app=*/false);
+    return true;
+  }
+  // Forgotten before the callback runs: the manager answers by closing the
+  // dialog, which must not read as the page going away.
+  std::unique_ptr<DialogView> view = std::move(it->second);
+  Dialogs().erase(it);
+  view->MarkAnswered();
+  view->TakeCallback().Run(ok, answer);
+  return true;
+}
 
 }  // namespace
 
@@ -224,7 +249,7 @@ void ReturnDialogsToChrome(BaaTab* tab, content::WebContents* wc) {
     }
   }
   for (uint64_t id : pending) {
-    baa_dialog_answer(id, false, "");
+    AnswerDialog(id, false, std::u16string());
   }
   wc->RemoveUserData(javascript_dialogs::TabModalDialogManager::UserDataKey());
   javascript_dialogs::TabModalDialogManager::CreateForWebContents(
@@ -245,7 +270,7 @@ void DropDialogsOf(BaaTab* tab, bool tell) {
       uint64_t id = d->first;
       d = Dialogs().erase(d);
       if (tell) {
-        Callbacks().dialog_closed(CallbackContext(), tab, id);
+        Callbacks().request_closed(CallbackContext(), IdOf(tab), id);
       }
     } else {
       ++d;
@@ -274,21 +299,11 @@ void InstallAppModalFactory() {
 
 }  // namespace baa
 
-void baa_dialog_answer(uint64_t id, bool ok, const char* text) {
-  std::u16string answer = base::UTF8ToUTF16(text ? text : "");
-  auto it = baa::Dialogs().find(id);
-  if (it == baa::Dialogs().end()) {
-    auto modal = baa::AppModals().find(id);
-    if (modal != baa::AppModals().end()) {
-      // Answering deletes it.
-      modal->second->Answer(ok, answer, /*tell_app=*/false);
-    }
+void baa_answer(uint64_t id, const BaaAnswer* answer) {
+  if (!answer) {
     return;
   }
-  // Forgotten before the callback runs: the manager answers by closing the
-  // dialog, which must not read as the page going away.
-  std::unique_ptr<baa::DialogView> view = std::move(it->second);
-  baa::Dialogs().erase(it);
-  view->MarkAnswered();
-  view->TakeCallback().Run(ok, answer);
+  if (!baa::AnswerDialog(id, answer->ok, base::UTF8ToUTF16(answer->text ? answer->text : ""))) {
+    baa::AnswerPermission(id, answer->ok);
+  }
 }

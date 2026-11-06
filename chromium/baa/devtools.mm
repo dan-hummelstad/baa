@@ -32,16 +32,17 @@ void ForgetDevtoolsOf(BaaTab* tab) {
 
 }  // namespace baa
 
-BaaTab* baa_tab_open_devtools(BaaTab* tab, bool inspect, int x, int y) {
+BaaTabId baa_tab_open_devtools(BaaTabId tab_id, bool inspect, int x, int y, int side) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc || baa_is_quitting()) {
-    return nullptr;
+    return 0;
   }
   if (auto it = baa::Fronts().find(tab); it != baa::Fronts().end()) {
     BaaTab* old = it->second;
     baa::Fronts().erase(it);
     if (baa::TabAlive(old)) {
-      baa_tab_close(old);
+      baa_tab_close(baa::IdOf(old));
     }
   }
   BaaTab* front;
@@ -66,11 +67,13 @@ BaaTab* baa_tab_open_devtools(BaaTab* tab, bool inspect, int x, int y) {
   }
   if (front) {
     baa::Fronts()[tab] = front;
+    baa::SetDockSide(front, side == BAA_DOCK_BOTTOM ? "bottom" : side == BAA_DOCK_LEFT ? "left" : "right");
   }
-  return front;
+  return baa::IdOf(front);
 }
 
-void baa_tab_show_devtools_window(BaaTab* tab, bool inspect, int x, int y) {
+void baa_tab_show_devtools_window(BaaTabId tab_id, bool inspect, int x, int y) {
+  BaaTab* tab = baa::TabFromId(tab_id);
   content::WebContents* wc = baa::ContentsOf(tab);
   if (!wc || baa_is_quitting()) {
     return;

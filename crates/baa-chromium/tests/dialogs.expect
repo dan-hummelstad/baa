@@ -1,10 +1,10 @@
-# alert/confirm/prompt through baa_dialog_answer, dialog_closed on navigation, permissions denied, stale handles
+# alert/confirm/prompt through baa_answer, request_closed on navigation, permissions denied, stale handles
 script: dialogs.txt
 env: BAA_HARNESS_PERMISSION=deny
-must: baa: dialog tab=0 id=1 kind=0
-must: baa: dialog tab=0 id=2 kind=1
-must: baa: dialog tab=0 id=3 kind=2 .*default="dflt"
-must: baa: dialog_closed tab=0 id=4
+must: baa: dialog tab=0 id=\d+ kind=0
+must: baa: dialog tab=0 id=\d+ kind=1
+must: baa: dialog tab=0 id=\d+ kind=2 .*default="dflt"
+must: baa: request_closed tab=0 id=\d+
 must: title="confirm:false"
 must: title="prompt:bob"
 must: title="after-alert"

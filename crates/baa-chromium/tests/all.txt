@@ -1,5 +1,5 @@
 # combined smoke (all.expect):
-# permissions, leave site, menu, downloads, DevTools, extension popup, fetch, settings tab, in one run, then quit
+# permissions, leave site, menu, downloads, DevTools, extension popup, settings tab, in one run, then quit
 load https://example.com/
 sleep 3000
 activate
@@ -9,7 +9,7 @@ eval document.body.innerHTML='<a href="https://www.iana.org/" style="position:fi
 sleep 500
 menu 100 100
 sleep 2000
-devtools
+devtools 0
 sleep 4000
 use 1
 close
@@ -19,8 +19,6 @@ sleep 3500
 use 3
 close
 use 0
-fetch https://suggestqueries.google.com/complete/search?client=firefox&q=a
-sleep 3000
 tab 1 chrome://settings/
 sleep 4000
 use 4

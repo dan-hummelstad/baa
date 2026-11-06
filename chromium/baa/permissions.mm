@@ -64,14 +64,14 @@ class Prompt : public permissions::PermissionPrompt {
     origin_ = delegate->GetRequestingOrigin().spec();
     Prompts()[id_] = this;
     kinds_ = kinds;
-    Callbacks().permission(CallbackContext(), tab_.get(), id_, origin_.c_str(), kinds_);
+    Callbacks().permission(CallbackContext(), IdOf(tab_.get()), id_, origin_.c_str(), kinds_);
   }
 
   ~Prompt() override {
     // Still waiting: Chrome dropped the request (navigation, tab closed).
     BaaTab* tab = tab_.get();
     if (Prompts().erase(id_) && tab && TabAnnounced(tab)) {
-      Callbacks().permission_closed(CallbackContext(), tab, id_);
+      Callbacks().request_closed(CallbackContext(), IdOf(tab), id_);
     }
   }
 
@@ -239,7 +239,7 @@ void DropPermissionsOf(BaaTab* tab, bool tell) {
       uint64_t id = it->first;
       it = Prompts().erase(it);
       if (tell) {
-        Callbacks().permission_closed(CallbackContext(), tab, id);
+        Callbacks().request_closed(CallbackContext(), IdOf(tab), id);
       }
     } else {
       ++it;
@@ -249,22 +249,27 @@ void DropPermissionsOf(BaaTab* tab, bool tell) {
 
 }  // namespace baa
 
-void baa_permission_answer(uint64_t id, bool allow) {
-  auto it = baa::Prompts().find(id);
-  if (it == baa::Prompts().end()) {
-    return;
+namespace baa {
+
+bool AnswerPermission(uint64_t id, bool allow) {
+  auto it = Prompts().find(id);
+  if (it == Prompts().end()) {
+    return false;
   }
   auto delegate = it->second->delegate();
-  baa::Prompts().erase(it);
+  Prompts().erase(it);
   if (!delegate) {
-    return;
+    return true;
   }
   if (allow) {
     delegate->Accept(std::monostate());
   } else {
     delegate->Deny(std::monostate());
   }
+  return true;
 }
+
+}  // namespace baa
 
 int baa_profile_site_permission(BaaProfile* profile, const char* url, uint32_t kind) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);

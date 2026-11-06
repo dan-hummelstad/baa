@@ -61,13 +61,13 @@ fn dropping_a_page_closes_its_tab_once_and_unknown_tabs_are_ignored(cx: &mut Tes
     let tab = env.tab_of(&page, cx);
     let seen = events(&page, cx);
 
-    (env.callbacks.tab_closed)(env.ctx(), 0xdead0 as *mut Tab);
+    (env.callbacks.tab_closed)(env.ctx(), 0xdead0, ffi::CLOSED_BY_CHROME);
     cx.run_until_parked();
     assert!(seen.borrow().is_empty());
 
     cx.update(|_| drop(page));
     assert_eq!(calls("tab_close"), [format!("tab_close {tab:?}")]);
-    (env.callbacks.tab_closed)(env.ctx(), tab);
+    (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_APP);
     cx.run_until_parked();
     assert_eq!(calls("tab_close").len(), 1);
 }
@@ -79,9 +79,12 @@ fn a_tab_chrome_closed_says_so_and_is_not_closed_again(cx: &mut TestAppContext) 
     let tab = env.tab_of(&page, cx);
     let seen = events(&page, cx);
 
-    (env.callbacks.tab_closed)(env.ctx(), tab);
+    (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_CHROME);
     cx.run_until_parked();
     assert_eq!(*seen.borrow(), [PageEvent::Closed]);
+    (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_CHROME);
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [PageEvent::Closed], "an id used after tab_closed is ignored");
     page.read_with(cx, |page, _| page.reload());
     assert_eq!(calls("tab_reload"), Vec::<String>::new(), "the handle is dead");
     cx.update(|_| drop(page));
@@ -145,7 +148,7 @@ fn a_tab_chrome_closed_lets_go_of_its_view_at_once(cx: &mut TestAppContext) {
     let tab = env.tab_of(&page, cx);
     let seen = events(&page, cx);
 
-    (env.callbacks.tab_closed)(env.ctx(), tab);
+    (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_CHROME);
     assert!(superview(view).is_null());
     page.read_with(cx, |page, _| assert!(page.shared.container.page().is_null()));
     cx.run_until_parked();
@@ -162,7 +165,7 @@ fn quitting_releases_views_but_keeps_the_session(cx: &mut TestAppContext) {
     let seen = events(&page, cx);
 
     QUITTING.with(|q| q.set(true));
-    (env.callbacks.tab_closed)(env.ctx(), env.tab_of(&page, cx));
+    (env.callbacks.tab_closed)(env.ctx(), env.tab_of(&page, cx), ffi::CLOSED_BY_QUIT);
     cx.run_until_parked();
     assert!(superview(view).is_null());
     assert!(seen.borrow().is_empty(), "no Closed: the tab is still in the session");
@@ -191,4 +194,17 @@ fn only_tabs_are_activated(cx: &mut TestAppContext) {
         .unwrap();
     popup.read_with(cx, |page, _| page.set_visible(true));
     assert_eq!(calls("tab_activate").len(), 1, "a popup has no strip");
+}
+
+#[gpui::test]
+fn a_tab_the_app_closed_is_released_without_a_closed_event(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let page = env.page(1, "https://a.test", cx);
+    let tab = env.tab_of(&page, cx);
+    let seen = events(&page, cx);
+
+    (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_APP);
+    cx.run_until_parked();
+    assert!(seen.borrow().is_empty());
+    assert_eq!(env.tab_of(&page, cx), 0);
 }
