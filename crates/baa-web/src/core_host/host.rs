@@ -1,0 +1,281 @@
+//! [`WebHost`] on BaaCore: profiles, pages, extensions, downloads.
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    path::PathBuf,
+};
+
+use gpui::{App, AppContext as _, Entity, Pixels, Window};
+
+use super::{
+    c_string, extensions, ffi,
+    ffi::Profile,
+    dispatch::Dispatch,
+    menu,
+    page::CorePage,
+    profiles::{is_ephemeral, queue_delete},
+    sheet, Core, PageKind,
+};
+use crate::{
+    Callback, ChromeSheet, ChromeTabs, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
+    PageHandle, Permission, PermissionState, ProfileId, WebHost,
+};
+
+/// `BAA_PERMISSION_*` bits, in bit order.
+const PERMISSION_BITS: [(u32, Permission); 7] = [
+    (ffi::PERMISSION_CAMERA, Permission::Camera),
+    (ffi::PERMISSION_MICROPHONE, Permission::Microphone),
+    (ffi::PERMISSION_LOCATION, Permission::Location),
+    (ffi::PERMISSION_NOTIFICATIONS, Permission::Notifications),
+    (ffi::PERMISSION_CLIPBOARD, Permission::Clipboard),
+    (ffi::PERMISSION_MIDI, Permission::Midi),
+    (ffi::PERMISSION_OTHER, Permission::Other),
+];
+
+pub(super) fn permissions_of(kinds: u32) -> Vec<Permission> {
+    PERMISSION_BITS.iter().filter(|(bit, _)| kinds & bit != 0).map(|(_, kind)| *kind).collect()
+}
+
+/// The bit a per-site setting exists for; screen sharing and the rest have none.
+fn permission_bit(kind: Permission) -> Option<u32> {
+    PERMISSION_BITS.iter().find(|(_, k)| *k == kind && *k != Permission::Other).map(|(bit, _)| *bit)
+}
+
+pub struct CoreWebHost {
+    core: &'static Core,
+    dispatch: &'static Dispatch,
+    /// `--user-data-dir`: profiles live in `root/space-<id>`.
+    root: PathBuf,
+    profiles: RefCell<HashMap<ProfileId, *mut Profile>>,
+    next_ephemeral: Cell<u64>,
+    downloads: Entity<Downloads>,
+    chrome_tabs: Entity<ChromeTabs>,
+    /// Per profile, Chrome's settings shown as a sheet.
+    sheets: RefCell<HashMap<ProfileId, sheet::Sheet>>,
+}
+
+impl CoreWebHost {
+    pub(super) fn new(core: &'static Core, dispatch: &'static Dispatch, root: PathBuf, cx: &mut App) -> Self {
+        let chrome_tabs = cx.new(|_| ChromeTabs::default());
+        *dispatch.chrome_tabs.borrow_mut() = Some(chrome_tabs.downgrade());
+        let downloads = cx.new(|_| Downloads::default());
+        *dispatch.downloads.borrow_mut() = Some(downloads.downgrade());
+        *dispatch.app.borrow_mut() = Some(cx.to_async());
+        Self {
+            core,
+            dispatch,
+            root,
+            profiles: RefCell::default(),
+            next_ephemeral: Cell::new(u64::MAX),
+            downloads,
+            chrome_tabs,
+            sheets: RefCell::default(),
+        }
+    }
+
+    /// Ephemeral profiles have no extensions.
+    fn read_extensions(&self, profile: ProfileId) -> Vec<(Extension, ExtensionInfo)> {
+        if is_ephemeral(profile) {
+            return Vec::new();
+        }
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return Vec::new();
+        }
+        extensions::read(self.core, handle)
+    }
+
+    pub(super) fn profile_handle(&self, id: ProfileId) -> *mut Profile {
+        if let Some(handle) = self.profiles.borrow().get(&id) {
+            return *handle;
+        }
+        let handle = if is_ephemeral(id) {
+            (self.core.profile_open_ephemeral)()
+        } else {
+            (self.core.profile_open)(c_string(&format!("space-{}", id.0)).as_ptr())
+        };
+        if handle.is_null() {
+            log::error!("profile {id:?}: Chrome refused it");
+        } else {
+            self.profiles.borrow_mut().insert(id, handle);
+            // Most are Helium's defaults already; this pins them if one was flipped in settings.
+            for pref in baa_privacy::PREFS_OFF {
+                (self.core.profile_set_pref_bool)(handle, c_string(pref).as_ptr(), false);
+            }
+        }
+        handle
+    }
+}
+
+impl WebHost for CoreWebHost {
+    type Page = CorePage;
+
+    fn create_devtools(
+        &self,
+        of: &Entity<CorePage>,
+        inspect_at: Option<(i32, i32)>,
+        side: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<CorePage> {
+        let (profile, inspected) = of.read_with(cx, |page, _| (page.profile, page.shared.tab.get()));
+        let handle = self.profile_handle(profile);
+        let (x, y) = inspect_at.unwrap_or_default();
+        // NULL: Chrome refused, or the inspected page is gone; the page then closes itself.
+        let tab = if inspected.is_null() {
+            std::ptr::null_mut()
+        } else {
+            (self.core.tab_open_devtools)(inspected, inspect_at.is_some(), x, y)
+        };
+        let (dispatch, side) = (self.dispatch, side.to_string());
+        cx.new(|cx| {
+            let mut page = CorePage::new(dispatch, profile, handle, tab, PageKind::DevTools, window, cx);
+            page.dock_side = side;
+            if tab.is_null() {
+                page.close_soon(cx);
+            }
+            page
+        })
+    }
+
+    fn show_menu(&self, at: gpui::Point<Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone) {
+        menu::show_menu(window, cx, at, items, done);
+    }
+
+    fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
+        let handle = self.profile_handle(profile);
+        let tab = if handle.is_null() {
+            std::ptr::null_mut()
+        } else {
+            // A tab Chrome already made for this (window.open) is taken, not duplicated.
+            self.dispatch
+                .take_pending(handle, url)
+                .unwrap_or_else(|| (self.core.tab_create)(handle, c_string(url).as_ptr()))
+        };
+        let dispatch = self.dispatch;
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))
+    }
+
+    fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
+        // The action runs on the profile's real active tab (no tabs shim).
+        let handle = self.profile_handle(profile);
+        let id = extensions::id_of(url).filter(|_| !handle.is_null());
+        // NULL: no popup (the click was all the action did); the Peek card closes.
+        let tab = id.map_or(std::ptr::null_mut(), |id| (self.core.extension_popup)(handle, c_string(id).as_ptr()));
+        let dispatch = self.dispatch;
+        cx.new(|cx| {
+            let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Popup, window, cx);
+            page.set_corner_radius(8.);
+            if tab.is_null() {
+                page.close_soon(cx);
+            }
+            page
+        })
+    }
+
+    fn ephemeral_profile(&self) -> ProfileId {
+        let id = self.next_ephemeral.get();
+        self.next_ephemeral.set(id - 1);
+        ProfileId(id)
+    }
+
+    fn delete_profile(&self, profile: ProfileId) {
+        self.sheets.borrow_mut().remove(&profile);
+        if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
+            self.dispatch.forget_profile(handle);
+            (self.core.profile_close)(handle);
+        }
+        if !is_ephemeral(profile) {
+            // Next launch removes the directory, before Chrome opens anything in it.
+            queue_delete(&self.root, profile);
+        }
+    }
+
+    fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>) {
+        let mut infos: Vec<ExtensionInfo> = self.read_extensions(profile).into_iter().map(|(_, info)| info).collect();
+        infos.sort_by_key(|info| info.name.to_lowercase());
+        done(Some(infos), cx);
+    }
+
+    fn show_chrome_page(&self, profile: ProfileId, sheet: Option<ChromeSheet>, window: &mut Window) -> bool {
+        let mut sheets = self.sheets.borrow_mut();
+        for (id, page) in sheets.iter() {
+            if sheet.is_none() || *id != profile {
+                page.hide();
+            }
+        }
+        let Some(sheet) = sheet else { return true };
+        // Chrome closed it (an extension's chrome.tabs.remove): open a fresh one.
+        if sheets.get(&profile).is_some_and(|page| page.is_gone()) {
+            sheets.remove(&profile);
+        }
+        let page = match sheets.entry(profile) {
+            std::collections::hash_map::Entry::Occupied(page) => page.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                let handle = self.profile_handle(profile);
+                let Some(page) = sheet::Sheet::open(self.dispatch, handle, &sheet) else { return false };
+                slot.insert(page)
+            }
+        };
+        page.show(&sheet, window)
+    }
+
+    fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>) {
+        let (change, value) = extensions::change_code(change);
+        let handle = if is_ephemeral(profile) { std::ptr::null_mut() } else { self.profile_handle(profile) };
+        let done_ok = !handle.is_null() && (self.core.profile_extension_change)(handle, c_string(id).as_ptr(), change, value);
+        done(done_ok, cx);
+    }
+
+    fn extensions(&self, profile: ProfileId) -> Vec<Extension> {
+        let mut list: Vec<Extension> =
+            self.read_extensions(profile).into_iter().filter(|(_, info)| info.enabled).map(|(e, _)| e).collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
+    }
+
+    fn fetch(&self, profile: ProfileId, url: &str, done: Box<dyn FnOnce(Option<String>)>) {
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return done(None);
+        }
+        let id = self.dispatch.next_fetch.get();
+        self.dispatch.next_fetch.set(id + 1);
+        self.dispatch.fetches.borrow_mut().insert(id, done);
+        (self.core.profile_fetch)(handle, c_string(url).as_ptr(), id);
+    }
+
+    fn downloads(&self) -> Entity<Downloads> {
+        self.downloads.clone()
+    }
+
+    fn chrome_tabs(&self) -> Entity<ChromeTabs> {
+        self.chrome_tabs.clone()
+    }
+
+    fn cancel_download(&self, id: u32) {
+        (self.core.download_cancel)(id);
+    }
+
+    fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return PermissionState::Ask };
+        match (self.core.profile_site_permission)(handle, c_string(url).as_ptr(), bit) {
+            ffi::SITE_ALLOW => PermissionState::Allow,
+            ffi::SITE_BLOCK => PermissionState::Block,
+            _ => PermissionState::Ask,
+        }
+    }
+
+    fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState) {
+        let handle = self.profile_handle(profile);
+        let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return };
+        let state = match state {
+            PermissionState::Ask => ffi::SITE_ASK,
+            PermissionState::Allow => ffi::SITE_ALLOW,
+            PermissionState::Block => ffi::SITE_BLOCK,
+        };
+        (self.core.profile_set_site_permission)(handle, c_string(url).as_ptr(), bit, state);
+    }
+}

@@ -5,7 +5,11 @@
 //! its callbacks keep running under it. [`popup_soon`] opens it on a later run
 //! loop turn instead.
 
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::c_int,
+    rc::Rc,
+};
 
 use gpui::{App, Pixels, Window};
 use objc2::{
@@ -14,7 +18,11 @@ use objc2::{
     sel,
 };
 
-use super::native::{self, CGPoint, CGRect};
+use super::{
+    ffi, from_c,
+    native::{self, CGPoint, CGRect},
+    PageKind, Shared,
+};
 use crate::{MenuDone, MenuItem};
 
 thread_local! {
@@ -156,4 +164,82 @@ pub fn show_at(
     done: impl FnOnce(Option<usize>) + 'static,
 ) {
     popup_soon(move || done(popup(view(), x, y, &items)));
+}
+
+/// One row of a context menu, as Chrome flattened it.
+pub(super) struct Row {
+    pub(super) label: String,
+    pub(super) command: c_int,
+    pub(super) depth: u8,
+    pub(super) kind: u8,
+    pub(super) enabled: bool,
+    pub(super) checked: bool,
+}
+
+impl Row {
+    pub(super) fn from_c(items: *const ffi::MenuItem, count: usize) -> Vec<Row> {
+        if items.is_null() {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(items, count) }
+            .iter()
+            .map(|item| Row {
+                label: unsafe { from_c(item.label) },
+                command: item.command,
+                depth: item.depth,
+                kind: item.kind,
+                enabled: item.enabled,
+                checked: item.checked,
+            })
+            .collect()
+    }
+}
+
+/// The rows as a menu tree; an action's id is its row index.
+pub(super) fn menu_tree(rows: &[Row]) -> Vec<MenuItem> {
+    fn level(rows: &[Row], at: &mut usize, depth: u8) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        while let Some(row) = rows.get(*at).filter(|row| row.depth == depth) {
+            let index = *at;
+            *at += 1;
+            items.push(match row.kind {
+                ffi::MENU_SEPARATOR => MenuItem::Separator,
+                ffi::MENU_SUBMENU => MenuItem::Submenu { label: row.label.clone(), items: level(rows, at, depth + 1) },
+                _ => MenuItem::Action { label: row.label.clone(), enabled: row.enabled, checked: row.checked, id: index },
+            });
+        }
+        items
+    }
+    let mut at = 0;
+    let mut items = level(rows, &mut at, 0);
+    // Rows that skip a depth (a malformed list) end the menu rather than loop.
+    while at < rows.len() && rows[at].depth == 0 {
+        items.extend(level(rows, &mut at, 0));
+    }
+    items
+}
+
+/// What to tell Chrome once the menu closed, and whether baa's own DevTools
+/// should open: Chrome's Inspect would open its window against our hidden one,
+/// so on a tab it is not run.
+pub(super) fn menu_answer(rows: &[Row], picked: Option<usize>, kind: PageKind) -> (c_int, bool) {
+    match picked.and_then(|index| rows.get(index)) {
+        Some(row) if row.kind == ffi::MENU_INSPECT && kind == PageKind::Tab => (-1, true),
+        Some(row) => (row.command, false),
+        None => (-1, false),
+    }
+}
+
+/// Opens Chrome's menu over `shared`'s view and tells Chrome the outcome once;
+/// `on_inspect` runs when baa's own DevTools were asked for.
+pub(super) fn present_menu(shared: Rc<Shared>, id: u64, x: f32, y: f32, rows: Vec<Row>, kind: PageKind, on_inspect: impl FnOnce() + 'static) {
+    let core = shared.core;
+    let items = menu_tree(&rows);
+    show_at(move || shared.view.get(), x, y, items, move |picked| {
+        let (command, inspect) = menu_answer(&rows, picked, kind);
+        (core.context_menu_done)(id, command);
+        if inspect {
+            on_inspect();
+        }
+    });
 }
