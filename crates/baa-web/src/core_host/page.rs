@@ -203,8 +203,8 @@ impl PageHandle for CorePage {
     fn load_url(&self, url: &str) {
         self.shared.run(|core, tab| (core.tab_load_url)(tab, c_string(&skin::to_chrome(url)).as_ptr()));
     }
-    fn reload(&self) {
-        self.shared.run(|core, tab| (core.tab_reload)(tab));
+    fn reload(&self, bypass_cache: bool) {
+        self.shared.run(|core, tab| (core.tab_reload)(tab, bypass_cache));
     }
     fn stop(&self) {
         self.shared.run(|core, tab| (core.tab_stop)(tab));

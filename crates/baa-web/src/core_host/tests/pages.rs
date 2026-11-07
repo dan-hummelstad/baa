@@ -85,7 +85,7 @@ fn a_tab_chrome_closed_says_so_and_is_not_closed_again(cx: &mut TestAppContext) 
     (env.callbacks.tab_closed)(env.ctx(), tab, ffi::CLOSED_BY_CHROME);
     cx.run_until_parked();
     assert_eq!(*seen.borrow(), [PageEvent::Closed], "an id used after tab_closed is ignored");
-    page.read_with(cx, |page, _| page.reload());
+    page.read_with(cx, |page, _| page.reload(false));
     assert_eq!(calls("tab_reload"), Vec::<String>::new(), "the handle is dead");
     cx.update(|_| drop(page));
     assert_eq!(calls("tab_close"), Vec::<String>::new());

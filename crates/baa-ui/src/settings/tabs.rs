@@ -515,6 +515,7 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Back", Box::new(Back)),
         ("Forward", Box::new(Forward)),
         ("Reload", Box::new(Reload)),
+        ("Reload without cache", Box::new(HardReload)),
         ("Find in page", Box::new(Find)),
         ("Developer tools", Box::new(DevTools)),
         ("Zoom in", Box::new(ZoomIn)),

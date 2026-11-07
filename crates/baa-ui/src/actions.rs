@@ -25,6 +25,7 @@ gpui::actions!(
         Back,
         Forward,
         Reload,
+        HardReload,
         Find,
         DevTools,
         ZoomIn,

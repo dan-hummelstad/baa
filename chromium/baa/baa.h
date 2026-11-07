@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 6
+#define BAA_ABI_VERSION 7
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -469,7 +469,7 @@ BAA_EXPORT void baa_tab_close(BaaTabId tab);
 BAA_EXPORT bool baa_tab_get_state(BaaTabId tab, BaaTabState* state);
 
 BAA_EXPORT void baa_tab_load_url(BaaTabId tab, const char* url);
-BAA_EXPORT void baa_tab_reload(BaaTabId tab);
+BAA_EXPORT void baa_tab_reload(BaaTabId tab, bool bypass_cache);  // bypass_cache: a hard reload (⌘⇧R)
 BAA_EXPORT void baa_tab_stop(BaaTabId tab);
 // Moves through history: -1 is back, 1 forward. Out of range does nothing.
 BAA_EXPORT void baa_tab_go_to_offset(BaaTabId tab, int offset);

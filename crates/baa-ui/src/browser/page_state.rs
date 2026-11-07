@@ -123,6 +123,6 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn reload_crashed(&mut self, cx: &mut Context<Self>) {
-        self.with_page(cx, |p| p.reload());
+        self.with_page(cx, |p| p.reload(false));
     }
 }

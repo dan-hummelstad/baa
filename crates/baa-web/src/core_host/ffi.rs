@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 6;
+pub const ABI_VERSION: c_int = 7;
 
 #[repr(C)]
 pub struct Profile {
@@ -246,7 +246,7 @@ pub struct Core {
     pub tab_close: extern "C" fn(TabId),
     pub tab_get_state: extern "C" fn(TabId, *mut TabState) -> bool,
     pub tab_load_url: extern "C" fn(TabId, *const c_char),
-    pub tab_reload: extern "C" fn(TabId),
+    pub tab_reload: extern "C" fn(TabId, bool),
     pub tab_stop: extern "C" fn(TabId),
     pub tab_go_to_offset: extern "C" fn(TabId, c_int),
     pub tab_history: extern "C" fn(TabId, HistoryVisitor, *mut c_void) -> c_int,

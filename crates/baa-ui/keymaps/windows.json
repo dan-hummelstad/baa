@@ -97,7 +97,9 @@
       "ctrl-shift-c": "baa::CopyUrl",
       "ctrl-p": "baa::Print",
       "ctrl-alt-u": "baa::ViewSource",
-      "ctrl-shift-r": "baa::ReaderMode",
+      "ctrl-shift-r": "baa::HardReload",
+      "shift-f5": "baa::HardReload",
+      "ctrl-alt-r": "baa::ReaderMode",
       "ctrl-j": "baa::ShowDownloads",
       "ctrl-h": "baa::ShowHistory",
       "ctrl-,": "baa::OpenSettings"

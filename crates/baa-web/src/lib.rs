@@ -162,7 +162,7 @@ impl Downloads {
 /// One live page. Implemented by the BaaCore backend.
 pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn load_url(&self, url: &str);
-    fn reload(&self);
+    fn reload(&self, bypass_cache: bool);
     fn stop(&self);
     fn go_back(&self);
     fn go_forward(&self);

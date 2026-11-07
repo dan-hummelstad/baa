@@ -60,8 +60,9 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &Back, _, cx| this.with_page(cx, |p| p.go_back())))
         .on_action(cx.listener(|this, _: &Forward, _, cx| this.with_page(cx, |p| p.go_forward())))
         .on_action(cx.listener(|this, _: &Reload, _, cx| {
-            this.with_page(cx, |p| if p.is_loading() { p.stop() } else { p.reload() })
+            this.with_page(cx, |p| if p.is_loading() { p.stop() } else { p.reload(false) })
         }))
+        .on_action(cx.listener(|this, _: &HardReload, _, cx| this.with_page(cx, |p| p.reload(true))))
         .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(cx)))
         .on_action(cx.listener(|this, _: &Find, window, cx| {
             if this.active_page().is_some() {

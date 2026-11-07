@@ -207,7 +207,7 @@ extern "C" fn tab_load_url(tab: TabId, url: *const c_char) {
 fn note(name: &str, tab: TabId) {
     log(format!("{name} {tab:?}"));
 }
-extern "C" fn tab_reload(t: TabId) {
+extern "C" fn tab_reload(t: TabId, _bypass_cache: bool) {
     note("tab_reload", t)
 }
 extern "C" fn tab_stop(t: TabId) {

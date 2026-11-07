@@ -67,7 +67,7 @@ impl PageHandle for MockPage {
     fn load_url(&self, url: &str) {
         *self.url.borrow_mut() = url.into();
     }
-    fn reload(&self) {
+    fn reload(&self, _bypass_cache: bool) {
         self.reloads.set(self.reloads.get() + 1);
     }
     fn stop(&self) {}

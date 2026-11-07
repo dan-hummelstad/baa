@@ -198,7 +198,7 @@ drawn by GPUI.
 
 ⌘T command bar / new tab · ⌘L address · ⌘S sidebar · ⌘W close · ⌘⇧T reopen · ⌃⇥ next tab ·
 ⌘1–8 tab n · ⌘9 last · ⌃⌥→/← next/prev Space · ⌘D pin · ⌘F find · ⌘⇧N incognito Space ·
-⌘Y history · ⌘⇧J Library downloads · ⌘P print · ⌥⌘U view source · ⌘⇧R reader mode · ⌘, settings.
+⌘Y history · ⌘⇧J Library downloads · ⌘P print · ⌥⌘U view source · ⌘⇧R reload without cache · ⌥⌘R reader mode · ⌘, settings.
 Everything is remappable in `keymap.json` (GPUI's keymap format). Two-finger swipe across the
 sidebar or address bar switches Spaces; hold (or right-click) Back/Forward for history; double-click
 the top bar to zoom the window; double-click a Space's name to rename it. Right-click the sidebar for

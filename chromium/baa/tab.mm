@@ -627,10 +627,10 @@ void baa_tab_load_url(BaaTabId tab_id, const char* url) {
   }
 }
 
-void baa_tab_reload(BaaTabId tab_id) {
+void baa_tab_reload(BaaTabId tab_id, bool bypass_cache) {
   BaaTab* tab = baa::TabFromId(tab_id);
   if (content::WebContents* wc = baa::ContentsOf(tab)) {
-    wc->GetController().Reload(content::ReloadType::NORMAL, true);
+    wc->GetController().Reload(bypass_cache ? content::ReloadType::BYPASSING_CACHE : content::ReloadType::NORMAL, true);
   }
 }
 

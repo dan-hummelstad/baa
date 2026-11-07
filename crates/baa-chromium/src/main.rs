@@ -493,7 +493,7 @@ mod app {
                     "load" => (core.tab_load_url)(tab, c(arg).as_ptr()),
                     "back" => (core.tab_go_to_offset)(tab, -1),
                     "forward" => (core.tab_go_to_offset)(tab, 1),
-                    "reload" => (core.tab_reload)(tab),
+                    "reload" => (core.tab_reload)(tab, false),
                     "stop" => (core.tab_stop)(tab),
                     "history" => {
                         let at = (core.tab_history)(tab, visit_history, std::ptr::null_mut());
