@@ -36,6 +36,10 @@ mod header;
 mod groups;
 mod live;
 mod page_state;
+mod shared_extensions;
+pub(crate) use shared_extensions::InstallTarget;
+#[cfg(test)]
+mod tests_shared_extensions;
 #[cfg(test)]
 mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
@@ -121,6 +125,11 @@ pub struct Browser<H: WebHost> {
     pub(crate) folder_motion: HashMap<FolderId, Spring>,
     /// Why a live folder's last refresh failed.
     pub(crate) live_errors: HashMap<FolderId, String>,
+    /// (profile, extension) copies under way, so none starts twice.
+    copying: HashSet<(baa_model::ProfileId, String)>,
+    /// The profiles shared extensions were last spread over.
+    shared_to: Vec<baa_model::ProfileId>,
+    pending_install: Option<shared_extensions::PendingInstall>,
     /// Hover, press and selection springs of everything the pointer touches.
     pub(crate) motion: Motion,
     /// Where each tab's row was at the last sync, to animate rows in and out.
@@ -263,6 +272,9 @@ impl<H: WebHost> Browser<H> {
             renaming_folder: None,
             folder_motion: HashMap::new(),
             live_errors: HashMap::new(),
+            copying: HashSet::new(),
+            shared_to: Vec::new(),
+            pending_install: None,
             motion: Motion::default(),
             placements: None,
             ghosts: Vec::new(),
@@ -307,6 +319,13 @@ impl<H: WebHost> Browser<H> {
         };
         this.sync(window, cx);
         this.start_live_refresh(window, cx);
+        // ponytail: a fixed wait for Chrome to load each profile's extensions before the
+        // launch pass looks for copies to make; later passes run when Spaces are added.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
+            this.update(cx, |this, cx| this.share_extensions(cx)).ok();
+        })
+        .detach();
         // Launch shows the Space's colour, not a crossfade from the placeholder.
         this.fade.snap(1.0);
         this
@@ -431,6 +450,7 @@ impl<H: WebHost> Browser<H> {
             .active_space()
             .map(|s| self.host.extensions(s.profile))
             .unwrap_or_default();
+        self.share_extensions_if_new_profiles(cx);
         self.sync_groups(cx);
         self.save();
         cx.notify();

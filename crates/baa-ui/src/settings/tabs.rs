@@ -335,6 +335,9 @@ impl<H: WebHost> SettingsView<H> {
                 );
             }
             out.push(self.sub_row(format!("space:{}", id.0), left, buttons.into_any_element()));
+            if confirming {
+                out.push(self.note(delete_warning(&self.browser.read(cx).extensions_lost_with(id))));
+            }
         }
         out.push((
             None,
@@ -533,4 +536,14 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("History", Box::new(ShowHistory)),
         ("Settings", Box::new(OpenSettings)),
     ]
+}
+
+/// Shown under a Space while its Delete waits for "Delete for Good".
+pub(crate) fn delete_warning(lost_extensions: &[String]) -> String {
+    let base = "Its tabs, logins and site data are deleted.";
+    match lost_extensions {
+        [] => base.into(),
+        [one] => format!("{base} Its extension {one} is removed too; extensions in All Spaces stay."),
+        many => format!("{base} Its extensions {} are removed too; extensions in All Spaces stay.", many.join(", ")),
+    }
 }

@@ -77,6 +77,9 @@ impl<H: WebHost> Browser<H> {
         if change == ExtensionChange::Remove && self.session.active_space() == Some(space) {
             self.extensions.retain(|e| e.id != id);
         }
+        if change == ExtensionChange::Remove && self.is_extension_shared(id) {
+            self.remove_shared_everywhere(id, profile, cx);
+        }
         let this = cx.weak_entity();
         self.host.change_extension(
             profile,
@@ -193,6 +196,7 @@ impl<H: WebHost> SettingsView<H> {
         let confirming = page.confirm_remove.as_deref() == Some(e.id.as_str());
         let pinned = !b.settings.unpinned_extensions.contains(&e.id);
         let icon_path = b.extensions.iter().find(|x| x.id == e.id).and_then(|x| x.icon.clone());
+        let shared = b.is_extension_shared(&e.id);
         let (id, on) = (e.id.clone(), e.enabled);
         let switch = self.switch("ext-on", on).on_click(cx.listener(move |this, _, _, cx| {
             this.browser.update(cx, |b, cx| b.change_extension(space, &id, ExtensionChange::Enable(!on), cx))
@@ -226,6 +230,14 @@ impl<H: WebHost> SettingsView<H> {
                 .on_click(cx.listener(move |this, _, _, cx| this.browser.update(cx, |b, cx| b.toggle_extension_pin(&id, cx))))
                 .into_any_element(),
         );
+        let id = e.id.clone();
+        actions.push(
+            self.button("ext-share", if shared { "✓ In All Spaces" } else { "Add to All Spaces" }, false, cx)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.browser.update(cx, |b, cx| b.set_extension_shared(&id, !shared, cx))
+                }))
+                .into_any_element(),
+        );
         if developer && e.unpacked {
             let id = e.id.clone();
             actions.push(
@@ -251,7 +263,16 @@ impl<H: WebHost> SettingsView<H> {
             );
         }
         actions.push(
-            self.button("ext-remove", if confirming { "Remove for Good" } else { "Remove" }, confirming, cx)
+            self.button(
+                "ext-remove",
+                match (confirming, shared) {
+                    (true, true) => "Remove from All Spaces",
+                    (true, false) => "Remove for Good",
+                    _ => "Remove",
+                },
+                confirming,
+                cx,
+            )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let id = id.clone();
                     this.browser.update(cx, |b, cx| {

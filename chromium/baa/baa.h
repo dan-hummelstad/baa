@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 7
+#define BAA_ABI_VERSION 8
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -446,6 +446,15 @@ BAA_EXPORT bool baa_profile_extension_change(BaaProfile* profile,
 // call. The extension then shows in baa_profile_extensions.
 BAA_EXPORT void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id,
                                           const char* path);
+
+// Installs extension `extension_id` of `from` into `to` without asking: from
+// the Web Store, approved by `from`'s copy (the store's version may differ but
+// not ask for more), or from the same folder if it is unpacked there. Already
+// in `to`: succeeds at once. Result by `load_unpacked_done(id, ...)`, never
+// inside this call.
+BAA_EXPORT void baa_profile_copy_extension(BaaProfile* to, uint64_t id,
+                                           BaaProfile* from,
+                                           const char* extension_id);
 
 // Clicks the extension's toolbar action on the profile's active tab (grants
 // activeTab, fires action.onClicked). Returns the popup page when the action

@@ -378,6 +378,16 @@ impl WebHost for CoreWebHost {
         (self.core.profile_load_unpacked)(handle, id, c_string(&path.to_string_lossy()).as_ptr());
     }
 
+    fn copy_extension(&self, to: ProfileId, from: ProfileId, ext: &str, _cx: &mut App, done: Callback<Result<String, String>>) {
+        let id = self.dispatch.unpacked.add(done);
+        let handle = |p| if is_ephemeral(p) { std::ptr::null_mut() } else { self.profile_handle(p) };
+        let (to, from) = (handle(to), handle(from));
+        if to.is_null() || from.is_null() {
+            return self.dispatch.finish_unpacked(id, Err("This Space cannot have extensions".into()));
+        }
+        (self.core.profile_copy_extension)(to, id, from, c_string(ext).as_ptr());
+    }
+
     fn is_default_browser(&self) -> bool {
         (self.core.is_default_browser)()
     }

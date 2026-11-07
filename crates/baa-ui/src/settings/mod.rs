@@ -9,7 +9,7 @@
 mod extensions;
 mod privacy;
 pub(crate) mod rows;
-mod tabs;
+pub(crate) mod tabs;
 
 use std::{collections::HashMap, time::Instant};
 
@@ -102,6 +102,23 @@ pub(crate) fn window_options(cx: &App) -> WindowOptions {
 impl<H: WebHost> Browser<H> {
     /// The one entry point: opens the settings window at `tab` and `row`, or
     /// brings the open one there. `None` keeps the tab it shows.
+    /// Deleting a Space goes through the Spaces tab, where the confirmation says what goes with it.
+    pub(crate) fn ask_delete_space(&mut self, id: SpaceId, cx: &mut Context<Self>) {
+        self.open_settings_at(Some(Tab::Spaces), Some("spaces"), cx);
+        let browser = cx.entity();
+        // After open_settings_at's own deferred step, so the window exists.
+        cx.defer(move |cx| {
+            if let Some(handle) = browser.read(cx).settings_window {
+                handle
+                    .update(cx, |view, _, cx| {
+                        view.confirm_delete = Some(id);
+                        cx.notify();
+                    })
+                    .ok();
+            }
+        });
+    }
+
     pub(crate) fn open_settings_at(&mut self, tab: Option<Tab>, row: Option<&'static str>, cx: &mut Context<Self>) {
         let browser = cx.entity();
         // Later, outside this update: a new window draws once before it returns,

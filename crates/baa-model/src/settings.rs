@@ -216,6 +216,8 @@ pub struct Settings {
     pub chrome: ChromeStyle,
     /// Extension ids kept out of the toolbar; they stay in the extensions menu.
     pub unpinned_extensions: Vec<String>,
+    /// Extension ids every Space has: baa installs them into each Space's profile.
+    pub shared_extensions: Vec<String>,
     pub devtools_dock: DevToolsDock,
     /// false archives Today tabs at startup instead of restoring them.
     pub restore_today: bool,
@@ -238,6 +240,7 @@ impl Default for Settings {
             archive_after_hours: 12,
             chrome: ChromeStyle::Arc,
             unpinned_extensions: Vec::new(),
+            shared_extensions: Vec::new(),
             devtools_dock: DevToolsDock::default(),
             restore_today: true,
             external_links: ExternalLinks::default(),

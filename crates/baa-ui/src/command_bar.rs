@@ -500,7 +500,7 @@ impl<H: WebHost> Browser<H> {
             }
             Command::DeleteSpace => {
                 if let Some(id) = self.session.active_space() {
-                    self.delete_space(id, window, cx);
+                    self.ask_delete_space(id, cx);
                 }
             }
             Command::SwapSidebarSide => self.swap_sidebar_side(cx),

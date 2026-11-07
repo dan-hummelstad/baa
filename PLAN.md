@@ -44,7 +44,7 @@ bot PR takes new Helium releases; a release chain builds the engine in CI. No ba
 | De-Googling | Helium's patch set in the build, plus baa's switches | Runtime stripping of stock CEF | See `PLAN-chromium.md`. |
 | Storage isolation | One Chrome `Profile` per Space (`space-<id>`) | — | See `PLAN-chromium.md` and §6. |
 | Updates | Weekly Helium bump PR, release chain builds the engine, `release.yml` ships a signed DMG; no in-app updater yet | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
-| Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. |
+| Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. Per Space by default; "Add to All Spaces" (Settings → Extensions, or the install prompt's Space picker) installs one into every Space's profile through `baa_profile_copy_extension` (ABI 8, no second prompt). Each Space keeps its own copy's data and on/off; removing a shared one removes it everywhere. Deleting a Space names the extensions that go with it. |
 
 ---
 

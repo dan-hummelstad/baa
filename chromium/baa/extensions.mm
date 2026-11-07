@@ -36,6 +36,9 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/install_approval.h"
+#include "extensions/browser/webstore_installer.h"
+#include "base/task/single_thread_task_runner.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/unpacked_installer.h"
@@ -382,6 +385,32 @@ BaaTabId baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   return baa::IdOf(popup->tab());
 }
 
+namespace {
+
+// Answers request `id` (kLoadUnpacked) with the extension's id or Chrome's error.
+void LoadUnpacked(Profile* profile, uint64_t id, const base::FilePath& path) {
+  auto installer = extensions::UnpackedInstaller::Create(profile);
+  installer->set_be_noisy_on_failure(false);
+  // Posted: the installer reports some failures before Load returns.
+  installer->set_completion_callback(base::BindOnce(
+      [](uint64_t id, const extensions::Extension* extension, const base::FilePath&, const std::u16string& error) {
+        std::string message = extension ? extension->id() : base::UTF16ToUTF8(error);
+        baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, extension != nullptr,
+                                message.empty() ? "Could not load the extension" : message);
+      },
+      id));
+  installer->Load(path);
+}
+
+// baa_profile_copy_extension's end: frees its blank page and answers the request.
+void CopyDone(content::WebContents* contents, uint64_t id, bool ok, const std::string& message) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, contents);
+  baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, ok,
+                          message.empty() ? "Could not install the extension" : message);
+}
+
+}  // namespace
+
 void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id, const char* path) {
   Profile* chrome_profile = baa::ChromeProfileOf(profile);
   baa::BeginRequest(baa::RequestKind::kLoadUnpacked, id, chrome_profile);
@@ -393,15 +422,48 @@ void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id, const char* pat
     baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, false, error);
     return;
   }
-  auto installer = extensions::UnpackedInstaller::Create(chrome_profile);
-  installer->set_be_noisy_on_failure(false);
-  // Posted: the installer reports some failures before Load returns.
-  installer->set_completion_callback(base::BindOnce(
-      [](uint64_t id, const extensions::Extension* extension, const base::FilePath&, const std::u16string& error) {
-        std::string message = extension ? extension->id() : base::UTF16ToUTF8(error);
-        baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, extension != nullptr,
-                                message.empty() ? "Could not load the extension" : message);
-      },
-      id));
-  installer->Load(base::FilePath(path));
+  LoadUnpacked(chrome_profile, id, base::FilePath(path));
+}
+
+void baa_profile_copy_extension(BaaProfile* to, uint64_t id, BaaProfile* from, const char* extension_id) {
+  Profile* target = baa::ChromeProfileOf(to);
+  Profile* source = baa::ChromeProfileOf(from);
+  baa::BeginRequest(baa::RequestKind::kLoadUnpacked, id, target);
+  const extensions::Extension* ext =
+      source && extension_id ? extensions::ExtensionRegistry::Get(source)->GetInstalledExtension(extension_id)
+                             : nullptr;
+  if (!target || !ext || extensions::Manifest::IsComponentLocation(ext->location())) {
+    baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, false, "No such profile or extension");
+    return;
+  }
+  if (extensions::ExtensionRegistry::Get(target)->GetInstalledExtension(ext->id())) {
+    baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, true, ext->id());
+    return;
+  }
+  if (extensions::Manifest::IsUnpackedLocation(ext->location())) {
+    LoadUnpacked(target, id, ext->path());
+    return;
+  }
+  // The user already approved this extension in `source`: no prompt, and the store's current
+  // version may differ from that copy but not ask for more (a loose manifest check).
+  auto approval = extensions::InstallApproval::CreateWithNoInstallPrompt(
+      target, ext->id(), ext->manifest()->value()->Clone(), /*strict_manifest_check=*/false);
+  approval->skip_post_install_ui = true;
+  // WebstoreInstaller downloads through a page of the target profile; a blank one serves.
+  // Whichever callback runs frees it.
+  content::WebContents* contents =
+      content::WebContents::Create(content::WebContents::CreateParams(target)).release();
+  auto installer = base::MakeRefCounted<extensions::WebstoreInstaller>(
+      target,
+      base::BindOnce(
+          [](content::WebContents* contents, uint64_t id, const std::string& ext_id) {
+            CopyDone(contents, id, true, ext_id);
+          },
+          contents, id),
+      base::BindOnce(
+          [](content::WebContents* contents, uint64_t id, const std::string&, const std::string& error,
+             extensions::WebstoreInstaller::FailureReason) { CopyDone(contents, id, false, error); },
+          contents, id),
+      contents, ext->id(), std::move(approval), extensions::WebstoreInstaller::INSTALL_SOURCE_OTHER);
+  installer->Start();
 }

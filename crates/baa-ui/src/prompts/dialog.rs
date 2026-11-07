@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEven
 
 use super::{button, site_name};
 use crate::{
-    browser::{drop_in, shadow, Browser},
+    browser::{drop_in, shadow, Browser, InstallTarget},
     icons::icon,
     input::{Key, TextField},
     theme::{surface, Theme},
@@ -23,6 +23,16 @@ pub(crate) struct DialogAsk {
     pub password: TextField,
     /// Auth only: Tab moves the keyboard to the password.
     pub on_password: bool,
+    /// Extension installs only: where the extension goes.
+    pub target: InstallTarget,
+}
+
+/// An extension install prompt, not a re-enable or a permission increase (those keep
+/// the extension where it is).
+// ponytail: told apart by Chrome's button label ("Add extension"); a translated label
+// hides the Space picker. Pass the prompt type through the ABI if that matters.
+fn is_install(d: &Dialog) -> bool {
+    d.kind == DialogKind::ExtensionInstall && (d.ok_label.is_empty() || d.ok_label.starts_with("Add"))
 }
 
 impl DialogAsk {
@@ -34,6 +44,7 @@ impl DialogAsk {
             field,
             password: TextField { masked: true, ..Default::default() },
             on_password: false,
+            target: InstallTarget::Here,
         }
     }
 }
@@ -90,11 +101,62 @@ impl<H: WebHost> Browser<H> {
         let Some(ask) = self.asks.get_mut(&tab).and_then(|a| a.dialog.take()) else {
             return;
         };
+        if ok && is_install(&ask.dialog) {
+            if let Some(space) = self.session.tab(tab).map(|t| t.space) {
+                self.install_accepted(space, ask.target, cx);
+            }
+        }
         if let Some((page, _)) = self.pages.get(&tab) {
             let answer = DialogAnswer { ok, text: ask.field.text, password: ask.password.text, checked: ask.checked };
             page.read(cx).answer_dialog(ask.dialog.id, answer);
         }
         self.close_overlays(window, cx);
+    }
+
+    pub(crate) fn set_install_target(&mut self, target: InstallTarget, cx: &mut Context<Self>) {
+        if let Some(d) = self.active_tab().and_then(|t| self.asks.get_mut(&t)).and_then(|a| a.dialog.as_mut()) {
+            d.target = target;
+            cx.notify();
+        }
+    }
+
+    /// "Add to": this Space, another one, or all of them.
+    fn render_install_target(&self, ask: &DialogAsk, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let here = self.active_space().map(|s| s.id);
+        let mut choices: Vec<(InstallTarget, String)> = self
+            .session
+            .spaces()
+            .iter()
+            .filter(|s| !s.ephemeral)
+            .map(|s| {
+                let target = if Some(s.id) == here { InstallTarget::Here } else { InstallTarget::Space(s.id) };
+                (target, format!("{} {}", s.icon, s.name))
+            })
+            .collect();
+        choices.push((InstallTarget::All, "All Spaces".into()));
+        let chips = choices.into_iter().enumerate().map(|(i, (target, label))| {
+            let on = ask.target == target;
+            div()
+                .id(("install-target", i))
+                .debug_selector(move || format!("install-target-{i}"))
+                .px(px(10.))
+                .py(px(4.))
+                .rounded(r(7.))
+                .border_1()
+                .border_color(if on { theme.accent } else { surface::border().into() })
+                .bg(if on { Hsla { a: 0.12, ..theme.accent } } else { gpui::white() })
+                .text_size(px(12.5))
+                .text_color(surface::ink())
+                .child(SharedString::from(label))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_install_target(target, cx)))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(div().text_size(px(12.)).text_color(surface::muted()).child("Add to"))
+            .child(div().flex().flex_wrap().gap(px(6.)).children(chips))
+            .into_any_element()
     }
 
     /// The scrim and the sheet over the page.
@@ -210,6 +272,7 @@ impl<H: WebHost> Browser<H> {
             })
             .children(fields)
             .children(checkbox)
+            .children(is_install(d).then(|| self.render_install_target(ask, theme, cx)))
             .child(
                 div()
                     .flex()

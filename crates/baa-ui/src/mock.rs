@@ -16,6 +16,10 @@ pub struct MockHost {
     pub autocompletes: RefCell<Vec<String>>,
     update: std::rc::Rc<RefCell<Option<baa_web::SuggestUpdate>>>,
     pub extensions: RefCell<Vec<baa_web::Extension>>,
+    /// Overrides `extensions` for the profiles listed; `copy_extension` adds to it.
+    pub profile_extensions: RefCell<std::collections::HashMap<ProfileId, Vec<baa_web::Extension>>>,
+    /// (to, from, id) of each `copy_extension`.
+    pub copies: RefCell<Vec<(ProfileId, ProfileId, String)>>,
     pub chrome_tabs: Entity<baa_web::ChromeTabs>,
     pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
     pub extension_changes: RefCell<Vec<(String, baa_web::ExtensionChange)>>,
@@ -169,6 +173,8 @@ impl MockHost {
             autocompletes: RefCell::default(),
             update: Default::default(),
             extensions: RefCell::default(),
+            profile_extensions: RefCell::default(),
+            copies: RefCell::default(),
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
             extension_details: RefCell::default(),
             extension_changes: RefCell::default(),
@@ -264,8 +270,19 @@ impl WebHost for MockHost {
         drop(list);
         done(true, cx)
     }
-    fn extensions(&self, _: ProfileId) -> Vec<baa_web::Extension> {
-        self.extensions.borrow().clone()
+    fn extensions(&self, profile: ProfileId) -> Vec<baa_web::Extension> {
+        match self.profile_extensions.borrow().get(&profile) {
+            Some(list) => list.clone(),
+            None => self.extensions.borrow().clone(),
+        }
+    }
+    fn copy_extension(&self, to: ProfileId, from: ProfileId, id: &str, cx: &mut App, done: baa_web::Callback<Result<String, String>>) {
+        self.copies.borrow_mut().push((to, from, id.into()));
+        let ext = self.extensions(from).into_iter().find(|e| e.id == id);
+        if let Some(ext) = ext {
+            self.profile_extensions.borrow_mut().entry(to).or_default().push(ext);
+        }
+        done(Ok(id.into()), cx)
     }
     fn autocomplete(&self, _: ProfileId, text: &str, update: baa_web::SuggestUpdate) {
         self.autocompletes.borrow_mut().push(text.into());

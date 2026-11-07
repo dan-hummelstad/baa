@@ -270,6 +270,9 @@ pub trait WebHost: 'static {
     /// Loads the unpacked extension in folder `path` (developer mode); `done`
     /// gets its id, or Chrome's error text.
     fn load_unpacked(&self, profile: ProfileId, path: &std::path::Path, cx: &mut App, done: Callback<Result<String, String>>);
+    /// Installs `from`'s extension `id` into `to` without a prompt (see `baa_profile_copy_extension`).
+    /// `Ok` with the id, also when `to` already has it.
+    fn copy_extension(&self, to: ProfileId, from: ProfileId, id: &str, cx: &mut App, done: Callback<Result<String, String>>);
     /// Whether baa is the system's default browser for http and https.
     fn is_default_browser(&self) -> bool;
     /// macOS asks the user; check again with `is_default_browser` later.

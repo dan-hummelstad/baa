@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 7;
+pub const ABI_VERSION: c_int = 8;
 
 #[repr(C)]
 pub struct Profile {
@@ -241,6 +241,7 @@ pub struct Core {
     pub profile_extensions: extern "C" fn(*mut Profile, ExtensionVisitor, *mut c_void) -> c_int,
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
     pub profile_load_unpacked: extern "C" fn(*mut Profile, u64, *const c_char),
+    pub profile_copy_extension: extern "C" fn(*mut Profile, u64, *mut Profile, *const c_char),
     pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> TabId,
     pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> TabId,
     pub tab_close: extern "C" fn(TabId),
@@ -334,6 +335,7 @@ pub fn load() -> &'static Core {
             profile_extensions,
             profile_extension_change,
             profile_load_unpacked,
+            profile_copy_extension,
             extension_popup,
             tab_create,
             tab_close,

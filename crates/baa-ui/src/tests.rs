@@ -125,6 +125,15 @@ fn spaces_isolate_profiles_and_delete_cleanly(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("secondary-t");
     cx.simulate_input("delete space");
     cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.session().spaces().len(), 2, "the command only asks, in Settings");
+        assert!(b.settings_window.is_some());
+    });
+    b.update_in(cx, |b, window, cx| {
+        let id = b.session.active_space().unwrap();
+        b.delete_space(id, window, cx)
+    });
     b.read_with(cx, |b, _| {
         assert_eq!(b.session().spaces().len(), 1);
         assert!(b.pages.is_empty(), "work page dropped");

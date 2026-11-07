@@ -128,6 +128,9 @@ extern "C" fn profile_set_site_rule(_: *mut Profile, kind: u32, pattern: *const 
 extern "C" fn profile_clear_data(_: *mut Profile, id: u64, since_ms: i64, types: u32) {
     log(format!("profile_clear_data {id} {since_ms} {types}"));
 }
+extern "C" fn profile_copy_extension(_: *mut Profile, id: u64, _: *mut Profile, ext: *const c_char) {
+    log(format!("profile_copy_extension {id} {}", arg(ext)));
+}
 extern "C" fn profile_load_unpacked(_: *mut Profile, id: u64, path: *const c_char) {
     log(format!("profile_load_unpacked {id} {}", arg(path)));
 }
@@ -273,6 +276,7 @@ fn fake_core() -> &'static Core {
         profile_extensions,
         profile_extension_change,
         profile_load_unpacked,
+        profile_copy_extension,
         extension_popup,
         tab_create,
         tab_close,
