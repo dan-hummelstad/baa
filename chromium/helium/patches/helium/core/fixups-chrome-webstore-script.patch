@@ -54,7 +54,7 @@
 +
 +  const replaceDownloadButtonText = (el) => {
 +    if (el.nodeType === Node.TEXT_NODE) {
-+      const replacement = el.nodeValue.replace(CHROME_NAME_REGEX, 'Helium');
++      const replacement = el.nodeValue.replace(CHROME_NAME_REGEX, 'baa');
 +      if (replacement === el.nodeValue) {
 +        return false;
 +      }
