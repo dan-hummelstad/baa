@@ -34,6 +34,7 @@ mod actions;
 mod page_area;
 mod header;
 mod groups;
+mod live;
 mod page_state;
 #[cfg(test)]
 mod tests_m3_page;
@@ -118,6 +119,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) renaming_folder: Option<FolderId>,
     /// Folders opening or closing: 0 closed, 1 open. Absent = at rest.
     pub(crate) folder_motion: HashMap<FolderId, Spring>,
+    /// Why a live folder's last refresh failed.
+    pub(crate) live_errors: HashMap<FolderId, String>,
     /// Hover, press and selection springs of everything the pointer touches.
     pub(crate) motion: Motion,
     /// Where each tab's row was at the last sync, to animate rows in and out.
@@ -259,6 +262,7 @@ impl<H: WebHost> Browser<H> {
             renaming: None,
             renaming_folder: None,
             folder_motion: HashMap::new(),
+            live_errors: HashMap::new(),
             motion: Motion::default(),
             placements: None,
             ghosts: Vec::new(),
@@ -302,6 +306,7 @@ impl<H: WebHost> Browser<H> {
             last_frame: cx.background_executor().now(),
         };
         this.sync(window, cx);
+        this.start_live_refresh(window, cx);
         // Launch shows the Space's colour, not a crossfade from the placeholder.
         this.fade.snap(1.0);
         this

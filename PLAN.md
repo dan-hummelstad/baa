@@ -56,7 +56,8 @@ Must-haves (in the brief) are bold.
 - **Vertical tab column**, collapsible (⌘S), auto-hide with hover reveal.
 - **Side is configurable: left (default) or right**; all slide/reveal animations and the space-swipe direction mirror with it. Setting is global, Space override allowed.
 - Four zones top→bottom: Favorites grid (cross-space pinned icons), Pinned tabs, Today (unpinned), New Tab.
-- Drag between zones; drag reorder; folders inside pinned.
+- Drag between zones; drag reorder; folders inside pinned, nested to any depth (folder menu "New Subfolder"; the Arc import keeps Arc's nesting).
+- Live folders (built 2026-11-07): a folder whose tabs mirror a GitHub search (pull requests, review requests, issues; or the filter of the GitHub list page you are on) or an RSS/Atom feed (or the feed a page links to). Refreshed every 10 min and from the folder menu, through the system `curl`; GitHub signs in with `GH_TOKEN`/`GITHUB_TOKEN` or the `gh` CLI's login. A tab that drops out of the source stays while it is open. Live folders take no dragged tabs and hold no subfolders.
 - Auto-archive of Today tabs after N hours (12 h default, configurable), Archive view to recover.
 - Tab rows: favicon, title, loading indicator, audio indicator, close-on-hover.
 

@@ -137,8 +137,8 @@ pub struct ArcTab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArcItem {
     Tab(ArcTab),
-    /// Nested folders are flattened into this one; baa folders do not nest.
-    Folder { name: String, tabs: Vec<ArcTab> },
+    /// Nested Arc folders stay nested.
+    Folder { name: String, items: Vec<ArcItem> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,7 +208,9 @@ pub fn read_arc_sidebar(path: &Path) -> Result<ArcSidebar, Error> {
 fn arc_item<'a>(item: &'a Value, children: &impl Fn(&str) -> Vec<&'a Value>) -> Option<ArcItem> {
     if item["data"].get("list").is_some() {
         let name = item["title"].as_str().unwrap_or("Folder").into();
-        return Some(ArcItem::Folder { name, tabs: arc_tabs(item, children) });
+        let id = item["id"].as_str().unwrap_or_default();
+        let items = children(id).into_iter().filter_map(|c| arc_item(c, children)).collect();
+        return Some(ArcItem::Folder { name, items });
     }
     arc_tab(item).map(ArcItem::Tab)
 }
@@ -286,7 +288,13 @@ mod tests {
                     pinned: vec![
                         ArcItem::Folder {
                             name: "Work".into(),
-                            tabs: vec![t("https://two", "saved T2"), t("https://three", "saved T3")]
+                            items: vec![
+                                ArcItem::Tab(t("https://two", "saved T2")),
+                                ArcItem::Folder {
+                                    name: "Nested".into(),
+                                    items: vec![ArcItem::Tab(t("https://three", "saved T3"))]
+                                },
+                            ]
                         },
                         ArcItem::Tab(t("https://one", "Renamed")),
                     ],

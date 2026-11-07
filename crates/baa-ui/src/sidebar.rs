@@ -145,7 +145,7 @@ impl<H: WebHost> Browser<H> {
                     .gap(px(6.))
                     .children(
                         self.session
-                            .folders(space)
+                            .subfolders(space, None)
                             .map(|f| self.render_folder(f, theme, cx))
                             .collect::<Vec<_>>(),
                     )
@@ -619,9 +619,9 @@ impl<H: WebHost> Browser<H> {
             .children(tiles)
     }
 
-    /// A folder row, then its tabs indented unless it is collapsed (its active
-    /// tab still shows, as in Arc). Opening and closing springs the height.
-    fn render_folder(&self, folder: &Folder, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A folder row, then its subfolders and tabs indented unless it is collapsed (its
+    /// active tab still shows, as in Arc). Opening and closing springs the height.
+    fn render_folder(&self, folder: &Folder, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let id = folder.id;
         let open = !folder.collapsed;
         // Overshoot would grow past the rows, so the spring is clamped.
@@ -643,7 +643,27 @@ impl<H: WebHost> Browser<H> {
             })
             .collect();
         let rows = stack(self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme), true);
-        let name = match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
+        // ponytail: subfolders pop in and out instead of folding with the spring.
+        let subfolders: Vec<AnyElement> = if open || animating {
+            self.session.subfolders(folder.space, Some(id)).map(|f| self.render_folder(f, theme, cx)).collect()
+        } else {
+            Vec::new()
+        };
+        let error = self.live_errors.get(&id).filter(|_| open).map(|e| {
+            div()
+                .px(px(10.))
+                .py(px(4.))
+                .text_size(px(11.))
+                .text_color(theme.ink_muted)
+                .child(SharedString::from(e.clone()))
+        });
+        let glyph = match &folder.live {
+            Some(baa_model::LiveSource::GitHub { .. }) => "git-pull-request",
+            Some(baa_model::LiveSource::Feed { .. }) => "rss",
+            None if open => "folder-open",
+            None => "folder",
+        };
+        let name =match self.renaming.as_ref().filter(|_| self.renaming_folder == Some(id)) {
             Some(field) => div()
                 .flex_1()
                 .min_w_0()
@@ -706,23 +726,26 @@ impl<H: WebHost> Browser<H> {
                         this.set_folder_open(id, true);
                         this.sync(window, cx);
                     }))
-                    .child(icon(if open { "folder-open" } else { "folder" }, 16., theme.ink).with_transformation(
+                    .child(icon(glyph, 16., theme.ink).with_transformation(
                         Transformation::scale(gpui::size(1. - 0.15 * p, 1. - 0.15 * p)),
                     ))
                     .child(name),
                 key,
                 cx,
             ))
-            .when(!rows.is_empty(), |d| {
+            .when(!rows.is_empty() || !subfolders.is_empty() || error.is_some(), |d| {
                 d.child(
                     div()
                         .pl(px(14.))
                         .flex()
                         .flex_col()
                         .debug_selector(|| "folder-rows".into())
+                        .children(subfolders)
+                        .children(error)
                         .children(rows),
                 )
             })
+            .into_any_element()
     }
 
     /// Library, the Space dots, and New Space.

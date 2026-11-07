@@ -5,6 +5,7 @@
 //! archive policy is testable.
 
 pub mod import;
+pub mod live;
 mod permission;
 mod settings;
 mod store;
@@ -14,6 +15,7 @@ pub use settings::{
     ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
     SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
 };
+pub use live::{LiveItem, LiveSource};
 pub use store::{DownloadRecord, HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};
@@ -40,13 +42,19 @@ pub enum Zone {
     Favorite,
 }
 
-/// A collapsible group of pinned tabs in one Space.
+/// A collapsible group of pinned tabs (and subfolders) in one Space.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: FolderId,
     pub space: SpaceId,
     pub name: String,
     pub collapsed: bool,
+    /// `None`: at the top of the pinned section.
+    #[serde(default)]
+    pub parent: Option<FolderId>,
+    /// Set: its tabs mirror this source (see [`Session::set_live_items`]); it holds no subfolders.
+    #[serde(default)]
+    pub live: Option<LiveSource>,
 }
 
 /// User-visible storage profile ("Personal", "Work"). Several Spaces may share one.
@@ -239,14 +247,31 @@ impl Session {
     /// Every live tab of a Space, in sidebar order: folders, loose pinned, Today.
     /// Favourites are not part of any one Space.
     pub fn space_tabs(&self, space: SpaceId) -> impl Iterator<Item = &Tab> {
-        self.folders(space)
-            .flat_map(|f| self.folder_tabs(f.id))
+        let mut order = Vec::new();
+        self.folder_order(space, None, &mut order);
+        order
+            .into_iter()
+            .flat_map(move |f| self.folder_tabs(f))
             .chain(self.tabs(space, Zone::Pinned))
             .chain(self.tabs(space, Zone::Today))
     }
 
+    /// Sidebar order: a folder's subfolders sit above its own tabs.
+    fn folder_order(&self, space: SpaceId, parent: Option<FolderId>, out: &mut Vec<FolderId>) {
+        for f in self.subfolders(space, parent) {
+            self.folder_order(space, Some(f.id), out);
+            out.push(f.id);
+        }
+    }
+
+    /// Every folder of a Space, subfolders included.
     pub fn folders(&self, space: SpaceId) -> impl Iterator<Item = &Folder> {
         self.folders.iter().filter(move |f| f.space == space)
+    }
+
+    /// The folders directly in `parent`, or at the top of the Space for `None`.
+    pub fn subfolders(&self, space: SpaceId, parent: Option<FolderId>) -> impl Iterator<Item = &Folder> {
+        self.folders.iter().filter(move |f| f.space == space && f.parent == parent)
     }
 
     pub fn folder(&self, id: FolderId) -> Option<&Folder> {
@@ -262,26 +287,78 @@ impl Session {
     }
 
     pub fn add_folder(&mut self, space: SpaceId, name: &str) -> FolderId {
+        self.push_folder(space, None, name, None)
+    }
+
+    /// `None` if `parent` is gone or live.
+    pub fn add_subfolder(&mut self, parent: FolderId, name: &str) -> Option<FolderId> {
+        let space = self.folder(parent).filter(|f| f.live.is_none())?.space;
+        Some(self.push_folder(space, Some(parent), name, None))
+    }
+
+    /// Empty until the caller fetches the source and hands the result to [`Self::set_live_items`].
+    pub fn add_live_folder(&mut self, space: SpaceId, name: &str, source: LiveSource) -> FolderId {
+        self.push_folder(space, None, name, Some(source))
+    }
+
+    fn push_folder(&mut self, space: SpaceId, parent: Option<FolderId>, name: &str, live: Option<LiveSource>) -> FolderId {
         let id = FolderId(self.alloc());
-        self.folders.push(Folder { id, space, name: name.into(), collapsed: false });
+        self.folders.push(Folder { id, space, name: name.into(), collapsed: false, parent, live });
         id
     }
 
-    /// Its tabs stay pinned, below the remaining folders.
+    /// Its subfolders and tabs move up into its parent folder, or the pinned section.
+    /// A live folder's tabs go with it.
     pub fn remove_folder(&mut self, id: FolderId) {
-        self.folders.retain(|f| f.id != id);
+        let Some(i) = self.folders.iter().position(|f| f.id == id) else { return };
+        let folder = self.folders.remove(i);
+        if folder.live.is_some() {
+            return self.drop_tabs(|t| t.folder == Some(id));
+        }
+        for f in self.folders.iter_mut().filter(|f| f.parent == Some(id)) {
+            f.parent = folder.parent;
+        }
         let tabs: Vec<TabId> = self.folder_tabs(id).map(|t| t.id).collect();
         for tab in tabs {
             if let Some((mut tab, _)) = self.take(tab) {
-                tab.folder = None;
+                tab.folder = folder.parent;
                 self.insert(tab, usize::MAX);
             }
         }
     }
 
+    /// Makes a live folder's tabs match `items`, in order. A tab no longer listed goes,
+    /// unless a Space is showing it.
+    pub fn set_live_items(&mut self, folder: FolderId, items: &[LiveItem]) {
+        let Some(space) = self.folder(folder).filter(|f| f.live.is_some()).map(|f| f.space) else { return };
+        let shown: Vec<TabId> = self.spaces.iter().filter_map(|s| s.active_tab).collect();
+        let (mut old, rest): (Vec<Tab>, Vec<Tab>) =
+            std::mem::take(&mut self.tabs).into_iter().partition(|t| t.folder == Some(folder));
+        self.tabs = rest;
+        for item in items {
+            let tab = match old.iter().position(|t| t.url == item.url) {
+                Some(i) => Tab { title: item.title.clone(), ..old.remove(i) },
+                None => Tab {
+                    id: TabId(self.alloc()),
+                    space,
+                    zone: Zone::Pinned,
+                    folder: Some(folder),
+                    url: item.url.clone(),
+                    title: item.title.clone(),
+                    favicon: None,
+                    last_active: now(),
+                    archived_at: None,
+                },
+            };
+            self.tabs.push(tab);
+        }
+        self.tabs.extend(old.into_iter().filter(|t| shown.contains(&t.id)));
+    }
+
     /// Drag into a folder: the tab becomes pinned in the folder's Space.
+    /// A live folder takes no tabs; its source decides them.
     pub fn move_to_folder(&mut self, id: TabId, folder: FolderId, index: usize) {
-        let Some(space) = self.folder(folder).map(|f| f.space) else { return };
+        let Some(space) = self.folder(folder).filter(|f| f.live.is_none()).map(|f| f.space) else { return };
         let Some((mut tab, old_index)) = self.take(id) else { return };
         let (from, old_zone) = (tab.space, tab.zone);
         tab.space = space;
@@ -313,25 +390,15 @@ impl Session {
     }
 
     /// Each Arc Space becomes a new Space with its own profile, holding Arc's pinned tabs
-    /// and folders; Arc favourites not already here become favourites of the first one.
-    /// Returns how many tabs were added.
+    /// and folders (nested ones as subfolders); Arc favourites not already here become
+    /// favourites of the first one. Returns how many tabs were added.
     pub fn import_arc(&mut self, arc: &import::ArcSidebar) -> usize {
         let before = self.tabs.len();
         let mut first = None;
         for sp in &arc.spaces {
             let space = self.add_space(&sp.name, sp.emoji.as_deref().unwrap_or("🐑"), None);
             first.get_or_insert(space);
-            for item in &sp.pinned {
-                match item {
-                    import::ArcItem::Tab(t) => self.push_tab(space, Zone::Pinned, None, t),
-                    import::ArcItem::Folder { name, tabs } => {
-                        let folder = self.add_folder(space, name);
-                        for t in tabs {
-                            self.push_tab(space, Zone::Pinned, Some(folder), t);
-                        }
-                    }
-                }
-            }
+            self.import_arc_items(space, None, &sp.pinned);
         }
         if let Some(space) = first.or(self.active_space) {
             for t in &arc.favorites {
@@ -341,6 +408,18 @@ impl Session {
             }
         }
         self.tabs.len() - before
+    }
+
+    fn import_arc_items(&mut self, space: SpaceId, folder: Option<FolderId>, items: &[import::ArcItem]) {
+        for item in items {
+            match item {
+                import::ArcItem::Tab(t) => self.push_tab(space, Zone::Pinned, folder, t),
+                import::ArcItem::Folder { name, items } => {
+                    let sub = self.push_folder(space, folder, name, None);
+                    self.import_arc_items(space, Some(sub), items);
+                }
+            }
+        }
     }
 
     /// Appends an inactive tab to the end of its list.
@@ -690,14 +769,21 @@ mod tests {
                     emoji: Some("🐦".into()),
                     pinned: vec![
                         ArcItem::Tab(t("https://a")),
-                        ArcItem::Folder { name: "Docs".into(), tabs: vec![t("https://b"), t("https://c")] },
+                        ArcItem::Folder {
+                            name: "Docs".into(),
+                            items: vec![
+                                ArcItem::Tab(t("https://b")),
+                                ArcItem::Folder { name: "Specs".into(), items: vec![ArcItem::Tab(t("https://d"))] },
+                                ArcItem::Tab(t("https://c")),
+                            ],
+                        },
                     ],
                 },
                 ArcSpace { name: "Dev".into(), emoji: None, pinned: vec![] },
             ],
             favorites: vec![t("https://fav"), t("https://new")],
         };
-        assert_eq!(s.import_arc(&arc), 4);
+        assert_eq!(s.import_arc(&arc), 5);
         let work = s.spaces()[1].clone();
         assert_eq!((work.name.as_str(), work.icon.as_str()), ("Work", "🐦"));
         assert_eq!(s.spaces().len(), 3);
@@ -707,8 +793,51 @@ mod tests {
         let folder = s.folders(work.id).next().unwrap();
         assert_eq!(folder.name, "Docs");
         assert_eq!(s.folder_tabs(folder.id).map(|t| t.url.as_str()).collect::<Vec<_>>(), ["https://b", "https://c"]);
+        let specs = s.subfolders(work.id, Some(folder.id)).next().unwrap();
+        assert_eq!(specs.name, "Specs");
+        assert_eq!(s.folder_tabs(specs.id).map(|t| t.url.as_str()).collect::<Vec<_>>(), ["https://d"]);
+        assert_eq!(s.subfolders(work.id, None).count(), 1, "Specs is not top level");
         assert_eq!(urls(&s, home, Zone::Favorite), ["https://fav", "https://new"]);
         assert_eq!(s.active_space(), Some(home), "importing does not switch Space");
+    }
+
+    #[test]
+    fn subfolders_nest_and_hand_back_to_their_parent() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let (a, b) = (s.open_tab(sp, "a", 0), s.open_tab(sp, "b", 0));
+        let top = s.add_folder(sp, "Top");
+        let sub = s.add_subfolder(top, "Sub").unwrap();
+        let deep = s.add_subfolder(sub, "Deep").unwrap();
+        s.move_to_folder(a, top, 0);
+        s.move_to_folder(b, sub, 0);
+        let order: Vec<_> = s.space_tabs(sp).map(|t| t.url.as_str()).collect();
+        assert_eq!(order, ["b", "a"], "a folder's subfolders sit above its own tabs");
+        s.remove_folder(sub);
+        assert_eq!(s.tab(b).unwrap().folder, Some(top));
+        assert_eq!(s.folder(deep).unwrap().parent, Some(top));
+    }
+
+    #[test]
+    fn live_folders_follow_their_source() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let src = LiveSource::Feed { url: "https://f".into() };
+        let f = s.add_live_folder(sp, "Feed", src);
+        let item = |u: &str| LiveItem { url: u.into(), title: u.to_uppercase() };
+        s.set_live_items(f, &[item("1"), item("2")]);
+        let ids: Vec<TabId> = s.folder_tabs(f).map(|t| t.id).collect();
+        s.activate_tab(ids[0], 0);
+        s.set_live_items(f, &[item("3"), item("2")]);
+        let got: Vec<_> = s.folder_tabs(f).map(|t| (t.url.as_str(), t.id)).collect();
+        assert_eq!(got[..2], [("3", got[0].1), ("2", ids[1])], "kept items keep their tab");
+        assert_eq!(got[2], ("1", ids[0]), "the open tab stays until you leave it");
+        let other = s.open_tab(sp, "x", 0);
+        s.move_to_folder(other, f, 0);
+        assert_eq!(s.tab(other).unwrap().folder, None, "a live folder takes no tabs");
+        assert_eq!(s.add_subfolder(f, "no"), None);
+        s.remove_folder(f);
+        assert_eq!(s.space_tabs(sp).count(), 1, "its tabs go with it");
     }
 
     #[test]

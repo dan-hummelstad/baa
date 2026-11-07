@@ -61,7 +61,7 @@ impl<H: WebHost> Browser<H> {
                     ));
                     items.push((
                         "Move to New Folder",
-                        Box::new(move |this, window, cx| this.new_folder(Some(id), window, cx)),
+                        Box::new(move |this, window, cx| this.new_folder(Some(id), None, window, cx)),
                     ));
                 }
                 items.push((
@@ -96,6 +96,14 @@ impl<H: WebHost> Browser<H> {
                 }
             }
             MenuKind::Folder(id) => {
+                if self.session.folder(id).is_some_and(|f| f.live.is_some()) {
+                    items.push(("Refresh", Box::new(move |this, window, cx| this.refresh_live(Some(id), window, cx))));
+                } else {
+                    items.push((
+                        "New Subfolder",
+                        Box::new(move |this, window, cx| this.new_folder(None, Some(id), window, cx)),
+                    ));
+                }
                 items.push((
                     "Rename Folder",
                     Box::new(move |this, window, cx| this.start_folder_rename(id, window, cx)),
@@ -141,8 +149,29 @@ impl<H: WebHost> Browser<H> {
             MenuKind::Sidebar => {
                 items.push((
                     "New Folder",
-                    Box::new(|this, window, cx| this.new_folder(None, window, cx)),
+                    Box::new(|this, window, cx| this.new_folder(None, None, window, cx)),
                 ));
+                // Arc's presets, written as the GitHub pages they mirror.
+                for (label, page) in [
+                    ("New Live Folder: My Pull Requests", "https://github.com/pulls"),
+                    ("New Live Folder: Review Requests", "https://github.com/pulls/review-requested"),
+                    ("New Live Folder: My Issues", "https://github.com/issues"),
+                ] {
+                    items.push((
+                        label,
+                        Box::new(move |this, window, cx| {
+                            if let Some((name, source)) = baa_model::LiveSource::from_page(page) {
+                                this.new_live_folder(&name, source, window, cx);
+                            }
+                        }),
+                    ));
+                }
+                if let Some((name, source)) = self.live_source_here() {
+                    items.push((
+                        "New Live Folder from This Page",
+                        Box::new(move |this, window, cx| this.new_live_folder(&name, source.clone(), window, cx)),
+                    ));
+                }
                 items.push((
                     "New Tab",
                     Box::new(|this, window, cx| this.open_bar(Mode::NewTab, window, cx)),

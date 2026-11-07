@@ -432,7 +432,7 @@ fn folders_are_named_in_place_and_favorites_follow_every_space(cx: &mut TestAppC
     cx.simulate_keystrokes("enter");
     let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
 
-    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), window, cx));
+    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), None, window, cx));
     cx.simulate_input("Reading");
     cx.simulate_keystrokes("enter");
     b.read_with(cx, |b, _| {
@@ -660,7 +660,7 @@ fn an_opening_folder_pushes_today_down_with_it(cx: &mut TestAppContext) {
     let folder = b.update_in(cx, |b, window, cx| {
         let space = b.session.active_space().unwrap();
         let tabs: Vec<_> = b.session.tabs(space, Zone::Today).map(|t| t.id).collect();
-        b.new_folder(Some(tabs[1]), window, cx);
+        b.new_folder(Some(tabs[1]), None, window, cx);
         b.close_overlays(window, cx);
         let folder = b.session.folders(space).next().unwrap().id;
         b.session.move_to_folder(tabs[2], folder, 1);
@@ -693,13 +693,43 @@ fn an_opening_folder_pushes_today_down_with_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_subfolder_is_named_in_place_inside_its_parent(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    let parent = b.update_in(cx, |b, window, cx| {
+        b.new_folder(None, None, window, cx);
+        b.close_overlays(window, cx);
+        let space = b.session.active_space().unwrap();
+        let parent = b.session.folders(space).next().unwrap().id;
+        b.set_folder_open(parent, false);
+        b.new_folder(Some(tab), Some(parent), window, cx);
+        parent
+    });
+    cx.simulate_input("Sub");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        let space = s.active_space().unwrap();
+        let sub = s.subfolders(space, Some(parent)).next().expect("nested");
+        assert_eq!(sub.name, "Sub");
+        assert_eq!(s.tab(tab).unwrap().folder, Some(sub.id));
+        assert!(!s.folder(parent).unwrap().collapsed, "the parent opens to show it");
+    });
+    assert!(cx.debug_bounds("folder-rows").is_some(), "the parent's rows render");
+}
+
+#[gpui::test]
 fn clicking_away_keeps_the_name_being_typed(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");
     cx.simulate_input("a.example");
     cx.simulate_keystrokes("enter");
     let tab = b.read_with(cx, |b, _| b.active_tab().unwrap());
-    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), window, cx));
+    b.update_in(cx, |b, window, cx| b.new_folder(Some(tab), None, window, cx));
     cx.simulate_input("Reading");
     cx.run_until_parked();
     cx.simulate_click(gpui::point(gpui::px(700.), gpui::px(400.)), gpui::Modifiers::none());

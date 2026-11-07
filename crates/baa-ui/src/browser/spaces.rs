@@ -109,12 +109,19 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    /// A new folder in the active Space, holding `tab` if given, named in place.
-    pub(crate) fn new_folder(&mut self, tab: Option<TabId>, window: &mut Window, cx: &mut Context<Self>) {
+    /// A new folder in the active Space (or inside `parent`), holding `tab` if given, named in place.
+    pub(crate) fn new_folder(&mut self, tab: Option<TabId>, parent: Option<FolderId>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = self.session.active_space() else {
             return;
         };
-        let id = self.session.add_folder(space, "New Folder");
+        let id = match parent {
+            Some(parent) => {
+                let Some(id) = self.session.add_subfolder(parent, "New Folder") else { return };
+                self.set_folder_open(parent, true);
+                id
+            }
+            None => self.session.add_folder(space, "New Folder"),
+        };
         if let Some(tab) = tab {
             self.session.move_to_folder(tab, id, usize::MAX);
         }

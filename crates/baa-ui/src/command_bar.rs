@@ -47,6 +47,7 @@ pub enum Mode {
 pub enum Command {
     NewSpace,
     NewFolder,
+    NewLiveFolder,
     NewIncognitoSpace,
     ToggleSidebar,
     CopyUrl,
@@ -75,7 +76,7 @@ pub enum Command {
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 27] = [
+const COMMANDS: [(Command, &str); 28] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -83,6 +84,7 @@ const COMMANDS: [(Command, &str); 27] = [
     (Command::ReopenClosedTab, "Reopen Closed Tab"),
     (Command::NewIncognitoSpace, "New Incognito Space"),
     (Command::NewFolder, "New Folder"),
+    (Command::NewLiveFolder, "New Live Folder from This Page"),
     (Command::RenameSpace, "Rename Space"),
     (Command::ChangeSpaceColor, "Change Space Color"),
     (Command::SwapSidebarSide, "Move Sidebar to Other Side"),
@@ -138,6 +140,7 @@ impl Command {
             Command::Find => "search",
             Command::ReopenClosedTab => "rotate-cw",
             Command::NewFolder => "folder",
+            Command::NewLiveFolder => "rss",
             Command::DeleteSpace => "x",
             Command::RenameSpace | Command::ChangeSpaceColor => "house",
             Command::Print => "printer",
@@ -483,7 +486,12 @@ impl<H: WebHost> Browser<H> {
             return window.dispatch_action(action, cx);
         }
         match c {
-            Command::NewFolder => self.new_folder(None, window, cx),
+            Command::NewFolder => self.new_folder(None, None, window, cx),
+            Command::NewLiveFolder => {
+                if let Some((name, source)) = self.live_source_here() {
+                    self.new_live_folder(&name, source, window, cx);
+                }
+            }
             Command::RenameSpace => self.start_rename(window, cx),
             Command::ChangeSpaceColor => {
                 if let Some(id) = self.session.active_space() {
