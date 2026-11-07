@@ -30,8 +30,9 @@ lil-baa (links from other apps open in a small window you can move into the brow
 downloads kept across launches and archived tabs, a header downloads button, history
 (in ⌘T, and ⌘Y), permission prompts and per-site settings, page dialogs drawn over the page,
 print, view source, reader mode, Picture in Picture, translate, tab mute, Settings (⌘,), and import
-of Arc's Spaces and other browsers' history. Extensions have a toolbar and popups, and Chrome's
-`chrome://settings` shows as a sheet in baa's skin. DevTools dock beside the page. Chrome's own
+of Arc's Spaces and other browsers' history. Extensions have a toolbar and popups. Settings and
+Extensions are baa's own window (⌘,; `baa://settings/...` routes there), and the rest of Chrome's
+pages (`baa://flags` and the like) open as tabs in baa's skin. DevTools dock beside the page. Chrome's own
 prompts (HTTP auth, external-protocol links, hung or crashed pages, extension install) are drawn by
 baa on the tab, page fullscreen fills the window, find shows `3/12`, tabs in a folder are a Chrome
 tab group (an extension's `chrome.tabs.group` fills a folder), and the command bar ranks with
@@ -142,6 +143,56 @@ switches to Developer ID + notarisation: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PA
 | `vendor/gpui_apple` | gpui's macOS backend with the punch-hole surface |
 | `chromium` | vendored Helium + helium-macos, baa's patches, `//baa`, `local-build.sh` |
 | `xtask` | `cargo bundle`, sign the DMG, notarise |
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph app["baa process: Rust"]
+        main["crates/baa<br/>entry: dlopen BaaCore, lock, migrate"]
+        ui["crates/baa-ui<br/>GPUI views: sidebar, command bar,<br/>settings window, dialogs, motion"]
+        model[("crates/baa-model<br/>Spaces, tabs, folders, settings<br/>SQLite")]
+        privacy["crates/baa-privacy<br/>switches, prefs"]
+        subgraph web["crates/baa-web"]
+            host["WebHost trait<br/>PageHandle / PageEvent"]
+            core["core_host<br/>ffi.rs, dispatch"]
+        end
+        gpui["GPUI + vendor/gpui_apple<br/>Metal layer with punch holes"]
+    end
+
+    subgraph engine["BaaCore.framework: baa's Chromium build"]
+        abi{{"C ABI: chromium/baa/baa.h<br/>ABI 6, functions + callbacks"}}
+        layer["//baa: chromium/baa<br/>one Browser per Space profile,<br/>baa::Window, TabStripModel,<br/>request registry, autocomplete,<br/>groups, dialog hooks"]
+        chrome["Chrome browser code<br/>Helium patches + chromium/patches/baa<br/>profiles, extensions, downloads"]
+        procs["renderer, GPU, utility processes"]
+    end
+
+    main --> ui
+    main -- "dlopen, baa_install_app" --> abi
+    ui --> model
+    ui -- "codes against" --> host
+    host --- core
+    core -- "baa_* calls" --> abi
+    abi -- "callbacks: tab state, dialogs,<br/>downloads, autocomplete" --> core
+    core --> privacy
+    abi --- layer
+    layer --> chrome
+    chrome --> procs
+    ui --> gpui
+    procs -. "page NSViews below GPUI's layer,<br/>shown through its holes" .-> gpui
+```
+
+Chromium owns the run loop (`[NSApp run]`): `crates/baa` loads `BaaCore.framework`, installs
+baa's `NSApplication`, and GPUI runs inside Chrome's loop. The UI only sees the `WebHost` trait.
+`core_host` turns each `PageHandle` call into a `baa_*` C call, and each engine callback into a
+`PageEvent`. A Space is a Chrome profile (`space-<id>`; an incognito Space is an off-the-record
+profile), so its cookies, storage and extensions are kept apart.
+
+Every tab is a real Chrome tab in a `TabStripModel`, so extensions see normal tabs. Its page is a
+native view in a container below GPUI's view. GPUI leaves a transparent hole where the page
+shows and draws the sidebar, popovers, dialogs and command bar over it. Chrome's own prompts
+(permissions, HTTP auth, external links, extension installs) come back through the ABI and are
+drawn by GPUI.
 
 ## Keys
 
