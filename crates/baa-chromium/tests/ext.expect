@@ -11,4 +11,5 @@ must: ext \w{32} access 1 -> true
 must: site_access=1
 must: enabled=0
 must: baa: tab_closed tab=1
-must: baa: extensions count=0
+# uBO (a component every Space has) stays after the probe goes
+must: baa: extensions count=1

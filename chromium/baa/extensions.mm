@@ -59,6 +59,13 @@
 namespace baa {
 namespace {
 
+// Chrome's own component extensions stay out of baa's lists. Helium's uBlock Origin is the one
+// a user sees, pauses and opens; Chrome's policy still refuses to uninstall it.
+bool HiddenExtension(const extensions::Extension& ext) {
+  return extensions::Manifest::IsComponentLocation(ext.location()) &&
+         !extensions::Manifest::IsUBlockComponent(ext.id());
+}
+
 std::string IconPath(const extensions::Extension& ext) {
   const extensions::ActionInfo* action = extensions::ActionInfo::GetExtensionActionInfo(&ext);
   std::string relative;
@@ -260,7 +267,7 @@ int baa_profile_extensions(BaaProfile* profile, BaaExtensionVisitor visit, void*
   int count = 0;
   for (const auto& ref : registry->GenerateInstalledExtensionsSet()) {
     const extensions::Extension& ext = *ref;
-    if (extensions::Manifest::IsComponentLocation(ext.location()) || ext.is_theme()) {
+    if (baa::HiddenExtension(ext) || ext.is_theme()) {
       continue;
     }
     const extensions::ActionInfo* action = extensions::ActionInfo::GetExtensionActionInfo(&ext);
@@ -297,7 +304,7 @@ bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id,
   extensions::ExtensionRegistry* registry = extensions::ExtensionRegistry::Get(chrome_profile);
   std::string id = extension_id;
   const extensions::Extension* ext = registry->GetInstalledExtension(id);
-  if (!ext || extensions::Manifest::IsComponentLocation(ext->location())) {
+  if (!ext || baa::HiddenExtension(*ext)) {
     return false;
   }
   extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(chrome_profile);

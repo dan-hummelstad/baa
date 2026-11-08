@@ -1,0 +1,10 @@
+# Helium's uBO is built in: listed, popup, pause, kept installed, blocks ads in disk and ephemeral Spaces
+script: ublock.txt
+secs: 120
+must: baa: extension id=blockjmkbacgjkknlgpkjjiijinjdanf name="uBlock Origin
+must: baa: popup blockjmkbacgjkknlgpkjjiijinjdanf -> 1
+must: baa: ext blockjmkbacgjkknlgpkjjiijinjdanf disable -> true
+must: baa: ext blockjmkbacgjkknlgpkjjiijinjdanf enable -> true
+must: baa: ext blockjmkbacgjkknlgpkjjiijinjdanf remove -> false
+count: 2 get_state ok=true url=https://example.com/ title="ad:blocked"
+mustnot: title="(ad:loaded|net:down)"
