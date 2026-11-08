@@ -35,6 +35,7 @@ mod app {
         LayoutId, Menu, MenuItem, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollWheelEvent,
         SharedString, Style, Window, WindowBackgroundAppearance, WindowBounds, WindowOptions,
     };
+    use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
 
     use crate::{ffi, harness, native};
@@ -199,6 +200,7 @@ mod app {
         resized: on_resized,
         devtools_dock: on_devtools_dock,
         fullscreen: on_fullscreen,
+        exclusive_access: on_exclusive_access,
         find_result: on_find_result,
         tab_group: on_tab_group,
         autocomplete: on_autocomplete,
@@ -401,6 +403,10 @@ mod app {
 
     extern "C" fn on_fullscreen(_: *mut c_void, tab: ffi::TabId, on: bool) {
         eprintln!("baa: fullscreen tab={} on={on}", tab_index(tab));
+    }
+
+    extern "C" fn on_exclusive_access(_: *mut c_void, tab: ffi::TabId, origin: *const c_char, kind: c_int) {
+        eprintln!("baa: exclusive_access tab={} origin={:?} kind={kind}", tab_index(tab), text(origin));
     }
 
     extern "C" fn on_find_result(_: *mut c_void, tab: ffi::TabId, active: c_int, count: c_int) {
@@ -896,7 +902,7 @@ mod app {
         view: *mut AnyObject,
         container: native::Container,
         /// The view a drag started on; the drag stays with it.
-        drag: Cell<Option<*mut AnyObject>>,
+        drag: Cell<Option<Retained<AnyObject>>>,
         inside: Cell<bool>,
     }
 
@@ -982,8 +988,8 @@ mod app {
                 if phase != DispatchPhase::Bubble {
                     return;
                 }
-                if let Some(view) = page.drag.get().filter(|_| event.pressed_button.is_some()) {
-                    native::forward_current_event(page.view, Some(view));
+                if let Some(view) = page.drag.take().filter(|_| event.pressed_button.is_some()) {
+                    page.drag.set(native::forward_current_event(page.view, Some(&view)));
                     return;
                 }
                 // Moves over the page, and the first one off it so hover ends.
@@ -997,7 +1003,7 @@ mod app {
             window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
                 if phase == DispatchPhase::Bubble {
                     if let Some(view) = page.drag.take() {
-                        native::forward_current_event(page.view, Some(view));
+                        native::forward_current_event(page.view, Some(&view));
                     }
                 }
             });
