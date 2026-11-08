@@ -314,8 +314,8 @@ impl<H: WebHost> SettingsView<H> {
                             .justify_center()
                             .opacity(if e.enabled { 1. } else { 0.45 })
                             .child(match icon_path {
-                                Some(path) => gpui::img(path).size(px(30.)).into_any_element(),
-                                None => icon("puzzle", 24., surface::icon().into()).into_any_element(),
+                                Some(path) if path.exists() => gpui::img(path).size(px(30.)).into_any_element(),
+                                _ => icon("puzzle", 24., surface::icon().into()).into_any_element(),
                             }),
                     )
                     .child(

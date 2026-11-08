@@ -37,8 +37,9 @@ impl<H: WebHost> Browser<H> {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
                 .child(match icon_path {
-                    Some(path) => gpui::img(path).size(px(size)).into_any_element(),
-                    None => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
+                    // A component extension (uBlock) names an icon that is only in the resource pak.
+                    Some(path) if path.exists() => gpui::img(path).size(px(size)).into_any_element(),
+                    _ => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
                 });
             feel(el, key, cx)
         }).collect();

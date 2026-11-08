@@ -405,8 +405,8 @@ impl<H: WebHost> Browser<H> {
                         }),
                     )
                     .child(match &ext.icon {
-                        Some(path) => gpui::img(path.clone()).size(px(20.)).into_any_element(),
-                        None => icon("puzzle", 18., surface::icon().into()).into_any_element(),
+                        Some(path) if path.exists() => gpui::img(path.clone()).size(px(20.)).into_any_element(),
+                        _ => icon("puzzle", 18., surface::icon().into()).into_any_element(),
                     })
                     .child(
                         div()
