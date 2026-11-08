@@ -94,10 +94,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: pip install mitmproxy
+      # Pinned by version and hash: mitmproxy runs in the privacy test after the
+      # Developer ID certificate is in the keychain.
+      - run: |
+          pip install --require-hashes --only-binary :all: -r xtask/privacy-requirements.txt
       - name: Rust crate notices
         run: |
-          cargo install cargo-about --locked --features cli
+          cargo install cargo-about --version 0.9.3 --locked --features cli
           cargo about generate about.hbs > target/bundle/baa.app/Contents/Resources/rust-credits.html
       - if: env.SIGNED == 'true'
         uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c # v7.2.0
@@ -142,7 +145,8 @@ jobs:
           hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -fs HFS+ -format UDRW "$RUNNER_TEMP/rw.dmg"
           MNT=$(hdiutil attach "$RUNNER_TEMP/rw.dmg" -nobrowse -noautoopen | awk -F'\t' '/\/Volumes\//{print $NF}')
           xattr -wx com.apple.FinderInfo 0000000000000000040000000000000000000000000000000000000000000000 "$MNT"
-          hdiutil detach "$MNT"
+          # Spotlight/fseventsd on hosted runners can hold the volume briefly.
+          hdiutil detach "$MNT" || { sleep 5; hdiutil detach -force "$MNT"; }
           hdiutil convert "$RUNNER_TEMP/rw.dmg" -format ULMO -o "$DMG"
           if [ "$SIGNED" = true ]; then
             cargo run --release -p xtask -- sign "$DMG"
@@ -175,13 +179,15 @@ jobs:
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ needs.macos.outputs.signed }}
+          VER: ${{ needs.version.outputs.version }}
         run: |
           set -eu
           e=dist/engine/engine.json
           notes="Engine: Chromium $(jq -r .chromium "$e"), Helium $(jq -r .helium "$e"), engine $(jq -r '.tree[0:8]' "$e"). Source: https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_REF_NAME"
-          if [ "${{ needs.macos.outputs.signed }}" != true ]; then
+          if [ "$SIGNED" != true ]; then
             notes="$notes"$'\n\n'"Not signed with a Developer ID or notarised yet: open it with right-click → Open (or \`xattr -dr com.apple.quarantine /Applications/baa.app\`)."
           fi
           # ponytail: GitHub Release only; mirroring to baa.me/dl (§13) waits until baa.me hosts anything.
           gh release create "$GITHUB_REF_NAME" dist/baa-*.dmg dist/engine/engine.json --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --title "baa ${{ needs.version.outputs.version }}" --notes "$notes" --generate-notes
+            --target "$GITHUB_SHA" --title "baa $VER" --notes "$notes" --generate-notes
