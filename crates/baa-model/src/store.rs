@@ -56,6 +56,11 @@ impl Store {
              bytes INTEGER NOT NULL, finished_at INTEGER NOT NULL)",
             [],
         )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, host TEXT NOT NULL, \
+             session TEXT, transcript TEXT NOT NULL)",
+            [],
+        )?;
         Ok(Store { conn })
     }
 
@@ -236,6 +241,42 @@ impl Store {
     pub fn remove_download(&self, path: &str) -> Result<()> {
         self.conn.execute("DELETE FROM downloads WHERE path = ?1", [path]).map(drop)
     }
+
+    /// Private mode is the caller's: it never passes an incognito chat here, and removes one
+    /// that turned incognito after it was saved.
+    pub fn save_chat(&self, c: &ChatRecord) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO chats VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![c.id, c.at, c.host, c.session, c.transcript],
+            )
+            .map(drop)
+    }
+
+    /// Newest first.
+    pub fn chats(&self, limit: usize) -> Result<Vec<ChatRecord>> {
+        let mut q = self.conn.prepare("SELECT id, at, host, session, transcript FROM chats ORDER BY at DESC LIMIT ?1")?;
+        let rows = q.query_map([limit as i64], |r| {
+            Ok(ChatRecord { id: r.get(0)?, at: r.get(1)?, host: r.get(2)?, session: r.get(3)?, transcript: r.get(4)? })
+        })?;
+        rows.collect()
+    }
+
+    pub fn remove_chat(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM chats WHERE id = ?1", [id]).map(drop)
+    }
+}
+
+/// A Claude chat. `transcript` is baa-ui's JSON, opaque here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatRecord {
+    pub id: i64,
+    /// Unix seconds of the last message.
+    pub at: i64,
+    pub host: String,
+    /// `claude`'s session id, so the chat resumes.
+    pub session: Option<String>,
+    pub transcript: String,
 }
 
 #[cfg(test)]
@@ -270,6 +311,19 @@ mod tests {
         store.clear_downloads_since(150).unwrap();
         let paths: Vec<String> = store.downloads().unwrap().into_iter().map(|d| d.path).collect();
         assert_eq!(paths, ["/d/old"]);
+    }
+
+    #[test]
+    fn chats_are_newest_first_and_one_row_per_id() {
+        let store = Store::open(":memory:").unwrap();
+        let rec = |id, at| ChatRecord { id, at, host: "a.example".into(), session: Some("s".into()), transcript: "[]".into() };
+        store.save_chat(&rec(1, 10)).unwrap();
+        store.save_chat(&rec(2, 20)).unwrap();
+        store.save_chat(&rec(1, 30)).unwrap();
+        assert_eq!(store.chats(10).unwrap(), [rec(1, 30), rec(2, 20)]);
+        assert_eq!(store.chats(1).unwrap().len(), 1);
+        store.remove_chat(1).unwrap();
+        assert_eq!(store.chats(10).unwrap(), [rec(2, 20)]);
     }
 
     #[test]
