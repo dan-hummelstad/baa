@@ -71,9 +71,13 @@ pub struct Space {
     pub name: String,
     /// Emoji or short glyph shown in the switcher.
     pub icon: String,
-    /// 0xRRGGBB theme tint; `accent_to` makes it a gradient.
+    /// 0xRRGGBB theme tint; `accent_to` makes it a gradient, `accent_mid` a three-stop one.
     pub accent: u32,
     pub accent_to: Option<u32>,
+    #[serde(default)]
+    pub accent_mid: Option<u32>,
+    #[serde(default)]
+    pub mode: ThemeMode,
     pub profile: ProfileId,
     /// Incognito: never written to disk, profile comes from `WebHost::ephemeral_profile`.
     #[serde(skip)]
@@ -84,6 +88,16 @@ pub struct Space {
     /// Shown while `active_tab` is one of its panes; another tab leaves it standing, as in Arc.
     #[serde(default)]
     pub split: Option<Split>,
+}
+
+/// How a Space's colours are shown: as picked, with light or dark ink chosen from
+/// them (`Auto`), or moved into a pale (`Light`) or deep (`Dark`) band.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    #[default]
+    Auto,
+    Light,
+    Dark,
 }
 
 /// Split view: 2 to [`SPLIT_MAX`] live tabs of one Space side by side, left to right.
@@ -207,6 +221,8 @@ impl Session {
             icon: icon.into(),
             accent: 0x6c9cff,
             accent_to: None,
+            accent_mid: None,
+            mode: ThemeMode::Auto,
             profile,
             ephemeral,
             sidebar_side: None,
