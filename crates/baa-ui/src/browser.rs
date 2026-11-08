@@ -163,6 +163,8 @@ pub struct Browser<H: WebHost> {
     /// Rows that just left a list, collapsing where they were.
     pub(crate) ghosts: Vec<Ghost>,
     shown_tab: Option<TabId>,
+    /// The panes on screen at the last sync; a playing one that leaves goes to PiP.
+    on_screen: Vec<TabId>,
     /// Copies of the URL so far, so only the latest one's check goes away.
     copies: u64,
     /// The command bar on its way out.
@@ -339,6 +341,7 @@ impl<H: WebHost> Browser<H> {
             placements: None,
             ghosts: Vec::new(),
             shown_tab: None,
+            on_screen: Vec::new(),
             closing_bar: None,
             copies: 0,
             favicons,
@@ -466,9 +469,6 @@ impl<H: WebHost> Browser<H> {
             for s in [self.shown_space, space].into_iter().flatten() {
                 self.motion.to(("space-sel", s.0), Feel::Glide, (Some(s) == space) as u8 as f32);
             }
-            if let Some(left) = self.shown_space {
-                self.pip_on_leaving(left, cx);
-            }
             self.shown_space = space;
             self.session
                 .archive_expired(now(), self.settings.archive_after_hours);
@@ -502,6 +502,10 @@ impl<H: WebHost> Browser<H> {
                 self.create_page(id, window, cx);
             }
         }
+        let on_screen = self.shown_panes();
+        let left: Vec<_> = self.on_screen.iter().filter(|id| !on_screen.contains(id)).copied().collect();
+        self.pip_on_leaving(&left, cx);
+        self.on_screen = on_screen;
         self.show_pages(cx);
         self.retarget_mini_player();
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {

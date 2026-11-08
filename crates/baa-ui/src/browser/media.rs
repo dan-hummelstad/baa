@@ -1,5 +1,5 @@
-//! The sidebar's mini-player for media playing off screen, and Picture in Picture on a
-//! Space switch (PLAN-m4-features.md C). Media and muted state are Chrome's, never guessed.
+//! The sidebar's mini-player for media playing off screen, and Picture in Picture for
+//! video that leaves the screen (PLAN-m4-features.md C). Media and muted state are Chrome's, never guessed.
 
 use baa_web::{Media, MediaAction};
 
@@ -45,22 +45,20 @@ impl<H: WebHost> Browser<H> {
         self.motion.to(MINI, Feel::Glide, tab.is_some() as u8 as f32);
     }
 
-    /// Leaving a Space keeps its playing video on screen in Picture in Picture. Chrome's own
-    /// auto PiP only sees tab switches inside one of its windows, and a Space is a window.
-    pub(crate) fn pip_on_leaving(&self, space: SpaceId, cx: &mut Context<Self>) {
+    /// A playing video that leaves the screen (tab switch, Space switch, split change) keeps
+    /// playing in Picture in Picture, as Arc does. Chrome's own auto PiP is not relied on: it
+    /// only sees tab switches inside one of its windows (a Space is a window), and needs the
+    /// tab recently audible and focused.
+    pub(crate) fn pip_on_leaving(&self, left: &[TabId], cx: &mut Context<Self>) {
         if !self.settings.auto_pip {
             return;
         }
-        let shown = match self.session.shown_split(space) {
-            Some(split) => split.tabs.clone(),
-            None => self.session.space(space).and_then(|s| s.active_tab).into_iter().collect(),
-        };
-        for id in shown {
+        for id in left {
             let pip = self
                 .media
-                .get(&id)
+                .get(id)
                 .is_some_and(|(m, _)| m.playing && m.actions.contains(&MediaAction::PictureInPicture));
-            if let Some((page, _)) = self.pages.get(&id).filter(|_| pip) {
+            if let Some((page, _)) = self.pages.get(id).filter(|_| pip) {
                 page.read(cx).set_media_action(MediaAction::PictureInPicture);
             }
         }

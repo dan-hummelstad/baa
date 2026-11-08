@@ -1,4 +1,4 @@
-//! PLAN-m4-features C: engine-owned muted state, the mini-player, PiP on a Space switch.
+//! PLAN-m4-features C: engine-owned muted state, the mini-player, PiP for video leaving the screen.
 
 use baa_model::{now, Store};
 use baa_web::{Media, MediaAction, PageEvent};
@@ -90,4 +90,24 @@ fn leaving_a_space_puts_its_playing_video_in_pip_when_the_setting_is_on(cx: &mut
         b.activate_space(second, window, cx);
     });
     assert_eq!(pips(cx), 1, "off: no PiP");
+}
+
+#[gpui::test]
+fn switching_tabs_puts_the_playing_video_in_pip(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let (a, page) = open_page(&b, "a.example", cx);
+    playing(&page, cx);
+    let pips = |cx: &mut VisualTestContext| page.read_with(cx, |p, _| p.cdp.borrow().iter().filter(|c| *c == "media PictureInPicture").count());
+
+    let (other, _) = open_page(&b, "b.example", cx);
+    assert_eq!(pips(cx), 1, "a left the screen while playing");
+    b.update_in(cx, |b, window, cx| b.activate_tab(a, window, cx));
+    assert_eq!(pips(cx), 1, "coming back is not leaving");
+    b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
+    assert_eq!(pips(cx), 2);
+
+    page.update(cx, |_, cx| cx.emit(PageEvent::Media(Media { playing: false, ..Media::default() })));
+    b.update_in(cx, |b, window, cx| b.activate_tab(a, window, cx));
+    b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
+    assert_eq!(pips(cx), 2, "paused: no PiP");
 }
