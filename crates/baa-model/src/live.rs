@@ -13,11 +13,137 @@ use crate::store::is_web;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LiveSource {
-    /// A GitHub issue search, e.g. `is:open is:pr author:@me`.
-    GitHub { query: String },
+    GitHub(GitHub),
     /// An RSS or Atom feed, or a page that links to one.
     Feed { url: String },
 }
+
+/// Open pull requests or issues, as Arc's GitHub live folders list them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitHub {
+    pub kind: GitHubKind,
+    /// Each is its own search (GitHub's search ANDs qualifiers); the folder shows them all.
+    pub filters: Vec<GitHubFilter>,
+    /// Qualifiers on every search: `repo:o/r`, or a list page's own query. (Folders from
+    /// before filters stored their whole search here as `query`.)
+    #[serde(alias = "query")]
+    pub scope: String,
+    /// `owner/repo`s left out of the folder.
+    pub hidden_repos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GitHubKind {
+    #[default]
+    PullRequests,
+    Issues,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GitHubFilter {
+    CreatedByMe,
+    ReviewRequests,
+    TeamReviewRequests,
+    AssignedToMe,
+    MentioningMe,
+}
+
+impl GitHubFilter {
+    /// The ones a folder of `kind` offers, in menu order.
+    pub fn for_kind(kind: GitHubKind) -> &'static [GitHubFilter] {
+        use GitHubFilter::*;
+        match kind {
+            GitHubKind::PullRequests => &[CreatedByMe, ReviewRequests, TeamReviewRequests],
+            GitHubKind::Issues => &[CreatedByMe, AssignedToMe, MentioningMe],
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GitHubFilter::CreatedByMe => "Created by Me",
+            GitHubFilter::ReviewRequests => "Review Requests",
+            GitHubFilter::TeamReviewRequests => "Team Review Requests",
+            GitHubFilter::AssignedToMe => "Assigned to Me",
+            GitHubFilter::MentioningMe => "Mentioning Me",
+        }
+    }
+
+    fn qualifier(self) -> &'static str {
+        match self {
+            GitHubFilter::CreatedByMe => "author:@me",
+            GitHubFilter::ReviewRequests => "user-review-requested:@me",
+            // review-requested also matches requests made to your teams.
+            GitHubFilter::TeamReviewRequests => "review-requested:@me -user-review-requested:@me",
+            GitHubFilter::AssignedToMe => "assignee:@me",
+            GitHubFilter::MentioningMe => "mentions:@me",
+        }
+    }
+}
+
+impl GitHub {
+    /// The searches the folder runs.
+    pub fn queries(&self) -> Vec<String> {
+        let has = |q: &str| self.scope.contains(q);
+        let mut base = Vec::new();
+        // The search API answers 422 without a type qualifier.
+        if !(has("is:pr") || has("is:issue") || has("type:")) {
+            base.push(if self.kind == GitHubKind::PullRequests { "is:pr" } else { "is:issue" });
+        }
+        if !(has("is:open") || has("is:closed") || has("is:merged") || has("state:")) {
+            base.push("is:open");
+        }
+        if !has("archived:") {
+            base.push("archived:false");
+        }
+        let base = base.join(" ");
+        let one = |filter: &str| {
+            [base.as_str(), filter, self.scope.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+        };
+        match self.filters.as_slice() {
+            [] => vec![one("")],
+            filters => filters.iter().map(|f| one(f.qualifier())).collect(),
+        }
+    }
+
+    /// Checks or unchecks `filter`. False (no change) for unchecking the last one of a folder
+    /// not limited to a repo, owner or query, which would list every open item on GitHub.
+    pub fn toggle(&mut self, filter: GitHubFilter) -> bool {
+        if let Some(i) = self.filters.iter().position(|f| *f == filter) {
+            if self.filters.len() == 1 && self.scope.trim().is_empty() {
+                return false;
+            }
+            self.filters.remove(i);
+        } else {
+            self.filters.push(filter);
+            let order = GitHubFilter::for_kind(self.kind);
+            self.filters.sort_by_key(|f| order.iter().position(|o| o == f));
+        }
+        true
+    }
+
+    pub fn set_repo_hidden(&mut self, repo: &str, hidden: bool) {
+        self.hidden_repos.retain(|r| r != repo);
+        if hidden {
+            self.hidden_repos.push(repo.into());
+        }
+    }
+}
+
+/// `owner/repo` of a github.com URL.
+pub fn repo_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let mut parts = rest.split('/');
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    (!owner.is_empty() && !repo.is_empty()).then(|| format!("{owner}/{repo}"))
+}
+
+/// github.com paths that are not `owner/repo`.
+const GITHUB_PAGES: &[&str] = &[
+    "pulls", "issues", "settings", "notifications", "orgs", "organizations", "marketplace", "explore", "topics",
+    "search", "sponsors", "features", "login", "new", "codespaces", "dashboard", "trending", "collections",
+    "enterprise", "pricing", "apps", "users", "copilot",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveItem {
@@ -28,76 +154,90 @@ pub struct LiveItem {
 const MAX_ITEMS: usize = 25;
 
 impl LiveSource {
-    /// The live folder a page stands for, with a name: a GitHub pull request or issue
-    /// list keeps its filter; any other web page is taken as a feed.
+    /// The live folder a page stands for, with a name. Any github.com page is a GitHub
+    /// folder that picks itself: a repo's issues or pull requests, a list page's own query,
+    /// or (elsewhere on GitHub) your own. Any other web page is taken as a feed.
     pub fn from_page(page: &str) -> Option<(String, LiveSource)> {
         let u = url::Url::parse(page).ok().filter(|u| is_web(u.as_str()))?;
         let host = u.host_str()?.trim_start_matches("www.");
-        if host == "github.com" {
-            let segs: Vec<&str> = u.path_segments()?.filter(|s| !s.is_empty()).collect();
-            let (repo, kind, filter) = match segs.as_slice() {
-                [kind @ ("pulls" | "issues")] => (None, *kind, None),
-                [kind @ ("pulls" | "issues"), filter] => (None, *kind, Some(*filter)),
-                [owner, repo, kind @ ("pulls" | "issues")] => (Some(format!("{owner}/{repo}")), *kind, None),
-                _ => return Some((host.into(), LiveSource::Feed { url: page.into() })),
-            };
-            let pr = kind == "pulls";
-            let mine = match filter {
-                Some("assigned") => "assignee:@me",
-                Some("mentioned") => "mentions:@me",
-                Some("review-requested") => "review-requested:@me",
-                _ => "author:@me",
-            };
-            let typed = u.query_pairs().find(|(k, _)| k == "q").map(|(_, v)| v.into_owned());
-            let mut query = match (&repo, typed) {
-                (_, Some(q)) => q,
-                (Some(_), None) => "is:open".into(),
-                (None, None) => format!("is:open {mine} archived:false"),
-            };
-            // The search API answers 422 without a type qualifier.
-            if !query.contains("is:pr") && !query.contains("is:issue") && !query.contains("type:") {
-                query = format!("{} {query}", if pr { "is:pr" } else { "is:issue" });
-            }
-            if let Some(r) = repo.as_ref().filter(|_| !query.contains("repo:")) {
-                query = format!("{query} repo:{r}");
-            }
-            let label = match (pr, filter) {
-                (true, Some("review-requested")) => "Review Requests",
-                (true, _) => "Pull Requests",
-                (false, _) => "Issues",
-            };
-            let name = format!("{} {label}", repo.as_deref().unwrap_or("GitHub"));
-            return Some((name, LiveSource::GitHub { query }));
+        if host != "github.com" {
+            return Some((host.into(), LiveSource::Feed { url: page.into() }));
         }
-        Some((host.into(), LiveSource::Feed { url: page.into() }))
+        let segs: Vec<&str> = u.path_segments()?.filter(|s| !s.is_empty()).collect();
+        let (repo, rest) = match segs.as_slice() {
+            [owner, repo, rest @ ..] if !GITHUB_PAGES.contains(owner) => (Some(format!("{owner}/{repo}")), rest),
+            all => (None, all),
+        };
+        let kind = if rest.first() == Some(&"issues") { GitHubKind::Issues } else { GitHubKind::PullRequests };
+        // A list page's own search, unless it is a single item (`issues/12`).
+        let list = matches!(rest, ["pulls" | "issues"] | ["pulls" | "issues", _] if repo.is_none() || rest.len() == 1);
+        let typed = u.query_pairs().find(|(k, _)| k == "q").map(|(_, v)| v.into_owned()).filter(|_| list);
+        let mut gh = GitHub { kind, ..Default::default() };
+        match (&repo, typed) {
+            (Some(r), q) => gh.scope = [q.unwrap_or_default(), format!("repo:{r}")].join(" ").trim().to_string(),
+            (None, Some(q)) => gh.scope = q,
+            (None, None) => {
+                use GitHubFilter::*;
+                gh.filters = match rest {
+                    [_, "review-requested"] => vec![ReviewRequests],
+                    [_, "assigned"] => vec![AssignedToMe],
+                    [_, "mentioned"] => vec![MentioningMe],
+                    ["pulls" | "issues", ..] => vec![CreatedByMe],
+                    _ => GitHubFilter::for_kind(kind).to_vec(),
+                };
+            }
+        }
+        let label = if kind == GitHubKind::Issues { "Issues" } else { "Pull Requests" };
+        let name = repo.map_or(label.to_string(), |r| format!("{r} {label}"));
+        Some((name, LiveSource::GitHub(gh)))
+    }
+
+    /// `items` without the ones the folder hides.
+    pub fn visible(&self, items: &[LiveItem]) -> Vec<LiveItem> {
+        let hidden = match self {
+            LiveSource::GitHub(gh) => gh.hidden_repos.as_slice(),
+            LiveSource::Feed { .. } => &[],
+        };
+        items.iter().filter(|i| repo_of(&i.url).is_none_or(|r| !hidden.contains(&r))).cloned().collect()
     }
 }
 
 /// The source's current items, newest or most relevant first, without duplicates.
+/// Hidden repos are still in; see [`LiveSource::visible`].
 pub fn fetch(source: &LiveSource) -> Result<Vec<LiveItem>, String> {
     let mut items = match source {
-        LiveSource::GitHub { query } => github(query)?,
+        LiveSource::GitHub(gh) => github(&gh.queries())?,
         LiveSource::Feed { url } => feed(url)?,
     };
     let mut seen = std::collections::HashSet::new();
     items.retain(|i| seen.insert(i.url.clone()));
-    items.truncate(MAX_ITEMS);
+    if let LiveSource::Feed { .. } = source {
+        items.truncate(MAX_ITEMS);
+    }
     Ok(items)
 }
 
-fn github(query: &str) -> Result<Vec<LiveItem>, String> {
+/// Every search's items, most recently updated first.
+fn github(queries: &[String]) -> Result<Vec<LiveItem>, String> {
     let token = github_token();
-    if token.is_none() && query.contains("@me") {
+    if token.is_none() && queries.iter().any(|q| q.contains("@me")) {
         return Err("Sign in to GitHub: run `gh auth login`, or set GH_TOKEN".into());
     }
-    let q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let url = format!("https://api.github.com/search/issues?q={q}&sort=updated&per_page={MAX_ITEMS}");
     let mut headers = vec!["Accept: application/vnd.github+json".to_string()];
     headers.extend(token.map(|t| format!("Authorization: Bearer {t}")));
-    github_items(&curl(&url, &headers)?)
+    let mut all = Vec::new();
+    for query in queries {
+        let q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+        let url = format!("https://api.github.com/search/issues?q={q}&sort=updated&per_page={MAX_ITEMS}");
+        all.extend(github_items(&curl(&url, &headers)?)?);
+    }
+    // ISO 8601 times sort as text.
+    all.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(all.into_iter().map(|(_, item)| item).collect())
 }
 
-fn github_items(body: &str) -> Result<Vec<LiveItem>, String> {
+/// (updated_at, item) per search result.
+fn github_items(body: &str) -> Result<Vec<(String, LiveItem)>, String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("GitHub: {e}"))?;
     let items = v["items"]
         .as_array()
@@ -106,7 +246,8 @@ fn github_items(body: &str) -> Result<Vec<LiveItem>, String> {
         .iter()
         .filter_map(|i| {
             let url = i["html_url"].as_str()?.into();
-            Some(LiveItem { url, title: i["title"].as_str().unwrap_or_default().into() })
+            let updated = i["updated_at"].as_str().unwrap_or_default().into();
+            Some((updated, LiveItem { url, title: i["title"].as_str().unwrap_or_default().into() }))
         })
         .collect())
 }
@@ -282,22 +423,59 @@ mod tests {
     }
 
     #[test]
-    fn github_pages_become_queries() {
-        let q = |page: &str| match LiveSource::from_page(page) {
-            Some((name, LiveSource::GitHub { query })) => (name, query),
+    fn github_pages_pick_their_folder() {
+        use GitHubFilter::*;
+        let gh = |page: &str| match LiveSource::from_page(page) {
+            Some((name, LiveSource::GitHub(gh))) => (name, gh),
             other => panic!("{other:?}"),
         };
-        assert_eq!(q("https://github.com/pulls"), ("GitHub Pull Requests".into(), "is:pr is:open author:@me archived:false".into()));
-        assert_eq!(q("https://github.com/pulls/review-requested").1, "is:pr is:open review-requested:@me archived:false");
-        assert_eq!(q("https://github.com/o/r/pulls"), ("o/r Pull Requests".into(), "is:pr is:open repo:o/r".into()));
-        assert_eq!(q("https://github.com/o/r/issues?q=is%3Aissue+label%3Abug").1, "is:issue label:bug repo:o/r");
+        let (name, home) = gh("https://github.com/");
+        assert_eq!(name, "Pull Requests");
+        assert_eq!(home.filters, [CreatedByMe, ReviewRequests, TeamReviewRequests], "GitHub's home: all of yours");
+        assert_eq!(home.queries()[0], "is:pr is:open archived:false author:@me");
+        assert_eq!(home.queries()[2], "is:pr is:open archived:false review-requested:@me -user-review-requested:@me");
+        assert_eq!(gh("https://github.com/pulls/review-requested").1.filters, [ReviewRequests]);
+        let (name, issues) = gh("https://github.com/issues/assigned");
+        assert_eq!((name.as_str(), issues.kind, issues.filters.as_slice()), ("Issues", GitHubKind::Issues, &[AssignedToMe][..]));
+
+        let (name, repo) = gh("https://github.com/o/r");
+        assert_eq!((name.as_str(), repo.queries()), ("o/r Pull Requests", vec!["is:pr is:open archived:false repo:o/r".to_string()]));
+        assert_eq!(gh("https://github.com/o/r/pull/7").0, "o/r Pull Requests");
+        let (name, bugs) = gh("https://github.com/o/r/issues?q=is%3Aissue+label%3Abug");
+        assert_eq!(name, "o/r Issues");
+        assert_eq!(bugs.queries(), ["is:open archived:false is:issue label:bug repo:o/r"]);
+        assert_eq!(gh("https://github.com/o/r/issues/12?q=x").1.scope, "repo:o/r", "an issue page has no list query");
+
         assert_eq!(
             LiveSource::from_page("https://www.example.com/blog"),
             Some(("example.com".into(), LiveSource::Feed { url: "https://www.example.com/blog".into() }))
         );
         assert_eq!(LiveSource::from_page("baa://settings"), None);
-        let body = r#"{"items":[{"html_url":"https://github.com/o/r/pull/1","title":"Fix"}]}"#;
-        assert_eq!(github_items(body), Ok(vec![item("https://github.com/o/r/pull/1", "Fix")]));
+        let body = r#"{"items":[{"html_url":"https://github.com/o/r/pull/1","title":"Fix","updated_at":"2026-11-07T00:00:00Z"}]}"#;
+        assert_eq!(github_items(body), Ok(vec![("2026-11-07T00:00:00Z".into(), item("https://github.com/o/r/pull/1", "Fix"))]));
         assert_eq!(github_items(r#"{"message":"Bad credentials"}"#), Err("GitHub: Bad credentials".into()));
+    }
+
+    #[test]
+    fn filters_and_hidden_repos() {
+        use GitHubFilter::*;
+        let mut mine = GitHub { filters: vec![ReviewRequests], ..Default::default() };
+        assert!(mine.toggle(CreatedByMe));
+        assert_eq!(mine.filters, [CreatedByMe, ReviewRequests], "kept in menu order");
+        assert!(mine.toggle(CreatedByMe));
+        assert!(!mine.toggle(ReviewRequests), "the last filter stays: it would be all of GitHub");
+        let mut repo = GitHub { scope: "repo:o/r".into(), filters: vec![CreatedByMe], ..Default::default() };
+        assert!(repo.toggle(CreatedByMe), "a repo folder may show all its open items");
+
+        mine.set_repo_hidden("o/r", true);
+        let source = LiveSource::GitHub(mine);
+        let items = [item("https://github.com/o/r/pull/1", "a"), item("https://github.com/o/s/pull/2", "b")];
+        assert_eq!(source.visible(&items), [items[1].clone()]);
+        assert_eq!(repo_of("https://github.com/o/r/pull/1").as_deref(), Some("o/r"));
+
+        // A folder saved before filters existed still loads, with its search as the scope.
+        let old: LiveSource = serde_json::from_str(r#"{"GitHub":{"query":"is:pr is:open author:@me archived:false"}}"#).unwrap();
+        let LiveSource::GitHub(old) = old else { panic!() };
+        assert_eq!(old.queries(), ["is:pr is:open author:@me archived:false"]);
     }
 }

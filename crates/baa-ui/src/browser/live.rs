@@ -29,14 +29,21 @@ impl<H: WebHost> Browser<H> {
             .filter_map(|f| Some((f.id, f.live.clone()?)))
             .collect();
         for (id, source) in jobs {
+            let asked = source.clone();
             let fetch = cx.background_spawn(async move { baa_model::live::fetch(&source) });
             cx.spawn_in(window, async move |this, cx| {
                 let result = fetch.await;
                 this.update_in(cx, |this, window, cx| {
+                    // The filters changed while it ran; the fetch they started wins.
+                    if this.session.folder(id).and_then(|f| f.live.as_ref()) != Some(&asked) {
+                        return;
+                    }
                     match result {
                         Ok(items) => {
                             this.live_errors.remove(&id);
-                            this.session.set_live_items(id, &items);
+                            this.live_fetched.insert(id, now());
+                            this.live_items.insert(id, items);
+                            this.show_live_items(id);
                             this.save();
                         }
                         Err(e) => {
@@ -59,6 +66,48 @@ impl<H: WebHost> Browser<H> {
         let id = self.session.add_live_folder(space, name, source);
         self.sync(window, cx);
         self.refresh_live(Some(id), window, cx);
+    }
+
+    /// The folder's tabs from its last fetch, less its hidden repos.
+    pub(super) fn show_live_items(&mut self, id: FolderId) {
+        let Some(source) = self.session.folder(id).and_then(|f| f.live.clone()) else { return };
+        let items = source.visible(self.live_items.get(&id).map_or(&[], Vec::as_slice));
+        self.session.set_live_items(id, &items);
+    }
+
+    /// Repos the last fetch saw, and hidden ones, by name.
+    pub(crate) fn live_repos(&self, id: FolderId) -> Vec<String> {
+        let mut repos: Vec<String> =
+            self.live_items.get(&id).into_iter().flatten().filter_map(|i| baa_model::live::repo_of(&i.url)).collect();
+        if let Some(Some(LiveSource::GitHub(gh))) = self.session.folder(id).map(|f| &f.live) {
+            repos.extend(gh.hidden_repos.iter().cloned());
+        }
+        repos.sort_by_key(|r| r.to_lowercase());
+        repos.dedup();
+        repos
+    }
+
+    pub(crate) fn toggle_live_filter(
+        &mut self,
+        id: FolderId,
+        filter: baa_model::live::GitHubFilter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Some(LiveSource::GitHub(gh))) = self.session.folder_mut(id).map(|f| &mut f.live) else { return };
+        if !gh.toggle(filter) {
+            return self.show_toast("A live folder needs at least one filter", cx);
+        }
+        self.save();
+        self.refresh_live(Some(id), window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_live_repo_hidden(&mut self, id: FolderId, repo: &str, hidden: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Some(LiveSource::GitHub(gh))) = self.session.folder_mut(id).map(|f| &mut f.live) else { return };
+        gh.set_repo_hidden(repo, hidden);
+        self.show_live_items(id);
+        self.sync(window, cx);
     }
 
     /// What "New Live Folder from This Page" would make of the current tab.

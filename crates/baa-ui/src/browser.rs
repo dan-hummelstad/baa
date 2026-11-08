@@ -41,6 +41,8 @@ pub(crate) use shared_extensions::InstallTarget;
 #[cfg(test)]
 mod tests_shared_extensions;
 #[cfg(test)]
+mod tests_live;
+#[cfg(test)]
 mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
 pub(crate) use peek::PeekPage;
@@ -125,6 +127,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) folder_motion: HashMap<FolderId, Spring>,
     /// Why a live folder's last refresh failed.
     pub(crate) live_errors: HashMap<FolderId, String>,
+    /// When each live folder last fetched, and everything it got (hidden repos included,
+    /// so un-hiding one needs no fetch).
+    pub(crate) live_fetched: HashMap<FolderId, u64>,
+    live_items: HashMap<FolderId, Vec<baa_model::LiveItem>>,
     /// (profile, extension) copies under way, so none starts twice.
     copying: HashSet<(baa_model::ProfileId, String)>,
     /// The profiles shared extensions were last spread over.
@@ -272,6 +278,8 @@ impl<H: WebHost> Browser<H> {
             renaming_folder: None,
             folder_motion: HashMap::new(),
             live_errors: HashMap::new(),
+            live_fetched: HashMap::new(),
+            live_items: HashMap::new(),
             copying: HashSet::new(),
             shared_to: Vec::new(),
             pending_install: None,
