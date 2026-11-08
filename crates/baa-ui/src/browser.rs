@@ -79,6 +79,7 @@ pub(crate) const PALETTE: [(u32, u32); 9] = [
     (0xAFD3E8, 0x7AB6D8), // blue
     (0x5F5F7F, 0x34344A), // slate, the dark one
 ];
+pub(crate) const PALETTE_NAMES: [&str; 9] = ["Cream", "Pink", "Purple", "Red", "Orange", "Yellow", "Green", "Blue", "Slate"];
 const ICONS: [&str; 7] = ["🐑", "🌿", "🔥", "🌊", "⭐", "🍋", "🪐"];
 const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 
@@ -93,6 +94,8 @@ pub(crate) enum MenuKind {
     LibraryFilter,
     Folder(FolderId),
     Sidebar,
+    /// The Space's name at the top of the sidebar.
+    Space(SpaceId),
     /// An extension in the extensions panel.
     Extension(String),
 }

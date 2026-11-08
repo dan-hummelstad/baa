@@ -102,6 +102,13 @@ impl<H: WebHost> Browser<H> {
                     .text_size(px(11.5))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.ink_muted)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_menu(MenuKind::Space(space), e.position, window, cx);
+                        }),
+                    )
                     .child(div().text_size(px(11.)).child(SharedString::from(space_icon)))
                     .child(match self.renaming.as_ref().filter(|_| self.renaming_folder.is_none()) {
                         // Named in place: Enter keeps it, Esc leaves it as it was.

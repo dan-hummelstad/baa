@@ -195,6 +195,41 @@ impl<H: WebHost> Browser<H> {
                     }),
                 ));
             }
+            MenuKind::Space(id) => {
+                let Some(space) = self.session.space(id) else { return items };
+                if !space.ephemeral {
+                    items.push(MenuEntry::item("Rename Space", Box::new(|this, window, cx| this.start_rename(window, cx))));
+                    let colors = PALETTE
+                        .iter()
+                        .zip(PALETTE_NAMES)
+                        .enumerate()
+                        .map(|(i, ((top, _), name))| {
+                            MenuEntry::check(name, *top == space.accent, Box::new(move |this, window, cx| this.set_color_of(id, i, window, cx)))
+                        })
+                        .collect();
+                    items.push(MenuEntry::Submenu("Theme Colour".into(), colors));
+                    // ponytail: a fixed emoji set; any other emoji goes in through Rename ("🦊 Work").
+                    let icons = ICONS
+                        .iter()
+                        .chain(&["🏠", "💼", "🎨", "📚", "🎮", "🎵", "✈️", "🧪"])
+                        .map(|&icon| {
+                            MenuEntry::check(icon, icon == space.icon, Box::new(move |this, _, cx| {
+                                this.set_icon_of(id, icon);
+                                cx.notify();
+                            }))
+                        })
+                        .collect();
+                    items.push(MenuEntry::Submenu("Icon".into(), icons));
+                    items.push(MenuEntry::Separator);
+                }
+                items.push(MenuEntry::item(
+                    "Space Settings…",
+                    Box::new(|this, _, cx| this.open_settings_at(Some(crate::settings::Tab::Spaces), Some("spaces"), cx)),
+                ));
+                if self.session.spaces().len() > 1 {
+                    items.push(MenuEntry::item("Delete Space…", Box::new(move |this, _, cx| this.ask_delete_space(id, cx))));
+                }
+            }
             MenuKind::Sidebar => {
                 items.push(MenuEntry::item(
                     "New Folder",

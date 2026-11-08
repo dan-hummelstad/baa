@@ -79,9 +79,23 @@ impl<H: WebHost> Browser<H> {
             .position(|(top, _)| *top == space.accent)
             .map_or(0, |i| i + 1)
             % PALETTE.len();
-        let (top, bottom) = PALETTE[next];
+        self.set_color_of(id, next, window, cx);
+    }
+
+    pub(crate) fn set_color_of(&mut self, id: SpaceId, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = self.session.space_mut(id) else {
+            return;
+        };
+        let (top, bottom) = PALETTE[index];
         (space.accent, space.accent_to) = (top, Some(bottom));
         self.sync(window, cx);
+    }
+
+    pub(crate) fn set_icon_of(&mut self, id: SpaceId, icon: &str) {
+        if let Some(space) = self.session.space_mut(id) {
+            space.icon = icon.into();
+            self.save();
+        }
     }
 
     pub(crate) fn swap_sidebar_side(&mut self, cx: &mut Context<Self>) {

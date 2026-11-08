@@ -284,6 +284,23 @@ impl<H: WebHost> SettingsView<H> {
         ]
     }
 
+    /// The sidebar's Theme Colour list, as a menu over this window.
+    fn pick_color(&mut self, id: SpaceId, accent: u32, at: gpui::Point<gpui::Pixels>, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let items = crate::browser::PALETTE
+            .iter()
+            .zip(crate::browser::PALETTE_NAMES)
+            .enumerate()
+            .map(|(i, ((top, _), name))| baa_web::MenuItem::Action { label: name.into(), enabled: true, checked: *top == accent, id: i })
+            .collect();
+        let this = cx.entity().downgrade();
+        let done: baa_web::MenuDone = Box::new(move |picked, _, cx| {
+            if let Some(i) = picked {
+                let _ = this.update(cx, |this, cx| this.in_browser(cx, false, move |b, w, cx| b.set_color_of(id, i, w, cx)));
+            }
+        });
+        self.browser.update(cx, |b, cx| b.host.show_menu(at, items, window, cx, done));
+    }
+
     pub(super) fn spaces_tab(&self, cx: &mut Context<Self>) -> Vec<Item> {
         let spaces: Vec<(SpaceId, String, String, u32, bool)> = self
             .browser
@@ -317,8 +334,8 @@ impl<H: WebHost> SettingsView<H> {
                         self.button("space-rename", if renaming { "Done" } else { "Rename" }, false, cx)
                             .on_click(cx.listener(move |this, _, _, cx| this.toggle_rename(id, cx))),
                     )
-                    .child(self.button("space-color", "Colour", false, cx).on_click(cx.listener(move |this, _, _, cx| {
-                        this.in_browser(cx, false, move |b, w, cx| b.cycle_color_of(id, w, cx))
+                    .child(self.button("space-color", "Colour", false, cx).on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                        this.pick_color(id, accent, e.position(), window, cx)
                     })));
             }
             if many {
