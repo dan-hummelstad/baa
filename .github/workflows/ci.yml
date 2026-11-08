@@ -14,9 +14,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
-  actions: read
+# Fork PRs run this file: nothing by default, each job asks for what it uses.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,6 +25,8 @@ env:
 jobs:
   scripts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - run: python3 -m unittest discover -s xtask -p 'test_*.py'
@@ -33,6 +34,10 @@ jobs:
 
   build:
     runs-on: macos-15
+    # actions: read for the engine action and the engine download.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -52,6 +57,9 @@ jobs:
   # engine for this commit's chromium/ tree exists.
   harness:
     runs-on: macos-15
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup

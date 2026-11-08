@@ -144,6 +144,12 @@ is notarised, and the release notes say to open it with right-click → Open. Ad
 switches to Developer ID + notarisation: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`,
 `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`.
 
+CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
+`chromium.yml` in this repository with a recorded `.sha256` counts (`.github/actions/engine/trusted.sh`).
+`ci.yml` runs on fork pull requests with no token permissions beyond what each job declares. Keep
+Settings → Actions → General → "Require approval for all outside collaborators" on, so a fork's
+workflow changes do not run until a maintainer approves them.
+
 ## Layout
 
 | Path | Owns |
