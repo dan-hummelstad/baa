@@ -73,10 +73,12 @@ pub enum Command {
     Settings,
     ImportFromArc,
     SetUpPasswords,
+    ClearToday,
+    Archive,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 28] = [
+const COMMANDS: [(Command, &str); 30] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -105,6 +107,8 @@ const COMMANDS: [(Command, &str); 28] = [
     (Command::Settings, "Settings"),
     (Command::ImportFromArc, "Import Spaces from Arc"),
     (Command::SetUpPasswords, "Password Manager Extensions"),
+    (Command::ClearToday, "Clear Today"),
+    (Command::Archive, "Archived Tabs"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -128,6 +132,8 @@ impl Command {
             Command::Downloads => Box::new(actions::ShowDownloads),
             Command::History => Box::new(actions::ShowHistory),
             Command::Settings => Box::new(actions::OpenSettings),
+            Command::ClearToday => Box::new(actions::ClearToday),
+            Command::Archive => Box::new(actions::ShowArchive),
             _ => return None,
         })
     }
@@ -156,6 +162,7 @@ impl Command {
             Command::Settings => "settings",
             Command::ImportFromArc => "import",
             Command::SetUpPasswords => "key-round",
+            Command::ClearToday | Command::Archive => "archive",
             _ => "sliders-horizontal",
         }
     }
@@ -166,6 +173,8 @@ pub(crate) enum Item {
     /// Go to this URL (typed, or a search).
     Open(String),
     Tab(TabId),
+    /// An archived tab; restored to the top of its Space's Today.
+    Archived(TabId),
     /// A Space, with its position for the ⌃n shortcut.
     Space(SpaceId, usize),
     Command(Command),
@@ -362,8 +371,23 @@ pub(crate) fn rows(
         .filter(|m| !open.iter().any(|u| same(u, &m.url)) && !matches!(&typed, Item::Open(t) if same(t, &m.url)))
         .take(MAX_HISTORY)
         .collect();
+    // Archived tabs rank below open ones: a match that is still open is not listed again.
+    let mut archived: Vec<(u32, Row)> = session
+        .archived()
+        .iter()
+        .filter(|t| !open.iter().any(|u| same(u, &t.url)))
+        .filter_map(|t| {
+            let score = fuzzy::score(query, tab_title(t)).max(fuzzy::score(query, &t.url))?;
+            Some((score, row(Item::Archived(t.id), tab_title(t), format!("Archived · {}", host_of(&t.url)))))
+        })
+        .collect();
+    archived.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     let room = MAX_ROWS.saturating_sub(out.len() + pages.len());
-    out.extend(scored.into_iter().map(|(_, row)| row).take(room));
+    // They take room from Spaces and commands, never from open tabs.
+    let open_hits = scored.iter().filter(|(_, r)| matches!(r.item, Item::Tab(_))).count();
+    archived.truncate(MAX_EXTRA.min(room.saturating_sub(open_hits)));
+    out.extend(scored.into_iter().map(|(_, row)| row).take(room - archived.len()));
+    out.extend(archived.into_iter().map(|(_, row)| row));
     out.extend(pages.into_iter().map(|m| {
         let label = if m.description.is_empty() { &m.url } else { &m.description };
         Row { history: true, ..row(Item::Open(m.url.clone()), label.clone(), host_of(&m.url)) }
@@ -474,6 +498,10 @@ fn submit<H: WebHost>(
         Item::Open(url) => this.navigate(&url, mode == Mode::Address, window, cx),
         Item::Command(c) => this.run_command(c, window, cx),
         Item::Tab(id) => this.activate_tab(id, window, cx),
+        Item::Archived(id) => {
+            this.session.restore_archived(id, baa_model::now());
+            this.sync(window, cx);
+        }
         Item::Space(id, _) => this.activate_space(id, window, cx),
         Item::Page(page) => this.navigate(page.url, mode == Mode::Address, window, cx),
         Item::Setting(r) => this.open_settings_at(Some(r.tab), Some(r.id), cx),
@@ -596,6 +624,7 @@ impl<H: WebHost> Browser<H> {
                     .and_then(|url| self.favicons.get(url))
                     .map(|image| gpui::img(image.clone()).size(px(18.)).rounded(r(4.)).into_any_element())
                     .unwrap_or_else(|| icon("globe", 18., icon_color).into_any_element()),
+                Item::Archived(_) => icon("archive", 18., icon_color).into_any_element(),
                 Item::Space(id, _) => div()
                     .w(px(18.))
                     .text_size(px(14.))
@@ -622,6 +651,7 @@ impl<H: WebHost> Browser<H> {
                 Item::Open(_) if row.detail.starts_with("— Search") || row.suggestion => "Search",
                 Item::Open(_) => "Open",
                 Item::Tab(_) => "Switch to Tab",
+                Item::Archived(_) => "Restore",
                 Item::Space(..) => "Switch",
                 Item::Command(_) => "Run",
                 Item::Page(_) => "Open",
@@ -839,6 +869,23 @@ mod tests {
         let from_history: Vec<&str> = r.iter().filter(|r| r.history).map(|r| r.label.as_str()).collect();
         assert_eq!(from_history, ["gpui docs"], "GitHub is open as a tab already");
         assert!(r.last().unwrap().history);
+    }
+
+    #[test]
+    fn archived_tabs_rank_below_open_ones_unless_still_open() {
+        let (mut s, gh, ls) = session();
+        let sp = s.active_space().unwrap();
+        let old = s.open_tab(sp, "https://github.com/old", 3);
+        s.tab_mut(old).unwrap().title = "GitHub old".into();
+        let dup = s.open_tab(sp, "https://github.com", 4);
+        s.close_tab(old, 5);
+        s.close_tab(dup, 6);
+        let r = rows("github", &s, &Settings::default(), &[]);
+        let at = |item: Item| r.iter().position(|r| r.item == item);
+        assert!(at(Item::Archived(old)).unwrap() > at(Item::Tab(gh)).unwrap());
+        assert_eq!(at(Item::Archived(dup)), None, "GitHub is open as a tab already");
+        assert_eq!(r[at(Item::Archived(old)).unwrap()].detail, "Archived · github.com");
+        assert_eq!(at(Item::Tab(ls)), None);
     }
 
     #[test]
