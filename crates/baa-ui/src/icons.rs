@@ -15,7 +15,7 @@ macro_rules! icons {
 
 icons!(
     "archive", "arrow-down-to-line", "arrow-left", "arrow-right", "arrow-up", "bell", "book-open", "calendar",
-    "camera", "check", "chevron-down", "chevron-up", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "file",
+    "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "file",
     "file-archive", "file-image", "file-music", "file-spreadsheet", "file-text",
     "file-video-camera", "folder", "folder-open", "git-pull-request", "globe", "history", "house", "import",
     "key-round", "languages", "link", "list-filter", "lock", "map-pin", "maximize-2", "message-circle", "mic",

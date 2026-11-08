@@ -1,5 +1,6 @@
-//! Arc's Space editors: the theme colour (a hue × vividness field, a lightness
-//! slider, the nine swatches) and the icon (every emoji macOS has a name for).
+//! Arc's Space editors: the theme colour (a dotted canvas, angle hue and radius
+//! vividness; the swatches; a lightness slider; a dial for how far the top stop
+//! fades toward white) and the icon (every emoji macOS has a name for).
 //! Each is its own view so the browser window and the settings window can both
 //! hang one; they change the Space through the browser, live.
 
@@ -8,7 +9,7 @@ use std::{cell::Cell, ops::Range, rc::Rc, sync::LazyLock};
 use baa_model::SpaceId;
 use baa_web::WebHost;
 use gpui::{
-    anchored, canvas, deferred, div, linear_color_stop, linear_gradient, prelude::*, px, AnyView, Bounds, Context,
+    anchored, canvas, deferred, div, prelude::*, px, AnyView, Bounds, Context,
     DismissEvent, Entity, EventEmitter, FocusHandle, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, Rgba, ScrollStrategy, SharedString, Stateful, Subscription, UniformListScrollHandle,
     WeakEntity, Window,
@@ -16,6 +17,7 @@ use gpui::{
 
 use crate::{
     browser::{drop_in, shadow, Browser, PALETTE},
+    icons::icon,
     input::{Key, TextField},
     theme::{from_oklch, r, surface, to_oklch},
 };
@@ -57,7 +59,7 @@ impl Shown {
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         } else {
             let bottom = space.accent_to.unwrap_or(space.accent);
-            let p = cx.new(|cx| ColorPicker::new(browser, space.id, bottom, cx));
+            let p = cx.new(|cx| ColorPicker::new(browser, space.id, space.accent, bottom, cx));
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         };
         window.focus(&focus, cx);
@@ -102,37 +104,55 @@ fn dismiss<H: WebHost, V: EventEmitter<DismissEvent>>(browser: &WeakEntity<Brows
     cx.emit(DismissEvent);
 }
 
-const FIELD_W: f32 = 216.;
-const FIELD_H: f32 = 132.;
-/// Vividness at the field's top edge: about what sRGB holds at mid lightness.
+/// The canvas: hue is the angle around its centre, vividness the distance out.
+const CANVAS: (f32, f32) = (340., 336.);
+/// Distance from the centre at full vividness.
+const RING: f32 = 140.;
+/// Vividness at the ring: about what sRGB holds at mid lightness.
 const MAX_C: f32 = 0.16;
 /// The slider's ends, dark to light (OKLCH L).
 const LIGHT: (f32, f32) = (0.30, 0.95);
-const KNOB: f32 = 18.;
+const TRACK: (f32, f32) = (224., 27.5);
+const THUMB: (f32, f32) = (20., 42.);
+const DIAL: f32 = 88.;
+const TICKS: usize = 28;
 
 #[derive(Clone, Copy)]
 enum Drag {
-    Field,
+    Canvas,
     Light,
+    Spread,
 }
 
 pub(crate) struct ColorPicker<H: WebHost> {
     browser: WeakEntity<Browser<H>>,
     space: SpaceId,
-    /// OKLCH of the Space's bottom stop, the colour the dot stands for.
+    /// OKLCH of the Space's bottom stop, the big stop on the canvas.
     lch: [f32; 3],
+    /// How far the top stop is mixed toward white: the dial, 0..=1.
+    spread: f32,
     drag: Option<Drag>,
-    field: Rc<Cell<Bounds<Pixels>>>,
+    canvas: Rc<Cell<Bounds<Pixels>>>,
     slider: Rc<Cell<Bounds<Pixels>>>,
+    dial: Rc<Cell<Bounds<Pixels>>>,
     focus: FocusHandle,
 }
 
 impl<H: WebHost> EventEmitter<DismissEvent> for ColorPicker<H> {}
 
-/// The gradient's top stop: the bottom one 40% toward white, as the swatches are.
-fn top_of(bottom: Rgba) -> Rgba {
-    let up = |v: f32| v + (1. - v) * 0.4;
+/// The gradient's top stop: the bottom one `spread` of the way to white.
+fn top_of(bottom: Rgba, spread: f32) -> Rgba {
+    let up = |v: f32| v + (1. - v) * spread;
     Rgba { r: up(bottom.r), g: up(bottom.g), b: up(bottom.b), a: 1. }
+}
+
+/// `top_of` undone, read off the channel with the most headroom (the least rounding).
+fn spread_of(top: Rgba, bottom: Rgba) -> f32 {
+    let (t, b) = [(top.r, bottom.r), (top.g, bottom.g), (top.b, bottom.b)]
+        .into_iter()
+        .min_by(|x, y| x.1.total_cmp(&y.1))
+        .unwrap_or_default();
+    if b > 0.98 { 0. } else { ((t - b) / (1. - b)).clamp(0., 1.) }
 }
 
 fn hex(c: Rgba) -> u32 {
@@ -146,15 +166,49 @@ fn fraction(at: Point<Pixels>, b: Bounds<Pixels>) -> (f32, f32) {
     (f(at.x, b.origin.x, b.size.width), f(at.y, b.origin.y, b.size.height))
 }
 
+/// Offset from the canvas centre (y down) of a colour's vividness and hue.
+fn on_canvas(c: f32, h: f32) -> (f32, f32) {
+    let d = (c / MAX_C).min(1.) * RING;
+    let a = h.to_radians();
+    (a.cos() * d, -a.sin() * d)
+}
+
+/// `on_canvas` undone: (vividness, hue) at an offset from the centre.
+fn from_canvas(dx: f32, dy: f32) -> (f32, f32) {
+    (((dx * dx + dy * dy).sqrt() / RING).min(1.) * MAX_C, (-dy).atan2(dx).to_degrees().rem_euclid(360.))
+}
+
+fn ring(size: f32, border: f32) -> gpui::Div {
+    div()
+        .absolute()
+        .size(px(size))
+        .rounded_full()
+        .border(px(border))
+        .border_color(gpui::white())
+        .shadow(vec![shadow(gpui::rgba(0x2A253A2B).into(), 2., 8.)])
+}
+
+fn glow(color: Hsla, blur: f32, spread: f32) -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+    }]
+}
+
 impl<H: WebHost> ColorPicker<H> {
-    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, bottom: u32, cx: &mut Context<Self>) -> Self {
+    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, top: u32, bottom: u32, cx: &mut Context<Self>) -> Self {
         Self {
             browser,
             space,
             lch: to_oklch(gpui::rgb(bottom)),
+            spread: spread_of(gpui::rgb(top), gpui::rgb(bottom)),
             drag: None,
-            field: Rc::default(),
+            canvas: Rc::default(),
             slider: Rc::default(),
+            dial: Rc::default(),
             focus: cx.focus_handle(),
         }
     }
@@ -167,18 +221,29 @@ impl<H: WebHost> ColorPicker<H> {
         cx.notify();
     }
 
+    fn swatch(&mut self, i: usize, cx: &mut Context<Self>) {
+        let (top, bottom) = PALETTE[i];
+        self.lch = to_oklch(gpui::rgb(bottom));
+        self.spread = spread_of(gpui::rgb(top), gpui::rgb(bottom));
+        self.set(top, bottom, cx);
+    }
+
     fn drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let off = |b: Bounds<Pixels>| (f32::from(at.x - b.center().x), f32::from(at.y - b.center().y));
         match self.drag {
-            Some(Drag::Field) => {
-                let (x, y) = fraction(at, self.field.get());
-                self.lch[1] = (1. - y) * MAX_C;
-                self.lch[2] = x * 360.;
+            Some(Drag::Canvas) => {
+                let (dx, dy) = off(self.canvas.get());
+                (self.lch[1], self.lch[2]) = from_canvas(dx, dy);
             }
             Some(Drag::Light) => self.lch[0] = LIGHT.0 + fraction(at, self.slider.get()).0 * (LIGHT.1 - LIGHT.0),
+            Some(Drag::Spread) => {
+                let (dx, dy) = off(self.dial.get());
+                self.spread = dx.atan2(-dy).to_degrees().rem_euclid(360.) / 360.;
+            }
             None => return,
         }
         let bottom = from_oklch(self.lch);
-        self.set(hex(top_of(bottom)), hex(bottom), cx);
+        self.set(hex(top_of(bottom, self.spread)), hex(bottom), cx);
     }
 
     fn start(drag: Drag) -> impl Fn(&mut Self, &MouseDownEvent, &mut Window, &mut Context<Self>) {
@@ -197,94 +262,179 @@ fn measure(cell: &Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
 
 impl<H: WebHost> Render for ColorPicker<H> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let [l, c, h] = self.lch;
-        let current: Option<u32> = self
-            .browser
-            .upgrade()
-            .and_then(|b| b.read(cx).session.space(self.space).and_then(|s| s.accent_to));
-        const STEPS: usize = 24;
-        let hue = |i: usize| Hsla::from(from_oklch([l, MAX_C, i as f32 * 360. / STEPS as f32]));
-        let grey = Hsla::from(from_oklch([l, 0., 0.]));
+        let bottom = from_oklch(self.lch);
+        let top = top_of(bottom, self.spread);
+        let current = PALETTE.iter().position(|&(_, b)| b == hex(bottom));
+        let (mid_x, mid_y) = (CANVAS.0 / 2., CANVAS.1 / 2.);
+        let stop = |[_, c, h]: [f32; 3], size: f32, border: f32, fill: Rgba| {
+            let (dx, dy) = on_canvas(c, h);
+            ring(size, border).left(px(mid_x + dx - size / 2.)).top(px(mid_y + dy - size / 2.)).bg(fill)
+        };
+        // Soft hue glows past the ring: a legend for the angle.
+        let auras = (0..6).map(|i| {
+            let hue = 30. + i as f32 * 60.;
+            let (dx, dy) = on_canvas(MAX_C * 1.1, hue);
+            let tint = Hsla { a: 0.22, ..Hsla::from(from_oklch([0.75, 0.12, hue])) };
+            div()
+                .absolute()
+                .left(px(mid_x + dx * 1.1 - 25.))
+                .top(px(mid_y + dy * 1.1 - 25.))
+                .size(px(50.))
+                .rounded_full()
+                .shadow(glow(tint, 24., 8.))
+        });
+        let dots = canvas(|_, _, _| {}, |b, _, window, _| {
+            const STEP: f32 = 7.2;
+            let dot = Hsla::from(surface::border());
+            let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+            let mut y = STEP / 2.;
+            while y < h {
+                let mut x = STEP / 2.;
+                while x < w {
+                    let at = b.origin + gpui::point(px(x), px(y));
+                    window.paint_quad(gpui::fill(Bounds::new(at, gpui::size(px(1.4), px(1.4))), dot));
+                    x += STEP;
+                }
+                y += STEP;
+            }
+        })
+        .absolute()
+        .inset_0();
         let field = div()
             .id("theme-field")
             .relative()
-            .w(px(FIELD_W))
-            .h(px(FIELD_H))
-            .flex()
+            .w(px(CANVAS.0))
+            .h(px(CANVAS.1))
+            .rounded(r(8.))
+            .overflow_hidden()
+            .bg(surface::key())
             .cursor_crosshair()
-            .children((0..STEPS).map(|i| {
+            .children(auras)
+            .child(dots)
+            .child(measure(&self.canvas))
+            .child(stop(to_oklch(top), 23.5, 2., top))
+            .child(stop(self.lch, 41., 2.5, bottom))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Canvas)));
+
+        let chevron = |id: &'static str, name: &'static str, step: usize| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .child(icon(name, 14., surface::muted().into()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let i = current.map_or(0, |i| (i + step) % PALETTE.len());
+                    this.swatch(i, cx);
+                }))
+        };
+        let palette = div()
+            .mt(px(25.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(chevron("theme-prev", "chevron-left", PALETTE.len() - 1))
+            .children(PALETTE.iter().enumerate().map(|(i, &(_, b))| {
                 div()
-                    .flex_1()
-                    .h_full()
-                    .bg(linear_gradient(90., linear_color_stop(hue(i), 0.), linear_color_stop(hue(i + 1), 1.)))
-                    .when(i == 0, |d| d.rounded_l(r(10.)))
-                    .when(i == STEPS - 1, |d| d.rounded_r(r(10.)))
-            }))
-            // Vivid at the top, fading to the grey of the same lightness at the bottom.
-            .child(div().absolute().inset_0().rounded(r(10.)).bg(linear_gradient(
-                180.,
-                linear_color_stop(Hsla { a: 0., ..grey }, 0.),
-                linear_color_stop(grey, 1.),
-            )))
-            .child(measure(&self.field))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(h / 360. * FIELD_W - KNOB / 2.))
-                    .top(px((1. - (c / MAX_C).min(1.)) * FIELD_H - KNOB / 2.))
-                    .size(px(KNOB))
+                    .id(("theme-swatch", i))
+                    .size(px(22.))
                     .rounded_full()
-                    .border_2()
-                    .border_color(gpui::white())
-                    .bg(from_oklch(self.lch))
-                    .shadow(vec![shadow(gpui::rgba(0x0000004D).into(), 1., 4.)]),
-            )
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Field)));
-        let t = ((l - LIGHT.0) / (LIGHT.1 - LIGHT.0)).clamp(0., 1.);
+                    .cursor_pointer()
+                    .bg(gpui::rgb(b))
+                    .border_1()
+                    .border_color(gpui::rgba(0x00000014))
+                    .when(current == Some(i), |d| {
+                        d.border_2().border_color(gpui::white()).shadow(glow(surface::ink().into(), 0., 1.5))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.swatch(i, cx)))
+            }))
+            .child(chevron("theme-next", "chevron-right", 1));
+
+        let t = ((self.lch[0] - LIGHT.0) / (LIGHT.1 - LIGHT.0)).clamp(0., 1.);
+        let wave = canvas(|_, _, _| {}, |b, _, window, _| {
+            const CYCLES: f32 = 7.;
+            let (w, mid) = (f32::from(b.size.width), f32::from(b.size.height) / 2.);
+            let mut p = gpui::PathBuilder::stroke(px(3.));
+            p.move_to(b.origin + gpui::point(px(0.), px(mid)));
+            let mut x = 1.;
+            while x <= w {
+                let y = mid + (x / w * CYCLES * std::f32::consts::TAU).sin() * 5.;
+                p.line_to(b.origin + gpui::point(px(x), px(y)));
+                x += 1.;
+            }
+            if let Ok(path) = p.build() {
+                window.paint_path(path, surface::muted());
+            }
+        })
+        .absolute()
+        .top(px(5.))
+        .bottom(px(5.))
+        .left(px(12.))
+        .right(px(12.));
         let slider = div()
             .id("theme-light")
             .relative()
-            .w(px(FIELD_W))
-            .h(px(12.))
+            .w(px(TRACK.0))
+            .h(px(TRACK.1))
             .rounded_full()
-            .bg(linear_gradient(
-                90.,
-                linear_color_stop(from_oklch([LIGHT.0, c, h]), 0.),
-                linear_color_stop(from_oklch([LIGHT.1, c, h]), 1.),
-            ))
+            .bg(surface::key())
+            .cursor_pointer()
+            .child(wave)
             .child(measure(&self.slider))
             .child(
                 div()
                     .absolute()
-                    .top(px(-3.))
-                    .left(px(t * FIELD_W - KNOB / 2.))
-                    .size(px(KNOB))
+                    .left(px(t * (TRACK.0 - THUMB.0)))
+                    .top(px((TRACK.1 - THUMB.1) / 2.))
+                    .w(px(THUMB.0))
+                    .h(px(THUMB.1))
                     .rounded_full()
-                    .border_2()
-                    .border_color(gpui::white())
-                    .bg(from_oklch(self.lch))
-                    .shadow(vec![shadow(gpui::rgba(0x0000004D).into(), 1., 4.)]),
+                    .bg(surface::raised())
+                    .shadow(vec![shadow(gpui::rgba(0x2A253A2E).into(), 2., 7.)]),
             )
             .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Light)));
-        let swatches = div().flex().justify_between().children(PALETTE.iter().enumerate().map(|(i, &(top, bottom))| {
-            let on = current == Some(bottom);
+
+        // Ticks up to the handle take the colour, so the dial reads at a glance.
+        let lit = (self.spread * TICKS as f32).round() as usize;
+        let around = |deg: f32, size: f32| {
+            let a = deg.to_radians();
+            (DIAL / 2. + a.sin() * 34. - size / 2., DIAL / 2. - a.cos() * 34. - size / 2.)
+        };
+        let ticks = (0..TICKS).map(|i| {
+            let (x, y) = around(i as f32 * 360. / TICKS as f32, 3.5);
             div()
-                .id(("theme-swatch", i))
-                .size(px(22.))
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .size(px(3.5))
                 .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_2()
-                .border_color(if on { Hsla::from(surface::ink()) } else { gpui::transparent_black() })
-                .cursor_pointer()
-                .child(div().size(px(14.)).rounded_full().bg(gpui::rgb(bottom)).border_1().border_color(surface::border()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.lch = to_oklch(gpui::rgb(bottom));
-                    this.set(top, bottom, cx);
-                }))
-        }));
+                .bg(if i < lit { Hsla::from(bottom) } else { Hsla::from(surface::border()) })
+        });
+        let (hx, hy) = around(self.spread * 360., 11.);
+        let dial = div()
+            .id("theme-spread")
+            .relative()
+            .size(px(DIAL))
+            .cursor_pointer()
+            .children(ticks)
+            .child(
+                div()
+                    .absolute()
+                    .left(px(22.))
+                    .top(px(22.))
+                    .size(px(44.))
+                    .rounded_full()
+                    .bg(surface::raised())
+                    .border_1()
+                    .border_color(surface::line()),
+            )
+            .child(ring(11., 0.).left(px(hx)).top(px(hy)).bg(surface::raised()))
+            .child(measure(&self.dial))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Spread)));
+
         card("theme-picker")
+            .w(px(CANVAS.0 + 12.))
+            .p(px(6.))
+            .gap(px(0.))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if matches!(e.keystroke.key.as_str(), "escape" | "enter") {
@@ -294,8 +444,8 @@ impl<H: WebHost> Render for ColorPicker<H> {
             }))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| dismiss(&this.browser, cx)))
             .child(field)
-            .child(slider)
-            .child(swatches)
+            .child(palette)
+            .child(div().mt(px(4.)).px(px(10.)).pb(px(6.)).flex().items_center().justify_between().child(slider).child(dial))
             // While dragging, every move in the window steers, even off the card.
             .when(self.drag.is_some(), |d| {
                 let this = cx.entity().downgrade();
@@ -553,11 +703,19 @@ mod tests {
     }
 
     #[test]
-    fn a_swatch_survives_the_round_trip_through_the_field() {
+    fn a_swatch_survives_the_round_trip_through_the_canvas() {
         for (_, bottom) in PALETTE {
-            let back = hex(from_oklch(to_oklch(gpui::rgb(bottom))));
+            let [l, c, h] = to_oklch(gpui::rgb(bottom));
+            let (dx, dy) = on_canvas(c, h);
+            let (c, h) = from_canvas(dx, dy);
+            let back = hex(from_oklch([l, c, h]));
             let d = |s: u32| ((back >> s & 0xFF) as i32 - (bottom >> s & 0xFF) as i32).abs();
             assert!(d(16) <= 1 && d(8) <= 1 && d(0) <= 1, "{bottom:06X} came back {back:06X}");
+            for spread in [0., 0.25, 0.4, 0.9] {
+                let top = gpui::rgb(hex(top_of(gpui::rgb(bottom), spread)));
+                let back = spread_of(top, gpui::rgb(bottom));
+                assert!((back - spread).abs() < 0.02, "{bottom:06X} at {spread} read as {back}");
+            }
         }
     }
 }
