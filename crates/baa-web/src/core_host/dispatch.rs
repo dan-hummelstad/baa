@@ -24,8 +24,18 @@ use super::{
     PageKind, Shared, Snapshot,
 };
 use crate::{
-    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, PageEvent, SuggestUpdate, Suggestion,
+    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate,
+    Suggestion,
 };
+
+/// `BAA_MEDIA_*` bits.
+pub(super) const MEDIA_ACTIONS: [(u32, MediaAction); 5] = [
+    (ffi::MEDIA_PLAY, MediaAction::Play),
+    (ffi::MEDIA_PAUSE, MediaAction::Pause),
+    (ffi::MEDIA_NEXT, MediaAction::Next),
+    (ffi::MEDIA_PREVIOUS, MediaAction::Previous),
+    (ffi::MEDIA_PICTURE_IN_PICTURE, MediaAction::PictureInPicture),
+];
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
 /// Long: a background open is taken only once its tab is activated, and a
@@ -468,6 +478,22 @@ pub(super) fn callbacks() -> Callbacks {
         let message = unsafe { from_c(message) };
         unsafe { dispatch(ctx) }.finish_unpacked(id, if ok { Ok(message) } else { Err(message) });
     }
+    extern "C" fn cdp(ctx: *mut c_void, tab: TabId, id: u64, json: *const c_char) {
+        let json = unsafe { from_c(json) };
+        unsafe { dispatch(ctx) }.on_page(tab, move |page, cx| page.on_cdp(id, &json, cx));
+    }
+    extern "C" fn media(ctx: *mut c_void, tab: TabId, media: *const ffi::Media) {
+        let raw = unsafe { &*media };
+        let artwork = unsafe { from_c(raw.artwork_url) };
+        let media = crate::Media {
+            title: unsafe { from_c(raw.title) },
+            artist: unsafe { from_c(raw.artist) },
+            artwork: (!artwork.is_empty()).then_some(artwork),
+            playing: raw.playing,
+            actions: MEDIA_ACTIONS.iter().filter(|(bit, _)| raw.actions & bit != 0).map(|(_, a)| *a).collect(),
+        };
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::Media(media)));
+    }
     Callbacks {
         key,
         tab_created,
@@ -488,6 +514,8 @@ pub(super) fn callbacks() -> Callbacks {
         autocomplete,
         clear_done,
         load_unpacked_done,
+        cdp,
+        media,
     }
 }
 

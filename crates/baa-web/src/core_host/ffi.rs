@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 9;
+pub const ABI_VERSION: c_int = 10;
 
 #[repr(C)]
 pub struct Profile {
@@ -23,6 +23,7 @@ pub struct TabState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub audible: bool,
+    pub muted: bool,
     pub secure: bool,
     pub crashed: bool,
 }
@@ -129,6 +130,22 @@ pub const EXCLUSIVE_FULLSCREEN: c_int = 1;
 pub const EXCLUSIVE_POINTER_LOCK: c_int = 2;
 pub const EXCLUSIVE_KEYBOARD_LOCK: c_int = 3;
 
+/// `BaaMedia`: a tab's media session.
+#[repr(C)]
+pub struct Media {
+    pub title: *const c_char,
+    pub artist: *const c_char,
+    pub artwork_url: *const c_char,
+    pub playing: bool,
+    pub actions: u32,
+}
+
+pub const MEDIA_PLAY: u32 = 1 << 0;
+pub const MEDIA_PAUSE: u32 = 1 << 1;
+pub const MEDIA_NEXT: u32 = 1 << 2;
+pub const MEDIA_PREVIOUS: u32 = 1 << 3;
+pub const MEDIA_PICTURE_IN_PICTURE: u32 = 1 << 4;
+
 /// `BaaDialog`: a question the page or Chrome waits on.
 #[repr(C)]
 pub struct Dialog {
@@ -218,6 +235,8 @@ pub struct Callbacks {
     pub autocomplete: extern "C" fn(ctx: *mut c_void, id: u64, matches: *const Match, count: usize, done: bool),
     pub clear_done: extern "C" fn(ctx: *mut c_void, id: u64),
     pub load_unpacked_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, message: *const c_char),
+    pub cdp: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64, json: *const c_char),
+    pub media: extern "C" fn(ctx: *mut c_void, tab: TabId, media: *const Media),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -273,6 +292,9 @@ pub struct Core {
     pub tab_show_devtools_window: extern "C" fn(TabId, bool, c_int, c_int),
     pub tab_exit_fullscreen: extern "C" fn(TabId),
     pub tab_set_group: extern "C" fn(TabId, u64, *const c_char),
+    /// Only through `cdp::command`: the allowlist decides what reaches it.
+    pub tab_cdp: extern "C" fn(TabId, u64, *const c_char),
+    pub tab_media_action: extern "C" fn(TabId, u32),
     /// Answers a dialog or permission ask.
     pub answer: extern "C" fn(u64, *const Answer),
     pub context_menu_done: extern "C" fn(u64, c_int),
@@ -369,6 +391,8 @@ pub fn load() -> &'static Core {
             tab_show_devtools_window,
             tab_exit_fullscreen,
             tab_set_group,
+            tab_cdp,
+            tab_media_action,
             answer,
             context_menu_done,
             download_cancel,
@@ -505,6 +529,11 @@ mod tests {
             ("BAA_EXCLUSIVE_FULLSCREEN", EXCLUSIVE_FULLSCREEN as i64),
             ("BAA_EXCLUSIVE_POINTER_LOCK", EXCLUSIVE_POINTER_LOCK as i64),
             ("BAA_EXCLUSIVE_KEYBOARD_LOCK", EXCLUSIVE_KEYBOARD_LOCK as i64),
+            ("BAA_MEDIA_PLAY", MEDIA_PLAY as i64),
+            ("BAA_MEDIA_PAUSE", MEDIA_PAUSE as i64),
+            ("BAA_MEDIA_NEXT", MEDIA_NEXT as i64),
+            ("BAA_MEDIA_PREVIOUS", MEDIA_PREVIOUS as i64),
+            ("BAA_MEDIA_PICTURE_IN_PICTURE", MEDIA_PICTURE_IN_PICTURE as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

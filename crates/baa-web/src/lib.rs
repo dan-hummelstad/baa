@@ -156,6 +156,50 @@ pub enum PageEvent {
     DevToolsDock(String),
     /// The page got keyboard focus (a click on it, say): split view makes it the focused pane.
     Focused,
+    /// A console message or an uncaught exception; only after [`PageHandle::watch_console`].
+    Console { level: ConsoleLevel, text: String },
+    /// The tab's media session changed.
+    Media(Media),
+    /// The tab's audio was muted or unmuted, by the app or by Chrome.
+    Muted(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsoleLevel {
+    Debug,
+    Log,
+    Info,
+    Warning,
+    /// `console.error`, a failed `console.assert`, or an uncaught exception.
+    Error,
+}
+
+/// A tab's media session, as Chrome's media controls see it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Media {
+    /// The page's, else the page title.
+    pub title: String,
+    pub artist: String,
+    pub artwork: Option<String>,
+    pub playing: bool,
+    /// What [`PageHandle::set_media_action`] can do now.
+    pub actions: Vec<MediaAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaAction {
+    Play,
+    Pause,
+    Next,
+    Previous,
+    PictureInPicture,
+}
+
+/// What [`PageHandle::set_emulation`] shows the page as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Device {
+    /// 393×852 at 3x, mobile, touch, and an iPhone's user agent.
+    Phone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,8 +268,31 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn is_secure(&self) -> bool;
     /// Runs `script` as if the user had just clicked (Picture in Picture needs that).
     fn eval_with_gesture(&self, script: &str);
-    /// Hidden pages keep state but stop painting (background tabs).
+    /// Hidden pages keep state but stop painting (background tabs). Only shows
+    /// or hides; see [`PageHandle::activate`].
     fn set_visible(&self, visible: bool);
+    /// Makes this Chrome's active tab of its window, which permission prompts,
+    /// dialogs and extension actions follow. Call it for the one tab the user
+    /// is on, after `set_visible`. Popups and DevTools ignore it.
+    fn activate(&self);
+    /// Runs `script` in the page's main world and gets its result as JSON
+    /// (promises awaited), or the exception's text. `done` is dropped if the
+    /// page closes first.
+    fn eval_value(&self, script: &str, done: Callback<Result<serde_json::Value, String>>);
+    /// The page's viewport as a base64 PNG.
+    fn screenshot(&self, done: Callback<Result<String, String>>);
+    /// A real left click (trusted events) at CSS pixels from the viewport's top left.
+    fn click(&self, x: f32, y: f32);
+    /// Types `text` into the focused element, as a keyboard or IME would.
+    fn insert_text(&self, text: &str);
+    /// Presses and releases `key`: a DOM key name ("Enter", "ArrowDown") or one character.
+    fn press_key(&self, key: &str);
+    /// Shows the page as `device` would see it, or as itself again (`None`).
+    fn set_emulation(&self, device: Option<Device>);
+    fn set_media_action(&self, action: MediaAction);
+    /// From now on the page reports [`PageEvent::Console`]. Off by default, so
+    /// normal browsing does not pay for it.
+    fn watch_console(&self);
     /// Focus this to send keyboard input to the page (after closing the command bar, say).
     fn focus_handle(&self, cx: &App) -> FocusHandle;
     /// Render the page for this frame at the element's laid-out bounds.

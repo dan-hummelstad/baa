@@ -40,6 +40,12 @@ void SendError(uint64_t tab, uint64_t id, std::string_view message) {
            ",\"error\":{\"code\":-32000,\"message\":\"" + std::string(message) + "\"}}");
 }
 
+// Domains the app enabled are off (or never came on): it enables them again
+// after the next navigation.
+void SendDetached(uint64_t tab) {
+  Send(tab, 0, R"({"method":"Baa.detached","params":{}})");
+}
+
 class Session;
 
 // tab id -> its session.
@@ -120,7 +126,7 @@ class Session : public content::DevToolsAgentHostClient {
     for (uint64_t id : waiting) {
       SendError(tab_, id, "session ended");
     }
-    Send(tab_, 0, R"({"method":"Baa.detached","params":{}})");
+    SendDetached(tab_);
   }
 
   const uint64_t tab_;
@@ -154,6 +160,7 @@ void baa_tab_cdp(BaaTabId tab_id, uint64_t id, const char* json) {
         tab_id, content::DevToolsAgentHost::GetOrCreateFor(wc));
     if (!session->Attach()) {
       baa::SendError(tab_id, id, "page does not allow a session");
+      baa::SendDetached(tab_id);
       return;
     }
     it = sessions.emplace(tab_id, std::move(session)).first;

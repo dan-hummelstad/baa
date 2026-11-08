@@ -613,10 +613,11 @@ BAA_EXPORT void baa_tab_set_group(BaaTabId tab, uint64_t group,
 // attaches to the browser target, Chrome's pages (WebUI), extensions, DevTools
 // or file: pages, never reads or writes local files, and allows no unsafe
 // operations. The reply, and events of domains the caller enabled, come by
-// `cdp`. A tab the session cannot attach to gets an error reply. When the
-// session ends (the page went to a URL above, Chrome swapped its contents),
-// waiting commands get error replies, then the event {"method":"Baa.detached"};
-// the next call makes a new session, with no domain enabled.
+// `cdp`. When the session ends (the page went to a URL above, Chrome swapped
+// its contents), waiting commands get error replies, then the event
+// {"method":"Baa.detached"}; the next call makes a new session, with no domain
+// enabled. A page the session cannot attach to gets an error reply and
+// Baa.detached too.
 BAA_EXPORT void baa_tab_cdp(BaaTabId tab, uint64_t id, const char* json);
 
 // One BAA_MEDIA_* action on the tab's media session, as Chrome's media

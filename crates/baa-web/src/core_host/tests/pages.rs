@@ -208,13 +208,15 @@ fn only_tabs_are_activated(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let tab_page = env.page(1, "https://a.test", cx);
     tab_page.read_with(cx, |page, _| page.set_visible(true));
+    assert!(calls("tab_activate").is_empty(), "showing is not activating");
+    tab_page.read_with(cx, |page, _| page.activate());
     assert_eq!(calls("tab_activate").len(), 1);
 
     let popup = env
         .window
         .update(cx, |_, window, cx| env.host.create_popup(ProfileId(1), "chrome-extension://bbb/p.html", window, cx))
         .unwrap();
-    popup.read_with(cx, |page, _| page.set_visible(true));
+    popup.read_with(cx, |page, _| page.activate());
     assert_eq!(calls("tab_activate").len(), 1, "a popup has no strip");
 }
 

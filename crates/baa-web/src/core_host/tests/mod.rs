@@ -189,6 +189,12 @@ extern "C" fn tab_exit_fullscreen(t: TabId) {
 extern "C" fn tab_set_group(t: TabId, group: u64, title: *const c_char) {
     log(format!("tab_set_group {t:?} {group} {}", arg(title)));
 }
+extern "C" fn tab_cdp(t: TabId, id: u64, json: *const c_char) {
+    log(format!("tab_cdp {t:?} {id} {}", arg(json)));
+}
+extern "C" fn tab_media_action(t: TabId, action: u32) {
+    log(format!("tab_media_action {t:?} {action}"));
+}
 extern "C" fn context_menu_done(id: u64, command: c_int) {
     log(format!("context_menu_done {id} {command}"));
 }
@@ -304,6 +310,8 @@ fn fake_core() -> &'static Core {
         tab_show_devtools_window,
         tab_exit_fullscreen,
         tab_set_group,
+        tab_cdp,
+        tab_media_action,
         answer,
         context_menu_done,
         download_cancel,
@@ -441,6 +449,7 @@ struct State {
     loading: bool,
     can_go_back: bool,
     audible: bool,
+    muted: bool,
     crashed: bool,
     view: usize,
 }
@@ -458,6 +467,7 @@ impl State {
             can_go_back: self.can_go_back,
             can_go_forward: false,
             audible: self.audible,
+            muted: self.muted,
             secure: false,
             crashed: self.crashed,
         };
@@ -479,6 +489,7 @@ fn container_of(page: &Entity<CorePage>, cx: &mut TestAppContext) -> *mut AnyObj
 }
 
 mod adoption;
+mod cdp_tests;
 mod devtools_tests;
 mod dialogs;
 mod extension_tests;

@@ -2,6 +2,7 @@
 //! `chromium/baa/baa.h` (PLAN-chromium-phase3.md). Pages are Chrome tabs whose
 //! NSView sits under gpui's view, seen through the hole each page element punches.
 
+mod cdp;
 mod dispatch;
 mod extensions;
 mod ffi;
@@ -141,6 +142,7 @@ struct Snapshot {
     can_go_back: bool,
     can_go_forward: bool,
     audible: bool,
+    muted: bool,
     secure: bool,
     crashed: bool,
 }
@@ -156,6 +158,7 @@ impl Default for Snapshot {
             can_go_back: false,
             can_go_forward: false,
             audible: false,
+            muted: false,
             secure: false,
             crashed: false,
         }
@@ -174,6 +177,7 @@ impl Snapshot {
                 can_go_back: state.can_go_back,
                 can_go_forward: state.can_go_forward,
                 audible: state.audible,
+                muted: state.muted,
                 secure: state.secure,
                 crashed: state.crashed,
             }

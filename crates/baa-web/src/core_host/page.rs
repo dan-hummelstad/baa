@@ -1,7 +1,8 @@
 //! One Chrome tab as a gpui entity.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::HashMap,
     ffi::{c_char, c_void},
     rc::Rc,
 };
@@ -11,10 +12,12 @@ use gpui::{
     ParentElement, Render, Styled, Subscription, WeakEntity, Window,
 };
 use objc2::runtime::AnyObject;
+use serde_json::{json, Value};
 
 use super::{
     c_string,
-    dispatch::{Dispatch, Live},
+    cdp::{self, Incoming},
+    dispatch::{Dispatch, Live, MEDIA_ACTIONS},
     from_c,
     menu::{present_menu, Row},
     native,
@@ -23,11 +26,27 @@ use super::{
     ffi::{self, Profile, TabId},
     PageKind, Shared, Snapshot,
 };
-use crate::{PageEvent, PageHandle, ProfileId};
+use crate::{Callback, Device, MediaAction, PageEvent, PageHandle, ProfileId};
+
+const PHONE_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+
+/// What the page asked of its tab's CDP session (`cdp.rs` decides what may be sent).
+#[derive(Default)]
+struct Cdp {
+    /// Ids are per tab.
+    last_id: Cell<u64>,
+    waiting: RefCell<HashMap<u64, Callback<Result<Value, String>>>>,
+    console: Cell<bool>,
+    emulation: Cell<Option<Device>>,
+    /// The session ended with `console` or `emulation` on: both are sent again
+    /// after the next navigation.
+    lost: Cell<bool>,
+}
 
 /// One Chrome tab as a gpui entity.
 pub struct CorePage {
     pub(super) dispatch: &'static Dispatch,
+    cdp: Cdp,
     pub(super) shared: Rc<Shared>,
     pub(super) profile: ProfileId,
     state: Snapshot,
@@ -70,6 +89,7 @@ impl CorePage {
         }
         Self {
             dispatch,
+            cdp: Cdp::default(),
             shared,
             profile,
             state,
@@ -90,6 +110,9 @@ impl CorePage {
         }
         let old = std::mem::replace(&mut self.state, new.clone());
         self.emit_changes(&old, &new, cx);
+        if new.url != old.url || view_changed {
+            self.resubscribe();
+        }
         if view_changed {
             cx.notify();
         }
@@ -113,6 +136,9 @@ impl CorePage {
         }
         if new.audible != old.audible {
             cx.emit(PageEvent::AudibleChanged(new.audible));
+        }
+        if new.muted != old.muted {
+            cx.emit(PageEvent::Muted(new.muted));
         }
         if new.crashed != old.crashed {
             cx.emit(PageEvent::Crashed(new.crashed));
@@ -138,10 +164,64 @@ impl CorePage {
         .detach();
     }
 
-    /// Makes the tab its window's active one; popups and DevTools have no strip.
-    fn activate(&self) {
-        if self.shared.kind == PageKind::Tab {
-            self.shared.run(|core, tab| (core.tab_activate)(tab));
+    /// Sends `method` if `cdp.rs` allows it; `done` gets the reply's result.
+    fn cdp(&self, method: &str, params: Value, done: Option<Callback<Result<Value, String>>>) {
+        let id = self.cdp.last_id.get() + 1;
+        self.cdp.last_id.set(id);
+        let Some(json) = cdp::command(id, method, params) else {
+            log::error!("CDP method {method} is not allowed");
+            return;
+        };
+        self.shared.run(|core, tab| {
+            if let Some(done) = done {
+                self.cdp.waiting.borrow_mut().insert(id, done);
+            }
+            (core.tab_cdp)(tab, id, c_string(&json).as_ptr());
+        });
+    }
+
+    /// A reply or event of the tab's CDP session.
+    pub(super) fn on_cdp(&mut self, id: u64, json: &str, cx: &mut Context<Self>) {
+        match cdp::parse(id, json) {
+            Incoming::Reply(id, result) => {
+                let done = self.cdp.waiting.borrow_mut().remove(&id);
+                // Outside this page's update, so `done` may read the page.
+                if let Some(done) = done {
+                    cx.defer(move |cx| done(result, cx));
+                }
+            }
+            Incoming::Console { level, text } => cx.emit(PageEvent::Console { level, text }),
+            Incoming::Detached => self.cdp.lost.set(self.cdp.console.get() || self.cdp.emulation.get().is_some()),
+            Incoming::Other => {}
+        }
+    }
+
+    fn resubscribe(&self) {
+        if self.cdp.lost.replace(false) {
+            if self.cdp.console.get() {
+                self.cdp("Runtime.enable", json!({}), None);
+            }
+            if let Some(device) = self.cdp.emulation.get() {
+                self.send_emulation(Some(device));
+            }
+        }
+    }
+
+    fn send_emulation(&self, device: Option<Device>) {
+        match device {
+            Some(Device::Phone) => {
+                let metrics = json!({ "width": 393, "height": 852, "deviceScaleFactor": 3, "mobile": true });
+                self.cdp("Emulation.setDeviceMetricsOverride", metrics, None);
+                self.cdp("Emulation.setTouchEmulationEnabled", json!({ "enabled": true, "maxTouchPoints": 5 }), None);
+                let agent = json!({ "userAgent": PHONE_USER_AGENT, "platform": "iPhone" });
+                self.cdp("Emulation.setUserAgentOverride", agent, None);
+            }
+            None => {
+                self.cdp("Emulation.clearDeviceMetricsOverride", json!({}), None);
+                self.cdp("Emulation.setTouchEmulationEnabled", json!({ "enabled": false }), None);
+                // An empty user agent ends the override.
+                self.cdp("Emulation.setUserAgentOverride", json!({ "userAgent": "" }), None);
+            }
         }
     }
 
@@ -151,7 +231,7 @@ impl CorePage {
             self.shared.run(|core, tab| {
                 (core.tab_focus)(tab);
             });
-            self.activate();
+            PageHandle::activate(self);
         } else if native::has_first_responder(view) {
             native::make_first_responder(self.gpui_view);
         }
@@ -291,9 +371,52 @@ impl PageHandle for CorePage {
     }
     fn set_visible(&self, visible: bool) {
         self.shared.container.set_visible(visible);
-        // The tab on show is the one the user is on, focused or not.
-        if visible {
-            self.activate();
+    }
+    fn activate(&self) {
+        // Popups and DevTools have no tab strip.
+        if self.shared.kind == PageKind::Tab {
+            self.shared.run(|core, tab| (core.tab_activate)(tab));
+        }
+    }
+    fn eval_value(&self, script: &str, done: Callback<Result<Value, String>>) {
+        let params = json!({ "expression": script, "returnByValue": true, "awaitPromise": true });
+        self.cdp("Runtime.evaluate", params, Some(Box::new(move |result, cx| done(result.and_then(cdp::eval_value), cx))));
+    }
+    fn screenshot(&self, done: Callback<Result<String, String>>) {
+        let read = move |result: Result<Value, String>, cx: &mut App| {
+            let png = result.and_then(|r| r["data"].as_str().map(str::to_string).ok_or_else(|| "no image".to_string()));
+            done(png, cx)
+        };
+        self.cdp("Page.captureScreenshot", json!({ "format": "png" }), Some(Box::new(read)));
+    }
+    fn click(&self, x: f32, y: f32) {
+        self.cdp("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y }), None);
+        for kind in ["mousePressed", "mouseReleased"] {
+            let event = json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 });
+            self.cdp("Input.dispatchMouseEvent", event, None);
+        }
+    }
+    fn insert_text(&self, text: &str) {
+        self.cdp("Input.insertText", json!({ "text": text }), None);
+    }
+    fn press_key(&self, key: &str) {
+        for event in cdp::key_events(key) {
+            self.cdp("Input.dispatchKeyEvent", event, None);
+        }
+    }
+    fn set_emulation(&self, device: Option<Device>) {
+        if self.cdp.emulation.replace(device) != device {
+            self.send_emulation(device);
+        }
+    }
+    fn set_media_action(&self, action: MediaAction) {
+        if let Some((bit, _)) = MEDIA_ACTIONS.iter().find(|(_, a)| *a == action) {
+            self.shared.run(|core, tab| (core.tab_media_action)(tab, *bit));
+        }
+    }
+    fn watch_console(&self) {
+        if !self.cdp.console.replace(true) {
+            self.cdp("Runtime.enable", json!({}), None);
         }
     }
     fn focus_handle(&self, cx: &App) -> FocusHandle {
