@@ -234,6 +234,8 @@ pub struct Settings {
     /// A site's local, staging and production origins: the header names the one a tab is on,
     /// and ⌥⌘E moves the tab to the next.
     pub environments: Vec<Project>,
+    /// A red count of console errors on localhost tabs' rows (E4).
+    pub console_badge: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +297,7 @@ impl Default for Settings {
             search_engines: Vec::new(),
             web: WebPrefs::default(),
             environments: Vec::new(),
+            console_badge: true,
         }
     }
 }
@@ -387,6 +390,7 @@ mod tests {
         assert!(s.reduce_motion);
         assert_eq!(s.search_engine.name, "Google");
         assert_eq!(s.archive_after_hours, 12);
+        assert!(s.console_badge, "the console badge is on for settings saved before it");
     }
 
     #[test]
