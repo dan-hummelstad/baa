@@ -20,6 +20,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -80,12 +81,10 @@ class Session : public content::DevToolsAgentHostClient {
                                base::span<const uint8_t> message) override {
     std::string json(base::as_string_view(message));
     uint64_t id = 0;
-    if (std::optional<base::Value> value = base::JSONReader::Read(json)) {
-      if (const base::Value::Dict* dict = value->GetIfDict()) {
-        // FindDouble also reads ints; ids may outgrow int.
-        if (std::optional<double> n = dict->FindDouble("id")) {
-          id = static_cast<uint64_t>(*n);
-        }
+    if (std::optional<base::DictValue> dict = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC)) {
+      // FindDouble also reads ints; ids may outgrow int.
+      if (std::optional<double> n = dict->FindDouble("id")) {
+        id = static_cast<uint64_t>(*n);
       }
     }
     if (id != 0 && !waiting_.erase(id)) {
@@ -112,7 +111,8 @@ class Session : public content::DevToolsAgentHostClient {
   bool MayAttachToURL(const GURL& url, bool is_webui) override {
     return !is_webui && (url.is_empty() || url.SchemeIsHTTPOrHTTPS() || url.IsAboutBlank());
   }
-  bool MayAttachToBrowser() override { return false; }
+  // Not in Chrome's trust domain: no browser target, no other targets.
+  bool IsTrusted() override { return false; }
   bool MayReadLocalFiles() override { return false; }
   bool MayWriteLocalFiles() override { return false; }
   bool AllowUnsafeOperations() override { return false; }
