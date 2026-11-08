@@ -40,6 +40,8 @@ mod shared_extensions;
 mod media;
 #[cfg(test)]
 mod tests_media;
+mod dev;
+pub(crate) use dev::PHONE_W;
 pub(crate) use shared_extensions::InstallTarget;
 #[cfg(test)]
 mod tests_shared_extensions;
@@ -183,6 +185,11 @@ pub struct Browser<H: WebHost> {
     pub(crate) media: HashMap<TabId, (baa_web::Media, u64)>,
     /// The tab the mini-player shows, kept while it fades out.
     pub(crate) mini_tab: Option<TabId>,
+    /// Split panes showing their page as a phone (E2); in memory only.
+    pub(crate) phone_panes: HashSet<TabId>,
+    /// Console errors on each localhost tab since its last load (E4), and the pages asked to report them.
+    pub(crate) console_errors: HashMap<TabId, u32>,
+    console_watched: HashSet<TabId>,
     /// Header popovers: the download list, the site's settings.
     pub(crate) popover: Option<crate::prompts::Popover>,
     /// Downloads the user cleared from the list.
@@ -333,6 +340,9 @@ impl<H: WebHost> Browser<H> {
             muted: HashSet::new(),
             media: HashMap::new(),
             mini_tab: None,
+            phone_panes: HashSet::new(),
+            console_errors: HashMap::new(),
+            console_watched: HashSet::new(),
             popover: None,
             cleared_downloads: HashSet::new(),
             downloads_seen: 0,
@@ -463,6 +473,7 @@ impl<H: WebHost> Browser<H> {
         self.audible.retain(|id| pages.contains_key(id));
         self.muted.retain(|id| pages.contains_key(id));
         self.media.retain(|id, _| pages.contains_key(id));
+        self.retain_dev(cx);
         let active = self.active_tab();
         if active != self.shown_tab {
             for (id, on) in [(self.shown_tab, 0.0), (active, 1.0)] {
@@ -533,11 +544,13 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         let user_initiated = !self.supplied.remove(&id);
-        let page = self.host.create_page(space.profile, &tab.url, user_initiated, window, cx);
+        let tab_url = tab.url.clone();
+        let page = self.host.create_page(space.profile, &tab_url, user_initiated, window, cx);
         let sub = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
             this.on_page_event(id, event, window, cx)
         });
         self.pages.insert(id, (page, sub));
+        self.watch_if_local(id, &tab_url, cx);
     }
 
     fn on_page_event(
@@ -547,10 +560,10 @@ impl<H: WebHost> Browser<H> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.session.tab_mut(id) else {
+        let Some((space, url)) = self.session.tab(id).map(|t| (t.space, t.url.clone())) else {
             return;
         };
-        let (space, url) = (tab.space, tab.url.clone());
+        self.console_event(id, event, cx);
         let private = self.session.space(space).is_some_and(|s| s.ephemeral);
         let tab = self.session.tab_mut(id).expect("looked up above");
         match event {
@@ -680,6 +693,7 @@ impl<H: WebHost> Browser<H> {
             this.on_page_event(id, event, window, cx)
         });
         self.pages.insert(id, (page, sub));
+        self.watch_if_local(id, url, cx);
         self.sync(window, cx);
     }
 

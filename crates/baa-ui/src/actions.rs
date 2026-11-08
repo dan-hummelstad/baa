@@ -49,6 +49,7 @@ gpui::actions!(
         ShowArchive,
         CycleEnvironment,
         SplitView,
+        ResponsiveView,
     ]
 );
 

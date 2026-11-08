@@ -529,6 +529,7 @@ impl<H: WebHost> Browser<H> {
             ))
             .child(div().flex_1().min_w_0().truncate().child(title))
             .children(self.render_speaker(id, theme, cx))
+            .children(self.console_badge(("console-badge", id.0), &[id], cx))
             .child(feel(
                 div()
                     .id(("close", id.0))
@@ -764,6 +765,11 @@ impl<H: WebHost> Browser<H> {
                 .child(SharedString::from(folder.name.clone()))
                 .into_any_element(),
         };
+        // A closed dev servers folder still shows its servers' console errors.
+        let badge = (!open && matches!(folder.live, Some(baa_model::LiveSource::DevServers))).then(|| {
+            let tabs: Vec<TabId> = self.session.folder_tabs(id).map(|t| t.id).collect();
+            self.console_badge(("folder-console-badge", id.0), &tabs, cx)
+        });
         let glass = theme.glass;
         let key = ("folder", id.0);
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
@@ -813,7 +819,8 @@ impl<H: WebHost> Browser<H> {
                     .child(icon(glyph, 16., theme.ink).with_transformation(
                         Transformation::scale(gpui::size(1. - 0.15 * p, 1. - 0.15 * p)),
                     ))
-                    .child(name),
+                    .child(name)
+                    .children(badge.flatten()),
                 key,
                 cx,
             ))

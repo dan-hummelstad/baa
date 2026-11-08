@@ -100,6 +100,7 @@
       "cmd-p": "baa::Print",
       "cmd-alt-u": "baa::ViewSource",
       "cmd-alt-e": "baa::CycleEnvironment",
+      "cmd-alt-m": "baa::ResponsiveView",
       "cmd-shift-r": "baa::HardReload",
       "cmd-alt-r": "baa::ReaderMode",
       "cmd-shift-j": "baa::ShowDownloads",

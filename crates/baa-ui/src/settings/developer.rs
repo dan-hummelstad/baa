@@ -1,5 +1,4 @@
-//! Developer: DevTools, Chrome's pages, environments and the dev servers folder.
-// E2 (responsive view), E3's sidebar placement and E4 (console error badge) add their toggles here.
+//! Developer: DevTools, Chrome's pages, environments, the dev servers folder and console badges.
 
 use baa_model::{DevToolsDock, Env, Project, Settings};
 use baa_web::WebHost;
@@ -80,6 +79,11 @@ impl<H: WebHost> SettingsView<H> {
                     this.in_browser(cx, false, move |b, w, cx| b.set_dev_servers_folder(!on, w, cx));
                 }))
                 .into_any_element(),
+        ));
+        out.push(self.row(
+            "console_badge",
+            "A red count of console errors on localhost tabs; clicking it opens DevTools. Applies from a tab's next load.",
+            self.toggle("pref-console-badge", s.console_badge, |s, v| s.console_badge = v, cx),
         ));
         out
     }

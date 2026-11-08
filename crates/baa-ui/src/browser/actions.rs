@@ -95,6 +95,7 @@ impl<H: WebHost> Browser<H> {
                 this.sync(window, cx);
             }
         }))
+        .on_action(cx.listener(|this, _: &ResponsiveView, window, cx| this.responsive_view(window, cx)))
         .on_action(cx.listener(|this, _: &MuteTab, _, cx| {
             if let Some(id) = this.active_tab() {
                 this.toggle_mute(id, cx);

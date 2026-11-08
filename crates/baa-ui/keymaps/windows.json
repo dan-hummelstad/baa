@@ -99,6 +99,7 @@
       "ctrl-p": "baa::Print",
       "ctrl-alt-u": "baa::ViewSource",
       "ctrl-alt-e": "baa::CycleEnvironment",
+      "ctrl-alt-m": "baa::ResponsiveView",
       "ctrl-shift-r": "baa::HardReload",
       "shift-f5": "baa::HardReload",
       "ctrl-alt-r": "baa::ReaderMode",

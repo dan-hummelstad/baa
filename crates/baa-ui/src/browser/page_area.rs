@@ -17,13 +17,24 @@ impl<H: WebHost> Browser<H> {
         // Corners where a pane meets its neighbours stay square.
         let inner = |i: usize| (if i > 0 { 1 | 4 } else { 0 }) | (if i + 1 < panes.len() { 2 | 8 } else { 0 });
         // Each pane's share of the row, from its spring (they need not sum to 1 mid-flight).
+        // A phone pane (E2) is fixed, not springy: `render_split` lays it out at its device width
+        // in px and the springy panes shrink to the rest. Its share here is of last frame's row,
+        // for the prompt overlay only, so layout never waits a frame on it.
+        let phone = |id: &TabId| panes.len() > 1 && self.phone_panes.contains(id);
         let shares: Vec<f32> = {
+            let row = f32::from(self.split_area.get().size.width);
+            let fixed = if row > PHONE_W { (PHONE_W + 1.) / row } else { 0.5 };
+            let rest = (1. - fixed * panes.iter().filter(|id| phone(id)).count() as f32).max(0.);
             let w: Vec<f32> = panes
                 .iter()
-                .map(|id| self.split_w.iter().find(|(p, _)| p == id).map_or(1., |(_, s)| s.value().max(0.)))
+                .map(|id| if phone(id) { 0. } else { self.split_w.iter().find(|(p, _)| p == id).map_or(1., |(_, s)| s.value().max(0.)) })
                 .collect();
             let sum: f32 = w.iter().sum();
-            w.iter().map(|v| if sum > 0. { v / sum } else { 1. / w.len() as f32 }).collect()
+            let springy = panes.iter().filter(|id| !phone(id)).count().max(1) as f32;
+            w.iter()
+                .zip(&panes)
+                .map(|(v, id)| if phone(id) { fixed } else if sum > 0. { v / sum * rest } else { rest / springy })
+                .collect()
         };
         // The native view rounds itself; keep it on the card's radius as the style changes.
         for id in &panes {
@@ -268,8 +279,15 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .child(gpui::canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().size_full());
         let mut focused_pane = Some(focused_pane);
+        // The springy panes' widths sum to the whole row; beside a fixed phone pane they shrink
+        // in proportion to fit.
+        let springy: f32 = panes.iter().zip(shares).filter(|(id, _)| !self.phone_panes.contains(id)).map(|(_, s)| s).sum();
         for (i, id) in panes.iter().enumerate() {
-            if i > 0 {
+            let phone = self.phone_panes.contains(id);
+            // A phone pane's edges do not drag: it keeps its device width.
+            if i > 0 && (phone || self.phone_panes.contains(&panes[i - 1])) {
+                row = row.child(div().flex_none().h_full().w(px(1.)).bg(gpui::rgba(0x0000002E)));
+            } else if i > 0 {
                 let grip = div()
                     .id(("split-seam", i as u64 - 1))
                     .absolute()
@@ -295,7 +313,11 @@ impl<H: WebHost> Browser<H> {
                     None => div().into_any_element(),
                 },
             };
-            row = row.child(div().h_full().min_w_0().w(relative(shares[i])).child(content));
+            row = row.child(if phone {
+                div().flex_none().h_full().w(px(PHONE_W)).flex().flex_col().child(self.phone_strip(*id, cx)).child(div().flex_1().min_h_0().child(content))
+            } else {
+                div().h_full().min_w_0().w(relative(if springy > 0. { shares[i] / springy } else { 0. })).child(content)
+            });
         }
         row.into_any_element()
     }

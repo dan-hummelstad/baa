@@ -156,6 +156,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Developer, "chrome_pages", "Chrome pages", "flags about gpu net-internals inspect"),
     row(Developer, "environments", "Environments", "local staging production prod origin project env"),
     row(Developer, "dev_servers", "Dev servers folder", "localhost ports node vite live"),
+    row(Developer, "console_badge", "Console errors on localhost tabs", "badge console error devtools localhost"),
     row(System, "hw_accel", "Graphics acceleration", "gpu hardware"),
     row(System, "memory_saver", "Memory saver", "discard tabs performance"),
     row(System, "reset", "Reset settings…", "defaults restore"),
