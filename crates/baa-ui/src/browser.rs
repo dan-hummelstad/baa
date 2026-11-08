@@ -66,16 +66,18 @@ const REVEAL_LINGER: std::time::Duration = std::time::Duration::from_millis(40);
 const ZOOM_LEVELS: [f64; 15] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
 ];
-/// Space gradients (top, bottom): Personal, Work, Studio, Night from the mocks,
-/// then a few more in the same key.
-pub(crate) const PALETTE: [(u32, u32); 7] = [
-    (0xDCCFFB, 0xA592EC),
-    (0xF3D07F, 0xE8808E),
-    (0xC9F0E0, 0x8FD8A7),
-    (0x34304A, 0x16151E),
-    (0xCFE3FB, 0x8FB4EC),
-    (0xFBE0CF, 0xECA88F),
-    (0xF6D1E8, 0xD98FC2),
+/// Space gradients (top, bottom): the swatch row of Arc's theme editor, left to right;
+/// bottom is the swatch, top is it 40% toward white.
+pub(crate) const PALETTE: [(u32, u32); 9] = [
+    (0xF6F0ED, 0xF0E6E1), // cream
+    (0xF1C4D7, 0xE79CBC), // pink
+    (0xC4A9C0, 0x9C7096), // purple
+    (0xECA1A6, 0xE0636B), // red
+    (0xF5B99E, 0xEF8B5E), // orange
+    (0xF7E5A7, 0xF1D46C), // yellow
+    (0xABEEC4, 0x73E39D), // green
+    (0xAFD3E8, 0x7AB6D8), // blue
+    (0x5F5F7F, 0x34344A), // slate, the dark one
 ];
 const ICONS: [&str; 7] = ["🐑", "🌿", "🔥", "🌊", "⭐", "🍋", "🪐"];
 const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
