@@ -227,6 +227,7 @@ impl<H: WebHost> Browser<H> {
                 } else {
                     self.audible.remove(&tab);
                 }
+                self.retarget_mini_player();
             }
             _ => {}
         }

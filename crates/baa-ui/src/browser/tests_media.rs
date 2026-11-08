@@ -28,7 +28,30 @@ fn playing(page: &Entity<MockPage>, cx: &mut VisualTestContext) {
         actions: vec![MediaAction::Pause, MediaAction::Next, MediaAction::PictureInPicture],
         ..Media::default()
     };
-    page.update(cx, |_, cx| cx.emit(PageEvent::Media(media)));
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::Media(media));
+        cx.emit(PageEvent::AudibleChanged(true));
+    });
+}
+
+#[gpui::test]
+fn mini_player_only_while_sound_plays(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let (a, page_a) = open_page(&b, "a.example", cx);
+    open_page(&b, "b.example", cx);
+    let silent = Media { title: "Muted autoplay".into(), playing: true, ..Media::default() };
+    page_a.update(cx, |_, cx| cx.emit(PageEvent::Media(silent)));
+    assert_eq!(mini(&b, cx), None, "playing without sound");
+    playing(&page_a, cx);
+    assert_eq!(mini(&b, cx), Some(a));
+    page_a.update(cx, |_, cx| cx.emit(PageEvent::Muted(true)));
+    page_a.update(cx, |_, cx| cx.emit(PageEvent::AudibleChanged(false)));
+    assert_eq!(mini(&b, cx), Some(a), "muted by the user keeps its controls");
+    page_a.update(cx, |_, cx| cx.emit(PageEvent::Muted(false)));
+    assert_eq!(mini(&b, cx), None, "silent again");
+    playing(&page_a, cx);
+    page_a.update(cx, |_, cx| cx.emit(PageEvent::Media(Media { playing: false, ..Media::default() })));
+    assert_eq!(mini(&b, cx), None, "paused");
 }
 
 fn mini(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Option<baa_model::TabId> {

@@ -654,6 +654,7 @@ impl<H: WebHost> Browser<H> {
                 } else {
                     self.muted.remove(&id);
                 }
+                self.retarget_mini_player();
                 return cx.notify();
             }
             PageEvent::DevToolsRequested { x, y } => {
