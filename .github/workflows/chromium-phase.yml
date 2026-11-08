@@ -126,7 +126,7 @@ jobs:
             done
           fi
           { echo "run=$B"; echo "id=$ID"; echo "digest=$DIGEST"; } >> "$GITHUB_OUTPUT"
-          echo "- base tree: ${B:-none, building from scratch}${DIGEST:+ (checked by GitHub's digest)}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- base tree: ${B:-none, building from scratch}${DIGEST:+ (checked against the GitHub upload digest)}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Restore tree by GitHub's digest
         if: steps.base.outputs.digest != ''
