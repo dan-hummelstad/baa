@@ -86,6 +86,7 @@ Must-haves (in the brief) are bold.
 
 **Explicitly out of scope for v1**: Boosts (CSS/JS injection), Easels, Notes, Arc Max/AI, sync, iOS companion,
 extensions UI, password manager, Picture-in-Picture auto-pop.
+Not out of scope: ad blocking. uBlock Origin (Helium's) is built in, one per Space, with bundled filter lists.
 
 ---
 
@@ -121,6 +122,10 @@ log, anyhow, url. No async runtime; Chromium runs its main loop inside gpui's `[
 ## 5. De-Googling: what Helium removes, and what we do about each (*superseded*)
 
 Kept for history. Today: Helium's patches, `chromium/patches/baa/*`, `baa_privacy::CORE_SWITCHES`, checked by the privacy test.
+
+Ad blocking: uBlock Origin (Helium's) is built in, one per Space, and runs in ephemeral Spaces too. It uses
+its bundled default filter lists (`remove-helium-services.patch` turns off Helium's list proxy), so they
+change with each engine bump. Optional lists the user turns on are fetched from their own sites, unproxied.
 
 Helium = ungoogled-chromium (source patches + domain substitution) + Helium patches + bits of Brave/Bromite/Debian/Inox.
 Mapping each item to what a *binary* CEF Alloy build lets us do:
