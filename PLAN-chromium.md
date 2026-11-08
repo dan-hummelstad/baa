@@ -112,8 +112,10 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
   name substitution rewrites Chrome/Chromium/Helium → baa and `chrome://`/`helium://` → `baa://` in
   user-visible strings, except "Helium services";
   `kHeliumUIScheme` = "baa" (`override-chrome-protocol.patch`); data folder `me.baa.browser`, Keychain item
-  "baa Storage Key" (macOS patches). Helium's logo and app icon are not applied: Chromium's stock art until
-  baa has its own.
+  "baa Storage Key" (macOS patches). Helium's wordmarks and vector logos are not applied (Chromium's stock
+  art). The raster product logos (`baa://version`, `product_logo_*.png`) come from
+  `helium/resources/branding/app_icon/raw.png`, which is baa's "The leap, solid"; the app icon is set
+  by `cargo bundle` from `assets/baa.icns`.
 - **Dropped:** 9 `helium/ui/*` patches that only touch views code and that nothing else depends on. The
   other 95 UI patches are tangled with prefs, strings and the WebUI pages baa still shows, so they stay.
 - **Dropped too:** `helium/ui/crash-dialog.patch` (offers to send a report; nothing is sent).

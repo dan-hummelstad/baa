@@ -135,8 +135,15 @@ jobs:
           mkdir "$RUNNER_TEMP/dmg"
           ditto "$APP" "$RUNNER_TEMP/dmg/baa.app"
           ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
+          cp assets/baa.icns "$RUNNER_TEMP/dmg/.VolumeIcon.icns"
           DMG="baa-$VER-macos-arm64$SUFFIX.dmg"
-          hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -format ULMO "$DMG"
+          # The volume shows .VolumeIcon.icns only with the custom-icon Finder flag set on its
+          # root, which needs a writable image: build read-write, flag it, then compress.
+          hdiutil create -volname baa -srcfolder "$RUNNER_TEMP/dmg" -fs HFS+ -format UDRW "$RUNNER_TEMP/rw.dmg"
+          MNT=$(hdiutil attach "$RUNNER_TEMP/rw.dmg" -nobrowse -noautoopen | awk -F'\t' '/\/Volumes\//{print $NF}')
+          xattr -wx com.apple.FinderInfo 0000000000000000040000000000000000000000000000000000000000000000 "$MNT"
+          hdiutil detach "$MNT"
+          hdiutil convert "$RUNNER_TEMP/rw.dmg" -format ULMO -o "$DMG"
           if [ "$SIGNED" = true ]; then
             cargo run --release -p xtask -- sign "$DMG"
             cargo run --release -p xtask -- notarize "$DMG"
