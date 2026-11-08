@@ -448,6 +448,52 @@ fn external_links_open_in_lil_baa_and_move_into_the_browser(cx: &mut TestAppCont
     });
 }
 
+fn open_requested(url: &str) -> PageEvent {
+    PageEvent::OpenRequested { url: url.into(), from_user_gesture: true, background: false }
+}
+
+const PAGE_SUPPLIED: [&str; 2] = ["data:text/html,x", "baa://flags"];
+
+#[gpui::test]
+fn links_a_peek_opens_adopt_chromes_tab_and_are_never_loaded(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    page.update(cx, |_, cx| cx.emit(open_requested("https://peek.example")));
+    cx.run_until_parked();
+    for url in PAGE_SUPPLIED {
+        let peek = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+        peek.update(cx, |_, cx| cx.emit(open_requested(url)));
+        cx.run_until_parked();
+        assert!(peek.read_with(cx, |p, _| p.loads.borrow().is_empty()), "{url} is not loaded in the card");
+    }
+    b.read_with(cx, |b, cx| {
+        assert_eq!(*b.host.supplied.borrow(), ["https://peek.example", PAGE_SUPPLIED[0], PAGE_SUPPLIED[1]]);
+        assert!(b.pages.values().all(|(p, _)| p.read(cx).loads.borrow().is_empty()));
+        assert!(b.settings_window.is_none(), "baa://flags from a page opens no settings");
+    });
+}
+
+#[gpui::test]
+fn links_lil_baa_opens_become_adopted_tabs_and_are_never_loaded(cx: &mut TestAppContext) {
+    use crate::lil_baa::LilBaa;
+    let (b, vcx) = browser(cx);
+    b.update(vcx, |b, cx| b.open_external("https://elsewhere.example", cx));
+    vcx.run_until_parked();
+    let lil = cx.windows().into_iter().find_map(|w| w.downcast::<LilBaa<MockHost>>()).expect("a lil-baa window");
+    let page = lil.update(cx, |lil, _, _| lil.page.clone().unwrap()).unwrap();
+    for url in PAGE_SUPPLIED {
+        page.update(cx, |_, cx| cx.emit(open_requested(url)));
+        cx.run_until_parked();
+    }
+    assert!(page.read_with(cx, |p, _| p.loads.borrow().is_empty()));
+    let vcx = &mut VisualTestContext::from_window(b.read_with(cx, |b, _| b.window_handle()), cx);
+    assert_eq!(urls(&b, Zone::Today, vcx), [PAGE_SUPPLIED[1], PAGE_SUPPLIED[0]]);
+    b.read_with(vcx, |b, cx| {
+        assert_eq!(*b.host.supplied.borrow(), PAGE_SUPPLIED);
+        assert!(b.pages.values().all(|(p, _)| p.read(cx).loads.borrow().is_empty()));
+    });
+}
+
 #[gpui::test]
 fn a_new_space_is_named_in_place(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);

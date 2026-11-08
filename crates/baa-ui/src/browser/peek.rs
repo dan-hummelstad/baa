@@ -28,7 +28,8 @@ impl<H: WebHost> Browser<H> {
     /// A cmd- or middle-clicked link: a tab for later, the current one stays.
     pub(super) fn open_background_tab(&mut self, space: SpaceId, url: &str) {
         let current = self.session.space(space).and_then(|s| s.active_tab);
-        self.session.open_tab(space, url, now());
+        let id = self.session.open_tab(space, url, now());
+        self.supplied.insert(id);
         if let Some(current) = current {
             self.session.activate_tab(current, now());
         }
@@ -60,7 +61,8 @@ impl<H: WebHost> Browser<H> {
         let page = if popup {
             self.host.create_popup(profile, url, window, cx)
         } else {
-            self.host.create_page(profile, url, true, window, cx)
+            // Peek only shows links a page opened.
+            self.host.create_page(profile, url, false, window, cx)
         };
         page.read(cx).set_corner_radius(f32::from(r(PEEK_RADIUS)));
         page.read(cx).set_floating(true);
@@ -111,12 +113,13 @@ impl<H: WebHost> Browser<H> {
                     return self.sync(window, cx);
                 }
                 // A popup's links and its options page are tabs, as in Chrome.
+                let (space, url) = (peek.space, url.clone());
                 if peek.popup {
-                    let (space, url) = (peek.space, url.clone());
                     self.close_peek(window, cx);
-                    return self.open_url_in(space, &url, window, cx);
+                    return self.open_supplied_in(space, &url, window, cx);
                 }
-                peek.page.read(cx).load_url(url);
+                // The card swaps to the page Chrome opened for the link.
+                return self.open_peek(space, &url, window, cx);
             }
             PageEvent::Closed => return self.close_peek(window, cx),
             PageEvent::PreferredSize(size) => return self.fit_popup(*size, cx),

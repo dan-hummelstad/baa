@@ -38,7 +38,7 @@ pub fn window_options(cx: &App) -> WindowOptions {
 pub struct LilBaa<H: WebHost> {
     browser: WeakEntity<Browser<H>>,
     /// Taken when the page moves into the browser.
-    page: Option<Entity<H::Page>>,
+    pub(crate) page: Option<Entity<H::Page>>,
     _sub: Subscription,
     /// The page's storage; opening it in a Space with another one reloads it there.
     profile: ProfileId,
@@ -91,10 +91,14 @@ impl<H: WebHost> LilBaa<H> {
         match event {
             PageEvent::UrlChanged(url) => self.url = url.clone(),
             PageEvent::TitleChanged(title) => window.set_window_title(title),
+            // A tab in the browser, adopting the one Chrome opened for the link.
             PageEvent::OpenRequested { url, .. } => {
-                if let Some(page) = &self.page {
-                    page.read(cx).load_url(url);
-                }
+                let Some(browser) = self.browser.upgrade() else { return };
+                let (space, main) = (self.space, browser.read(cx).window_handle());
+                main.update(cx, |_, main_window, cx| {
+                    browser.update(cx, |b, cx| b.open_supplied_in(space, url, main_window, cx))
+                })
+                .ok();
             }
             PageEvent::Closed => window.remove_window(),
             // ponytail: the small window has no room for prompts, and an

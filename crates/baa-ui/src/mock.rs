@@ -9,6 +9,11 @@ pub type RuleSet = (ProfileId, Permission, String, Option<PermissionState>);
 
 pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
+    /// The URL of each `create_page` a page or extension asked for (`user_initiated: false`).
+    pub supplied: RefCell<Vec<String>>,
+    /// Ids passed to `download_validate` and `download_discard`.
+    pub validated: RefCell<Vec<u64>>,
+    pub discarded: RefCell<Vec<u64>>,
     pub downloads: Entity<Downloads>,
     pub permissions: RefCell<Vec<(String, Permission, PermissionState)>>,
     pub deleted: RefCell<Vec<ProfileId>>,
@@ -62,6 +67,7 @@ pub struct MockPage {
     pub groups: RefCell<Vec<Option<(u64, String)>>>,
     pub exited_fullscreen: Cell<u32>,
     pub reloads: Cell<u32>,
+    pub loads: RefCell<Vec<String>>,
     pub focus: FocusHandle,
 }
 
@@ -69,6 +75,7 @@ impl EventEmitter<PageEvent> for MockPage {}
 
 impl PageHandle for MockPage {
     fn load_url(&self, url: &str) {
+        self.loads.borrow_mut().push(url.into());
         *self.url.borrow_mut() = url.into();
     }
     fn reload(&self, _bypass_cache: bool) {
@@ -167,6 +174,9 @@ impl MockHost {
     pub fn new(cx: &mut App) -> Self {
         Self {
             created: RefCell::default(),
+            supplied: RefCell::default(),
+            validated: RefCell::default(),
+            discarded: RefCell::default(),
             downloads: cx.new(|_| Downloads::default()),
             permissions: RefCell::default(),
             deleted: RefCell::default(),
@@ -210,11 +220,14 @@ impl WebHost for MockHost {
         &self,
         profile: ProfileId,
         url: &str,
-        _user_initiated: bool,
+        user_initiated: bool,
         _: &mut Window,
         cx: &mut App,
     ) -> Entity<MockPage> {
         self.created.borrow_mut().push((profile, url.into()));
+        if !user_initiated {
+            self.supplied.borrow_mut().push(url.into());
+        }
         cx.new(|cx| MockPage {
             url: RefCell::new(url.into()),
             visible: Cell::new(true),
@@ -229,6 +242,7 @@ impl WebHost for MockHost {
             groups: RefCell::default(),
             exited_fullscreen: Cell::default(),
             reloads: Cell::default(),
+            loads: RefCell::default(),
             focus: cx.focus_handle(),
         })
     }
@@ -296,8 +310,12 @@ impl WebHost for MockHost {
         self.chrome_tabs.clone()
     }
     fn cancel_download(&self, _: u64) {}
-    fn download_validate(&self, _: u64) {}
-    fn download_discard(&self, _: u64) {}
+    fn download_validate(&self, id: u64) {
+        self.validated.borrow_mut().push(id);
+    }
+    fn download_discard(&self, id: u64) {
+        self.discarded.borrow_mut().push(id);
+    }
     fn site_permission(&self, _: ProfileId, url: &str, kind: Permission) -> PermissionState {
         self.permissions
             .borrow()

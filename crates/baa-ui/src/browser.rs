@@ -161,6 +161,11 @@ pub struct Browser<H: WebHost> {
     pub(crate) extensions: Vec<baa_web::Extension>,
     /// What each tab's page is waiting on the user for.
     pub(crate) asks: HashMap<TabId, crate::prompts::Asks>,
+    /// Tabs a page or extension asked for, not yet given a page: theirs adopts
+    /// the tab Chrome opened, so their URL is never re-issued as a browser load.
+    // ponytail: not saved; a restart before such a background tab is shown
+    // loads its URL as the user's. Persist it if that matters.
+    supplied: HashSet<TabId>,
     /// Tabs playing sound, and tabs the user muted.
     pub(crate) audible: HashSet<TabId>,
     pub(crate) muted: HashSet<TabId>,
@@ -260,7 +265,9 @@ impl<H: WebHost> Browser<H> {
         let chrome_tabs = cx.observe_in(&host.chrome_tabs(), window, |this: &mut Self, list, window, cx| {
             let urls = list.update(cx, |list, _| std::mem::take(&mut list.0));
             for url in urls {
-                this.open_url(&url, window, cx);
+                if let Some(space) = this.session.active_space() {
+                    this.open_supplied_in(space, &url, window, cx);
+                }
             }
         });
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
@@ -302,6 +309,7 @@ impl<H: WebHost> Browser<H> {
             favicons,
             extensions: Vec::new(),
             asks: HashMap::new(),
+            supplied: HashSet::new(),
             audible: HashSet::new(),
             muted: HashSet::new(),
             popover: None,
@@ -497,7 +505,8 @@ impl<H: WebHost> Browser<H> {
         let Some(space) = self.session.space(tab.space) else {
             return;
         };
-        let page = self.host.create_page(space.profile, &tab.url, true, window, cx);
+        let user_initiated = !self.supplied.remove(&id);
+        let page = self.host.create_page(space.profile, &tab.url, user_initiated, window, cx);
         let sub = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
             this.on_page_event(id, event, window, cx)
         });
@@ -561,7 +570,7 @@ impl<H: WebHost> Browser<H> {
                     // previews over the page instead, unless settings say tab.
                     let url = url.clone();
                     if !self.settings.peek_links {
-                        return self.open_url_in(space, &url, window, cx);
+                        return self.open_supplied_in(space, &url, window, cx);
                     }
                     return self.open_peek(space, &url, window, cx);
                 }
@@ -662,6 +671,15 @@ impl<H: WebHost> Browser<H> {
             return;
         }
         self.session.open_tab(space, url, now());
+        self.sync(window, cx);
+    }
+
+    /// A tab a page or extension asked for: never one of baa's own pages, and its
+    /// page adopts Chrome's tab instead of loading `url`.
+    pub(crate) fn open_supplied_in(&mut self, space: SpaceId, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.session.set_active_space(space);
+        let id = self.session.open_tab(space, url, now());
+        self.supplied.insert(id);
         self.sync(window, cx);
     }
 
