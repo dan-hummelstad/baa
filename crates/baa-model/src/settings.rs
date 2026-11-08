@@ -236,6 +236,23 @@ pub struct Settings {
     pub environments: Vec<Project>,
     /// A red count of console errors on localhost tabs' rows (E4).
     pub console_badge: bool,
+    pub claude: Claude,
+}
+
+/// Claude Code's access to the browser (PLAN-m4-features D). Off by default: nothing is
+/// reachable until the user turns it on in Settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Claude {
+    pub enabled: bool,
+    /// The Spaces Claude can see. Ephemeral Spaces never, whatever this says.
+    pub allowed_spaces: Vec<crate::SpaceId>,
+    /// The user's path to `claude`, used over `found_path`.
+    pub claude_path: Option<String>,
+    /// Where `$SHELL -lc 'command -v claude'` found it, cached because a login shell is slow.
+    pub found_path: Option<String>,
+    /// The `evaluate` tool (any JavaScript); even then every call asks.
+    pub evaluate_allowed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +315,7 @@ impl Default for Settings {
             web: WebPrefs::default(),
             environments: Vec::new(),
             console_badge: true,
+            claude: Claude::default(),
         }
     }
 }
@@ -391,6 +409,8 @@ mod tests {
         assert_eq!(s.search_engine.name, "Google");
         assert_eq!(s.archive_after_hours, 12);
         assert!(s.console_badge, "the console badge is on for settings saved before it");
+        assert_eq!(s.claude, Claude::default());
+        assert!(!s.claude.enabled && !s.claude.evaluate_allowed && s.claude.allowed_spaces.is_empty());
     }
 
     #[test]
@@ -406,6 +426,7 @@ mod tests {
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
         s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];
+        s.claude = Claude { enabled: true, allowed_spaces: vec![crate::SpaceId(3)], claude_path: Some("/x/claude".into()), found_path: None, evaluate_allowed: true };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }
