@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_bubble.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
@@ -625,13 +626,14 @@ Profile* Window::GetProfile() {
 }
 // ponytail: Chrome is told "fullscreen" at once, not after the app window's animation; the page
 // lays out once at the old size meanwhile.
-void Window::EnterFullscreen(const url::Origin&,
+void Window::EnterFullscreen(const url::Origin& origin,
                              ExclusiveAccessBubbleType,
                              FullscreenTabParams) {
   if (fullscreen_) {
     return;
   }
   fullscreen_ = true;
+  fullscreen_origin_ = origin;
   fullscreen_tab_ = baa::IdOf(baa::TabFor(GetWebContentsForExclusiveAccess()));
   baa::Callbacks().fullscreen(baa::CallbackContext(), fullscreen_tab_, true);
   NotifyFullscreenChanged();
@@ -641,6 +643,7 @@ void Window::ExitFullscreen() {
     return;
   }
   fullscreen_ = false;
+  fullscreen_origin_ = url::Origin();
   baa::Callbacks().fullscreen(baa::CallbackContext(), fullscreen_tab_, false);
   NotifyFullscreenChanged();
 }
@@ -657,18 +660,75 @@ void Window::NotifyFullscreenChanged() {
                      },
                      weak_factory_.GetWeakPtr()));
 }
+// security: Chrome's exclusive access bubble ("x.com is now full screen, press Esc"), drawn by
+// the app from exclusive_access. Follows BrowserView's ExclusiveAccessContextImpl and
+// ExclusiveAccessBubbleViews: shown for kShowTime, re-shown on input after kSnoozeTime idle,
+// and `first_hide_callback` runs at most once (pointer lock reads kTimeout as "the user saw it").
 void Window::UpdateExclusiveAccessBubble(
-    const ExclusiveAccessBubbleParams&,
+    const ExclusiveAccessBubbleParams& params,
     ExclusiveAccessBubbleHideCallback first_hide_callback) {
-  if (first_hide_callback) {
-    std::move(first_hide_callback)
-        .Run(ExclusiveAccessBubbleHideReason::kInterrupted);
+  if (params.type == EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE) {
+    // A download-only notice keeps the current one (the app has its own tray); else it hides.
+    if (first_hide_callback) {
+      std::move(first_hide_callback).Run(ExclusiveAccessBubbleHideReason::kNotShown);
+    }
+    if (!params.has_download) {
+      HideBubble();
+    }
+    return;
+  }
+  if (params.type == bubble_type_ && params.origin == bubble_origin_ && !params.force_update &&
+      bubble_timer_.IsRunning()) {
+    return;  // as Chrome: the new callback is dropped unrun
+  }
+  RunBubbleHideCallback(ExclusiveAccessBubbleHideReason::kInterrupted);
+  bubble_hide_callback_ = std::move(first_hide_callback);
+  bubble_type_ = params.type;
+  bubble_origin_ = params.origin;
+  ShowBubble();
+}
+void Window::ShowBubble() {
+  const ExclusiveAccessBubbleType type = bubble_type_;
+  int kind = type == EXCLUSIVE_ACCESS_BUBBLE_TYPE_KEYBOARD_LOCK_EXIT_INSTRUCTION ? BAA_EXCLUSIVE_KEYBOARD_LOCK
+             : type == EXCLUSIVE_ACCESS_BUBBLE_TYPE_POINTERLOCK_EXIT_INSTRUCTION ? BAA_EXCLUSIVE_POINTER_LOCK
+                                                                                  : BAA_EXCLUSIVE_FULLSCREEN;
+  // Chrome's bubble has no origin for browser or extension fullscreen; the one that entered
+  // fullscreen is still the one to name.
+  const url::Origin& origin = bubble_origin_.opaque() && fullscreen_ ? fullscreen_origin_ : bubble_origin_;
+  std::string text = origin.opaque() ? std::string() : origin.Serialize();
+  bubble_tab_ = baa::IdOf(baa::TabFor(GetWebContentsForExclusiveAccess()));
+  // Unretained: the timer is a member, so it cannot fire after this is gone.
+  bubble_timer_.Start(FROM_HERE, ExclusiveAccessBubble::kShowTime,
+                      base::BindOnce(&Window::RunBubbleHideCallback, base::Unretained(this),
+                                     ExclusiveAccessBubbleHideReason::kTimeout));
+  bubble_snooze_until_ = base::TimeTicks::Now() + ExclusiveAccessBubble::kSnoozeTime;
+  baa::Callbacks().exclusive_access(baa::CallbackContext(), bubble_tab_, text.c_str(), kind);
+}
+void Window::HideBubble() {
+  if (bubble_type_ == EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE) {
+    return;
+  }
+  bubble_type_ = EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE;
+  bubble_origin_ = url::Origin();
+  bubble_timer_.Stop();
+  RunBubbleHideCallback(ExclusiveAccessBubbleHideReason::kInterrupted);
+  baa::Callbacks().exclusive_access(baa::CallbackContext(), bubble_tab_, "", BAA_EXCLUSIVE_NONE);
+}
+void Window::RunBubbleHideCallback(ExclusiveAccessBubbleHideReason reason) {
+  if (bubble_hide_callback_) {
+    std::move(bubble_hide_callback_).Run(reason);
   }
 }
 bool Window::IsExclusiveAccessBubbleDisplayed() const {
-  return false;
+  return bubble_timer_.IsRunning();
 }
-void Window::OnExclusiveAccessUserInput() {}
+void Window::OnExclusiveAccessUserInput() {
+  if (bubble_type_ != EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE && !bubble_timer_.IsRunning() &&
+      base::TimeTicks::Now() > bubble_snooze_until_) {
+    ShowBubble();
+  }
+  bubble_snooze_until_ = base::TimeTicks::Now() + ExclusiveAccessBubble::kSnoozeTime;
+}
 content::WebContents* Window::GetWebContentsForExclusiveAccess() {
   return browser_->GetTabStripModel()->GetActiveWebContents();
 }

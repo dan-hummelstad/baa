@@ -12,9 +12,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_hide_callback.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -254,6 +258,10 @@ class Window : public BrowserWindow,
   class StubLocationBar;
   NSView* ActiveView() const;
   void CloseNow();
+  // The app's stand-in for Chrome's exclusive access bubble.
+  void ShowBubble();
+  void HideBubble();
+  void RunBubbleHideCallback(ExclusiveAccessBubbleHideReason reason);
 
   raw_ptr<BrowserWindowInterface> browser_;
   std::unique_ptr<StubLocationBar> location_bar_;
@@ -262,6 +270,14 @@ class Window : public BrowserWindow,
   bool closing_ = false;
   bool fullscreen_ = false;
   uint64_t fullscreen_tab_ = 0;  // the tab fullscreen(on) was sent for
+  url::Origin fullscreen_origin_;  // who asked for it; opaque for browser fullscreen
+  // The notice: what it shows, for which tab, and Chrome's callback for when it first hides.
+  ExclusiveAccessBubbleType bubble_type_ = EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE;
+  url::Origin bubble_origin_;
+  uint64_t bubble_tab_ = 0;
+  ExclusiveAccessBubbleHideCallback bubble_hide_callback_;
+  base::OneShotTimer bubble_timer_;  // running while the notice counts as displayed
+  base::TimeTicks bubble_snooze_until_;
   base::CallbackListSubscription close_cancelled_;
   std::unique_ptr<ExtensionsContainer> extensions_container_;
   std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;

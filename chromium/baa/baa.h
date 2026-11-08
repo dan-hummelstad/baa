@@ -261,8 +261,10 @@ typedef struct {
 
   // Chrome's fullscreen / pointer lock / keyboard lock notice: show `origin`
   // (who took the screen or the input) and how to leave, as Chrome's bubble
-  // would, so a page cannot pose as the browser unannounced. `kind`
-  // BAA_EXCLUSIVE_*; BAA_EXCLUSIVE_NONE with origin "" hides the notice.
+  // would, so a page cannot pose as the browser unannounced. `origin` is
+  // serialized ("https://x.com"), "" when there is none (browser fullscreen).
+  // Sent again when the notice should re-show (input after a long idle).
+  // `kind` BAA_EXCLUSIVE_*; BAA_EXCLUSIVE_NONE with origin "" hides the notice.
   void (*exclusive_access)(void* ctx, BaaTabId tab, const char* origin,
                            int kind);
 
