@@ -29,9 +29,15 @@
 namespace baa {
 namespace {
 
-// JS dialogs: the app words title and labels.
-void SendDialog(uint64_t tab, uint64_t id, int kind, const std::string& message, const std::string& default_text) {
-  BaaDialog dialog = {kind, message.c_str(), default_text.c_str(), "", "", "", ""};
+// JS dialogs: the app words the labels. The title is Chrome's ("x.com says"), the only place
+// the asking frame's origin is named.
+void SendDialog(uint64_t tab,
+                uint64_t id,
+                int kind,
+                const std::string& message,
+                const std::string& default_text,
+                const std::string& title) {
+  BaaDialog dialog = {kind, message.c_str(), default_text.c_str(), title.c_str(), "", "", ""};
   Callbacks().dialog(CallbackContext(), tab, id, &dialog);
 }
 
@@ -54,11 +60,13 @@ class DialogView : public javascript_dialogs::TabModalDialogView, public Request
  public:
   DialogView(BaaTab* tab,
              int kind,
+             std::string title,
              std::string message,
              std::u16string default_text,
              content::JavaScriptDialogManager::DialogClosedCallback callback)
       : Request(IdOf(tab), Role::kDialog),
         kind_(kind),
+        title_(std::move(title)),
         message_(std::move(message)),
         default_text_(std::move(default_text)),
         callback_(std::move(callback)) {}
@@ -92,11 +100,12 @@ class DialogView : public javascript_dialogs::TabModalDialogView, public Request
   base::WeakPtr<DialogView> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
   // Tells the app about it (again, once the tab is announced).
   void Show(BaaTab* tab) const {
-    SendDialog(IdOf(tab), id(), kind_, message_, base::UTF16ToUTF8(default_text_));
+    SendDialog(IdOf(tab), id(), kind_, message_, base::UTF16ToUTF8(default_text_), title_);
   }
 
  private:
   const int kind_;
+  std::string title_;
   std::string message_;
   std::u16string default_text_;
   content::JavaScriptDialogManager::DialogClosedCallback callback_;
@@ -111,14 +120,15 @@ class DialogDelegate : public JavaScriptTabModalDialogManagerDelegateDesktop {
 
   base::WeakPtr<javascript_dialogs::TabModalDialogView> CreateNewDialog(
       content::WebContents*,
-      const std::u16string&,
+      const std::u16string& title,
       content::JavaScriptDialogType type,
       const std::u16string& message,
       const std::u16string& default_text,
       content::JavaScriptDialogManager::DialogClosedCallback callback,
       base::OnceClosure) override {
     BaaTab* tab = TabFor(wc_);
-    auto* view = new DialogView(tab, DialogKind(type), base::UTF16ToUTF8(message), default_text,
+    auto* view = new DialogView(tab, DialogKind(type), base::UTF16ToUTF8(title), base::UTF16ToUTF8(message),
+                                default_text,
                                 std::move(callback));
     auto weak = view->GetWeakPtr();
     if (!tab) {
@@ -150,7 +160,8 @@ class AppModal : public javascript_dialogs::AppModalDialogView, public Request {
     int kind = DialogKind(controller_->javascript_dialog_type(),
                           controller_->is_before_unload_dialog(), controller_->is_reload());
     SendDialog(tab(), id(), kind, base::UTF16ToUTF8(controller_->message_text()),
-               base::UTF16ToUTF8(controller_->default_prompt_text()));
+               base::UTF16ToUTF8(controller_->default_prompt_text()),
+               base::UTF16ToUTF8(controller_->title()));
   }
   void ActivateAppModalDialog() override {}
   // Chrome closes it (the page navigated or went away); OnClose before deleting.

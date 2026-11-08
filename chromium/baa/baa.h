@@ -161,8 +161,8 @@ typedef struct {
   const char* message;       // may hold '\n'-separated lines
   const char* default_text;  // PROMPT only
   // Chrome's title, e.g. "x.com says" or "An embedded page at y.com says": it
-  // names the frame that asked, which the tab's URL may not. "" when Chrome has
-  // none (beforeunload).
+  // names the frame that asked, which the tab's URL may not. beforeunload has
+  // Chrome's "Leave site?" / "Reload site?".
   const char* title;
   const char* ok_label;
   const char* cancel_label;
