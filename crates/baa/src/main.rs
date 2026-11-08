@@ -5,7 +5,14 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("baa runs on macOS only until the //baa Windows port");
 
-use std::{fs::File, path::PathBuf};
+use std::{
+    cell::RefCell,
+    fs::File,
+    os::unix::{fs::PermissionsExt as _, io::AsRawFd as _, net::{UnixListener, UnixStream}},
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::{atomic::{AtomicBool, Ordering}, Arc},
+};
 
 use baa_model::{Settings, Store};
 use baa_ui::Browser;
@@ -21,6 +28,10 @@ actions!(baa_app, [Quit]);
 /// BaaCore: Chromium's own main runs inside gpui's `[NSApp run]`, so the
 /// order here is load-bearing (PLAN-chromium-phase2.md "Results").
 fn main() {
+    // `baa mcp` (Claude Code's stdio server) bridges to the running app: no engine, no gpui, no lock.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        return mcp_bridge(&data_dir());
+    }
     // First: loading the framework installs PartitionAlloc's malloc zone,
     // which is only safe while the process has one thread.
     let core = baa_web::CoreRuntime::load();
@@ -59,6 +70,9 @@ fn main() {
         tx.unbounded_send(url).ok();
     }
     listen(&dir, tx.clone());
+    let (agent_tx, agent_rx) = mpsc::unbounded::<UnixStream>();
+    let mut agent = AgentSocket { path: dir.join("agent.sock"), tx: agent_tx, stop: None };
+    agent.set(settings.claude.enabled);
 
     // After install: NSApp must be BaaApplication before gpui asks for it.
     let app = gpui_platform::application().with_assets(baa_ui::Assets);
@@ -69,7 +83,9 @@ fn main() {
     });
     app.run(move |cx| {
         let host = core.start(cx);
-        launch(host, store, settings, dir, rx, cx);
+        let agent = Rc::new(RefCell::new(agent));
+        cx.set_global(baa_ui::AgentSwitch(Box::new(move |on| agent.borrow_mut().set(on))));
+        launch(host, store, settings, dir, rx, agent_rx, cx);
     });
     std::process::exit(core.exit_code());
 }
@@ -93,6 +109,7 @@ fn launch<H: WebHost>(
     settings: Settings,
     dir: PathBuf,
     mut rx: mpsc::UnboundedReceiver<String>,
+    mut agent_rx: mpsc::UnboundedReceiver<UnixStream>,
     cx: &mut App,
 ) {
     baa_ui::init(cx);
@@ -126,6 +143,15 @@ fn launch<H: WebHost>(
     cx.on_window_closed(move |cx, _| {
         if window.update(cx, |_, _, _| ()).is_err() {
             cx.quit();
+        }
+    })
+    .detach();
+
+    cx.spawn(async move |cx| {
+        while let Some(stream) = agent_rx.next().await {
+            if window.update(cx, |browser, window, cx| browser.serve_agent(stream, window, cx)).is_err() {
+                break;
+            }
         }
     })
     .detach();
@@ -197,4 +223,87 @@ fn listen(dir: &std::path::Path, tx: mpsc::UnboundedSender<String>) {
             }
         }
     });
+}
+
+/// The uid on the other end of a unix socket.
+fn peer_uid(stream: &UnixStream) -> Option<libc::uid_t> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: a valid fd for the call's duration, and two out-params it writes.
+    (unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0).then_some(uid)
+}
+
+fn is_me(stream: &UnixStream) -> bool {
+    // SAFETY: geteuid has no preconditions.
+    peer_uid(stream) == Some(unsafe { libc::geteuid() })
+}
+
+/// `baa mcp`: stdin to agent.sock, agent.sock to stdout, until either side closes.
+fn mcp_bridge(dir: &Path) {
+    let stream = UnixStream::connect(dir.join("agent.sock"))
+        .unwrap_or_else(|e| fail("baa is not running, or Claude is off in Settings → Claude", e));
+    // Talk only to our own app, whoever else could have put a socket there.
+    if !is_me(&stream) {
+        fail("agent.sock", "it belongs to another user");
+    }
+    let mut to_app = stream.try_clone().unwrap_or_else(|e| fail("agent.sock", e));
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut to_app);
+        let _ = to_app.shutdown(std::net::Shutdown::Write);
+    });
+    let _ = std::io::copy(&mut &stream, &mut std::io::stdout().lock());
+}
+
+/// agent.sock (PLAN-m4-features D4): Claude's MCP clients, bound only while Settings → Claude
+/// is on. Mode 0600 in the user's data dir; every connection's uid is checked as well, which
+/// also covers one that races the chmod.
+struct AgentSocket {
+    path: PathBuf,
+    tx: mpsc::UnboundedSender<UnixStream>,
+    /// Set while bound: tells the accept thread to stop.
+    stop: Option<Arc<AtomicBool>>,
+}
+
+impl AgentSocket {
+    fn set(&mut self, on: bool) {
+        match (on, self.stop.take()) {
+            (true, None) => self.stop = self.bind(),
+            (true, stop) => self.stop = stop,
+            (false, Some(stop)) => {
+                stop.store(true, Ordering::SeqCst);
+                // Wakes the blocked accept so the thread sees the flag and drops the listener.
+                let _ = UnixStream::connect(&self.path);
+                let _ = std::fs::remove_file(&self.path);
+            }
+            (false, None) => {}
+        }
+    }
+
+    fn bind(&self) -> Option<Arc<AtomicBool>> {
+        // A crashed run leaves the socket file behind; the instance lock proves nobody owns it.
+        let _ = std::fs::remove_file(&self.path);
+        let listener = UnixListener::bind(&self.path).map_err(|e| log::error!("agent socket: {e}")).ok()?;
+        if let Err(e) = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600)) {
+            log::error!("agent socket: {e}");
+            let _ = std::fs::remove_file(&self.path);
+            return None;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let (flag, tx) = (stop.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if flag.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(stream) = stream else { continue };
+                if !is_me(&stream) {
+                    log::warn!("agent socket: refused a connection from another user");
+                    continue;
+                }
+                if tx.unbounded_send(stream).is_err() {
+                    break;
+                }
+            }
+        });
+        Some(stop)
+    }
 }

@@ -20,3 +20,5 @@ env_logger.workspace = true
 # Already in the graph via gpui: an unbounded channel from the open-URL thread and
 # gpui's on_open_urls (neither has an App) into the foreground.
 futures = "0.3"
+# Already in the graph via gpui: getpeereid on agent.sock connections.
+libc = "0.2"
