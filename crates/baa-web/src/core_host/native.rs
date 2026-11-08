@@ -16,6 +16,7 @@ use objc2::{
     class,
     encode::{Encode, Encoding},
     msg_send,
+    rc::Retained,
     runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
     sel,
 };
@@ -481,8 +482,10 @@ unsafe fn install_hit_test(class: *mut AnyClass) {
 }
 
 /// Hands the mouse event gpui is handling to the deepest view of `page` under
-/// it, or to `target` (where a drag started). Returns the view that got it.
-pub fn forward_current_event(page: *mut AnyObject, target: Option<*mut AnyObject>) -> Option<*mut AnyObject> {
+/// it, or to `target` (where a drag started) while that is still in `page`.
+/// Returns the view that got it, retained: a drag keeps it across run-loop
+/// turns, and Chromium may drop its widget view meanwhile.
+pub fn forward_current_event(page: *mut AnyObject, target: Option<&AnyObject>) -> Option<Retained<AnyObject>> {
     let event = EVENT.with(Cell::get);
     if page.is_null() || event.is_null() {
         return None;
@@ -503,8 +506,11 @@ pub fn forward_current_event(page: *mut AnyObject, target: Option<*mut AnyObject
             27 => sel!(otherMouseDragged:),
             _ => return None,
         };
-        let target = match target {
-            Some(target) => target,
+        // A cross-site navigation replaces the widget view inside the same
+        // page view without telling baa: a target no longer in `page` is
+        // never messaged, the event goes to whatever is under the pointer now.
+        let target = match target.filter(|target| is_inside(page, target)) {
+            Some(target) => target as *const AnyObject as *mut AnyObject,
             None => {
                 let in_window: CGPoint = msg_send![event, locationInWindow];
                 let parent: *mut AnyObject = msg_send![page, superview];
@@ -517,8 +523,12 @@ pub fn forward_current_event(page: *mut AnyObject, target: Option<*mut AnyObject
         FORWARDING.with(|f| f.set(true));
         let _: *mut AnyObject = msg_send![target, performSelector: selector, withObject: event];
         FORWARDING.with(|f| f.set(false));
-        Some(target)
+        Retained::retain(target)
     }
+}
+
+pub fn is_inside(page: *mut AnyObject, view: &AnyObject) -> bool {
+    !page.is_null() && unsafe { msg_send![view, isDescendantOf: page] }
 }
 
 /// Offers a ⌘/⌃/Escape key-down to gpui's view in the event's window.

@@ -24,7 +24,7 @@ use std::{
 };
 
 use gpui::App;
-use objc2::runtime::AnyObject;
+use objc2::{rc::Retained, runtime::AnyObject};
 
 use self::{
     dispatch::{callbacks, Dispatch},
@@ -201,8 +201,9 @@ struct Shared {
     /// 0 once the tab is gone (Chrome closed it, or baa did).
     tab: Cell<TabId>,
     /// The view a mouse drag started on, and whether the pointer is over the
-    /// page; across frames, so a repaint mid-click loses nothing.
-    drag: Cell<Option<*mut AnyObject>>,
+    /// page; across frames, so a repaint mid-click loses nothing. Retained:
+    /// Chromium owns the view and may free it before the button is up.
+    drag: Cell<Option<Retained<AnyObject>>>,
     inside: Cell<bool>,
 }
 

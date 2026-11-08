@@ -102,8 +102,8 @@ impl Element for PageSlot {
             if phase != DispatchPhase::Bubble {
                 return;
             }
-            if let Some(view) = shared.drag.get().filter(|_| event.pressed_button.is_some()) {
-                native::forward_current_event(shared.container.page(), Some(view));
+            if let Some(view) = shared.drag.take().filter(|_| event.pressed_button.is_some()) {
+                shared.drag.set(native::forward_current_event(shared.container.page(), Some(&view)));
                 return;
             }
             // Moves over the page, and the first one off it so hover ends.
@@ -117,7 +117,7 @@ impl Element for PageSlot {
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
             if phase == DispatchPhase::Bubble {
                 if let Some(view) = shared.drag.take() {
-                    native::forward_current_event(shared.container.page(), Some(view));
+                    native::forward_current_event(shared.container.page(), Some(&view));
                 }
             }
         });

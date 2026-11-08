@@ -141,6 +141,28 @@ fn a_replaced_view_is_swapped_in_inside_the_callback(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_drag_target_is_dropped_with_its_view(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let (old, widget, new) = (new_view(), new_view(), new_view());
+    unsafe {
+        let _: () = msg_send![old, addSubview: widget];
+    }
+    let page = env.page_with_view(old, cx);
+    let shared = page.read_with(cx, |page, _| page.shared.clone());
+    assert!(native::is_inside(shared.container.page(), unsafe { &*widget }));
+    shared.drag.set(unsafe { objc2::rc::Retained::retain(widget) });
+
+    env.state(env.tab_of(&page, cx), &State { view: new as usize, ..Default::default() });
+    assert!(shared.drag.take().is_none(), "the swap forgets it");
+    assert!(!native::is_inside(shared.container.page(), unsafe { &*widget }));
+    // A widget Chromium replaces inside the same page view (no swap) fails the check too.
+    unsafe {
+        let _: () = msg_send![widget, removeFromSuperview];
+    }
+    assert!(!native::is_inside(old, unsafe { &*widget }));
+}
+
+#[gpui::test]
 fn a_tab_chrome_closed_lets_go_of_its_view_at_once(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let view = new_view();

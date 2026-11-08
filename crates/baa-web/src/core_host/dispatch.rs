@@ -236,6 +236,9 @@ impl Dispatch {
         let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
         let Some((shared, page)) = live else { return };
         let view_changed = shared.container.swap_page(snapshot.view);
+        if view_changed {
+            shared.drag.take();
+        }
         if let Some(page) = page {
             self.queue(move |cx| {
                 page.update(cx, |page, cx| page.apply(snapshot, view_changed, cx)).ok();
