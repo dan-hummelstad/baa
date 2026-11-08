@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 9
+#define BAA_ABI_VERSION 10
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -54,6 +54,7 @@ typedef struct {
   bool can_go_back;
   bool can_go_forward;
   bool audible;
+  bool muted;   // the tab's audio is muted (baa_tab_set_muted, or Chrome)
   bool secure;  // committed over valid TLS (security level SECURE)
   bool crashed;  // the renderer is gone (crash, killed, "Exit page"); a reload
                  // brings it back
@@ -138,6 +139,24 @@ enum {
   BAA_EXCLUSIVE_FULLSCREEN = 1,    // "Press Esc to exit"
   BAA_EXCLUSIVE_POINTER_LOCK = 2,  // the mouse is captured, not fullscreen
   BAA_EXCLUSIVE_KEYBOARD_LOCK = 3, // Esc goes to the page: "Press and hold Esc"
+};
+
+// A tab's media session, as Chrome's media controls see it. Sent whole on
+// every change.
+typedef struct {
+  const char* title;        // the page's, else Chrome's fallback (the page title)
+  const char* artist;       // "" if none
+  const char* artwork_url;  // "" if none
+  bool playing;
+  uint32_t actions;         // BAA_MEDIA_* bits the session takes now
+} BaaMedia;
+
+enum {
+  BAA_MEDIA_PLAY = 1 << 0,
+  BAA_MEDIA_PAUSE = 1 << 1,
+  BAA_MEDIA_NEXT = 1 << 2,
+  BAA_MEDIA_PREVIOUS = 1 << 3,
+  BAA_MEDIA_PICTURE_IN_PICTURE = 1 << 4,
 };
 
 enum {
@@ -291,6 +310,15 @@ typedef struct {
   // call, never inside it.
   void (*load_unpacked_done)(void* ctx, uint64_t id, bool ok,
                              const char* message);
+
+  // The tab's DevTools protocol session (baa_tab_cdp): the reply to the
+  // command whose "id" was `id`, or an event when `id` is 0. `json` is the
+  // whole message.
+  void (*cdp)(void* ctx, BaaTabId tab, uint64_t id, const char* json);
+
+  // The tab's media session changed. Not sent until it has something (a
+  // title, an action or playback).
+  void (*media)(void* ctx, BaaTabId tab, const BaaMedia* media);
 } BaaCallbacks;
 
 // ---- App -------------------------------------------------------------------
@@ -576,6 +604,24 @@ BAA_EXPORT void baa_tab_exit_fullscreen(BaaTabId tab);
 // 0 takes it out of its group. No tab_group callback for this.
 BAA_EXPORT void baa_tab_set_group(BaaTabId tab, uint64_t group,
                                   const char* title);
+
+// Sends `json`, one DevTools protocol command whose "id" is `id` (> 0, unique
+// among the tab's waiting commands), to the tab's in-process DevTools session:
+// no --remote-debugging-port, no socket. The first call makes the session; it
+// lives until the tab closes, and the user's own DevTools work alongside it.
+// Which commands are sent is the caller's decision. The session itself never
+// attaches to the browser target, Chrome's pages (WebUI), extensions, DevTools
+// or file: pages, never reads or writes local files, and allows no unsafe
+// operations. The reply, and events of domains the caller enabled, come by
+// `cdp`. A tab the session cannot attach to gets an error reply. When the
+// session ends (the page went to a URL above, Chrome swapped its contents),
+// waiting commands get error replies, then the event {"method":"Baa.detached"};
+// the next call makes a new session, with no domain enabled.
+BAA_EXPORT void baa_tab_cdp(BaaTabId tab, uint64_t id, const char* json);
+
+// One BAA_MEDIA_* action on the tab's media session, as Chrome's media
+// controls send it. An action the session does not take does nothing.
+BAA_EXPORT void baa_tab_media_action(BaaTabId tab, uint32_t action);
 
 // ---- Dialogs ---------------------------------------------------------------
 

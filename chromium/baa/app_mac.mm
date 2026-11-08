@@ -148,6 +148,8 @@ void baa_install_app(int argc,
   REQUIRE(autocomplete);
   REQUIRE(clear_done);
   REQUIRE(load_unpacked_done);
+  REQUIRE(cdp);
+  REQUIRE(media);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;

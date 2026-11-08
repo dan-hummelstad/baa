@@ -124,6 +124,7 @@ struct BaaTab : content::WebContentsObserver,
     state.can_go_back = wc->GetController().CanGoBack();
     state.can_go_forward = wc->GetController().CanGoForward();
     state.audible = wc->IsCurrentlyAudible();
+    state.muted = wc->IsAudioMuted();
     state.secure = chrome_security_state::GetSecurityLevel(wc) == security_state::SECURE;
     state.crashed = wc->IsCrashed();
     return state;
@@ -160,6 +161,8 @@ struct BaaTab : content::WebContentsObserver,
     SendState();
   }
   void OnAudioStateChanged(bool) override { SendState(); }
+  // Muting does not change audibility: Chrome counts a muted tab as audible.
+  void DidUpdateAudioMutingState(bool) override { SendState(); }
   void DidChangeVisibleSecurityState() override { SendState(); }
   void DidStartNavigation(content::NavigationHandle* handle) override {
     if (!reported && handle->IsInPrimaryMainFrame()) {
@@ -280,6 +283,7 @@ void Forget(BaaTab* t, int reason) {
   bool tell_asks = tell && reason != BAA_CLOSED_BY_APP;
   DropRequestsOf(t->id, tell_asks);
   ForgetDevtoolsOf(t);
+  DetachCdp(t->id, /*tell=*/false);  // the app hears tab_closed instead
   if (tell) {
     Callbacks().tab_closed(CallbackContext(), t->id, reason);
   }
@@ -345,6 +349,7 @@ void BaaTab::Attach(content::WebContents* wc) {
   }
   baa::AttachDialogs(wc);
   baa::AttachPermissions(wc);
+  baa::WatchMedia(id, wc);
   if (auto* helper = find_in_page::FindTabHelper::FromWebContents(wc)) {
     find_helper = helper;
     helper->AddObserver(this);
@@ -406,6 +411,7 @@ void BaaTab::Detach() {
     find_helper->RemoveObserver(this);
     find_helper = nullptr;
   }
+  baa::UnwatchMedia(id);
   Observe(nullptr);
 }
 
@@ -528,6 +534,8 @@ void OnTabReplaced(tabs::TabInterface* tab, content::WebContents* new_contents) 
   }
   t->Detach();
   DropRequestsOf(t->id, false, /*menus_only=*/true);
+  // The session is the old contents'; the next baa_tab_cdp makes one on the new.
+  DetachCdp(t->id, /*tell=*/true);
   t->icon_url.clear();
   t->Attach(new_contents);
   t->SendState();

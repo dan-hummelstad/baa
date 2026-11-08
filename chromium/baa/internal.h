@@ -97,6 +97,14 @@ void RestoreChromePermissions(content::WebContents* wc);
 void ForgetDevtoolsOf(BaaTab* tab);
 void SetDockSide(BaaTab* front, const char* side);  // tab.mm: for the front's dock script
 
+// cdp.mm: the tab's DevTools session leaves its host (the tab closes, or its
+// contents are swapped). With `tell`, waiting commands get error replies and
+// the app gets Baa.detached.
+void DetachCdp(uint64_t tab, bool tell);
+// media.mm: the tab's media session is reported by `media` from Watch to Unwatch.
+void WatchMedia(uint64_t tab, content::WebContents* wc);
+void UnwatchMedia(uint64_t tab);
+
 // downloads.mm: observes a profile's DownloadManager for as long as it lives
 // (BaaProfile owns one).
 class DownloadWatch : public content::DownloadManager::Observer {
