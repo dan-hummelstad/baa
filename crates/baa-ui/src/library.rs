@@ -249,14 +249,31 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_col()
             .pb(px(4.))
-            .border_r_1()
-            .border_color(if ascii() { crate::theme::ascii::rule().into() } else { Hsla { a: 0.26, ..gpui::white() } })
+            .when(ascii(), |d| d.border_r_1().border_color(crate::theme::ascii::rule()))
             .when(!ascii(), |d| {
-                d.child(div().absolute().top_0().bottom_0().right(px(-23.)).w(px(22.)).bg(gpui::linear_gradient(
-                    90.,
-                    gpui::linear_color_stop(Hsla { a: 0.07, ..theme.ink }, 0.),
-                    gpui::linear_color_stop(Hsla { a: 0., ..theme.ink }, 1.),
+                // Both fade in under the top bar instead of starting at full strength.
+                const FADE: f32 = 48.;
+                const SLICES: usize = 8;
+                let shade = |a: f32| {
+                    gpui::linear_gradient(
+                        90.,
+                        gpui::linear_color_stop(Hsla { a, ..theme.ink }, 0.),
+                        gpui::linear_color_stop(Hsla { a: 0., ..theme.ink }, 1.),
+                    )
+                };
+                let strip = || div().absolute().right(px(-23.)).w(px(22.));
+                let light = Hsla { a: 0.26, ..gpui::white() };
+                d.children((0..SLICES).map(|i| {
+                    let h = FADE / SLICES as f32;
+                    strip().top(px(i as f32 * h)).h(px(h)).bg(shade(0.07 * (i as f32 + 0.5) / SLICES as f32))
+                }))
+                .child(strip().top(px(FADE)).bottom_0().bg(shade(0.07)))
+                .child(div().absolute().right_0().w(px(1.)).top_0().h(px(FADE)).bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(Hsla { a: 0., ..light }, 0.),
+                    gpui::linear_color_stop(light, 1.),
                 )))
+                .child(div().absolute().right_0().w(px(1.)).top(px(FADE)).bottom_0().bg(light))
             })
             .child(
                 div()
