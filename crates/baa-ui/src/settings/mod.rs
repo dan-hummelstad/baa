@@ -783,7 +783,9 @@ impl<H: WebHost> SettingsView<H> {
                 .text_color(ink)
                 .on_click(cx.listener(move |this, _, _, cx| this.select_tab(tab, cx)))
                 .child(icon(tab.icon(), 18., mix(surface::icon().into(), if on { self.theme.accent } else { ink }, if on { 1. } else { h })))
-                .child(div().text_size(px(11.)).child(tab.label()));
+                // Tabs are one width (the pill slides by it); the ASCII theme's monospace
+                // "Appearance" and "Extensions" only fit it at 10px.
+                .child(div().whitespace_nowrap().text_size(px(if crate::theme::ascii() { 10. } else { 11. })).child(tab.label()));
             self.feel(el, key, cx)
         }).collect::<Vec<_>>();
         let empty = TextField::default();
