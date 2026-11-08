@@ -48,6 +48,7 @@ gpui::actions!(
         OpenSettings,
         ClearToday,
         ShowArchive,
+        ToggleLibrary,
         CycleEnvironment,
         SplitView,
         ResponsiveView,

@@ -108,6 +108,7 @@
       "ctrl-h": "baa::ShowHistory",
       "ctrl-shift-k": "baa::ClearToday",
       "ctrl-shift-a": "baa::ShowArchive",
+      "ctrl-shift-l": "baa::ToggleLibrary",
       "ctrl-,": "baa::OpenSettings"
     }
   },

@@ -140,6 +140,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn open_library(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.library_last = section;
         match &mut self.library {
             Some(library) => library.section = section,
             None => {

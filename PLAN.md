@@ -221,6 +221,7 @@ The OSR phases below are history: pages are native views (§1). Input still desc
 | Find | ⌘F | Ctrl+F |
 | Dev tools | ⌘⌥I | F12 |
 | Archive view | ⌘⇧A | Ctrl+Shift+A |
+| Library, last section | ⌘⇧L | Ctrl+Shift+L |
 
 Browser-standard keys (⌘R, ⌘+/-/0, ⌘P, ⌘⇧N incognito space) included. Keys the page should get first
 (text fields) are dispatched to Chromium first; unhandled keys bubble to GPUI actions, using Chromium's

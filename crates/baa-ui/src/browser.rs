@@ -207,6 +207,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) settings_window: Option<WindowHandle<crate::settings::SettingsView<H>>>,
     /// The Library, shown in the sidebar instead of the Space.
     pub(crate) library: Option<crate::library::Library>,
+    /// Where ToggleLibrary reopens it.
+    pub(crate) library_last: crate::library::Section,
     pub(crate) library_focus: FocusHandle,
     /// Finished downloads, newest first, kept across launches.
     pub(crate) saved_downloads: Vec<DownloadRecord>,
@@ -367,6 +369,7 @@ impl<H: WebHost> Browser<H> {
             downloads_seen: 0,
             settings_window: None,
             library: None,
+            library_last: crate::library::Section::Downloads,
             library_focus: cx.focus_handle(),
             saved_downloads,
             recorded_downloads: HashSet::new(),

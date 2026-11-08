@@ -108,6 +108,16 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &ToggleAgent, window, cx| this.toggle_agent_panel(window, cx)))
+        .on_action(cx.listener(|this, _: &ToggleLibrary, window, cx| {
+            if this.library.is_some() {
+                this.close_library(window, cx);
+            } else if this.library_last == crate::library::Section::Chat {
+                // Chat also takes focus for its field.
+                this.open_chat(window, cx);
+            } else {
+                this.open_library(this.library_last, cx);
+            }
+        }))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
         .on_action(cx.listener(|this, _: &ClearToday, window, cx| this.clear_today(window, cx)))
         .on_action(cx.listener(|this, _: &ShowArchive, window, cx| {
