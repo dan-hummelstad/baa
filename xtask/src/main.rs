@@ -3,7 +3,7 @@
 //! - `bundle [--release] [--engine DIR] [--no-sign] [--run [args…]]`: builds `baa` and puts the
 //!   binary into a copy of the engine's `baa.app` (BaaCore.framework and helpers).
 //! - `sign <file>`: Developer ID `codesign --timestamp` of a file (the DMG). The app itself is
-//!   signed by the engine's `sign_chrome.py` (release.yml). Identity from `MACOS_SIGN_IDENTITY`.
+//!   signed by `chromium/packaging/sign_chrome.py` (release.yml). Identity from `MACOS_SIGN_IDENTITY`.
 //! - `notarize <file.dmg>`: notarytool + staple. Needs `APPLE_ID`, `APPLE_TEAM_ID`,
 //!   `APPLE_APP_PASSWORD` (an app-specific password).
 

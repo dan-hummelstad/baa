@@ -236,6 +236,9 @@ jobs:
           # tar keeps the framework's Versions/Current symlinks; upload-artifact on a directory would not.
           tar -cf - baa.app "baa Packaging" engine.json | zstd -T0 -10 -o /Users/Shared/engine.tar.zst
           ls -lh /Users/Shared/engine.tar.zst
+          # Consumers check the tarball against this, taken from the same run.
+          (cd /Users/Shared && shasum -a 256 engine.tar.zst | tee engine.tar.zst.sha256)
+          echo "- baa-engine-$T sha256: \`$(cut -d' ' -f1 /Users/Shared/engine.tar.zst.sha256)\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload engine
         if: steps.build.outputs.status == 'finished' && inputs.mode == 'release'
@@ -245,6 +248,14 @@ jobs:
           path: /Users/Shared/engine.tar.zst
           retention-days: 90
           compression-level: 0
+
+      - name: Upload engine checksum
+        if: steps.build.outputs.status == 'finished' && inputs.mode == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ENGINE }}.sha256
+          path: /Users/Shared/engine.tar.zst.sha256
+          retention-days: 90
 
       - name: Pack tree
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')

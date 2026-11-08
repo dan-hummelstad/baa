@@ -50,10 +50,8 @@ jobs:
       - uses: actions/checkout@v7
       - id: engine
         uses: ./.github/actions/engine
-      - if: steps.engine.outputs.run == ''
-        run: |
-          echo "::error::no engine for chromium/ tree ${{ steps.engine.outputs.tree }}; run: gh workflow run chromium.yml -f mode=release --ref $GITHUB_REF_NAME, then re-run this workflow"
-          exit 1
+        with:
+          required: true
 
   macos:
     needs: [version, engine]
@@ -72,12 +70,20 @@ jobs:
           run-id: ${{ needs.engine.outputs.run }}
           github-token: ${{ github.token }}
           path: engine
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.engine.outputs.name }}.sha256
+          run-id: ${{ needs.engine.outputs.run }}
+          github-token: ${{ github.token }}
+          path: engine
       - name: Unpack engine, add the Rust binary
         run: |
+          (cd engine && shasum -a 256 -c engine.tar.zst.sha256)
           zstd -dc engine/engine.tar.zst | tar -xf - -C engine
           cargo bundle --release --engine engine --no-sign
-          # The signer's --input holds the app and the Packaging directory.
-          cp -R "engine/baa Packaging" target/bundle/
+          # The signer's --input holds the app and the Packaging directory. The signer
+          # comes from this checkout, never the artifact: this job holds the signing secrets.
+          cp -R chromium/packaging "target/bundle/baa Packaging"
           cargo run --release -p baa-privacy --example proxy_allowlist > proxy-allowlist.txt
       - uses: actions/setup-python@v7
         with:
@@ -119,7 +125,7 @@ jobs:
           fi
           codesign -dv "$APP" 2>&1 | grep -E 'flags=|TeamIdentifier=|Signature='
           # The signed app, as shipped.
-          python3 xtask/privacy_test.py "$APP" proxy-allowlist.txt --seconds 60 --netlog netlog.json
+          env -u APPLE_APP_PASSWORD -u APPLE_ID python3 xtask/privacy_test.py "$APP" proxy-allowlist.txt --seconds 60 --netlog netlog.json
           mkdir "$RUNNER_TEMP/dmg"
           ditto "$APP" "$RUNNER_TEMP/dmg/baa.app"
           ln -s /Applications "$RUNNER_TEMP/dmg/Applications"

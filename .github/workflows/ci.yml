@@ -29,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 -m unittest discover -s xtask -p 'test_*.py'
+      - run: .github/actions/engine/trusted_test.sh
 
   build:
     runs-on: macos-15

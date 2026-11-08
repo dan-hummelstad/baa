@@ -19,8 +19,16 @@ runs:
         run-id: ${{ inputs.run-id }}
         github-token: ${{ github.token }}
         path: target/engine
+    # The producer's checksum from the same run. run-id is the engine action's trusted run or chromium.yml's own.
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}.sha256
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
+        path: target/engine
     - shell: bash
       run: |
+        (cd target/engine && shasum -a 256 -c engine.tar.zst.sha256)
         zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
         # A runner has no signing identity: "-" signs ad hoc.
         BAA_SIGN_IDENTITY=- cargo bundle --release --engine target/engine
