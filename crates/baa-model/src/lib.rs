@@ -566,8 +566,9 @@ impl Session {
     }
 
     /// Puts `tab` in `space`'s split at `index` (clamped), making one with the Space's
-    /// active tab if there is none, and focuses it. A favourite goes in as a copy opened in
-    /// `space` (also when it is the active tab), so a pane never belongs to another Space.
+    /// active tab if there is none, and focuses it. A favourite or pinned tab goes in as a copy
+    /// opened in `space` (also when it is the active tab): a pane never belongs to another
+    /// Space, and the pinned tab stays where it is in the sidebar.
     /// Returns the pane's tab; `None` for another Space's tab or a full split.
     pub fn add_to_split(&mut self, space: SpaceId, tab: TabId, index: usize, now: u64) -> Option<TabId> {
         let active = self.space(space)?.active_tab;
@@ -589,10 +590,14 @@ impl Session {
         Some(tab)
     }
 
-    /// The tab itself if it is a live tab of `space`, a copy at the top of Today for a favourite.
+    /// The tab itself if it is a Today tab of `space`, a copy at the top of Today for a
+    /// favourite or pinned tab.
     fn pane_of(&mut self, space: SpaceId, id: TabId, now: u64) -> Option<TabId> {
         let tab = self.tab(id)?.clone();
-        if tab.zone != Zone::Favorite {
+        if tab.zone == Zone::Pinned && tab.space != space {
+            return None;
+        }
+        if tab.zone == Zone::Today {
             return (tab.space == space).then_some(id);
         }
         let copy = Tab {
@@ -1096,6 +1101,28 @@ mod tests {
         let pane = s.space(sp).unwrap().split.as_ref().unwrap().tabs[1];
         s.move_tab(pane, sp, Zone::Favorite, 0);
         assert!(s.space(sp).unwrap().split.is_none(), "a pane made a favourite leaves the split");
+    }
+
+    #[test]
+    fn split_takes_a_pinned_tab_as_a_copy() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let pin = s.open_tab(sp, "pin", 0);
+        s.move_tab(pin, sp, Zone::Pinned, 0);
+        let a = s.open_tab(sp, "a", 1);
+        let copy = s.add_to_split(sp, pin, usize::MAX, 2).unwrap();
+        assert_ne!(copy, pin);
+        assert_eq!((s.tab(copy).unwrap().url.as_str(), s.tab(copy).unwrap().zone), ("pin", Zone::Today));
+        assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned, "the pinned tab stays pinned");
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, copy]);
+        // The active pinned tab as the split's first pane is copied too.
+        s.remove_from_split(copy);
+        s.activate_tab(pin, 3);
+        assert_eq!(s.add_to_split(sp, a, usize::MAX, 4), Some(a));
+        let first = s.shown_split(sp).unwrap().tabs[0];
+        assert_ne!(first, pin);
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [first, a]);
+        assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned);
     }
 
     #[test]
