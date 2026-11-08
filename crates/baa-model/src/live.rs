@@ -272,14 +272,32 @@ fn feed(url: &str) -> Result<Vec<LiveItem>, String> {
         return Ok(parse_feed(&body));
     }
     let href = feed_link(&body).ok_or("No RSS or Atom feed on this page")?;
-    let next = url::Url::parse(url).and_then(|u| u.join(&href)).map_err(|e| e.to_string())?;
-    Ok(parse_feed(&curl(next.as_str(), &[])?))
+    Ok(parse_feed(&curl(&feed_url(url, &href)?, &[])?))
+}
+
+/// The page's feed link resolved against it. The page chooses the href, so an absolute one
+/// could name any scheme curl speaks (file:, gopher:, dict:…).
+fn feed_url(page: &str, href: &str) -> Result<String, String> {
+    let next = url::Url::parse(page).and_then(|u| u.join(href)).map_err(|e| e.to_string())?;
+    is_web(next.as_str()).then(|| next.into()).ok_or_else(|| "Feed link is not http(s)".into())
+}
+
+/// curl's argv for a GET of `url`. `--proto` holds curl to http(s) for the URL itself and
+/// `--proto-redir` for every redirect, whatever protocols the system curl was built with.
+fn curl_args(url: &str) -> [&str; 14] {
+    [
+        "-sSL", "--compressed", "--max-time", "20", "--proto", "=http,https", "--proto-redir", "=http,https", "-A",
+        "baa", "-H", "@-", "--", url,
+    ]
 }
 
 /// GET `url`. Headers go in on stdin so a token never shows in the process list.
 fn curl(url: &str, headers: &[String]) -> Result<String, String> {
+    if !is_web(url) {
+        return Err("Not an http(s) URL".into());
+    }
     let mut child = Command::new("curl")
-        .args(["-sSL", "--compressed", "--max-time", "20", "-A", "baa", "-H", "@-", "--", url])
+        .args(curl_args(url))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -406,6 +424,41 @@ mod tests {
 
     fn item(url: &str, title: &str) -> LiveItem {
         LiveItem { url: url.into(), title: title.into() }
+    }
+
+    #[test]
+    fn feed_links_resolve_to_http_only() {
+        let page = "https://blog.example/post";
+        let resolve = |href: &str| {
+            let html = format!(r#"<link rel="alternate" type="application/rss+xml" href="{href}">"#);
+            feed_url(page, &feed_link(&html).expect("link found"))
+        };
+        for href in [
+            "gopher://127.0.0.1:6379/_FLUSHALL%0D%0A",
+            "file:///etc/passwd",
+            "dict://127.0.0.1:11211/stats",
+            "javascript:alert(1)",
+            "&#103;opher://127.0.0.1/_x",
+            "FILE:///etc/passwd",
+            " smb://lan/share",
+        ] {
+            assert_eq!(resolve(href), Err("Feed link is not http(s)".into()), "{href}");
+        }
+        // Protocol-relative and relative hrefs keep the page's own web scheme.
+        assert_eq!(resolve("//feeds.example/rss").as_deref(), Ok("https://feeds.example/rss"));
+        assert_eq!(resolve("/feed.xml").as_deref(), Ok("https://blog.example/feed.xml"));
+        assert_eq!(feed_url("http://a.example/", "//evil/x").as_deref(), Ok("http://evil/x"));
+        assert!(curl("file:///etc/passwd", &[]).is_err());
+    }
+
+    #[test]
+    fn curl_is_held_to_http() {
+        let args = curl_args("https://a.example/");
+        let flag = |f: &str| args.windows(2).any(|w| w == [f, "=http,https"]);
+        assert!(flag("--proto") && flag("--proto-redir"), "{args:?}");
+        let dash = args.iter().position(|a| *a == "--").unwrap();
+        assert!(args.iter().position(|a| *a == "--proto-redir").unwrap() < dash);
+        assert_eq!(args[dash + 1..], ["https://a.example/"]);
     }
 
     #[test]
