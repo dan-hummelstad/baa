@@ -539,8 +539,11 @@ impl<H: WebHost> Browser<H> {
             }
             PageEvent::FaviconChanged(favicon) => tab.favicon = favicon.clone(),
             PageEvent::FaviconImage { url, png } => {
-                if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_favicon(url, png)) {
-                    log::error!("saving favicon: {e}");
+                // An incognito page's icon is kept in memory only, like its history.
+                if !private {
+                    if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_favicon(url, png)) {
+                        log::error!("saving favicon: {e}");
+                    }
                 }
                 let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png.to_vec());
                 self.favicons.insert(url.clone(), std::sync::Arc::new(image));
