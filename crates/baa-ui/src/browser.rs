@@ -310,8 +310,7 @@ impl<H: WebHost> Browser<H> {
                 }
             }
         });
-        let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
-        let mut this = Self {
+        let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();        let mut this = Self {
             host,
             store,
             shown_space: session.active_space(),
@@ -396,6 +395,7 @@ impl<H: WebHost> Browser<H> {
             last_frame: cx.background_executor().now(),
             agent: Default::default(),
         };
+        this.restore_chats();
         this.sync(window, cx);
         this.start_live_refresh(window, cx);
         // ponytail: a fixed wait for Chrome to load each profile's extensions before the

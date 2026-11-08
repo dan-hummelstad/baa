@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use baa_model::TabId;
+use baa_model::{ChatRecord, Store, TabId};
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt};
 use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, Hsla, ScrollHandle, SharedString, Window};
@@ -27,7 +27,7 @@ use crate::{
 
 const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Entry {
     User(String),
     Assistant(String),
@@ -47,17 +47,60 @@ enum Msg {
 /// A chat the switcher can go back to.
 #[derive(Default)]
 pub(crate) struct Chat {
+    /// Its row in `baa.db`; 0 until its first message.
+    id: i64,
+    /// An incognito tab was in its context or Space; never stored.
+    private: bool,
     transcript: Vec<Entry>,
+    /// `claude`'s id for this chat, so a switch or a restart resumes it.
     session: Option<String>,
+    /// When the chat last had a message, and the site it began on.
     at: u64,
     host: String,
+}
+
+/// What `baa.db` keeps of a chat: nothing for an empty or incognito one.
+fn chat_record(c: &Chat) -> Option<ChatRecord> {
+    if c.private || !c.transcript.iter().any(|e| matches!(e, Entry::User(_))) {
+        return None;
+    }
+    Some(ChatRecord {
+        id: c.id,
+        at: c.at as i64,
+        host: c.host.clone(),
+        session: c.session.clone(),
+        transcript: serde_json::to_string(&c.transcript).expect("entries serialize"),
+    })
+}
+
+/// Writes the chat, or removes it when it is incognito (it may have turned so after a save).
+fn persist_chat(store: &Store, c: &Chat) {
+    let saved = match chat_record(c) {
+        Some(r) => store.save_chat(&r),
+        None => store.remove_chat(c.id),
+    };
+    if let Err(e) = saved {
+        log::error!("saving chat: {e}");
+    }
+}
+
+fn restore(r: ChatRecord) -> Option<Chat> {
+    Some(Chat {
+        id: r.id,
+        private: false,
+        transcript: serde_json::from_str(&r.transcript).ok()?,
+        session: r.session,
+        at: r.at as u64,
+        host: r.host,
+    })
 }
 
 #[derive(Default)]
 pub(crate) struct Panel {
     focus: Option<FocusHandle>,
     field: TextField,
-    transcript: Vec<Entry>,
+    /// The open chat.
+    chat: Chat,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     /// A message is out and its turn has not ended.
@@ -67,13 +110,7 @@ pub(crate) struct Panel {
     /// Bumped by every kill, so a reader task of an older child stops.
     generation: u64,
     scroll: ScrollHandle,
-    /// `claude`'s id for this chat, so a switch or a restart resumes it.
-    session: Option<String>,
-    /// When the chat last had a message, and the site it began on.
-    at: u64,
-    host: String,
-    /// The run's other chats, newest first.
-    // ponytail: in memory only, so private mode needs no rule; persist through baa-model when chats must outlive a launch.
+    /// The other chats, newest first: saved ones from earlier launches and this run's.
     chats: Vec<Chat>,
     switcher: bool,
     /// Tabs added with "Add context"; the active tab counts unless `hide_active`.
@@ -265,6 +302,20 @@ impl<H: WebHost> Browser<H> {
                 let _ = child.wait();
             });
         }
+        // A stop, a switch or quitting can cut a turn short; keep what arrived.
+        self.save_chat();
+    }
+
+    fn save_chat(&self) {
+        if let Some(store) = self.store() {
+            persist_chat(store, &self.agent.panel.chat);
+        }
+    }
+
+    /// Saved chats into the switcher, at launch.
+    pub(crate) fn restore_chats(&mut self) {
+        let saved = self.store().and_then(|s| s.chats(50).ok()).unwrap_or_default();
+        self.agent.panel.chats = saved.into_iter().filter_map(restore).collect();
     }
 
     fn send_agent_message(&mut self, cx: &mut Context<Self>) {
@@ -277,15 +328,24 @@ impl<H: WebHost> Browser<H> {
         p.busy = true;
         p.not_logged_in = false;
         p.switcher = false;
-        p.transcript.push(Entry::User(text.clone()));
+        p.chat.transcript.push(Entry::User(text.clone()));
         p.scroll.scroll_to_bottom();
-        p.at = baa_model::now();
+        p.chat.at = baa_model::now();
         let context = self.chat_context();
+        let in_incognito = |space| self.session.space(space).is_some_and(|s| s.ephemeral);
+        let private = self.session.active_space().is_some_and(in_incognito)
+            || context.iter().any(|t| self.session.tab(*t).is_some_and(|t| in_incognito(t.space)));
         let p = &mut self.agent.panel;
-        if p.host.is_empty() {
-            p.host = context.first().and_then(|id| self.session.tab(*id)).map(|t| host_of(&t.url)).unwrap_or_default();
+        p.chat.private |= private;
+        if p.chat.id == 0 {
+            p.chat.id = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(1, |d| d.as_micros() as i64);
+        }
+        if p.chat.host.is_empty() {
+            p.chat.host = context.first().and_then(|id| self.session.tab(*id)).map(|t| host_of(&t.url)).unwrap_or_default();
         }
         let text = with_context(&text, &context.iter().map(|t| t.0).collect::<Vec<_>>());
+        self.save_chat();
+        let p = &mut self.agent.panel;
         if p.stdin.is_some() {
             return self.write_agent_line(&text, cx);
         }
@@ -309,7 +369,7 @@ impl<H: WebHost> Browser<H> {
         let ok = p.stdin.as_mut().is_some_and(|s| s.write_all(user_line(text).as_bytes()).and_then(|_| s.flush()).is_ok());
         if !ok {
             self.kill_agent_child();
-            self.agent.panel.transcript.push(Entry::Notice("Claude is no longer running. Send again to restart it.".into()));
+            self.agent.panel.chat.transcript.push(Entry::Notice("Claude is no longer running. Send again to restart it.".into()));
         }
         cx.notify();
     }
@@ -319,7 +379,7 @@ impl<H: WebHost> Browser<H> {
         let Some(path) = path else {
             p.not_found = true;
             p.busy = false;
-            if let Some(Entry::User(t)) = p.transcript.pop() {
+            if let Some(Entry::User(t)) = p.chat.transcript.pop() {
                 p.field.text = t;
             }
             return cx.notify();
@@ -335,7 +395,7 @@ impl<H: WebHost> Browser<H> {
             Err(e) => {
                 let p = &mut self.agent.panel;
                 p.busy = false;
-                p.transcript.push(Entry::Notice(format!("Could not start claude: {e}")));
+                p.chat.transcript.push(Entry::Notice(format!("Could not start claude: {e}")));
                 cx.notify();
             }
         }
@@ -348,7 +408,7 @@ impl<H: WebHost> Browser<H> {
         // The hello of the `baa mcp` this child starts: lets it in without the connect sheet, once.
         let nonce = crate::agent::secret();
         let mut child = Command::new(claude)
-            .args(argv(&exe, &nonce, self.agent.panel.session.as_deref()))
+            .args(argv(&exe, &nonce, self.agent.panel.chat.session.as_deref()))
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -401,7 +461,7 @@ impl<H: WebHost> Browser<H> {
             Msg::Line(line) => {
                 let p = &mut self.agent.panel;
                 if let Some(id) = session_of(&line) {
-                    p.session = Some(id);
+                    p.chat.session = Some(id);
                 }
                 for e in parse_line(&line) {
                     match e {
@@ -410,10 +470,13 @@ impl<H: WebHost> Browser<H> {
                         Entry::Notice(_) | Entry::Assistant(_) | Entry::Thinking(_) | Entry::ToolUse { .. } | Entry::User(_) => {}
                     }
                     if e != Entry::Done && !matches!(&e, Entry::Notice(t) if needs_login(t)) {
-                        p.transcript.push(e);
+                        p.chat.transcript.push(e);
                     }
                 }
                 p.scroll.scroll_to_bottom();
+                if !p.busy {
+                    self.save_chat();
+                }
             }
             Msg::Stderr(tail) => {
                 // ponytail: any stderr text is shown, the exit code is not read.
@@ -421,7 +484,7 @@ impl<H: WebHost> Browser<H> {
                     if needs_login(&tail) {
                         self.agent.panel.not_logged_in = true;
                     }
-                    self.agent.panel.transcript.push(Entry::Notice(tail));
+                    self.agent.panel.chat.transcript.push(Entry::Notice(tail));
                 }
             }
             Msg::Closed => {
@@ -490,12 +553,7 @@ impl<H: WebHost> Browser<H> {
         self.kill_agent_child();
         let p = &mut self.agent.panel;
         let next = i.filter(|i| *i < p.chats.len()).map(|i| p.chats.remove(i)).unwrap_or_default();
-        let cur = Chat {
-            transcript: std::mem::replace(&mut p.transcript, next.transcript),
-            session: std::mem::replace(&mut p.session, next.session),
-            at: std::mem::replace(&mut p.at, next.at),
-            host: std::mem::replace(&mut p.host, next.host),
-        };
+        let cur = std::mem::replace(&mut p.chat, next);
         if cur.transcript.iter().any(|e| matches!(e, Entry::User(_))) {
             p.chats.insert(0, cur);
         }
@@ -565,7 +623,7 @@ impl<H: WebHost> Browser<H> {
                     this.agent.panel.switcher ^= true;
                     cx.notify();
                 }))
-                .child(div().min_w_0().truncate().text_size(px(14.)).font_weight(gpui::FontWeight::BOLD).child(title_of(&p.transcript)))
+                .child(div().min_w_0().truncate().text_size(px(14.)).font_weight(gpui::FontWeight::BOLD).child(title_of(&p.chat.transcript)))
                 .child(icon(if p.switcher { "chevron-up" } else { "chevron-down" }, 14., theme.ink_muted)),
             )
             .child(
@@ -607,7 +665,7 @@ impl<H: WebHost> Browser<H> {
                     )
                     .when(current, |d| d.child(icon("check", 14., theme.ink)))
             };
-            let has_current = p.transcript.iter().any(|e| matches!(e, Entry::User(_)));
+            let has_current = p.chat.transcript.iter().any(|e| matches!(e, Entry::User(_)));
             raised(div().id("chat-switcher").absolute().top(px(46.)).left_0().right_0().py(px(7.)).flex().flex_col().rounded(r(14.)), theme)
                 .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 8., 28.)])
                 .occlude()
@@ -621,7 +679,7 @@ impl<H: WebHost> Browser<H> {
                         .text_color(soft)
                         .child("RECENT CHATS"),
                 )
-                .when(has_current, |d| d.child(row(0, title_of(&p.transcript), meta(now, p.at, &p.host), true)))
+                .when(has_current, |d| d.child(row(0, title_of(&p.chat.transcript), meta(now, p.chat.at, &p.chat.host), true)))
                 .children(p.chats.iter().take(8).enumerate().map(|(i, c)| {
                     row(i + 1, title_of(&c.transcript), meta(now, c.at, &c.host), false)
                         .on_click(cx.listener(move |this, _, _, cx| this.switch_chat(Some(i), cx)))
@@ -670,7 +728,7 @@ impl<H: WebHost> Browser<H> {
             .gap(px(14.))
             .text_size(px(12.5))
             .line_height(gpui::relative(1.5))
-            .children(p.transcript.iter().enumerate().filter_map(|(i, e)| {
+            .children(p.chat.transcript.iter().enumerate().filter_map(|(i, e)| {
                 let row = div().id(("agent-entry", i)).flex_none();
                 Some(match e {
                     Entry::User(t) => row.flex().justify_end().child(
@@ -908,6 +966,28 @@ mod tests {
         assert_eq!(parse_line(line), vec![Entry::Thinking("plan".into())]);
         assert_eq!(tool_label("read_page"), "Read page");
         assert_eq!(tool_label(""), "");
+    }
+
+    #[test]
+    fn chats_round_trip_and_incognito_ones_never_reach_the_store() {
+        let store = Store::open(":memory:").unwrap();
+        let chat = |id, private| Chat {
+            id,
+            private,
+            transcript: vec![Entry::User("hi".into()), Entry::Thinking("t".into()), Entry::Assistant("**yo**".into())],
+            session: Some("s1".into()),
+            at: 5,
+            host: "a.example".into(),
+        };
+        persist_chat(&store, &chat(1, false));
+        persist_chat(&store, &chat(2, true));
+        persist_chat(&store, &Chat { id: 3, ..Chat::default() });
+        let saved = store.chats(10).unwrap();
+        assert_eq!(saved.iter().map(|r| r.id).collect::<Vec<_>>(), [1], "incognito and empty chats are not written");
+        let back = restore(saved.into_iter().next().unwrap()).unwrap();
+        assert_eq!((back.transcript, back.session, back.host), (chat(1, false).transcript, chat(1, false).session, chat(1, false).host));
+        persist_chat(&store, &chat(1, true));
+        assert!(store.chats(10).unwrap().is_empty(), "a saved chat that turns incognito is removed");
     }
 
     #[test]
