@@ -5,7 +5,7 @@
 use crate::theme::r;
 use std::time::Duration;
 
-use baa_model::{Folder, SpaceId, Tab, TabId, Zone};
+use baa_model::{Folder, FolderId, SpaceId, Tab, TabId, Zone};
 use baa_web::{PageHandle, WebHost};
 use gpui::{
     div, img, prelude::*, pulsating_between, px, Animation, AnimationExt, AnyElement, Context,
@@ -146,7 +146,7 @@ impl<H: WebHost> Browser<H> {
                     .children(
                         self.session
                             .subfolders(space, None)
-                            .map(|f| self.render_folder(f, theme, cx))
+                            .map(|f| self.render_folder(f, 1.0, theme, cx))
                             .collect::<Vec<_>>(),
                     )
                     .child(self.render_zone(space, Zone::Pinned, theme, cx)),
@@ -631,34 +631,54 @@ impl<H: WebHost> Browser<H> {
 
     /// A folder row, then its subfolders and tabs indented unless it is collapsed (its
     /// active tab still shows, as in Arc). Opening and closing springs the height.
-    fn render_folder(&self, folder: &Folder, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let id = folder.id;
+    /// The active tab's folder and every folder above it.
+    fn active_folders(&self) -> Vec<FolderId> {
+        let mut chain = Vec::new();
+        let mut at = self.active_tab().and_then(|t| self.session.tab(t)).and_then(|t| t.folder);
+        while let Some(id) = at.filter(|id| !chain.contains(id)) {
+            chain.push(id);
+            at = self.session.folder(id).and_then(|f| f.parent);
+        }
+        chain
+    }
+
+    /// `shown`: how far the folder's parent shows it (1 at the top level). A subfolder
+    /// folds with its parent: its row and tabs go as the parent's spring closes.
+    fn render_folder(&self, folder: &Folder, shown: f32, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let (id, top) = (folder.id, folder.parent.is_none());
         let open = !folder.collapsed;
         // Overshoot would grow past the rows, so the spring is clamped.
         let t = self
             .folder_motion
             .get(&id)
             .map_or(if open { 1.0 } else { 0.0 }, |s| s.value().clamp(0.0, 1.0));
-        let animating = self.folder_motion.contains_key(&id);
+        // How far its contents show: its own spring, within what its parent shows.
+        let inner = t.min(shown);
         let active = self.active_tab();
+        // The folders holding the active tab: they stay to show it, however closed.
+        let holds_active = self.active_folders();
         let rows: Vec<(f32, AnyElement)> = self
             .session
             .folder_tabs(id)
             .enumerate()
-            .filter(|(_, t)| open || animating || active == Some(t.id))
+            .filter(|(_, t)| inner > 0.0 || active == Some(t.id))
             // The active tab stays put while the rest fold around it.
             .map(|(i, tab)| {
-                let shown = if active == Some(tab.id) { 1.0 } else { t };
+                let shown = if active == Some(tab.id) { 1.0 } else { inner };
                 (self.row_shown(tab.id, shown), self.render_tab_row(tab, i, shown, theme, cx).into_any_element())
             })
             .collect();
-        let rows = stack(self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme), true);
-        // ponytail: subfolders pop in and out instead of folding with the spring.
-        let subfolders: Vec<AnyElement> = if open || animating {
-            self.session.subfolders(folder.space, Some(id)).map(|f| self.render_folder(f, theme, cx)).collect()
-        } else {
-            Vec::new()
-        };
+        let mut entries: Vec<(f32, AnyElement)> = self
+            .session
+            .subfolders(folder.space, Some(id))
+            .filter(|f| inner > 0.0 || holds_active.contains(&f.id))
+            .map(|f| {
+                let gap = if holds_active.contains(&f.id) { 1.0 } else { inner };
+                (gap, self.render_folder(f, inner, theme, cx))
+            })
+            .collect();
+        entries.extend(self.with_ghosts(rows, (folder.space, Zone::Pinned, Some(id)), theme));
+        let rows = stack(entries, true);
         let error = self.live_errors.get(&id).filter(|_| open).map(|e| {
             div()
                 .px(px(10.))
@@ -703,11 +723,14 @@ impl<H: WebHost> Browser<H> {
             .child(feel(
                 div()
                     .id(("folder", id.0))
+                    .debug_selector(move || if top { "folder-row" } else { "subfolder-row" }.into())
                     .flex()
                     .flex_none()
                     .items_center()
                     .gap(px(10.))
-                    .h(px(row_h()))
+                    .h(px(row_h() * shown))
+                    .opacity(shown)
+                    .overflow_hidden()
                     .px(px(10.))
                     .rounded(r(10.))
                     .mx(px(2.5 * p))
@@ -743,14 +766,13 @@ impl<H: WebHost> Browser<H> {
                 key,
                 cx,
             ))
-            .when(!rows.is_empty() || !subfolders.is_empty() || error.is_some(), |d| {
+            .when(!rows.is_empty() || error.is_some(), |d| {
                 d.child(
                     div()
                         .pl(px(14.))
                         .flex()
                         .flex_col()
-                        .debug_selector(|| "folder-rows".into())
-                        .children(subfolders)
+                        .debug_selector(move || if top { "folder-rows" } else { "subfolder-rows" }.into())
                         .children(error)
                         .children(rows),
                 )

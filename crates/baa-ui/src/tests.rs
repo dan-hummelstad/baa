@@ -778,6 +778,56 @@ fn a_subfolder_is_named_in_place_inside_its_parent(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_subfolder_folds_with_its_parent(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example", "c.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let parent = b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        let tabs: Vec<_> = b.session.tabs(space, Zone::Today).map(|t| t.id).collect();
+        let parent = b.session.add_folder(space, "Parent");
+        let sub = b.session.add_subfolder(parent, "Sub").unwrap();
+        b.session.move_to_folder(tabs[1], sub, 0);
+        b.session.move_to_folder(tabs[2], sub, 1);
+        // The active tab is not in either folder, so nothing stays shown for it.
+        b.activate_tab(tabs[0], window, cx);
+        for tab in &tabs {
+            b.motion.from(("tab-in", tab.0), crate::motion::Feel::Glide, 0.0, 0.0);
+        }
+        parent
+    });
+    cx.run_until_parked();
+    let height = |name: &'static str, cx: &mut VisualTestContext| cx.debug_bounds(name).map(|r| f32::from(r.size.height));
+    let full = height("subfolder-rows", cx).expect("the subfolder's tabs render");
+    // Closing (target 0) and opening (target 1) run through the same values of the spring.
+    for (open, target) in [(false, 0.0), (true, 1.0)] {
+        for t in [0.75, 0.5, 0.25] {
+            b.update(cx, |b, cx| {
+                b.set_folder_open(parent, open);
+                b.folder_motion.insert(parent, crate::motion::Spring::new(t));
+                b.folder_motion.get_mut(&parent).unwrap().set_target(target);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let row = height("subfolder-row", cx).expect("the subfolder row is there mid-fold");
+            assert!((row - 38. * t).abs() < 1.5, "its row is {row}px at t={t}, open={open}");
+            let rows = height("subfolder-rows", cx).unwrap();
+            assert!(rows < full * t + 1.5, "its tabs fold too: {rows}px of {full} at t={t}, open={open}");
+        }
+    }
+    b.update(cx, |b, cx| {
+        b.set_folder_open(parent, false);
+        b.folder_motion.clear();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(height("subfolder-row", cx).is_none(), "a closed parent hides its subfolders");
+}
+
+#[gpui::test]
 fn clicking_away_keeps_the_name_being_typed(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");
