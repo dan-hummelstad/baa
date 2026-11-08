@@ -43,15 +43,16 @@ extern "C" {}
 /// switches (the short core list). URLs in `args` are not passed on.
 pub fn chrome_argv(args: &[String], user_data_dir: &Path) -> Vec<String> {
     let mut out = vec![args[0].clone()];
-    let mut disabled = String::new();
+    let (mut disabled, mut enabled) = (String::new(), String::new());
     for arg in args.iter().skip(1).filter(|a| a.starts_with('-')) {
-        match arg.strip_prefix("--disable-features=") {
-            // Chrome keeps only the last --disable-features, so ours is merged into it.
-            Some(list) => {
-                disabled.push(',');
-                disabled.push_str(list);
-            }
-            None => out.push(arg.clone()),
+        // Chrome keeps only the last --disable-features (and --enable-features), so ours is
+        // merged into it.
+        if let Some(list) = arg.strip_prefix("--disable-features=") {
+            disabled = format!("{disabled},{list}");
+        } else if let Some(list) = arg.strip_prefix("--enable-features=") {
+            enabled = format!("{enabled},{list}");
+        } else {
+            out.push(arg.clone());
         }
     }
     out.push("--no-startup-window".into());
@@ -64,13 +65,18 @@ pub fn chrome_argv(args: &[String], user_data_dir: &Path) -> Vec<String> {
             out.push(switch);
         }
     }
-    let mut features: Vec<&str> = disabled.split(',').filter(|f| !f.is_empty()).collect();
-    for feature in baa_privacy::CORE_DISABLED_FEATURES {
-        if !features.contains(feature) {
-            features.push(feature);
+    for (flag, user, ours) in [
+        ("disable", &disabled, baa_privacy::CORE_DISABLED_FEATURES),
+        ("enable", &enabled, baa_privacy::CORE_ENABLED_FEATURES),
+    ] {
+        let mut features: Vec<&str> = user.split(',').filter(|f| !f.is_empty()).collect();
+        for feature in ours {
+            if !features.contains(feature) {
+                features.push(feature);
+            }
         }
+        out.push(format!("--{flag}-features={}", features.join(",")));
     }
-    out.push(format!("--disable-features={}", features.join(",")));
     out
 }
 

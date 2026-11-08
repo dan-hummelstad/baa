@@ -32,6 +32,9 @@ pub struct Writes {
     pub local: Vec<Write>,
 }
 
+/// The AUTO_PICTURE_IN_PICTURE content setting's default, where Chrome's DefaultProvider keeps it.
+const AUTO_PIP: &str = "profile.default_content_setting_values.auto_picture_in_picture";
+
 pub fn writes(settings: &Settings) -> Writes {
     let web = &settings.web;
     let mut profile = vec![Write::Int(
@@ -68,6 +71,8 @@ pub fn writes(settings: &Settings) -> Writes {
     profile.push(Write::Bool("extensions.ui.developer_mode", web.developer_mode));
     // Chrome's default is on, and PREFS_OFF no longer pins it off.
     profile.push(Write::Bool("search.suggest_enabled", settings.search_suggest));
+    // Chrome's default is Ask, and baa draws no auto PiP prompt. 1 is CONTENT_SETTING_ALLOW.
+    profile.push(if settings.auto_pip { Write::Int(AUTO_PIP, 1) } else { Write::Clear(AUTO_PIP) });
     profile.push(Write::Zoom(web.default_zoom));
     profile.push(Write::Engine { name: settings.search_engine.name.clone(), url: settings.search_engine.url.clone() });
     // Every kind, so one the user stopped overriding is restored. Block wins over
@@ -156,6 +161,7 @@ mod tests {
             Bool("settings.a11y.caretbrowsing.enabled", false),
             Bool("extensions.ui.developer_mode", false),
             Bool("search.suggest_enabled", true),
+            Int(AUTO_PIP, 1),
             Zoom(1.0),
             Engine { name: "Google".into(), url: "https://www.google.com/search?q=%s".into() },
         ];
@@ -190,6 +196,13 @@ mod tests {
         let s = Settings { search_suggest: false, ..Settings::default() };
         assert!(writes(&s).profile.contains(&Write::Bool("search.suggest_enabled", false)));
         assert!(writes(&Settings::default()).profile.contains(&Write::Bool("search.suggest_enabled", true)));
+    }
+
+    #[test]
+    fn auto_pip_off_restores_chrome_default() {
+        let list = writes(&Settings { auto_pip: false, ..Settings::default() }).profile;
+        assert!(list.contains(&Write::Clear(AUTO_PIP)));
+        assert!(!list.contains(&Write::Int(AUTO_PIP, 1)));
     }
 
     #[test]

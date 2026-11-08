@@ -7,6 +7,11 @@ pub const CORE_SWITCHES: &[&str] = &["disable-background-networking", "no-pings"
 /// Features the own build still turns off, in `--disable-features`.
 pub const CORE_DISABLED_FEATURES: &[&str] = &["MediaRouter", "OptimizationHints", "AutofillServerCommunication", "AimEnabled"];
 
+/// Features the own build turns on, in `--enable-features`. Auto Picture in Picture for any
+/// playing video, not only pages that register the media session's `enterpictureinpicture`
+/// (as Arc does); the AUTO_PICTURE_IN_PICTURE content setting still gates it.
+pub const CORE_ENABLED_FEATURES: &[&str] = &["BrowserInitiatedAutomaticPictureInPicture"];
+
 /// Boolean prefs set to `false` on every profile.
 pub const PREFS_OFF: &[&str] = &[
     "alternate_error_pages.enabled",

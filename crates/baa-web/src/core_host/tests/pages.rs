@@ -109,7 +109,7 @@ fn page_calls_reach_the_tab(cx: &mut TestAppContext) {
 
 #[test]
 fn chrome_gets_user_flags_our_switches_and_no_urls() {
-    let args: Vec<String> = ["baa", "https://x.test", "--proxy-server=p", "--disable-features=Foo"].map(Into::into).into();
+    let args: Vec<String> = ["baa", "https://x.test", "--proxy-server=p", "--disable-features=Foo", "--enable-features=Bar"].map(Into::into).into();
     let argv = chrome_argv(&args, Path::new("/data/chromium"));
     assert_eq!(argv[0], "baa");
     assert_eq!(argv[1], "--proxy-server=p");
@@ -120,6 +120,8 @@ fn chrome_gets_user_flags_our_switches_and_no_urls() {
     let disabled: Vec<_> = argv.iter().filter(|a| a.starts_with("--disable-features=")).collect();
     assert_eq!(disabled.len(), 1);
     assert!(disabled[0].contains("Foo") && disabled[0].contains("MediaRouter"));
+    let enabled: Vec<_> = argv.iter().filter(|a| a.starts_with("--enable-features=")).collect();
+    assert_eq!(enabled, ["--enable-features=Bar,BrowserInitiatedAutomaticPictureInPicture"]);
 
     let own = chrome_argv(&["baa".into(), "--user-data-dir=/mine".into()], Path::new("/data/chromium"));
     assert_eq!(own.iter().filter(|a| a.starts_with("--user-data-dir=")).collect::<Vec<_>>(), ["--user-data-dir=/mine"]);
