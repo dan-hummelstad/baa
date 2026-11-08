@@ -742,12 +742,12 @@ impl Session {
     /// `keep` holds (split panes, tabs Claude drives). Incognito tabs are never archived,
     /// so there it does nothing. Returns the ids in sidebar order, for Undo.
     pub fn clear_today(&mut self, space: SpaceId, now: u64, keep: impl Fn(TabId) -> bool) -> Vec<TabId> {
-        if self.space(space).is_none_or(|s| s.ephemeral) {
-            return Vec::new();
-        }
+        let Some(sp) = self.space(space).filter(|s| !s.ephemeral) else { return Vec::new() };
+        // Split panes stay, whatever `keep` says: a split is put away by closing it.
+        let panes = sp.split.as_ref().map_or(Vec::new(), |p| p.tabs.clone());
         let (cleared, live): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
             .into_iter()
-            .partition(|t| t.zone == Zone::Today && t.space == space && !keep(t.id));
+            .partition(|t| t.zone == Zone::Today && t.space == space && !keep(t.id) && !panes.contains(&t.id));
         self.tabs = live;
         let ids: Vec<TabId> = cleared.iter().map(|t| t.id).collect();
         for t in cleared {
@@ -938,6 +938,10 @@ mod tests {
         }
         assert_eq!(urls(&s, sp, Zone::Today), ["b", "a", "kept"], "back on top, in their order");
         assert!(s.archived().is_empty());
+        s.activate_tab(b, 9);
+        s.add_to_split(sp, a, usize::MAX, 9);
+        assert_eq!(s.clear_today(sp, 10, |_| false), [kept], "split panes stay");
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [b, a]);
     }
 
     #[test]
