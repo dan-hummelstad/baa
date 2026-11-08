@@ -503,7 +503,7 @@ impl<H: WebHost> Browser<H> {
     /// the window edge and a little past the card (the inset gap included), or
     /// has left the window over that edge, or a menu from it is open.
     pub(super) fn track_reveal(&mut self, at: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
-        if self.sidebar_open {
+        if self.docked() {
             return;
         }
         let x = f32::from(match self.side() {

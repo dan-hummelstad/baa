@@ -141,7 +141,7 @@ impl<H: WebHost> Browser<H> {
         self.find = None;
         self.renaming = Some(TextField::selected(name));
         self.renaming_folder = None;
-        if !self.sidebar_open {
+        if !self.docked() {
             self.reveal.set_target(1.0);
         }
         window.focus(&self.input_focus, cx);

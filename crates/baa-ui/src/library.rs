@@ -147,10 +147,13 @@ impl<H: WebHost> Browser<H> {
                 self.motion.from(("library", 0), Feel::Glide, 0.0, 1.0);
             }
         }
-        if self.sidebar_open {
-            self.sidebar_w.set_target(LIBRARY_WIDTH);
-        }
+        self.sidebar_w.set_target(LIBRARY_WIDTH);
         cx.notify();
+    }
+
+    /// The Library always shows docked; closing it brings back the user's `sidebar_open`, which it never changes.
+    pub(crate) fn docked(&self) -> bool {
+        self.sidebar_open || self.library.is_some()
     }
 
     /// Back to the Spaces; the first comes in from the right, as it lies.
@@ -158,9 +161,7 @@ impl<H: WebHost> Browser<H> {
         if self.library.take().is_none() {
             return;
         }
-        if self.sidebar_open {
-            self.sidebar_w.set_target(SIDEBAR_WIDTH);
-        }
+        self.sidebar_w.set_target(if self.sidebar_open { SIDEBAR_WIDTH } else { 0. });
         self.slide.snap(1.0);
         self.slide.set_target(0.0);
         self.close_overlays(window, cx);

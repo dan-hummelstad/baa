@@ -1104,7 +1104,7 @@ impl<H: WebHost> Render for Browser<H> {
         let sidebar = self.render_sidebar(&theme, cx);
         let page = self.render_page(&theme, window, cx);
         // One sidebar element: docked, or in the reveal card while that is out.
-        let (docked, reveal) = if self.sidebar_open {
+        let (docked, reveal) = if self.docked() {
             (Some(sidebar), None)
         } else if self.reveal.value() > 0.001 || self.reveal_hovered() {
             (None, Some(self.render_reveal(Some(sidebar), &theme)))

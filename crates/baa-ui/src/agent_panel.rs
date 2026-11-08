@@ -282,8 +282,6 @@ impl<H: WebHost> Browser<H> {
 
     /// The Library's Chat section, with the sidebar brought out if it was collapsed.
     pub(crate) fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Docked wins over the reveal card while open, so the reveal needs no reset here.
-        self.sidebar_open = true;
         self.open_library(Section::Chat, cx);
         let focus = self.agent.panel.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         window.focus(&focus, cx);

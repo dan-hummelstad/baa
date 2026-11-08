@@ -266,13 +266,15 @@ fn chat_is_a_library_section_toggled_by_cmd_j(cx: &mut TestAppContext) {
     use crate::library::{Section, LIBRARY_WIDTH};
     let (b, cx) = browser(cx);
     let section = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.library.as_ref().map(|l| l.section));
-    // From a collapsed sidebar: it comes out, at the Library's width, on Chat.
+    // From a collapsed sidebar: it comes out docked, at the Library's width, on Chat, and the
+    // collapsed setting is untouched, so closing goes back to it.
     cx.dispatch_action(crate::actions::ToggleSidebar);
     b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
     assert_eq!(section(&b, cx), Some(Section::Chat));
-    b.read_with(cx, |b, _| assert!(b.sidebar_open && b.sidebar_w.target() == LIBRARY_WIDTH));
+    b.read_with(cx, |b, _| assert!(!b.sidebar_open && b.docked() && b.sidebar_w.target() == LIBRARY_WIDTH));
     b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
     assert_eq!(section(&b, cx), None, "⌘J on Chat closes the Library");
+    b.read_with(cx, |b, _| assert!(!b.sidebar_open && !b.docked() && b.sidebar_w.target() == 0.));
     // From another section, ⌘J switches to Chat rather than closing.
     b.update(cx, |b, cx| b.open_library(Section::Downloads, cx));
     b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
