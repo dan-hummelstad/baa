@@ -185,7 +185,16 @@ impl<H: WebHost> Browser<H> {
                     cx.stop_propagation();
                     this.open_menu(MenuKind::Today, e.position, window, cx);
                 }),
-            ))
+            )
+            // The gap above the divider is the end of Pinned.
+            .drag_over::<DraggedTab>({
+                let hover = theme.glass;
+                move |s, _, _, _| s.bg(hover).rounded(r(10.))
+            })
+            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
+                this.session.move_tab(d.id, space, Zone::Pinned, usize::MAX);
+                this.sync(window, cx);
+            })))
             .child(
                 {
                     let key = ("new-tab", 0);

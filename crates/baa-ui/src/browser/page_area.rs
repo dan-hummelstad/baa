@@ -3,6 +3,9 @@
 
 use super::*;
 
+const SPLIT_GAP: f32 = 8.0;
+const PANE_STRIP_H: f32 = 30.0;
+
 impl<H: WebHost> Browser<H> {
     pub(super) fn render_page(
         &mut self,
@@ -14,8 +17,9 @@ impl<H: WebHost> Browser<H> {
         let has_page = page.is_some();
         let panes = self.shown_panes();
         let focused = panes.iter().position(|p| Some(*p) == self.active_tab()).unwrap_or(0);
-        // Corners where a pane meets its neighbours stay square.
-        let inner = |i: usize| (if i > 0 { 1 | 4 } else { 0 }) | (if i + 1 < panes.len() { 2 | 8 } else { 0 });
+        // Split panes are separate cards with their strip on top: the page's top corners are square.
+        let split = panes.len() > 1;
+        let inner = move |_: usize| if split { 1 | 2 } else { 0 };
         // Each pane's share of the row, from its spring (they need not sum to 1 mid-flight).
         // A phone pane (E2) is fixed, not springy: `render_split` lays it out at its device width
         // in px and the springy panes shrink to the rest. Its share here is of last frame's row,
@@ -141,7 +145,7 @@ impl<H: WebHost> Browser<H> {
         let body = if panes.len() < 2 {
             focused_pane.into_any_element()
         } else {
-            self.render_split(&panes, focused, focused_pane, &shares, inner, window, cx)
+            self.render_split(&panes, focused, focused_pane, &shares, inner, theme, window, cx)
         };
         // A tab dragged from the sidebar onto the page opens beside it: left or right half.
         // ponytail: any drag counts (tabs are the only thing the window drags); the drop
@@ -232,10 +236,12 @@ impl<H: WebHost> Browser<H> {
                     .min_h_0()
                     .w_full()
                     .flex()
-                    .rounded(r(PAGE_RADIUS))
-                    .overflow_hidden()
-                    .bg(gpui::white())
-                    .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
+                    .when(!split, |d| {
+                        d.rounded(r(PAGE_RADIUS))
+                            .overflow_hidden()
+                            .bg(gpui::white())
+                            .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
+                    })
                     .child(body)
                     .children(drag)
                     .children(split_drag)
@@ -269,6 +275,7 @@ impl<H: WebHost> Browser<H> {
         focused_pane: gpui::Div,
         shares: &[f32],
         inner: impl Fn(usize) -> u8,
+        theme: &Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -284,24 +291,23 @@ impl<H: WebHost> Browser<H> {
         let springy: f32 = panes.iter().zip(shares).filter(|(id, _)| !self.phone_panes.contains(id)).map(|(_, s)| s).sum();
         for (i, id) in panes.iter().enumerate() {
             let phone = self.phone_panes.contains(id);
-            // A phone pane's edges do not drag: it keeps its device width.
+            // The gap between two cards is the seam; a phone pane's edges do not drag: it
+            // keeps its device width.
             if i > 0 && (phone || self.phone_panes.contains(&panes[i - 1])) {
-                row = row.child(div().flex_none().h_full().w(px(1.)).bg(gpui::rgba(0x0000002E)));
+                row = row.child(div().flex_none().h_full().w(px(SPLIT_GAP)));
             } else if i > 0 {
-                let grip = div()
-                    .id(("split-seam", i as u64 - 1))
-                    .absolute()
-                    .occlude()
-                    .cursor(gpui::CursorStyle::ResizeLeftRight)
-                    .top_0()
-                    .bottom_0()
-                    .left(px(-3.))
-                    .w(px(7.))
-                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.split_drag = Some(i - 1);
-                        cx.notify();
-                    }));
-                row = row.child(div().flex_none().relative().h_full().w(px(1.)).bg(gpui::rgba(0x0000002E)).child(grip));
+                row = row.child(
+                    div()
+                        .id(("split-seam", i as u64 - 1))
+                        .flex_none()
+                        .h_full()
+                        .w(px(SPLIT_GAP))
+                        .cursor(gpui::CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            this.split_drag = Some(i - 1);
+                            cx.notify();
+                        })),
+                );
             }
             let content = match (i == focused).then(|| focused_pane.take()).flatten() {
                 Some(pane) => pane.into_any_element(),
@@ -313,13 +319,63 @@ impl<H: WebHost> Browser<H> {
                     None => div().into_any_element(),
                 },
             };
+            let card = div()
+                .h_full()
+                .flex()
+                .flex_col()
+                .rounded(r(PAGE_RADIUS))
+                .overflow_hidden()
+                .bg(gpui::white())
+                .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
+                .child(self.pane_strip(*id, i == focused, cx))
+                .when(phone, |d| d.child(self.phone_strip(*id, cx)))
+                .child(div().flex_1().min_h_0().child(content));
             row = row.child(if phone {
-                div().flex_none().h_full().w(px(PHONE_W)).flex().flex_col().child(self.phone_strip(*id, cx)).child(div().flex_1().min_h_0().child(content))
+                card.flex_none().w(px(PHONE_W))
             } else {
-                div().h_full().min_w_0().w(relative(if springy > 0. { shares[i] / springy } else { 0. })).child(content)
+                // ponytail: shares ignore the gaps, so a pane is a few px off its spring's width.
+                card.min_w_0().w(relative(if springy > 0. { shares[i] / springy } else { 0. }))
             });
         }
         row.into_any_element()
+    }
+
+    /// A split pane's own top row: its host (the focused pane's darker), and × to take it
+    /// out of the split. A click on it focuses the pane.
+    fn pane_strip(&self, id: TabId, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let host = self.session.tab(id).map(|t| host_of(&t.url)).unwrap_or_default();
+        div()
+            .id(("pane-strip", id.0))
+            .flex_none()
+            .h(px(PANE_STRIP_H))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .bg(surface::bg())
+            .border_b_1()
+            .border_color(surface::border())
+            .text_size(px(12.))
+            .text_color(if focused { surface::ink() } else { surface::muted() })
+            .on_click(cx.listener(move |this, _, window, cx| this.on_page_focused(id, window, cx)))
+            .child(div().size(px(20.)))
+            .child(cut_left(div().flex_1().min_w_0().flex().justify_center()).child(host))
+            .child(
+                div()
+                    .id(("pane-close", id.0))
+                    .size(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(r(5.))
+                    .hover(|d| d.bg(surface::key()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.session.remove_from_split(id);
+                        this.sync(window, cx);
+                    }))
+                    .child(icon("x", 13., surface::icon().into())),
+            )
     }
 
     /// The pages on screen: the shown split's panes, else the active tab (alone in fullscreen).
