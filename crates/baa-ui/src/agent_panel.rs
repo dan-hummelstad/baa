@@ -9,18 +9,21 @@ use std::{
     time::SystemTime,
 };
 
+use baa_model::SidebarSide;
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt};
 use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, ScrollHandle, SharedString, Window};
 use serde_json::{json, Value};
 
 use crate::{
-    browser::{Browser, HEADER_H, INSET},
+    browser::{Browser, INSET},
     icons::icon,
     input::{Key, TextField},
     settings::Tab,
     theme::{r, surface, Theme},
 };
+
+pub(crate) const PANEL_WIDTH: f32 = 360.0;
 
 const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 
@@ -162,14 +165,21 @@ fn resolve_claude(configured: Option<String>, found: Option<String>) -> Option<S
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn toggle_agent_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = &mut self.agent.panel;
-        panel.open = !panel.open;
-        if panel.open {
-            let focus = panel.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-            window.focus(&focus, cx);
-        } else {
-            self.focus_page(window, cx);
+        if self.agent.panel.open {
+            return self.close_agent_panel(window, cx);
         }
+        let panel = &mut self.agent.panel;
+        panel.open = true;
+        let focus = panel.focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        window.focus(&focus, cx);
+        self.agent_w.set_target(PANEL_WIDTH);
+        cx.notify();
+    }
+
+    pub(crate) fn close_agent_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent.panel.open = false;
+        self.agent_w.set_target(0.0);
+        self.focus_page(window, cx);
         cx.notify();
     }
 
@@ -348,10 +358,7 @@ impl<H: WebHost> Browser<H> {
         let key = self.agent.panel.field.handle(&event.keystroke, cx);
         match key {
             Key::Submit if !event.is_held => self.send_agent_message(cx),
-            Key::Cancel => {
-                self.agent.panel.open = false;
-                self.focus_page(window, cx);
-            }
+            Key::Cancel => self.close_agent_panel(window, cx),
             _ => {}
         }
         cx.notify();
@@ -359,7 +366,8 @@ impl<H: WebHost> Browser<H> {
 
     pub(crate) fn render_agent_panel(&self, theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = &self.agent.panel;
-        if !p.open {
+        // Drawn while it slides shut too.
+        if !p.open && self.agent_w.value() < 0.5 {
             return None;
         }
         let focus = p.focus.clone()?;
@@ -395,11 +403,7 @@ impl<H: WebHost> Browser<H> {
                     .justify_center()
                     .rounded(r(6.))
                     .hover(|d| d.bg(surface::key()))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.agent.panel.open = false;
-                        this.focus_page(window, cx);
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_agent_panel(window, cx)))
                     .child(icon("x", 13., surface::icon().into())),
             );
 
@@ -479,29 +483,27 @@ impl<H: WebHost> Browser<H> {
                 )
         };
 
-        let card = div()
-            .id("agent-panel")
-            .occlude()
-            .absolute()
-            .top(px(HEADER_H))
-            .right(px(INSET))
-            .bottom(px(INSET))
-            .w(px(360.))
-            .flex()
-            .flex_col()
-            .rounded(r(12.))
-            .bg(surface::bg())
-            .border_1()
-            .border_color(surface::border())
-            .shadow(vec![crate::browser::shadow(gpui::rgba(0x0A08142E).into(), 8., 24.)])
-            .overflow_hidden()
-            .track_focus(&focus)
-            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| this.on_panel_key(e, window, cx)))
-            .child(header)
-            .child(transcript)
-            .children(log)
-            .child(foot);
-        Some(gpui::deferred(div().absolute().inset_0().child(card)).into_any_element())
+        // Docked like the sidebar: a fixed-width sheet in a slot the browser widens, clipped
+        // while it slides. Its outer padding stands in for the row's inset on that side.
+        let right = self.side() != SidebarSide::Right;
+        Some(
+            div()
+                .id("agent-panel")
+                .w(px(PANEL_WIDTH))
+                .h_full()
+                .when(right, |d| d.pr(px(INSET)).pl(px(10.)))
+                .when(!right, |d| d.pl(px(INSET)).pr(px(10.)))
+                .pb(px(4.))
+                .flex()
+                .flex_col()
+                .track_focus(&focus)
+                .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| this.on_panel_key(e, window, cx)))
+                .child(header)
+                .child(transcript)
+                .children(log)
+                .child(foot)
+                .into_any_element(),
+        )
     }
 }
 

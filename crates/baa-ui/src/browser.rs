@@ -225,6 +225,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) input_focus: FocusHandle,
     pub(crate) sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
+    /// The Claude panel's docked width; it slides like the sidebar, on the other side.
+    pub(crate) agent_w: Spring,
     /// The hover card's width, so opening the Library in it grows rather than jumps.
     reveal_w: Spring,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
@@ -368,6 +370,7 @@ impl<H: WebHost> Browser<H> {
             input_focus: cx.focus_handle(),
             sidebar_open: true,
             sidebar_w: Spring::new(SIDEBAR_WIDTH),
+            agent_w: Spring::new(0.0),
             reveal_w: Spring::new(SIDEBAR_WIDTH),
             reveal: Spring::quick(0.0),
             reveal_hover: false,
@@ -1074,6 +1077,10 @@ impl<H: WebHost> Render for Browser<H> {
         let docked_w = self.sidebar_w.value().max(0.0);
         let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
         let right = self.side() == SidebarSide::Right;
+        // The Claude panel docks on the side the sidebar is not, as a sheet under the page card.
+        let agent_w = self.agent_w.value().max(0.0);
+        let agent_edge = INSET * (1.0 - agent_w / crate::agent_panel::PANEL_WIDTH).clamp(0.0, 1.0);
+        let agent = self.render_agent_panel(&theme, window, cx);
 
         let header = self.render_header(&theme, cx);
         let root = div()
@@ -1110,8 +1117,8 @@ impl<H: WebHost> Render for Browser<H> {
                     .flex()
                     .when(right, |d| d.flex_row_reverse())
                     .pb(px(INSET))
-                    .when(right, |d| d.pl(px(INSET)).pr(px(edge)))
-                    .when(!right, |d| d.pr(px(INSET)).pl(px(edge)))
+                    .when(right, |d| d.pl(px(agent_edge)).pr(px(edge)))
+                    .when(!right, |d| d.pr(px(agent_edge)).pl(px(edge)))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1120,7 +1127,15 @@ impl<H: WebHost> Render for Browser<H> {
                             .overflow_hidden()
                             .children(docked),
                     )
-                    .child(page),
+                    .child(page)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .h_full()
+                            .w(px(agent_w))
+                            .overflow_hidden()
+                            .children(agent),
+                    ),
             )
             .children(reveal.into_iter().flatten())
             .children(peek)
@@ -1129,7 +1144,6 @@ impl<H: WebHost> Render for Browser<H> {
             .children(popover)
             .children(history)
             .children(self.space_picker.as_ref().map(|p| p.render()))
-            .children(self.render_agent_panel(&theme, window, cx))
             .children(self.render_agent_ask(&theme, cx));
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {

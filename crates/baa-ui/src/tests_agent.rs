@@ -260,3 +260,21 @@ fn clear_today_keeps_driven_tabs(cx: &mut TestAppContext) {
         assert!(b.session.tab(tab).is_some_and(|t| t.archived_at.is_none()));
     });
 }
+
+#[gpui::test]
+fn the_chat_panel_docks_opposite_the_sidebar_and_slides(cx: &mut TestAppContext) {
+    use crate::agent_panel::PANEL_WIDTH;
+    let (b, cx) = browser(cx);
+    b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        assert!(b.agent.panel.open);
+        assert_eq!(b.agent_w.target(), PANEL_WIDTH, "the docked slot widens by the same spring the sidebar uses");
+        assert_ne!(b.side(), baa_model::SidebarSide::Right, "default sidebar is left, so the panel is right");
+    });
+    b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
+    b.read_with(cx, |b, _| {
+        assert!(!b.agent.panel.open);
+        assert_eq!(b.agent_w.target(), 0.0, "closing slides the slot shut rather than dropping it");
+    });
+}
