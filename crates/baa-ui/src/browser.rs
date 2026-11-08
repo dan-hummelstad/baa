@@ -104,6 +104,8 @@ pub(crate) enum MenuKind {
     Extension(String),
     /// The rule above the active Space's Today tabs.
     Today,
+    /// The chat's "Add context": the Space's other tabs.
+    ChatContext,
 }
 
 pub struct Browser<H: WebHost> {

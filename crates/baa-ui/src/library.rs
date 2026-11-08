@@ -11,16 +11,32 @@ use baa_web::{DownloadState, WebHost};
 use gpui::{div, img, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEvent, Window};
 
 use crate::{
-    browser::{feel, host_of, tab_title, Browser, MenuKind, SIDEBAR_WIDTH},
+    browser::{feel, host_of, shadow, tab_title, Browser, MenuKind, SIDEBAR_WIDTH},
     icons::icon,
     input::{Key, TextField},
     motion::Feel,
-    theme::{fade, mix, Theme},
+    theme::{ascii, fade, mix, Theme},
 };
 
+/// The mock's in-between inks: group headers and chips; placeholders and meta lines.
+pub(crate) fn ink_mid(theme: &Theme) -> Hsla {
+    mix(theme.ink_muted, theme.ink, 0.5)
+}
+pub(crate) fn ink_soft(theme: &Theme) -> Hsla {
+    mix(theme.ink_faint, theme.ink_muted, 0.5)
+}
+
+/// The mocks' raised white card (active rail item, chat title, switcher); ASCII Chrome boxes it instead.
+pub(crate) fn raised<E: Styled>(d: E, theme: &Theme) -> E {
+    d.bg(theme.glass_strong)
+        .border_1()
+        .border_color(if ascii() { crate::theme::ascii::frame().into() } else { Hsla { a: 0.79, ..gpui::white() } })
+        .shadow(vec![shadow(Hsla { a: 0.14, ..theme.ink }, 3., 14.)])
+}
+
 /// The sidebar while the Library is open: a section column and a list.
-pub(crate) const LIBRARY_WIDTH: f32 = 384.0;
-const NAV_W: f32 = 92.0;
+pub(crate) const LIBRARY_WIDTH: f32 = 374.0;
+const NAV_W: f32 = 96.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Section {
@@ -197,65 +213,74 @@ impl<H: WebHost> Browser<H> {
             let key = ("library-nav", section as u64);
             let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
             let on = library.section == section;
+            let color = if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) };
             let el = div()
                 .id(("library-nav", section as u64))
-                .h(px(70.))
-                .mx(px(2. * p))
+                .h(px(58.))
+                .mx(px(5. + 2. * p))
                 .flex()
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .gap(px(6.))
+                .gap(px(7.))
                 .rounded(r(12.))
-                .bg(if on { theme.glass_strong } else { fade(theme.hover, h) })
-                .text_size(px(11.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
+                .when(on, |d| raised(d, theme))
+                .when(!on, |d| d.border_1().border_color(gpui::transparent_black()).bg(fade(theme.hover, h)))
+                .text_size(px(10.))
+                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::SEMIBOLD })
+                .text_color(color)
                 .on_click(cx.listener(move |this, _, window, cx| match section {
                     Section::Chat => this.open_chat(window, cx),
                     _ => this.open_library(section, cx),
                 }))
-                .child(icon(name, 22., if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) }))
+                .child(icon(name, 19., color))
                 .child(label);
             feel(el, key, cx)
         };
         let back = self
             .icon_button("library-back", "arrow-left", true, -2., 0., theme, cx)
             .on_click(cx.listener(|this, _, window, cx| this.close_library(window, cx)));
+        // The seam: a lit edge on the rail, and a soft shade falling onto the list.
         let nav = div()
             .w(px(NAV_W))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .pb(px(4.))
+            .border_r_1()
+            .border_color(if ascii() { crate::theme::ascii::rule().into() } else { Hsla { a: 0.26, ..gpui::white() } })
+            .when(!ascii(), |d| {
+                d.child(div().absolute().top_0().bottom_0().right(px(-23.)).w(px(22.)).bg(gpui::linear_gradient(
+                    90.,
+                    gpui::linear_color_stop(Hsla { a: 0.07, ..theme.ink }, 0.),
+                    gpui::linear_color_stop(Hsla { a: 0., ..theme.ink }, 1.),
+                )))
+            })
             .child(
                 div()
                     .flex_1()
                     .flex()
                     .flex_col()
                     .justify_center()
-                    .gap(px(8.))
+                    .gap(px(10.))
                     .child(nav_item(Section::Downloads, "circle-arrow-down", "Downloads", cx))
                     .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx))
                     .child(nav_item(Section::Chat, "message-circle", "Chat", cx)),
             )
-            .child(div().h(px(32.)).flex().items_center().child(back));
+            .child(div().h(px(32.)).flex().items_center().justify_center().child(back));
 
         let library_box = |body: AnyElement| {
             div()
                 .w(px(LIBRARY_WIDTH))
                 .h_full()
-                .pl(px(10.))
-                .pr(px(12.))
-                .pt(px(4.))
                 .flex()
-                .gap(px(10.))
                 // Comes in from the left, where it sits before the first Space.
                 .ml(px(-40. * (1. - t)))
                 .opacity(t.clamp(0., 1.))
                 .child(nav)
-                .child(body)
+                .child(div().flex_1().min_w_0().h_full().pl(px(10.)).pr(px(16.)).flex().child(body))
         };
         let placeholder = match library.section {
             Section::Downloads => "Search Downloads…",
@@ -272,19 +297,19 @@ impl<H: WebHost> Browser<H> {
             .id("library-search")
             .flex_1()
             .min_w_0()
-            .h(px(34.))
+            .h(px(30.))
             .px(px(10.))
             .flex()
             .items_center()
-            .gap(px(8.))
-            .rounded(r(10.))
+            .gap(px(7.))
+            .rounded(r(9.))
             .bg(theme.glass)
-            .text_size(px(13.))
+            .text_size(px(12.5))
             .track_focus(&self.library_focus)
             .on_key_down(cx.listener(Self::on_library_key))
             .on_click(cx.listener(|this, _, window, cx| window.focus(&this.library_focus, cx)))
-            .child(icon("search", 15., theme.ink_muted))
-            .child(library.search.render(placeholder, theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }));
+            .child(icon("search", 14., ink_soft(theme)))
+            .child(library.search.render(placeholder, theme.ink, ink_soft(theme), Hsla { a: 0.3, ..theme.accent }));
         let filter = (library.section == Section::Downloads).then(|| {
             let key = ("library-filter", 0);
             let h = self.motion.get(key, Feel::Hover);
@@ -294,20 +319,21 @@ impl<H: WebHost> Browser<H> {
             feel(
                 div()
                     .id("library-filter")
-                    .h(px(34.))
-                    .px(px(10.))
+                    .h(px(30.))
+                    .px(px(11.))
                     .flex()
                     .flex_none()
                     .items_center()
                     .gap(px(6.))
-                    .rounded(r(10.))
+                    .rounded(r(9.))
                     .bg(mix(theme.glass, theme.glass_strong, 0.5 * h))
-                    .text_size(px(13.))
-                    .text_color(theme.ink)
+                    .text_size(px(12.5))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(ink_mid(theme))
                     .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
                         this.open_menu(MenuKind::LibraryFilter, e.position(), window, cx)
                     }))
-                    .child(icon("list-filter", 15., theme.ink_muted))
+                    .child(icon("list-filter", 14., theme.ink_muted))
                     .child(label),
                 key,
                 cx,
@@ -325,8 +351,7 @@ impl<H: WebHost> Browser<H> {
             .h_full()
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .child(div().flex().gap(px(6.)).child(search).children(filter))
+            .child(div().flex().gap(px(8.)).child(search).children(filter))
             .child(
                 div()
                     .id("library-list")
@@ -359,12 +384,12 @@ impl<H: WebHost> Browser<H> {
 
     fn group_header(label: String, theme: &Theme) -> AnyElement {
         div()
-            .pt(px(10.))
+            .pt(px(18.))
             .pb(px(4.))
-            .px(px(8.))
+            .px(px(6.))
             .text_size(px(12.))
             .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_color(theme.ink_muted)
+            .text_color(ink_mid(theme))
             .child(label)
             .into_any_element()
     }
@@ -382,26 +407,26 @@ impl<H: WebHost> Browser<H> {
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
         let el = div()
             .id(key)
-            .h(px(50.))
+            .h(px(49.))
             .px(px(8.))
             .mx(px(2. * p))
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(10.))
-            .rounded(r(10.))
+            .gap(px(11.))
+            .rounded(r(8.))
             .bg(fade(theme.hover, h))
             .opacity(if dim { 0.5 } else { 1. })
-            .child(div().size(px(32.)).flex_none().flex().items_center().justify_center().child(thumb))
+            .child(div().size(px(30.)).flex_none().flex().items_center().justify_center().child(thumb))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(1.))
-                    .child(div().truncate().text_size(px(13.5)).font_weight(gpui::FontWeight::MEDIUM).child(title))
-                    .child(div().truncate().text_size(px(12.)).text_color(theme.ink_muted).child(detail)),
+                    .gap(px(2.))
+                    .child(div().truncate().text_size(px(12.5)).font_weight(gpui::FontWeight::MEDIUM).child(title))
+                    .child(div().truncate().text_size(px(11.5)).text_color(theme.ink_muted).child(detail)),
             );
         feel(el, key, cx)
     }
@@ -432,7 +457,7 @@ impl<H: WebHost> Browser<H> {
             let row = self
                 .library_row(
                     ("library-running", id),
-                    icon(icon_name, 24., theme.ink_muted).into_any_element(),
+                    icon(icon_name, 19., theme.ink_muted).into_any_element(),
                     (file_name(&d.path), crate::prompts::bytes(d.received_bytes)),
                     false,
                     theme,
@@ -460,7 +485,7 @@ impl<H: WebHost> Browser<H> {
                     .child(row)
                     .child(
                         div()
-                            .mx(px(50.))
+                            .mx(px(49.))
                             .mb(px(4.))
                             .h(px(3.))
                             .rounded(r(2.))
@@ -481,16 +506,16 @@ impl<H: WebHost> Browser<H> {
             let path = PathBuf::from(&d.path);
             let present = path.exists();
             let (kind, _, icon_name) = file_kind(&d.path);
-            let fallback = move || icon(icon_name, 24., Hsla { a: 0.6, ..gpui::black() }).into_any_element();
+            let fallback = move || icon(icon_name, 19., Hsla { a: 0.6, ..gpui::black() }).into_any_element();
             let thumb = if kind == Kind::Images && present {
                 img(path.clone())
                     .size(px(30.))
-                    .rounded(r(5.))
+                    .rounded(r(6.))
                     .object_fit(gpui::ObjectFit::Cover)
                     .with_fallback(fallback)
                     .into_any_element()
             } else {
-                icon(icon_name, 24., theme.ink_muted).into_any_element()
+                icon(icon_name, 19., theme.ink_muted).into_any_element()
             };
             let detail = if present { detail(&d.path, &d.url) } else { "Deleted".into() };
             let (open, menu_path, url) = (path.clone(), d.path.clone(), d.url.clone());
@@ -534,10 +559,21 @@ impl<H: WebHost> Browser<H> {
                 out.push(Self::group_header(group.clone(), theme));
                 last_group = group;
             }
-            let thumb = favicon
-                .and_then(|f| self.favicons.get(&f).cloned())
-                .map(|image| img(image).size(px(18.)).rounded(r(4.)).into_any_element())
-                .unwrap_or_else(|| icon("globe", 18., theme.ink_muted).into_any_element());
+            // The mock's site tile: the favicon on a raised square.
+            let thumb = div()
+                .size(px(30.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(r(6.))
+                .bg(theme.glass_strong)
+                .child(
+                    favicon
+                        .and_then(|f| self.favicons.get(&f).cloned())
+                        .map(|image| img(image).size(px(18.)).rounded(r(4.)).into_any_element())
+                        .unwrap_or_else(|| icon("globe", 18., theme.ink_muted).into_any_element()),
+                )
+                .into_any_element();
             let row = self
                 .library_row(("library-archived", id.0), thumb, (title, host_of(&url)), false, theme, cx)
                 .on_click(cx.listener(move |this, _, window, cx| {

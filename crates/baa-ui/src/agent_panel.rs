@@ -9,18 +9,19 @@ use std::{
     time::SystemTime,
 };
 
+use baa_model::TabId;
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt};
-use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, ScrollHandle, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, Hsla, ScrollHandle, SharedString, Window};
 use serde_json::{json, Value};
 
 use crate::{
-    browser::Browser,
-    library::Section,
+    browser::{cut_left, host_of, shadow, tab_title, Browser},
     icons::icon,
     input::{Key, TextField},
+    library::{ink_mid, ink_soft, raised, Section},
     settings::Tab,
-    theme::{r, surface, Theme},
+    theme::{ascii, fade, mix, r, Theme},
 };
 
 const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
@@ -41,6 +42,15 @@ enum Msg {
     Closed,
 }
 
+/// A chat the switcher can go back to.
+#[derive(Default)]
+pub(crate) struct Chat {
+    transcript: Vec<Entry>,
+    session: Option<String>,
+    at: u64,
+    host: String,
+}
+
 #[derive(Default)]
 pub(crate) struct Panel {
     focus: Option<FocusHandle>,
@@ -55,6 +65,18 @@ pub(crate) struct Panel {
     /// Bumped by every kill, so a reader task of an older child stops.
     generation: u64,
     scroll: ScrollHandle,
+    /// `claude`'s id for this chat, so a switch or a restart resumes it.
+    session: Option<String>,
+    /// When the chat last had a message, and the site it began on.
+    at: u64,
+    host: String,
+    /// The run's other chats, newest first.
+    // ponytail: in memory only, so private mode needs no rule; persist through baa-model when chats must outlive a launch.
+    chats: Vec<Chat>,
+    switcher: bool,
+    /// Tabs added with "Add context"; the active tab counts unless `hide_active`.
+    context: Vec<TabId>,
+    hide_active: bool,
 }
 
 /// One stream-json line from the child as transcript entries; anything unknown is nothing.
@@ -109,7 +131,7 @@ fn needs_login(text: &str) -> bool {
 /// Arguments after the binary. `--mcp-config`, `--allowedTools` and `--tools` are variadic, so each is
 /// followed by another flag, never by a positional; the prompt comes over stdin. `nonce` goes in the
 /// MCP server's own environment, so only `baa mcp` gets it, not `claude`'s other children.
-fn argv(exe: &Path, nonce: &str) -> Vec<String> {
+fn argv(exe: &Path, nonce: &str, resume: Option<&str>) -> Vec<String> {
     let config = json!({"mcpServers": {"baa": {"type": "stdio", "command": exe.to_string_lossy(), "args": ["mcp"], "env": {"BAA_AGENT_NONCE": nonce}}}});
     [
         "-p",
@@ -130,8 +152,50 @@ fn argv(exe: &Path, nonce: &str) -> Vec<String> {
         "--setting-sources",
         "user",
     ]
+    .into_iter()
+    .chain(resume.into_iter().flat_map(|id| ["--resume", id]))
     .map(String::from)
-    .into()
+    .collect()
+}
+
+/// The session id on a stream-json line. It becomes an argument, so only a plain id is taken.
+fn session_of(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let id = v["session_id"].as_str()?;
+    let plain = !id.is_empty() && !id.starts_with('-') && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    plain.then(|| id.to_string())
+}
+
+/// What Claude is told about the context chips: tab ids for its tools, never page text.
+fn with_context(text: &str, tabs: &[u64]) -> String {
+    if tabs.is_empty() {
+        return text.to_string();
+    }
+    let ids: Vec<String> = tabs.iter().map(|t| format!("tab {t}")).collect();
+    format!("{text}\n\n(Context: {} in baa.)", ids.join(", "))
+}
+
+/// The switcher's name for a chat: its first message, first line.
+fn title_of(transcript: &[Entry]) -> String {
+    transcript
+        .iter()
+        .find_map(|e| match e {
+            Entry::User(t) => t.lines().next().map(str::to_string),
+            _ => None,
+        })
+        .unwrap_or_else(|| "New chat".into())
+}
+
+/// "2h ago · dailyread.news".
+fn meta(now: u64, then: u64, host: &str) -> String {
+    let when = match now.saturating_sub(then) {
+        _ if then == 0 => String::new(),
+        0..60 => "Just now".into(),
+        s @ 60..3600 => format!("{}m ago", s / 60),
+        s @ 3600..86_400 => format!("{}h ago", s / 3600),
+        _ => crate::library::ago(now as i64, then as i64),
+    };
+    [when.as_str(), host].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
 fn user_line(text: &str) -> String {
@@ -202,8 +266,16 @@ impl<H: WebHost> Browser<H> {
         p.field.text.clear();
         p.busy = true;
         p.not_logged_in = false;
+        p.switcher = false;
         p.transcript.push(Entry::User(text.clone()));
         p.scroll.scroll_to_bottom();
+        p.at = baa_model::now();
+        let context = self.chat_context();
+        let p = &mut self.agent.panel;
+        if p.host.is_empty() {
+            p.host = context.first().and_then(|id| self.session.tab(*id)).map(|t| host_of(&t.url)).unwrap_or_default();
+        }
+        let text = with_context(&text, &context.iter().map(|t| t.0).collect::<Vec<_>>());
         if p.stdin.is_some() {
             return self.write_agent_line(&text, cx);
         }
@@ -237,8 +309,9 @@ impl<H: WebHost> Browser<H> {
         let Some(path) = path else {
             p.not_found = true;
             p.busy = false;
-            p.field.text = first.to_string();
-            p.transcript.pop();
+            if let Some(Entry::User(t)) = p.transcript.pop() {
+                p.field.text = t;
+            }
             return cx.notify();
         };
         p.not_found = false;
@@ -265,7 +338,7 @@ impl<H: WebHost> Browser<H> {
         // The hello of the `baa mcp` this child starts: lets it in without the connect sheet, once.
         let nonce = crate::agent::secret();
         let mut child = Command::new(claude)
-            .args(argv(&exe, &nonce))
+            .args(argv(&exe, &nonce, self.agent.panel.session.as_deref()))
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -317,6 +390,9 @@ impl<H: WebHost> Browser<H> {
         match msg {
             Msg::Line(line) => {
                 let p = &mut self.agent.panel;
+                if let Some(id) = session_of(&line) {
+                    p.session = Some(id);
+                }
                 for e in parse_line(&line) {
                     match e {
                         Entry::Done => p.busy = false,
@@ -355,19 +431,79 @@ impl<H: WebHost> Browser<H> {
     }
 
     fn on_panel_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let k = &event.keystroke;
+        if k.key == "n" && k.modifiers.platform && !k.modifiers.shift && !k.modifiers.alt && !k.modifiers.control {
+            cx.stop_propagation();
+            return self.switch_chat(None, cx);
+        }
         let key = self.agent.panel.field.handle(&event.keystroke, cx);
         match key {
             Key::Submit if !event.is_held => self.send_agent_message(cx),
+            Key::Cancel if self.agent.panel.switcher => self.agent.panel.switcher = false,
             Key::Cancel => self.close_library(window, cx),
             _ => {}
         }
         cx.notify();
     }
 
-    /// The Library's Chat section body.
+    /// The tabs this chat points Claude at: the active tab unless dismissed, then any added.
+    pub(crate) fn chat_context(&self) -> Vec<TabId> {
+        let p = &self.agent.panel;
+        let mut out: Vec<TabId> = self.active_tab().filter(|_| !p.hide_active).into_iter().collect();
+        for id in &p.context {
+            if !out.contains(id) && self.session.tab(*id).is_some() {
+                out.push(*id);
+            }
+        }
+        out
+    }
+
+    pub(crate) fn add_chat_context(&mut self, id: TabId, cx: &mut Context<Self>) {
+        let active = self.active_tab();
+        let p = &mut self.agent.panel;
+        if Some(id) == active {
+            p.hide_active = false;
+        } else if !p.context.contains(&id) {
+            p.context.push(id);
+        }
+        cx.notify();
+    }
+
+    fn close_switcher(&mut self, _: &gpui::MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.agent.panel.switcher) {
+            cx.notify();
+        }
+    }
+
+    /// Shelves the current chat and opens chat `i` of the switcher, or a new one.
+    fn switch_chat(&mut self, i: Option<usize>, cx: &mut Context<Self>) {
+        self.kill_agent_child();
+        let p = &mut self.agent.panel;
+        let next = i.filter(|i| *i < p.chats.len()).map(|i| p.chats.remove(i)).unwrap_or_default();
+        let cur = Chat {
+            transcript: std::mem::replace(&mut p.transcript, next.transcript),
+            session: std::mem::replace(&mut p.session, next.session),
+            at: std::mem::replace(&mut p.at, next.at),
+            host: std::mem::replace(&mut p.host, next.host),
+        };
+        if cur.transcript.iter().any(|e| matches!(e, Entry::User(_))) {
+            p.chats.insert(0, cur);
+        }
+        p.switcher = false;
+        p.context.clear();
+        p.hide_active = false;
+        p.not_logged_in = false;
+        p.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// The Library's Chat section body (pen.dev "baa · Side Panel — Chat").
     pub(crate) fn render_agent_panel(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = &self.agent.panel;
         let focus = p.focus.clone()?;
+        let (mid, soft) = (ink_mid(theme), ink_soft(theme));
+        // The mock's milky whites on the gradient; ASCII Chrome's navy boxes.
+        let milk = |a: f32| if ascii() { theme.glass_strong } else { Hsla { a, ..gpui::white() } };
         let btn = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -376,33 +512,131 @@ impl<H: WebHost> Browser<H> {
                 .flex()
                 .items_center()
                 .rounded(r(6.))
-                .bg(surface::key())
+                .bg(theme.glass_strong)
                 .text_size(px(12.))
-                .text_color(surface::ink())
-                .hover(|d| d.bg(surface::line()))
+                .text_color(theme.ink)
+                .hover(|d| d.bg(theme.hover))
                 .child(label)
+        };
+        let icon_btn = |id: &'static str, name: &'static str, size: f32| {
+            div()
+                .id(id)
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(r(6.))
+                .hover(|d| d.bg(theme.hover))
+                .child(icon(name, size, theme.ink_muted))
         };
         let running = p.child.is_some() || self.agent.connected();
         let header = div()
+            .flex_none()
+            .relative()
+            .mt(px(6.))
+            .h(px(34.))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .px(px(12.))
-            .py(px(8.))
-            .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Claude"))
-            .when(running, |d| d.child(btn("agent-stop", "Stop").on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))))
+            .justify_center()
+            .child(
+                raised(
+                    div()
+                        .id("chat-title")
+                        .max_w(px(170.))
+                        .h(px(29.))
+                        .px(px(11.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded(r(9.)),
+                    theme,
+                )
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.agent.panel.switcher ^= true;
+                    cx.notify();
+                }))
+                .child(div().min_w_0().truncate().text_size(px(14.)).font_weight(gpui::FontWeight::BOLD).child(title_of(&p.transcript)))
+                .child(icon(if p.switcher { "chevron-up" } else { "chevron-down" }, 14., theme.ink_muted)),
+            )
             .child(
                 div()
-                    .id("agent-close")
-                    .size(px(22.))
+                    .absolute()
+                    .right_0()
+                    .flex()
+                    .gap(px(2.))
+                    .when(running, |d| d.child(icon_btn("agent-stop", "square", 12.).on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))))
+                    .child(icon_btn("agent-close", "x", 16.).on_click(cx.listener(|this, _, window, cx| this.close_library(window, cx)))),
+            );
+
+        let now = baa_model::now();
+        let switcher = p.switcher.then(|| {
+            let row = |id: usize, title: String, meta: String, current: bool| {
+                div()
+                    .id(("chat-row", id))
+                    .px(px(14.))
+                    .py(px(7.))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(r(6.))
-                    .hover(|d| d.bg(surface::key()))
-                    .on_click(cx.listener(|this, _, window, cx| this.close_library(window, cx)))
-                    .child(icon("x", 13., surface::icon().into())),
-            );
+                    .gap(px(10.))
+                    .when(current, |d| d.bg(fade(theme.ink, 0.04)))
+                    .hover(|d| d.bg(fade(theme.ink, 0.06)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .font_weight(if current { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::MEDIUM })
+                                    .child(title),
+                            )
+                            .when(!meta.is_empty(), |d| d.child(div().truncate().text_size(px(10.5)).text_color(soft).child(meta))),
+                    )
+                    .when(current, |d| d.child(icon("check", 14., theme.ink)))
+            };
+            let has_current = p.transcript.iter().any(|e| matches!(e, Entry::User(_)));
+            raised(div().id("chat-switcher").absolute().top(px(46.)).left_0().right_0().py(px(7.)).flex().flex_col().rounded(r(14.)), theme)
+                .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 8., 28.)])
+                .occlude()
+                .child(
+                    div()
+                        .px(px(14.))
+                        .pt(px(6.))
+                        .pb(px(7.))
+                        .text_size(px(9.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(soft)
+                        .child("RECENT CHATS"),
+                )
+                .when(has_current, |d| d.child(row(0, title_of(&p.transcript), meta(now, p.at, &p.host), true)))
+                .children(p.chats.iter().take(8).enumerate().map(|(i, c)| {
+                    row(i + 1, title_of(&c.transcript), meta(now, c.at, &c.host), false)
+                        .on_click(cx.listener(move |this, _, _, cx| this.switch_chat(Some(i), cx)))
+                }))
+                .when(!has_current && p.chats.is_empty(), |d| {
+                    d.child(div().px(px(14.)).py(px(7.)).text_size(px(12.5)).text_color(theme.ink_muted).child("No other chats yet"))
+                })
+                .child(div().my(px(6.)).h(px(1.)).bg(theme.divider))
+                .child(
+                    div()
+                        .id("chat-new")
+                        .px(px(14.))
+                        .py(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(9.))
+                        .hover(|d| d.bg(fade(theme.ink, 0.06)))
+                        .on_click(cx.listener(|this, _, _, cx| this.switch_chat(None, cx)))
+                        .child(icon("plus", 15., theme.ink))
+                        .child(div().flex_1().text_size(px(12.5)).font_weight(gpui::FontWeight::SEMIBOLD).child("New chat"))
+                        .child(div().text_size(px(10.5)).text_color(soft).child("⌘N")),
+                )
+        });
 
         let transcript = div()
             .id("agent-transcript")
@@ -410,21 +644,37 @@ impl<H: WebHost> Browser<H> {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&p.scroll)
-            .px(px(12.))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::close_switcher))
+            .pt(px(16.))
+            .pb(px(12.))
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(14.))
             .text_size(px(12.5))
+            .line_height(gpui::relative(1.5))
             .children(p.transcript.iter().enumerate().filter_map(|(i, e)| {
-                let row = div().id(("agent-entry", i));
+                let row = div().id(("agent-entry", i)).flex_none();
                 Some(match e {
-                    Entry::User(t) => row.p(px(8.)).rounded(r(8.)).bg(surface::key()).child(SharedString::from(t.clone())),
-                    Entry::Assistant(t) => row.text_color(surface::ink()).child(SharedString::from(t.clone())),
+                    Entry::User(t) => row.flex().justify_end().child(
+                        div()
+                            .max_w(gpui::relative(0.8))
+                            .px(px(13.))
+                            .py(px(10.))
+                            .rounded_tl(r(14.))
+                            .rounded_tr(r(14.))
+                            .rounded_bl(r(14.))
+                            .rounded_br(r(4.))
+                            .bg(milk(0.56))
+                            .text_color(theme.ink)
+                            .child(SharedString::from(t.clone())),
+                    ),
+                    Entry::Assistant(t) => row.px(px(4.)).text_color(mix(theme.ink_muted, theme.ink, 0.7)).child(SharedString::from(t.clone())),
                     Entry::ToolUse { name, summary } => row
+                        .px(px(4.))
                         .text_size(px(11.5))
-                        .text_color(surface::muted())
+                        .text_color(soft)
                         .child(SharedString::from(format!("{name} {summary}"))),
-                    Entry::Notice(t) => row.text_color(theme.accent).child(SharedString::from(t.clone())),
+                    Entry::Notice(t) => row.px(px(4.)).text_color(theme.accent).child(SharedString::from(t.clone())),
                     Entry::Done => return None,
                 })
             }));
@@ -432,14 +682,14 @@ impl<H: WebHost> Browser<H> {
         let log = (!self.agent.activity.is_empty()).then(|| {
             div()
                 .id("agent-activity")
+                .flex_none()
                 .max_h(px(110.))
                 .overflow_y_scroll()
-                .px(px(12.))
                 .py(px(6.))
                 .border_t_1()
-                .border_color(surface::border())
+                .border_color(theme.divider)
                 .text_size(px(11.))
-                .text_color(surface::muted())
+                .text_color(soft)
                 .children(self.agent.activity.iter().rev().take(30).enumerate().map(|(i, a)| {
                     let at = a.at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
                     // UTC: no timezone database here.
@@ -449,40 +699,123 @@ impl<H: WebHost> Browser<H> {
                 }))
         });
 
-        let note = |text: &'static str| div().text_size(px(12.5)).text_color(surface::ink()).child(text);
-        let foot = div().px(px(12.)).py(px(10.)).border_t_1().border_color(surface::border()).flex().flex_col().gap(px(6.));
+        let note = |text: &'static str| div().text_size(px(12.5)).text_color(theme.ink).child(text);
+        let foot = div()
+            .flex_none()
+            .pt(px(9.))
+            .border_t_1()
+            .border_color(theme.divider)
+            .flex()
+            .flex_col()
+            .gap(px(9.))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(Self::close_switcher));
         let foot = if !self.settings.claude.enabled {
             foot.child(note("Claude is off")).child(btn("agent-open-settings", "Open Settings").on_click(cx.listener(|this, _, _, cx| {
                 this.open_settings_at(Some(Tab::Claude), None, cx)
             })))
         } else if p.not_found {
             foot.child(note("Install Claude Code"))
-                .child(div().text_size(px(11.5)).font_family("Menlo").text_color(surface::muted()).child(INSTALL))
+                .child(div().text_size(px(11.5)).font_family("Menlo").text_color(theme.ink_muted).child(INSTALL))
                 .child(note("or choose its path in Settings → Claude"))
                 .child(btn("agent-open-settings", "Choose path in Settings").on_click(cx.listener(|this, _, _, cx| {
                     this.open_settings_at(Some(Tab::Claude), None, cx)
                 })))
         } else {
-            foot.when(p.not_logged_in, |d| d.child(note("Run `claude` once in Terminal to log in")))
-                .child(
+            let active = self.active_tab();
+            let chips = self.chat_context().into_iter().filter_map(|id| {
+                let tab = self.session.tab(id)?;
+                let fav = tab
+                    .favicon
+                    .as_ref()
+                    .and_then(|f| self.favicons.get(f).cloned())
+                    .map(|image| gpui::img(image).size(px(11.)).rounded(r(3.)).into_any_element())
+                    .unwrap_or_else(|| icon("globe", 11., theme.ink_muted).into_any_element());
+                let host = host_of(&tab.url);
+                Some(
                     div()
-                        .h(px(30.))
+                        .id(("chat-context", id.0))
+                        .flex_none()
+                        .max_w(px(170.))
+                        .h(px(21.))
                         .px(px(8.))
                         .flex()
                         .items_center()
-                        .overflow_hidden()
+                        .gap(px(6.))
                         .rounded(r(7.))
+                        .bg(milk(0.54))
+                        .child(fav)
+                        .child(cut_left(div().min_w_0().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(mid)).child(
+                            if host.is_empty() { SharedString::from(tab_title(tab).to_string()) } else { host.into() },
+                        ))
+                        .child(
+                            div()
+                                .id(("chat-context-x", id.0))
+                                .flex_none()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let p = &mut this.agent.panel;
+                                    p.context.retain(|t| *t != id);
+                                    if Some(id) == active {
+                                        p.hide_active = true;
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(icon("x", 10., soft)),
+                        ),
+                )
+            });
+            let add = div()
+                .id("chat-add-context")
+                .flex_none()
+                .h(px(21.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .rounded(r(7.))
+                .bg(theme.glass)
+                .hover(|d| d.bg(theme.hover))
+                .text_size(px(11.))
+                .text_color(theme.ink_muted)
+                .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| {
+                    this.open_menu(crate::browser::MenuKind::ChatContext, e.position(), window, cx)
+                }))
+                .child(icon("plus", 10., theme.ink_muted))
+                .child("Add context");
+            let ready = !p.field.text.trim().is_empty() && !p.busy;
+            foot.when(p.not_logged_in, |d| d.child(note("Run `claude` once in Terminal to log in")))
+                .child(div().flex().flex_wrap().gap(px(6.)).children(chips).child(add))
+                .child(
+                    div()
+                        .h(px(38.))
+                        .px(px(11.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .rounded(r(11.))
                         .border_1()
-                        .border_color(theme.accent)
-                        .bg(surface::key())
+                        .border_color(if ascii() { theme.accent } else { Hsla { a: 0.77, ..gpui::white() } })
+                        .bg(milk(0.68))
                         .text_size(px(12.5))
-                        .child(p.field.render("Ask Claude", surface::ink().into(), surface::muted().into(), gpui::Hsla { a: 0.25, ..theme.accent })),
+                        .child(div().flex_1().min_w_0().overflow_hidden().child(p.field.render(
+                            "Ask baa…",
+                            theme.ink,
+                            soft,
+                            Hsla { a: 0.25, ..theme.accent },
+                        )))
+                        .child(
+                            div()
+                                .id("agent-send")
+                                .flex_none()
+                                .on_click(cx.listener(|this, _, _, cx| this.send_agent_message(cx)))
+                                .child(icon("arrow-up", 16., if ready { theme.ink } else { theme.ink_muted })),
+                        ),
                 )
         };
 
         Some(
             div()
                 .id("agent-panel")
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .h_full()
@@ -494,6 +827,7 @@ impl<H: WebHost> Browser<H> {
                 .child(transcript)
                 .children(log)
                 .child(foot)
+                .children(switcher)
                 .into_any_element(),
         )
     }
@@ -531,7 +865,8 @@ mod tests {
 
     #[test]
     fn argv_keeps_variadic_flags_apart_and_has_no_positional_prompt() {
-        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"), "n0nce");
+        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"), "n0nce", Some("5f1c-aa"));
+        assert_eq!(a[a.len() - 2..], ["--resume", "5f1c-aa"]);
         let at = |f: &str| a.iter().position(|x| x == f).unwrap_or_else(|| panic!("{f} missing"));
         assert_eq!(a[at("--tools") + 1], "");
         assert_eq!(a[at("--permission-prompt-tool") + 1], "mcp__baa__approve");
@@ -543,6 +878,32 @@ mod tests {
         let cfg: Value = serde_json::from_str(&a[at("--mcp-config") + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["baa"]["args"][0], "mcp");
         assert_eq!(cfg["mcpServers"]["baa"]["env"]["BAA_AGENT_NONCE"], "n0nce", "only the MCP server gets the nonce");
+    }
+
+    #[test]
+    fn only_plain_session_ids_become_arguments() {
+        assert_eq!(session_of(r#"{"type":"system","session_id":"9a1e-77b0"}"#).as_deref(), Some("9a1e-77b0"));
+        for bad in ["--mcp-config", "a b", "../x", ""] {
+            assert_eq!(session_of(&json!({"session_id": bad}).to_string()), None, "{bad:?}");
+        }
+        assert_eq!(session_of("not json"), None);
+    }
+
+    #[test]
+    fn context_names_tab_ids_only() {
+        assert_eq!(with_context("hi", &[]), "hi");
+        assert_eq!(with_context("hi", &[12, 40]), "hi\n\n(Context: tab 12, tab 40 in baa.)");
+    }
+
+    #[test]
+    fn switcher_rows_read_like_the_mock() {
+        let t = vec![Entry::Assistant("x".into()), Entry::User("Lofoten trip plan\nmore".into())];
+        assert_eq!(title_of(&t), "Lofoten trip plan");
+        assert_eq!(title_of(&[]), "New chat");
+        let now = 100 * 86_400;
+        assert_eq!(meta(now, now - 2 * 3600, "dailyread.news"), "2h ago · dailyread.news");
+        assert_eq!(meta(now, now - 86_400, ""), "Yesterday");
+        assert_eq!(meta(now, 0, "a.com"), "a.com");
     }
 
     #[test]

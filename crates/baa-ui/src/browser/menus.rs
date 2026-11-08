@@ -255,6 +255,22 @@ impl<H: WebHost> Browser<H> {
                     Box::new(|this, window, cx| this.open_bar(Mode::NewTab, window, cx)),
                 ));
             }
+            MenuKind::ChatContext => {
+                let shown = self.chat_context();
+                let space = self.active_space().map(|s| s.id);
+                let tabs: Vec<(TabId, String)> = space
+                    .into_iter()
+                    .flat_map(|s| self.session.space_tabs(s))
+                    .filter(|t| !shown.contains(&t.id))
+                    .map(|t| (t.id, tab_title(t).to_string()))
+                    .collect();
+                if tabs.is_empty() {
+                    items.push(MenuEntry::note("No other tabs in this Space"));
+                }
+                for (id, title) in tabs {
+                    items.push(MenuEntry::item(title, Box::new(move |this, _, cx| this.add_chat_context(id, cx))));
+                }
+            }
             MenuKind::Today => {
                 items.push(MenuEntry::item("Clear Today", Box::new(|this, window, cx| this.clear_today(window, cx))));
                 items.push(MenuEntry::item(
