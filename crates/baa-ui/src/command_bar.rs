@@ -75,10 +75,11 @@ pub enum Command {
     SetUpPasswords,
     ClearToday,
     Archive,
+    SplitView,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 30] = [
+const COMMANDS: [(Command, &str); 31] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -109,6 +110,7 @@ const COMMANDS: [(Command, &str); 30] = [
     (Command::SetUpPasswords, "Password Manager Extensions"),
     (Command::ClearToday, "Clear Today"),
     (Command::Archive, "Archived Tabs"),
+    (Command::SplitView, "Split View"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -134,6 +136,7 @@ impl Command {
             Command::Settings => Box::new(actions::OpenSettings),
             Command::ClearToday => Box::new(actions::ClearToday),
             Command::Archive => Box::new(actions::ShowArchive),
+            Command::SplitView => Box::new(actions::SplitView),
             _ => return None,
         })
     }
@@ -163,6 +166,7 @@ impl Command {
             Command::ImportFromArc => "import",
             Command::SetUpPasswords => "key-round",
             Command::ClearToday | Command::Archive => "archive",
+            Command::SplitView => "columns-2",
             _ => "sliders-horizontal",
         }
     }

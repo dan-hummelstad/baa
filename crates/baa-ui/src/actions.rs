@@ -48,10 +48,9 @@ gpui::actions!(
         ClearToday,
         ShowArchive,
         CycleEnvironment,
+        SplitView,
     ]
 );
-// ponytail: split view (§8) is milestone 5; its actions are added with its view
-// so the keymap never binds a key to nothing.
 
 /// 0-based index into the active Space's tabs (pinned first, then Today).
 #[derive(

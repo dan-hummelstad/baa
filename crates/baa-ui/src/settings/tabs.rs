@@ -522,6 +522,7 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Reader mode", Box::new(ReaderMode)),
         ("Picture in picture", Box::new(PictureInPicture)),
         ("Mute tab", Box::new(MuteTab)),
+        ("Split view", Box::new(SplitView)),
         ("Downloads", Box::new(ShowDownloads)),
         ("History", Box::new(ShowHistory)),
         ("Clear Today", Box::new(ClearToday)),

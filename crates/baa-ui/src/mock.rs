@@ -54,6 +54,8 @@ pub struct MockHost {
 pub struct MockPage {
     pub url: RefCell<String>,
     pub visible: Cell<bool>,
+    /// When it was last shown, counting every page's `set_visible(true)`: Chromium's active tab is the last.
+    pub shown_at: Cell<u64>,
     pub zoom: Cell<f64>,
     pub radius: Cell<f32>,
     pub square: Cell<u8>,
@@ -132,7 +134,14 @@ impl PageHandle for MockPage {
         self.answers.borrow_mut().push(format!("gesture {}", script.len()));
     }
     fn set_visible(&self, visible: bool) {
+        thread_local!(static SHOWS: Cell<u64> = const { Cell::new(0) });
         self.visible.set(visible);
+        if visible {
+            self.shown_at.set(SHOWS.with(|n| {
+                n.set(n.get() + 1);
+                n.get()
+            }));
+        }
     }
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -231,6 +240,7 @@ impl WebHost for MockHost {
         cx.new(|cx| MockPage {
             url: RefCell::new(url.into()),
             visible: Cell::new(true),
+            shown_at: Cell::new(0),
             zoom: Cell::new(1.0),
             radius: Cell::new(8.0),
             square: Cell::new(0),

@@ -49,6 +49,8 @@ impl<H: WebHost> Browser<H> {
                     if self.page_state.entered {
                         window.toggle_fullscreen();
                     }
+                    // Other split panes are native views: they would sit over the page.
+                    self.show_pages(cx);
                 }
             }
             PageEvent::Fullscreen(false) if self.fullscreen == Some(id) => self.end_fullscreen(false, window, cx),
@@ -94,6 +96,7 @@ impl<H: WebHost> Browser<H> {
         if std::mem::take(&mut self.page_state.entered) && window.is_fullscreen() {
             window.toggle_fullscreen();
         }
+        self.show_pages(cx);
     }
 
     /// The page alone, filling the window; `None` outside page fullscreen.

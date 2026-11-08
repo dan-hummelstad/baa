@@ -13,6 +13,7 @@
       "ctrl-alt-right": "baa::NextSpace",
       "ctrl-alt-left": "baa::PrevSpace",
       "cmd-d": "baa::TogglePin",
+      "ctrl-shift-=": "baa::SplitView",
       "cmd-f": "baa::Find",
       "cmd-r": "baa::Reload",
       "cmd-=": "baa::ZoomIn",

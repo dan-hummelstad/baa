@@ -110,6 +110,26 @@ impl<H: WebHost> Browser<H> {
                         Box::new(move |this, window, cx| this.new_folder(Some(id), None, window, cx)),
                     ));
                 }
+                let in_split = self.session.spaces().iter().any(|s| s.split.as_ref().is_some_and(|p| p.tabs.contains(&id)));
+                if in_split {
+                    items.push(MenuEntry::item(
+                        "Remove from Split",
+                        Box::new(move |this, window, cx| {
+                            this.session.remove_from_split(id);
+                            this.sync(window, cx);
+                        }),
+                    ));
+                } else if self.active_tab().is_some_and(|a| a != id) {
+                    items.push(MenuEntry::item(
+                        "Add to Split",
+                        Box::new(move |this, window, cx| {
+                            if let Some(space) = this.session.active_space() {
+                                this.session.add_to_split(space, id, usize::MAX, now());
+                                this.sync(window, cx);
+                            }
+                        }),
+                    ));
+                }
                 items.push(MenuEntry::item(
                     "Close Tab",
                     Box::new(move |this, window, cx| this.close_tab_id(id, window, cx)),

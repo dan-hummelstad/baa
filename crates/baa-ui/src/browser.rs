@@ -115,6 +115,11 @@ pub struct Browser<H: WebHost> {
     devtools_drag: bool,
     /// The page area's bounds, last frame: the seam drag measures against it.
     page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
+    /// Split view: each shown pane's width (owned springs, in pane order), the seam
+    /// being dragged, and the panes' row last frame.
+    split_w: Vec<(TabId, Spring)>,
+    split_drag: Option<usize>,
+    split_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     zoom: HashMap<TabId, f64>,
     pub(crate) bar: Option<Bar>,
     pub(crate) find: Option<TextField>,
@@ -286,6 +291,9 @@ impl<H: WebHost> Browser<H> {
             devtools_share: 0.4,
             devtools_drag: false,
             page_area: Default::default(),
+            split_w: Vec::new(),
+            split_drag: None,
+            split_area: Default::default(),
             zoom: HashMap::new(),
             bar: None,
             find: None,
@@ -455,12 +463,12 @@ impl<H: WebHost> Browser<H> {
             self.end_fullscreen(true, window, cx);
         }
         self.track_rows();
-        if let Some(id) = active.filter(|id| !self.pages.contains_key(id)) {
-            self.create_page(id, window, cx);
+        for id in self.shown_panes() {
+            if !self.pages.contains_key(&id) {
+                self.create_page(id, window, cx);
+            }
         }
-        for (id, (page, _)) in &self.pages {
-            page.read(cx).set_visible(Some(*id) == active);
-        }
+        self.show_pages(cx);
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
             self.focus_page(window, cx);
         }
@@ -585,7 +593,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::PreferredSize(_) => return,
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
-            PageEvent::Focused => return,
+            PageEvent::Focused => return self.on_page_focused(id, window, cx),
             PageEvent::DevToolsRequested { x, y } => {
                 // Inspect always opens (or moves to) the element, never closes.
                 self.devtools.remove(&id);
@@ -611,6 +619,18 @@ impl<H: WebHost> Browser<H> {
             }
         }
         self.sync(window, cx);
+    }
+
+    /// A click in another split pane makes it the focused one. A dialog on screen keeps
+    /// the keyboard, whichever page the click went to.
+    fn on_page_focused(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_dialog().is_some() {
+            return self.focus_page(window, cx);
+        }
+        if self.active_tab() != Some(id) && self.shown_panes().contains(&id) {
+            self.session.activate_tab(id, now());
+            self.sync(window, cx);
+        }
     }
 
     /// Makes `page` (from Peek or lil-baa) a tab in `space` of this window.

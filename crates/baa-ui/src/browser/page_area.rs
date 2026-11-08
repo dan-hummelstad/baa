@@ -1,4 +1,5 @@
-//! The page card with DevTools beside it, the collapsed sidebar's reveal, and the frame clock.
+//! The page card (split panes, DevTools beside the focused one), the collapsed sidebar's
+//! reveal, and the frame clock.
 
 use super::*;
 
@@ -10,9 +11,25 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let page = self.active_page().cloned();
+        let has_page = page.is_some();
+        let panes = self.shown_panes();
+        let focused = panes.iter().position(|p| Some(*p) == self.active_tab()).unwrap_or(0);
+        // Corners where a pane meets its neighbours stay square.
+        let inner = |i: usize| (if i > 0 { 1 | 4 } else { 0 }) | (if i + 1 < panes.len() { 2 | 8 } else { 0 });
+        // Each pane's share of the row, from its spring (they need not sum to 1 mid-flight).
+        let shares: Vec<f32> = {
+            let w: Vec<f32> = panes
+                .iter()
+                .map(|id| self.split_w.iter().find(|(p, _)| p == id).map_or(1., |(_, s)| s.value().max(0.)))
+                .collect();
+            let sum: f32 = w.iter().sum();
+            w.iter().map(|v| if sum > 0. { v / sum } else { 1. / w.len() as f32 }).collect()
+        };
         // The native view rounds itself; keep it on the card's radius as the style changes.
-        if let Some(page) = &page {
-            page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
+        for id in &panes {
+            if let Some((page, _)) = self.pages.get(id) {
+                page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
+            }
         }
         let content = match page {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
@@ -38,6 +55,7 @@ impl<H: WebHost> Browser<H> {
             (Some(_), DevToolsDock::Left) => (1 | 4, 2 | 8),
             (Some(_), DevToolsDock::Bottom) => (4 | 8, 1 | 2),
         };
+        let (page_square, tools_square) = (page_square | inner(focused), tools_square | inner(focused));
         if let Some(page) = self.active_page() {
             page.read(cx).set_square_corners(page_square);
         }
@@ -98,6 +116,61 @@ impl<H: WebHost> Browser<H> {
                     cx.notify();
                 }))
         });
+        // The focused pane: the page with DevTools docked beside it.
+        let focused_pane = div()
+            .relative()
+            .size_full()
+            .flex()
+            .when(across, |d| d.flex_col())
+            .when(dock == DevToolsDock::Left, |d| d.flex_row_reverse())
+            .child(measure)
+            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .children(seam)
+            .children(tools);
+        let body = if panes.len() < 2 {
+            focused_pane.into_any_element()
+        } else {
+            self.render_split(&panes, focused, focused_pane, &shares, inner, window, cx)
+        };
+        // A tab dragged from the sidebar onto the page opens beside it: left or right half.
+        // ponytail: any drag counts (tabs are the only thing the window drags); the drop
+        // itself only takes a `DraggedTab`.
+        let drop_zone = (cx.has_active_drag() && has_page).then(|| {
+            let accent = theme.accent;
+            let half = |left: bool| {
+                div()
+                    .id(if left { "split-drop-left" } else { "split-drop-right" })
+                    .flex_1()
+                    .h_full()
+                    .drag_over::<crate::sidebar::DraggedTab>(move |s, _, _, _| s.bg(Hsla { a: 0.18, ..accent }))
+                    .on_drop(cx.listener(move |this, d: &crate::sidebar::DraggedTab, window, cx| {
+                        this.drop_in_split(d.id, left, window, cx)
+                    }))
+            };
+            // Occludes, or the page under it would take the hover (slot.rs forwards it to Chromium).
+            div().id("split-drop").absolute().inset_0().occlude().flex().child(half(true)).child(half(false))
+        });
+        let split_drag = self.split_drag.map(|seam| {
+            let area = self.split_area.clone();
+            div()
+                .id("split-drag")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, _, cx| {
+                    let b = area.get();
+                    let x = (e.position.x - b.left()) / b.size.width;
+                    if x.is_finite() {
+                        this.drag_split_seam(seam, x, cx);
+                    }
+                }))
+                .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.split_drag = None;
+                    this.save();
+                    cx.notify();
+                }))
+        });
         let asks = self.render_asks(theme, cx);
         let crashed = self.crash_overlay(cx);
         let notice = self.exclusive_notice();
@@ -148,26 +221,160 @@ impl<H: WebHost> Browser<H> {
                     .min_h_0()
                     .w_full()
                     .flex()
-                    .when(across, |d| d.flex_col())
-                    .when(dock == DevToolsDock::Left, |d| d.flex_row_reverse())
                     .rounded(r(PAGE_RADIUS))
                     .overflow_hidden()
                     .bg(gpui::white())
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
-                    .child(measure)
-                    .child(div().flex_1().min_h_0().min_w_0().child(content))
-                    .children(seam)
-                    .children(tools)
-                    .children(drag),
+                    .child(body)
+                    .children(drag)
+                    .children(split_drag)
+                    .children(drop_zone),
             )
             // ASCII Chrome: the page sits in a box-drawn frame, a few px off its edge.
             .when(crate::theme::ascii(), |d| {
                 d.p(px(4.)).border_1().border_color(crate::theme::ascii::frame()).rounded(px(5.))
             })
-            .children(crashed)
-            .children(asks)
-            .children(find)
-            .children(notice)
+            .child(
+                // Over the focused pane only, so a prompt is never mistaken for another pane's.
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(shares[..focused.min(shares.len())].iter().sum()))
+                    .w(relative(shares.get(focused).copied().unwrap_or(1.)))
+                    .children(crashed)
+                    .children(asks)
+                    .children(find)
+                    .children(notice),
+            )
+    }
+
+    /// The panes left to right with a draggable seam between each two.
+    #[allow(clippy::too_many_arguments)]
+    fn render_split(
+        &self,
+        panes: &[TabId],
+        focused: usize,
+        focused_pane: gpui::Div,
+        shares: &[f32],
+        inner: impl Fn(usize) -> u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let area = self.split_area.clone();
+        let mut row = div()
+            .relative()
+            .size_full()
+            .flex()
+            .child(gpui::canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().size_full());
+        let mut focused_pane = Some(focused_pane);
+        for (i, id) in panes.iter().enumerate() {
+            if i > 0 {
+                let grip = div()
+                    .id(("split-seam", i as u64 - 1))
+                    .absolute()
+                    .occlude()
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-3.))
+                    .w(px(7.))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.split_drag = Some(i - 1);
+                        cx.notify();
+                    }));
+                row = row.child(div().flex_none().relative().h_full().w(px(1.)).bg(gpui::rgba(0x0000002E)).child(grip));
+            }
+            let content = match (i == focused).then(|| focused_pane.take()).flatten() {
+                Some(pane) => pane.into_any_element(),
+                None => match self.pages.get(id) {
+                    Some((page, _)) => {
+                        page.read(cx).set_square_corners(inner(i));
+                        page.update(cx, |p, cx| p.render(window, cx))
+                    }
+                    None => div().into_any_element(),
+                },
+            };
+            row = row.child(div().h_full().min_w_0().w(relative(shares[i])).child(content));
+        }
+        row.into_any_element()
+    }
+
+    /// The pages on screen: the shown split's panes, else the active tab (alone in fullscreen).
+    pub(crate) fn shown_panes(&self) -> Vec<TabId> {
+        let Some(space) = self.active_space() else { return Vec::new() };
+        match self.session.shown_split(space.id) {
+            Some(split) if self.fullscreen.is_none() => split.tabs.clone(),
+            _ => space.active_tab.into_iter().collect(),
+        }
+    }
+
+    /// Hides every page but the shown ones. Showing a tab also makes it Chromium's
+    /// active tab (one per window), so the focused pane is shown last.
+    // TODO(split): use PageHandle::activate once landed
+    pub(crate) fn show_pages(&self, cx: &mut Context<Self>) {
+        let (shown, active) = (self.shown_panes(), self.active_tab());
+        for (id, (page, _)) in &self.pages {
+            if !shown.contains(id) {
+                page.read(cx).set_visible(false);
+            }
+        }
+        for id in shown.iter().filter(|id| Some(**id) != active).chain(active.iter()) {
+            if let Some((page, _)) = self.pages.get(id) {
+                page.read(cx).set_visible(true);
+            }
+        }
+    }
+
+    /// A sidebar tab dropped on the left or right half of the page.
+    pub(crate) fn drop_in_split(&mut self, tab: TabId, left: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(space) = self.session.active_space() {
+            self.session.add_to_split(space, tab, if left { 0 } else { usize::MAX }, now());
+            self.sync(window, cx);
+        }
+    }
+
+    /// Seam `seam` (between panes `seam` and `seam + 1`) follows the pointer at `x`, a
+    /// fraction of the row; only those two panes change.
+    fn drag_split_seam(&mut self, seam: usize, x: f32, cx: &mut Context<Self>) {
+        const MIN: f32 = 0.1;
+        let Some(space) = self.session.active_space() else { return };
+        let Some(mut w) = self.session.shown_split(space).map(|s| s.widths.clone()) else { return };
+        if seam + 1 >= w.len() || w[seam] + w[seam + 1] <= 2. * MIN {
+            return;
+        }
+        let left: f32 = w[..seam].iter().sum();
+        let pair = w[seam] + w[seam + 1];
+        w[seam] = (x - left).clamp(MIN, pair - MIN);
+        w[seam + 1] = pair - w[seam];
+        self.session.set_split_widths(space, w);
+        cx.notify();
+    }
+
+    /// Each shown pane's spring heads for its width; a pane that joins grows from 0,
+    /// and a whole new set (another tab, launch) starts where it ends.
+    fn tick_split(&mut self, dt: f32, reduce: bool) -> bool {
+        let widths: Vec<(TabId, f32)> = match self.active_space().and_then(|s| self.session.shown_split(s.id)) {
+            Some(split) if self.fullscreen.is_none() => split.tabs.iter().copied().zip(split.widths.iter().copied()).collect(),
+            _ => self.active_tab().map(|t| (t, 1.)).into_iter().collect(),
+        };
+        let fresh = !widths.iter().any(|(id, _)| self.split_w.iter().any(|(p, _)| p == id));
+        let mut old = std::mem::take(&mut self.split_w);
+        let mut moving = false;
+        for (id, w) in widths {
+            let mut spring = match old.iter().position(|(p, _)| *p == id) {
+                Some(i) => old.swap_remove(i).1,
+                None => Spring::new(if fresh { w } else { 0. }),
+            };
+            if self.split_drag.is_some() {
+                spring.snap(w);
+            } else {
+                spring.set_target(w);
+            }
+            moving |= spring.tick(dt, reduce);
+            self.split_w.push((id, spring));
+        }
+        moving
     }
 
     /// DevTools for the active tab where the settings put it; docked ones close
@@ -340,6 +547,7 @@ impl<H: WebHost> Browser<H> {
                 self.closing_bar = None;
             }
         }
+        moving |= self.tick_split(dt, reduce);
         moving |= self.motion.tick(dt, reduce);
         let motion = &self.motion;
         self.ghosts.retain(|g| motion.get(("ghost", g.id.0), Feel::Glide) > 0.0);

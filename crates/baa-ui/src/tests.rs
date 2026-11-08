@@ -1211,3 +1211,87 @@ fn clear_today_archives_with_undo_until_the_toast_goes(cx: &mut TestAppContext) 
     b.update_in(cx, |b, window, cx| b.undo_clear_today(window, cx));
     assert!(urls(&b, Zone::Today, cx).is_empty(), "no Undo once the toast is gone");
 }
+
+fn shown(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Vec<baa_model::TabId> {
+    b.read_with(cx, |b, cx| {
+        let mut ids: Vec<_> = b.pages.iter().filter(|(_, (p, _))| p.read(cx).visible.get()).collect();
+        // Shown last = Chromium's active tab.
+        ids.sort_by_key(|(_, (p, _))| p.read(cx).shown_at.get());
+        ids.into_iter().map(|(id, _)| *id).collect()
+    })
+}
+
+#[gpui::test]
+fn split_view_shows_its_panes_and_follows_the_clicked_one(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example", "c.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let c = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    cx.dispatch_action(SplitView);
+    cx.run_until_parked();
+    let (split, focused) = b.read_with(cx, |b, _| {
+        let s = b.session();
+        (s.shown_split(s.active_space().unwrap()).expect("a split").tabs.clone(), b.active_tab().unwrap())
+    });
+    assert_eq!(split.len(), 2);
+    assert_eq!(split[0], c);
+    assert_eq!(shown(&b, cx).len(), 2, "both panes are on screen");
+    assert_eq!(shown(&b, cx).last(), Some(&focused), "the focused pane is Chromium's active tab");
+
+    // A click in the other pane focuses it.
+    let other = b.read_with(cx, |b, _| b.pages[&c].0.clone());
+    other.update(cx, |_, cx| cx.emit(PageEvent::Focused));
+    cx.run_until_parked();
+    assert_eq!(b.read_with(cx, |b, _| b.active_tab()), Some(c));
+    assert_eq!(shown(&b, cx).last(), Some(&c));
+
+    // A dialog in the focused pane keeps the focus there.
+    let dialog = baa_web::Dialog {
+        id: 1,
+        kind: baa_web::DialogKind::Alert,
+        message: "hi".into(),
+        default_text: String::new(),
+        title: String::new(),
+        ok_label: String::new(),
+        cancel_label: String::new(),
+        check_label: String::new(),
+    };
+    other.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog)));
+    let next = b.read_with(cx, |b, _| b.pages[&focused].0.clone());
+    next.update(cx, |_, cx| cx.emit(PageEvent::Focused));
+    cx.run_until_parked();
+    assert_eq!(b.read_with(cx, |b, _| b.active_tab()), Some(c), "a dialog on screen keeps the keyboard");
+    assert!(b.read_with(cx, |b, _| b.active_dialog().is_some()));
+
+    // Closing a pane leaves one page: the split dissolves.
+    b.update_in(cx, |b, window, cx| b.close_tab_id(c, window, cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&b, cx), [focused]);
+    b.read_with(cx, |b, _| assert!(b.session().spaces()[0].split.is_none()));
+}
+
+#[gpui::test]
+fn a_tab_dropped_on_the_page_joins_the_split(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let (a, second) = b.read_with(cx, |b, _| {
+        let s = b.session();
+        let ids: Vec<_> = s.tabs(s.active_space().unwrap(), Zone::Today).map(|t| t.id).collect();
+        (ids[1], ids[0])
+    });
+    b.update_in(cx, |b, window, cx| b.drop_in_split(a, true, window, cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        let s = b.session();
+        assert_eq!(s.shown_split(s.active_space().unwrap()).unwrap().tabs, [a, second], "dropped on the left half");
+        assert_eq!(b.active_tab(), Some(a));
+    });
+    assert_eq!(shown(&b, cx).len(), 2);
+}

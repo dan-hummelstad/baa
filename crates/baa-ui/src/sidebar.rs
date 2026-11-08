@@ -30,7 +30,7 @@ const FAV_H: f32 = 44.;
 
 #[derive(Clone)]
 pub(crate) struct DraggedTab {
-    id: TabId,
+    pub(crate) id: TabId,
     title: SharedString,
     theme: Theme,
 }
@@ -321,7 +321,8 @@ impl<H: WebHost> Browser<H> {
             .session
             .tabs(space, zone)
             .enumerate()
-            .map(|(i, tab)| (self.row_shown(tab.id, 1.0), self.render_tab_row(tab, i, 1.0, theme, cx).into_any_element()))
+            .filter(|(_, t)| self.split_lead(t))
+            .map(|(i, tab)| (self.row_shown(tab.id, 1.0), self.render_tab_entry(tab, i, 1.0, theme, cx)))
             .collect();
         let rows = stack(self.with_ghosts(rows, (space, zone, None), theme), false);
         let hover = theme.glass;
@@ -416,6 +417,31 @@ impl<H: WebHost> Browser<H> {
     fn row_shown(&self, id: TabId, shown: f32) -> f32 {
         let growing = self.motion.get(("tab-in", id.0), Feel::Glide).clamp(0.0, 1.0);
         shown.min(1. - growing)
+    }
+
+    /// The panes of the split `tab` is in.
+    fn split_of(&self, tab: &Tab) -> Option<&[TabId]> {
+        let split = self.session.space(tab.space)?.split.as_ref()?;
+        split.tabs.contains(&tab.id).then_some(&split.tabs[..])
+    }
+
+    /// A split shows as one row where its first pane is; its other panes are left out.
+    fn split_lead(&self, tab: &Tab) -> bool {
+        self.split_of(tab).is_none_or(|panes| panes[0] == tab.id)
+    }
+
+    /// A tab's row, or its split's panes side by side in one row, as in Arc.
+    // ponytail: the group row takes the lead pane's drop index; dropping above it puts a
+    // tab next to that pane only.
+    fn render_tab_entry(&self, tab: &Tab, index: usize, shown: f32, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let Some(panes) = self.split_of(tab) else {
+            return self.render_tab_row(tab, index, shown, theme, cx).into_any_element();
+        };
+        let mut rows = Vec::new();
+        for t in panes.iter().filter_map(|id| self.session.tab(*id)) {
+            rows.push(div().flex_1().min_w_0().child(self.render_tab_row(t, index, shown, theme, cx)));
+        }
+        div().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).into_any_element()
     }
 
     fn render_tab_row(
@@ -684,11 +710,11 @@ impl<H: WebHost> Browser<H> {
             .session
             .folder_tabs(id)
             .enumerate()
-            .filter(|(_, t)| inner > 0.0 || active == Some(t.id))
+            .filter(|(_, t)| (inner > 0.0 || active == Some(t.id)) && self.split_lead(t))
             // The active tab stays put while the rest fold around it.
             .map(|(i, tab)| {
                 let shown = if active == Some(tab.id) { 1.0 } else { inner };
-                (self.row_shown(tab.id, shown), self.render_tab_row(tab, i, shown, theme, cx).into_any_element())
+                (self.row_shown(tab.id, shown), self.render_tab_entry(tab, i, shown, theme, cx))
             })
             .collect();
         let mut entries: Vec<(f32, AnyElement)> = self

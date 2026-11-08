@@ -89,6 +89,12 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &PictureInPicture, _, cx| {
             this.with_page(cx, |p| p.eval_with_gesture(crate::tools::PIP_SCRIPT))
         }))
+        .on_action(cx.listener(|this, _: &SplitView, window, cx| {
+            if let Some(space) = this.session.active_space() {
+                this.session.split_with_recent(space, now());
+                this.sync(window, cx);
+            }
+        }))
         .on_action(cx.listener(|this, _: &MuteTab, _, cx| {
             if let Some(id) = this.active_tab() {
                 this.toggle_mute(id, cx);
