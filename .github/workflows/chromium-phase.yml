@@ -202,6 +202,8 @@ jobs:
             # siso skips it; a changed one is rewritten with a new mtime and rebuilt.
             "$(brew --prefix)/bin/rsync" -rlpc --delete --stats --exclude=/helium-macos/build/src/out "$PREP/" "$ROOT/"
             cd "$ROOT/helium-macos" && rm -rf "$PREP"
+            # shared.sh keeps an already-set _root_dir, which still names $PREP.
+            unset _root_dir
             source devutils/shared.sh
             rm -f "$ROOT/remaining.txt"
           fi
