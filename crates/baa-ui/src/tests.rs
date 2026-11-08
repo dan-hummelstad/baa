@@ -776,6 +776,39 @@ fn incognito_downloads_leave_no_record(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_dangerous_download_waits_for_keep_or_discard(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+    let (b, cx) = browser(cx);
+    let list = b.read_with(cx, |b, _| b.host.downloads());
+    for (id, danger) in [(1, baa_web::DangerKind::Dangerous), (2, baa_web::DangerKind::Insecure)] {
+        list.update(cx, |list, cx| {
+            list.upsert(baa_web::Download {
+                id,
+                url: "https://a.example/f.exe".into(),
+                path: format!("/tmp/f{id}.exe"),
+                received_bytes: 10,
+                total_bytes: 10,
+                state: baa_web::DownloadState::InProgress,
+                ephemeral: false,
+                danger: Some(danger),
+            });
+            cx.notify();
+        });
+    }
+    cx.run_until_parked();
+    b.update_in(cx, |b, window, cx| b.toggle_popover(crate::prompts::Popover::Downloads, window, cx));
+    cx.run_until_parked();
+    let keep = cx.debug_bounds("download-keep-1").expect("the warning row has Keep");
+    cx.simulate_click(keep.center(), Modifiers::none());
+    let discard = cx.debug_bounds("download-discard-2").expect("and Discard");
+    cx.simulate_click(discard.center(), Modifiers::none());
+    b.read_with(cx, |b, _| {
+        assert_eq!(*b.host.validated.borrow(), [1]);
+        assert_eq!(*b.host.discarded.borrow(), [2]);
+    });
+}
+
+#[gpui::test]
 fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let list = b.read_with(cx, |b, _| b.host.downloads());

@@ -15,7 +15,7 @@ pub(crate) use dialog::DialogAsk;
 pub(crate) use dialog::wording;
 
 use baa_model::TabId;
-use baa_web::{Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
+use baa_web::{DangerKind, Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
 
 use crate::{
@@ -611,12 +611,70 @@ impl<H: WebHost> Browser<H> {
             .text_color(surface::ink())
     }
 
+    /// A download Chrome holds back until the user decides: why, and Keep or Discard.
+    fn render_danger_row(&self, d: &Download, danger: DangerKind, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let id = d.id;
+        let reason = match danger {
+            DangerKind::Dangerous => "This file may harm your computer",
+            DangerKind::Insecure => "This file was not downloaded securely",
+        };
+        div()
+            .id(("download-danger", id))
+            .p(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(icon("triangle-alert", 18., gpui::rgb(0xC2410C).into()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(div().truncate().font_weight(gpui::FontWeight::MEDIUM).child(SharedString::from(download_name(d))))
+                            .child(div().text_size(px(11.5)).text_color(gpui::rgb(0xC2410C)).child(reason)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(6.))
+                    .child(
+                        button(("download-keep", id), "Keep", false, theme, self, cx)
+                            .debug_selector(move || format!("download-keep-{id}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.host.download_validate(id);
+                            })),
+                    )
+                    .child(
+                        button(("download-discard", id), "Discard", true, theme, self, cx)
+                            .debug_selector(move || format!("download-discard-{id}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.host.download_discard(id);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_downloads(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let items = self.visible_downloads(cx);
         let rows: Vec<AnyElement> = items
             .iter()
             .rev()
             .map(|d| {
+                if let Some(danger) = d.danger {
+                    return self.render_danger_row(d, danger, theme, cx);
+                }
                 let id = d.id;
                 let key = ("download-row", id);
                 let h = self.motion.get(key, Feel::Hover);
