@@ -196,7 +196,8 @@ web pages. A user-only unix socket can't.
 
 ### D1. Two ways in, one tool server
 1. **External Claude Code:**
-   `claude mcp add baa -- /Applications/baa.app/Contents/MacOS/baa mcp`.
+   `claude mcp add baa -e BAA_AGENT_TOKEN=<token> -- /Applications/baa.app/Contents/MacOS/baa mcp`
+   (the token is a pairing secret made when Claude is enabled; see D4).
    Settings → Claude shows the command with a copy button.
 2. **In-browser chat (Dia/Arc Max-style, feature 11):** a panel (⌘J, Arc-like) that spawns
    `claude -p --input-format stream-json --output-format stream-json`, with `--mcp-config`
@@ -243,6 +244,13 @@ Both reach the same tool server inside the app. The chat is just one more MCP cl
   - `agent.sock` is created inside the app data dir with mode 0600.
   - Each accepted connection is checked with `getpeereid` (via `libc`, already in the graph
     through gpui) to match our uid.
+  - Same uid is not enough: a client's first line is a hello carrying either the pairing token
+    (made when Claude is enabled, rotated on every off→on, cleared on off; shown in Settings as
+    `-e BAA_AGENT_TOKEN=…`) or the one-time nonce baa gave the panel's own `claude` (60 s, single
+    use). A token hello then raises a connect sheet naming the peer's process path and pid
+    (`LOCAL_PEERPID`, `proc_pidpath`); nothing is served before Allow. A bad hello closes the
+    socket and toasts. The token alone is not a boundary (same-uid code can read Claude's
+    config); the sheet is.
   - There is no TCP listener and no `--remote-debugging-port`. The CDP hook is in-process only (§0).
 - **Scope:**
   - Only Spaces ticked in settings are visible. **Ephemeral Spaces and lil-baa are never visible.**
