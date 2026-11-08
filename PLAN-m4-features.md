@@ -11,7 +11,7 @@ Features: **A** split view · **B** uBlock Origin · **C** media mini-player + a
 
 ---
 
-## 0. Shared engine work: ABI 9
+## 0. Shared engine work: ABI 10
 
 Several features need the same thing from //baa. They all land in **one** ABI bump so `ci.sh`
 and the release chain run once. Bump steps follow commit `daaf3b6f`: `BAA_ABI_VERSION` in
@@ -20,7 +20,7 @@ and the release chain run once. Bump steps follow commit `daaf3b6f`: `BAA_ABI_VE
 (`ffi.rs:175`) and `dispatch.rs`, test `header_matches` (`ffi.rs:425`), mock
 (`crates/baa-ui/src/mock.rs`), and the harness (`crates/baa-chromium`).
 
-| New in ABI 9 | Used by | //baa outline |
+| New in ABI 10 | Used by | //baa outline |
 |---|---|---|
 | `baa_tab_cdp(tab, id, json)` + callback `cdp(ctx, tab, id, json)` (id 0 = event) | D, E | New `chromium/baa/cdp.mm`: a `content::DevToolsAgentClient` attached in-process with `DevToolsAgentHost::GetOrCreateFor(wc)->AttachClient`, `DispatchProtocolMessage` in, `DispatchProtocolMessage` back out. **No `--remote-debugging-port`, no socket.** Detach on tab close. Chrome supports several clients, so the user's DevTools keeps working. |
 | `BaaTabState.muted` | C | `tab.mm:126`, next to `audible`: `wc->IsAudioMuted()`, re-sent from `OnAudioStateChanged` (`tab.mm:162`). |
@@ -346,7 +346,7 @@ Both reach the same tool server inside the app. The chat is just one more MCP cl
 |---|---|---|---|
 | 1 | F: Clear Today, ⇧⌘A, archived tabs in ⌘T | baa-model, baa-ui | — |
 | 2 | B: docs fix, uBO visible, OTR patch, `ublock.expect` | engine, docs | — |
-| 3 | ABI 9 (§0): CDP hook, `muted`, media | engine + baa-web | — |
+| 3 | ABI 10 (§0): CDP hook, `muted`, media | engine + baa-web | — |
 | 4 | A: split view (incl. show/activate split in baa-web) | baa-model, baa-web, baa-ui | — |
 | 5 | C: mini-player, auto PiP | baa-ui, baa-privacy | 3 |
 | 6 | E1, E3 | baa-model, baa-ui | — |
