@@ -252,7 +252,13 @@ pub trait WebHost: 'static {
     /// A native context menu at `at` (window coordinates); returns at once,
     /// `done` runs when it closes.
     fn show_menu(&self, at: gpui::Point<gpui::Pixels>, items: Vec<MenuItem>, window: &mut Window, cx: &mut App, done: MenuDone);
-    fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
+    /// `user_initiated`: the user typed or picked `url` (command bar, settings,
+    /// a tab they had open); it is loaded as given, `baa://` included.
+    /// Otherwise a page or extension supplied it ([`PageEvent::OpenRequested`],
+    /// [`ChromeTabs`]): Chrome's own tab for it is adopted, and if that is gone
+    /// only an `http(s)` URL is opened, anything else shows `about:blank`. A
+    /// page-supplied URL is never re-issued as a browser load, so pass `false`.
+    fn create_page(&self, profile: ProfileId, url: &str, user_initiated: bool, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
     /// An extension's toolbar popup, acting on the profile's active tab.
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
     /// In-memory profile; nothing persisted (incognito Space).

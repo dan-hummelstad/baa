@@ -65,7 +65,8 @@ fn restyle(css: &str) -> String {
 impl Dispatch {
     /// The init script of a tab baa takes over. A fresh Chrome page is created
     /// blank so the script is in before its first document; one Chrome made
-    /// (`adopted`) is on its way already and gets the skin once.
+    /// (`adopted`) is on its way already and gets the skin once. An unadopted
+    /// `baa://` url is always the user's: `create_page` blanks page-supplied ones.
     pub(super) fn prepare_tab(&self, tab: TabId, url: &str, css: &str, adopted: bool) {
         let script = loader(css);
         (self.core.tab_set_init_script)(tab, c_string(&script).as_ptr());

@@ -194,7 +194,7 @@ impl WebHost for CoreWebHost {
         menu::show_menu(window, cx, at, items, done);
     }
 
-    fn create_page(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
+    fn create_page(&self, profile: ProfileId, url: &str, user_initiated: bool, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
         let handle = self.profile_handle(profile);
         let tab = if handle.is_null() {
             0
@@ -202,7 +202,11 @@ impl WebHost for CoreWebHost {
             // A tab Chrome already made for this (window.open) is taken, not duplicated.
             let url = skin::to_baa(url.to_string());
             let css = self.skins.borrow().get(&profile).map(|(css, _)| css.clone()).unwrap_or_default();
-            let pending = self.dispatch.take_pending(handle, &url);
+            let pending = if user_initiated { None } else { self.dispatch.take_pending(handle, &url) };
+            // ponytail: Chrome's verdict on a page-supplied URL went with its
+            // tab, so baa takes no risk: only http(s) is opened again; data:,
+            // baa://, file:, chrome-extension:// and the rest show a blank page.
+            let url = if user_initiated || pending.is_some() || is_web_or_blank(&url) { url } else { "about:blank".into() };
             // Chrome's own pages start blank: the skin script has to be in before their first document.
             let tab = pending.unwrap_or_else(|| {
                 let first = if skin::is_webui(&url) { "about:blank" } else { &url };
@@ -413,4 +417,8 @@ impl WebHost for CoreWebHost {
             self.send_schemes(profile, handle);
         }
     }
+}
+
+fn is_web_or_blank(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://") || url == "about:blank"
 }

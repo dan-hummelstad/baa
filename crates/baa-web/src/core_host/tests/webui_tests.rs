@@ -66,7 +66,7 @@ fn tabs_chrome_made_for_chrome_pages_are_reported_and_adopted_as_baa(cx: &mut Te
     // Nobody asked for this one, so it waits for a page instead of being closed this turn.
     env.created(0x9010, 0, ProfileId(1), "chrome://version");
     let creates = calls("tab_create").len();
-    let adopted = env.page(1, "baa://version", cx);
+    let adopted = env.opened(1, "baa://version", cx);
     assert_eq!(env.tab_of(&adopted, cx), 0x9010);
     assert_eq!(calls("tab_create").len(), creates);
     assert_eq!(calls("tab_load_url"), Vec::<String>::new(), "already on its way");

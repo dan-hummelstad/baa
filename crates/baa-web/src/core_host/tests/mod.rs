@@ -390,8 +390,14 @@ impl Env {
         self.dispatch as *const Dispatch as *mut c_void
     }
 
+    /// A page for a URL the user asked for.
     fn page(&self, profile: u64, url: &str, cx: &mut TestAppContext) -> Entity<CorePage> {
-        self.window.update(cx, |_, window, cx| self.host.create_page(ProfileId(profile), url, window, cx)).unwrap()
+        self.window.update(cx, |_, window, cx| self.host.create_page(ProfileId(profile), url, true, window, cx)).unwrap()
+    }
+
+    /// A page for a URL a page asked for (`OpenRequested`).
+    fn opened(&self, profile: u64, url: &str, cx: &mut TestAppContext) -> Entity<CorePage> {
+        self.window.update(cx, |_, window, cx| self.host.create_page(ProfileId(profile), url, false, window, cx)).unwrap()
     }
 
     fn tab_of(&self, page: &Entity<CorePage>, cx: &mut TestAppContext) -> TabId {

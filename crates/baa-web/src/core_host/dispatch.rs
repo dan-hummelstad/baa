@@ -28,7 +28,9 @@ use crate::{
 };
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
-pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
+/// Long: a background open is taken only once its tab is activated, and a
+/// miss opens only http(s) URLs (`create_page`).
+pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(10 * 60);
 
 /// A tab Chrome opened that baa has not taken yet.
 struct Pending {
