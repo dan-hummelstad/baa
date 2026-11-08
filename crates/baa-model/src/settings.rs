@@ -253,6 +253,9 @@ pub struct Claude {
     pub found_path: Option<String>,
     /// The `evaluate` tool (any JavaScript); even then every call asks.
     pub evaluate_allowed: bool,
+    /// Hex of 32 random bytes that `baa mcp` must present (as `BAA_AGENT_TOKEN`) before the
+    /// connect sheet; baa-ui makes a new one on every off→on and clears it on off. Empty matches nothing.
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,6 +414,7 @@ mod tests {
         assert!(s.console_badge, "the console badge is on for settings saved before it");
         assert_eq!(s.claude, Claude::default());
         assert!(!s.claude.enabled && !s.claude.evaluate_allowed && s.claude.allowed_spaces.is_empty());
+        assert!(s.claude.token.is_empty(), "settings saved before pairing have no token, so nothing pairs");
     }
 
     #[test]
@@ -426,7 +430,7 @@ mod tests {
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
         s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];
-        s.claude = Claude { enabled: true, allowed_spaces: vec![crate::SpaceId(3)], claude_path: Some("/x/claude".into()), found_path: None, evaluate_allowed: true };
+        s.claude = Claude { enabled: true, allowed_spaces: vec![crate::SpaceId(3)], claude_path: Some("/x/claude".into()), found_path: None, evaluate_allowed: true, token: "ab".repeat(32) };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }
