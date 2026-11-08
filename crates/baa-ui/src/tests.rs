@@ -1181,3 +1181,33 @@ fn the_space_menu_opens_both_pickers_and_the_emoji_search_picks(cx: &mut TestApp
     assert!(b.read_with(cx, |b, _| b.space_picker.is_none()));
     assert_eq!(b.read_with(cx, |b, _| b.session.space(space).unwrap().icon.clone()), "🐑");
 }
+
+#[gpui::test]
+fn clear_today_archives_with_undo_until_the_toast_goes(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for host in ["a.example", "b.example", "c.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(host);
+        cx.simulate_keystrokes("enter");
+    }
+    cx.dispatch_action(GoToTab(2));
+    cx.dispatch_action(TogglePin);
+    cx.dispatch_action(GoToTab(2));
+    let shown = b.read_with(cx, |b, _| b.active_tab());
+    cx.dispatch_action(ClearToday);
+    assert!(urls(&b, Zone::Today, cx).is_empty());
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.pages.len(), 1, "archived tabs drop their pages");
+        assert_eq!(b.session.archived().len(), 2);
+        assert!(b.undo_clear.is_some());
+    });
+    b.update_in(cx, |b, window, cx| b.undo_clear_today(window, cx));
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://c.example/", "https://b.example/"]);
+    assert_eq!(b.read_with(cx, |b, _| b.active_tab()), shown, "the tab shown before comes back");
+
+    cx.dispatch_action(ClearToday);
+    cx.executor().advance_clock(std::time::Duration::from_secs(7));
+    cx.run_until_parked();
+    b.update_in(cx, |b, window, cx| b.undo_clear_today(window, cx));
+    assert!(urls(&b, Zone::Today, cx).is_empty(), "no Undo once the toast is gone");
+}

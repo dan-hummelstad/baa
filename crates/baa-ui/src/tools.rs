@@ -14,6 +14,8 @@ use crate::{
 
 /// How long a toast stays before it fades.
 const TOAST_FOR: std::time::Duration = std::time::Duration::from_millis(2600);
+/// A toast with Undo stays longer, so there is time to reach it.
+const UNDO_FOR: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// The page's main text in a clean column; run again (or reload) to go back.
 // ponytail: a "most paragraph text wins" heuristic, not Readability.js. Pages
@@ -80,15 +82,21 @@ fn language() -> String {
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.toast_for(text, TOAST_FOR, cx);
+    }
+
+    fn toast_for(&mut self, text: impl Into<SharedString>, shown: std::time::Duration, cx: &mut Context<Self>) {
         self.toast = Some(text.into());
+        self.undo_clear = None;
         self.toasts += 1;
         let n = self.toasts;
         self.motion.from(("toast", 0), Feel::Glide, 0.0, 1.0);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(TOAST_FOR).await;
+            cx.background_executor().timer(shown).await;
             let _ = this.update(cx, |this, cx| {
                 if this.toasts == n {
+                    this.undo_clear = None;
                     this.motion.to(("toast", 0), Feel::Glide, 0.0);
                     cx.notify();
                 }
@@ -97,9 +105,50 @@ impl<H: WebHost> Browser<H> {
         .detach();
     }
 
-    pub(crate) fn render_toast(&self) -> Option<impl IntoElement> {
+    /// ⇧⌘K: archives the active Space's Today tabs; the toast offers Undo for a few seconds.
+    pub(crate) fn clear_today(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = self.session.active_space() else { return };
+        let shown = self.active_tab();
+        // Split panes (PLAN-m4 A) and tabs Claude drives (D) go in `keep` once they exist.
+        let ids = self.session.clear_today(space, baa_model::now(), |_| false);
+        if ids.is_empty() {
+            return;
+        }
+        self.sync(window, cx);
+        let text = match ids.len() {
+            1 => "1 tab archived".to_string(),
+            n => format!("{n} tabs archived"),
+        };
+        self.toast_for(text, UNDO_FOR, cx);
+        self.undo_clear = Some((ids, shown));
+    }
+
+    pub(crate) fn undo_clear_today(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((ids, shown)) = self.undo_clear.take() else { return };
+        let now = baa_model::now();
+        // Each goes back on top of Today, so the last first keeps their order.
+        for id in ids.iter().rev() {
+            self.session.restore_archived(*id, now);
+        }
+        if let Some(id) = shown.filter(|id| self.session.tab(*id).is_some()) {
+            self.session.activate_tab(id, now);
+        }
+        self.motion.to(("toast", 0), Feel::Glide, 0.0);
+        self.sync(window, cx);
+    }
+
+    pub(crate) fn render_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let t = self.motion.get(("toast", 0), Feel::Glide);
         let text = self.toast.clone().filter(|_| t > 0.01)?;
+        let undo = self.undo_clear.is_some().then(|| {
+            div()
+                .id("toast-undo")
+                .ml(px(12.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, window, cx| this.undo_clear_today(window, cx)))
+                .child("Undo")
+        });
         Some(
             div()
                 .absolute()
@@ -120,7 +169,9 @@ impl<H: WebHost> Browser<H> {
                         .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 8., 24.)])
                         .text_size(px(13.))
                         .text_color(gpui::white())
-                        .child(text),
+                        .flex()
+                        .child(text)
+                        .children(undo),
                 ),
         )
     }

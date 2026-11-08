@@ -178,7 +178,14 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .child(div().w_full().h(px(1.)).bg(theme.divider))
-            })
+            }
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(MenuKind::Today, e.position, window, cx);
+                }),
+            ))
             .child(
                 {
                     let key = ("new-tab", 0);

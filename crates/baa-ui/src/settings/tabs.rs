@@ -548,6 +548,8 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Mute tab", Box::new(MuteTab)),
         ("Downloads", Box::new(ShowDownloads)),
         ("History", Box::new(ShowHistory)),
+        ("Clear Today", Box::new(ClearToday)),
+        ("Archived tabs", Box::new(ShowArchive)),
         ("Settings", Box::new(OpenSettings)),
     ]
 }

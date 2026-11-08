@@ -45,10 +45,12 @@ gpui::actions!(
         ShowDownloads,
         ShowHistory,
         OpenSettings,
+        ClearToday,
+        ShowArchive,
     ]
 );
-// ponytail: split view and the archive view (§8) are milestone 5; their actions
-// are added with their views so the keymap never binds a key to nothing.
+// ponytail: split view (§8) is milestone 5; its actions are added with its view
+// so the keymap never binds a key to nothing.
 
 /// 0-based index into the active Space's tabs (pinned first, then Today).
 #[derive(

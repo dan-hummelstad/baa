@@ -97,6 +97,8 @@ pub(crate) enum MenuKind {
     Space(SpaceId),
     /// An extension in the extensions panel.
     Extension(String),
+    /// The rule above the active Space's Today tabs.
+    Today,
 }
 
 pub struct Browser<H: WebHost> {
@@ -186,6 +188,8 @@ pub struct Browser<H: WebHost> {
     /// A short confirmation at the bottom of the window, and how many so far.
     pub(crate) toast: Option<SharedString>,
     pub(crate) toasts: u64,
+    /// While the toast shows: the tabs Clear Today archived and the tab shown before, for Undo.
+    pub(crate) undo_clear: Option<(Vec<TabId>, Option<TabId>)>,
     _downloads: Subscription,
     _chrome_tabs: Subscription,
     pub(crate) extensions_page: crate::settings::ExtensionsPage,
@@ -322,6 +326,7 @@ impl<H: WebHost> Browser<H> {
             recorded_downloads: HashSet::new(),
             toast: None,
             toasts: 0,
+            undo_clear: None,
             _downloads: downloads,
             _chrome_tabs: chrome_tabs,
             extensions_page: Default::default(),
@@ -1055,7 +1060,7 @@ impl<H: WebHost> Render for Browser<H> {
             .children(reveal.into_iter().flatten())
             .children(peek)
             .children(bar)
-            .children(self.render_toast())
+            .children(self.render_toast(cx))
             .children(popover)
             .children(history)
             .children(self.space_picker.as_ref().map(|p| p.render()));

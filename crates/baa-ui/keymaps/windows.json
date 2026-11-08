@@ -102,6 +102,8 @@
       "ctrl-alt-r": "baa::ReaderMode",
       "ctrl-j": "baa::ShowDownloads",
       "ctrl-h": "baa::ShowHistory",
+      "ctrl-shift-k": "baa::ClearToday",
+      "ctrl-shift-a": "baa::ShowArchive",
       "ctrl-,": "baa::OpenSettings"
     }
   },

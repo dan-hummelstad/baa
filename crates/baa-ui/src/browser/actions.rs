@@ -100,6 +100,13 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
+        .on_action(cx.listener(|this, _: &ClearToday, window, cx| this.clear_today(window, cx)))
+        .on_action(cx.listener(|this, _: &ShowArchive, window, cx| {
+            match this.library.as_ref().map(|l| l.section) {
+                Some(crate::library::Section::Archive) => this.close_library(window, cx),
+                _ => this.open_library(crate::library::Section::Archive, cx),
+            }
+        }))
         .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))
         .on_action(cx.listener(|this, _: &NewIncognitoSpace, window, cx| {
             this.new_incognito_space(window, cx)
