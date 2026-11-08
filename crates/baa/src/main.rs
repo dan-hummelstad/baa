@@ -15,15 +15,15 @@ use std::{
 };
 
 use baa_model::{Settings, Store};
-use baa_ui::{AgentPeer, Browser};
+use baa_ui::{AgentPeer, Browser, LilBaa};
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    actions, point, px, size, App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
+    actions, point, px, size, Action, App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem,
+    TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
-actions!(baa_app, [Quit]);
+actions!(baa_app, [Quit, DockNewTab, DockNewIncognito, DockShowLil, DockCloseLil]);
 
 /// BaaCore: Chromium's own main runs inside gpui's `[NSApp run]`, so the
 /// order here is load-bearing (PLAN-chromium-phase2.md "Results").
@@ -144,8 +144,10 @@ fn launch<H: WebHost>(
         if window.update(cx, |_, _, _| ()).is_err() {
             cx.quit();
         }
+        set_dock_menu::<H>(cx);
     })
     .detach();
+    dock_menu(window, cx);
 
     cx.spawn(async move |cx| {
         while let Some(peer) = agent_rx.next().await {
@@ -169,6 +171,57 @@ fn launch<H: WebHost>(
         }
     })
     .detach();
+}
+
+/// Arc's dock menu in baa's terms: one window, so "New Window" is a new tab
+/// in it; lil-baa is Little Arc. macOS adds the window list, Options, Show
+/// All Windows, Hide and Quit itself.
+fn dock_menu<H: WebHost>(window: WindowHandle<Browser<H>>, cx: &mut App) {
+    // A dock click usually comes while baa is inactive, so these arrive as
+    // global actions and are re-sent into the browser window.
+    fn to_browser<H: WebHost>(window: WindowHandle<Browser<H>>, action: impl Action, cx: &mut App) {
+        cx.activate(true);
+        window
+            .update(cx, |_, window, cx| {
+                window.activate_window();
+                window.dispatch_action(Box::new(action), cx);
+            })
+            .ok();
+    }
+    cx.on_action(move |_: &DockNewTab, cx| to_browser(window, baa_ui::actions::CommandBar, cx));
+    cx.on_action(move |_: &DockNewIncognito, cx| {
+        to_browser(window, baa_ui::actions::NewIncognitoSpace, cx)
+    });
+    cx.on_action(|_: &DockShowLil, cx| {
+        cx.activate(true);
+        for w in lil_windows::<H>(cx) {
+            w.update(cx, |_, w, _| w.activate_window()).ok();
+        }
+    });
+    cx.on_action(|_: &DockCloseLil, cx| {
+        for w in lil_windows::<H>(cx) {
+            w.update(cx, |_, w, _| w.remove_window()).ok();
+        }
+    });
+    // Deferred: the new window is not in `cx.windows()` while its view is built.
+    cx.observe_new::<LilBaa<H>>(|_, _, cx| cx.defer(set_dock_menu::<H>)).detach();
+    set_dock_menu::<H>(cx);
+}
+
+fn lil_windows<H: WebHost>(cx: &App) -> Vec<gpui::AnyWindowHandle> {
+    cx.windows().into_iter().filter(|w| w.downcast::<LilBaa<H>>().is_some()).collect()
+}
+
+/// Rebuilt whenever a window opens or closes, so the lil-baa items grey out
+/// when there are none, as Arc's do.
+fn set_dock_menu<H: WebHost>(cx: &mut App) {
+    let none = lil_windows::<H>(cx).is_empty();
+    cx.set_dock_menu(vec![
+        MenuItem::action("New Tab", DockNewTab),
+        MenuItem::action("New Incognito Space", DockNewIncognito),
+        MenuItem::action("Show lil-baa Windows", DockShowLil).disabled(none),
+        MenuItem::action("Close lil-baa Windows", DockCloseLil).disabled(none),
+    ]);
 }
 
 fn fail(what: &str, err: impl std::fmt::Display) -> ! {

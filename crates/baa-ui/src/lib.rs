@@ -39,6 +39,7 @@ mod tests_agent;
 
 pub use agent::{AgentPeer, AgentSwitch};
 pub use browser::Browser;
+pub use lil_baa::LilBaa;
 pub use icons::Assets;
 pub use settings::KeymapPath;
 
