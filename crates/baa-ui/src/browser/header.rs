@@ -193,7 +193,27 @@ impl<H: WebHost> Browser<H> {
                     .gap(px(4.))
                     .children(self.render_download_button(theme, cx))
                     .children(extensions)
+                    .child(self.render_split_button(theme, cx))
                     .child(self.render_extensions_button(theme, cx)),
             )
+    }
+
+    /// Same as ⌃⇧=: splits with the Space's most recent other tab. Lit while a split is shown.
+    fn render_split_button(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let key = ("split", 0);
+        let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
+        let on = self.session.active_space().is_some_and(|s| self.session.shown_split(s).is_some());
+        let el = div()
+            .id("split-button")
+            .size(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(r(6.))
+            .bg(fade(theme.hover, h.max(on as u8 as f32)))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(SplitView), cx))
+            .child(icon("columns-2", 15. * (1. - 0.15 * p), mix(theme.ink_muted, theme.ink, h)));
+        feel(el, key, cx)
     }
 }
