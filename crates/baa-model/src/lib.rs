@@ -601,6 +601,30 @@ impl Session {
         ids
     }
 
+    /// Clear Today (⇧⌘K): archives `space`'s Today tabs, the shown one too, except those
+    /// `keep` holds (split panes, tabs Claude drives). Incognito tabs are never archived,
+    /// so there it does nothing. Returns the ids in sidebar order, for Undo.
+    pub fn clear_today(&mut self, space: SpaceId, now: u64, keep: impl Fn(TabId) -> bool) -> Vec<TabId> {
+        if self.space(space).is_none_or(|s| s.ephemeral) {
+            return Vec::new();
+        }
+        let (cleared, live): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .partition(|t| t.zone == Zone::Today && t.space == space && !keep(t.id));
+        self.tabs = live;
+        let ids: Vec<TabId> = cleared.iter().map(|t| t.id).collect();
+        for t in cleared {
+            self.push_archive(Tab { archived_at: Some(now), ..t });
+        }
+        if self.space(space).and_then(|s| s.active_tab).is_some_and(|a| ids.contains(&a)) {
+            let next = self.space_tabs(space).next().map(|t| t.id);
+            if let Some(s) = self.space_mut(space) {
+                s.active_tab = next;
+            }
+        }
+        ids
+    }
+
     /// Start-up housekeeping: tabs whose page no longer exists go (`gone`), idle Today tabs
     /// are archived, and with "Pinned only" every Today tab but each Space's open one is.
     pub fn on_launch(&mut self, settings: &Settings, now: u64, gone: impl Fn(&Tab) -> bool) {
@@ -752,6 +776,40 @@ mod tests {
         assert!(s.tab(b).is_none() && s.archived().is_empty());
         assert_eq!(s.archive_today(10), [a]);
         assert!(s.tab(c).is_some(), "the active tab stays");
+    }
+
+    #[test]
+    fn clear_today_archives_the_space_and_undo_puts_it_back() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let pinned = s.open_tab(sp, "p", 1);
+        s.toggle_pin(pinned);
+        let a = s.open_tab(sp, "a", 2);
+        let b = s.open_tab(sp, "b", 3);
+        let kept = s.open_tab(sp, "kept", 4);
+        let other = s.add_space("Work", "w", None);
+        let elsewhere = s.open_tab(other, "elsewhere", 5);
+        s.activate_tab(b, 6);
+        let ids = s.clear_today(sp, 7, |id| id == kept);
+        assert_eq!(ids, [b, a], "sidebar order, the shown tab too");
+        assert_eq!(urls(&s, sp, Zone::Today), ["kept"]);
+        assert!(s.tab(pinned).is_some() && s.tab(elsewhere).is_some());
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(pinned), "falls back to what is left");
+        assert!(s.archived().iter().all(|t| t.archived_at == Some(7)));
+        for id in ids.iter().rev() {
+            s.restore_archived(*id, 8);
+        }
+        assert_eq!(urls(&s, sp, Zone::Today), ["b", "a", "kept"], "back on top, in their order");
+        assert!(s.archived().is_empty());
+    }
+
+    #[test]
+    fn clear_today_never_archives_incognito() {
+        let mut s = Session::first_run();
+        let incog = s.add_ephemeral_space("Incognito", ProfileId(u64::MAX));
+        let t = s.open_tab(incog, "https://secret", 1);
+        assert!(s.clear_today(incog, 2, |_| false).is_empty());
+        assert!(s.tab(t).is_some() && s.archived().is_empty());
     }
 
     #[test]
