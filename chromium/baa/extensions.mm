@@ -429,9 +429,13 @@ void baa_profile_copy_extension(BaaProfile* to, uint64_t id, BaaProfile* from, c
   Profile* target = baa::ChromeProfileOf(to);
   Profile* source = baa::ChromeProfileOf(from);
   baa::BeginRequest(baa::RequestKind::kLoadUnpacked, id, target);
+  // Not a blocklisted or policy-blocked copy: Chrome would refuse to run it there either.
   const extensions::Extension* ext =
-      source && extension_id ? extensions::ExtensionRegistry::Get(source)->GetInstalledExtension(extension_id)
-                             : nullptr;
+      source && extension_id
+          ? extensions::ExtensionRegistry::Get(source)->GetExtensionById(
+                extension_id, extensions::ExtensionRegistry::ENABLED | extensions::ExtensionRegistry::DISABLED |
+                                  extensions::ExtensionRegistry::TERMINATED)
+          : nullptr;
   if (!target || !ext || extensions::Manifest::IsComponentLocation(ext->location())) {
     baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, false, "No such profile or extension");
     return;
@@ -441,6 +445,13 @@ void baa_profile_copy_extension(BaaProfile* to, uint64_t id, BaaProfile* from, c
     return;
   }
   if (extensions::Manifest::IsUnpackedLocation(ext->location())) {
+    // security: Chrome loads unpacked code only in developer mode; the target Space's own
+    // switch decides, as for baa_profile_load_unpacked.
+    if (!target->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode)) {
+      baa::FinishRequestLater(baa::RequestKind::kLoadUnpacked, id, false,
+                              "Must be in developer mode to load unpacked extensions.");
+      return;
+    }
     LoadUnpacked(target, id, ext->path());
     return;
   }

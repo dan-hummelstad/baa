@@ -477,8 +477,9 @@ BAA_EXPORT void baa_profile_load_unpacked(BaaProfile* profile, uint64_t id,
 
 // Installs extension `extension_id` of `from` into `to` without asking: from
 // the Web Store, approved by `from`'s copy (the store's version may differ but
-// not ask for more), or from the same folder if it is unpacked there. Already
-// in `to`: succeeds at once. Result by `load_unpacked_done(id, ...)`, never
+// not ask for more), or from the same folder if it is unpacked there (only
+// when `to` is in developer mode). A blocklisted or policy-blocked copy fails.
+// Already in `to`: succeeds at once. Result by `load_unpacked_done(id, ...)`, never
 // inside this call.
 BAA_EXPORT void baa_profile_copy_extension(BaaProfile* to, uint64_t id,
                                            BaaProfile* from,
