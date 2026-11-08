@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 10;
+pub const ABI_VERSION: c_int = 11;
 
 #[repr(C)]
 pub struct Profile {
@@ -238,6 +238,7 @@ pub struct Callbacks {
     pub load_unpacked_done: extern "C" fn(ctx: *mut c_void, id: u64, ok: bool, message: *const c_char),
     pub cdp: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64, json: *const c_char),
     pub media: extern "C" fn(ctx: *mut c_void, tab: TabId, media: *const Media),
+    pub focus_requested: extern "C" fn(ctx: *mut c_void, tab: TabId),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.

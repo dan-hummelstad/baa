@@ -14,6 +14,7 @@
 #include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/views/overlay/baa_pip_hook.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -112,6 +113,21 @@ void WatchMedia(uint64_t tab, content::WebContents* wc) {
 
 void UnwatchMedia(uint64_t tab) {
   Watches().erase(tab);
+}
+
+}  // namespace baa
+
+namespace baa {
+
+// Only the PiP window's own button calls this, so a page cannot pull its tab
+// forward with it.
+void InstallPipHook() {
+  g_baa_pip_back_to_tab = [](content::WebContents* wc) {
+    BaaTab* tab = TabFor(wc);
+    if (tab && TabAnnounced(tab)) {
+      Callbacks().focus_requested(CallbackContext(), IdOf(tab));
+    }
+  };
 }
 
 }  // namespace baa

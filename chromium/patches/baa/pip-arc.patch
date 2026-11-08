@@ -62,7 +62,15 @@
  #include <memory>
  #include <string>
  
-@@ -71,6 +72,8 @@
+@@ -28,6 +29,7 @@
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/views/overlay/back_to_tab_button.h"
++#include "chrome/browser/ui/views/overlay/baa_pip_hook.h"
+ #include "chrome/browser/ui/views/overlay/back_to_tab_label_button.h"
+ #include "chrome/browser/ui/views/overlay/close_image_button.h"
+ #include "chrome/browser/ui/views/overlay/constants.h"
+@@ -71,6 +73,8 @@
  #include "ui/gfx/favicon_size.h"
  #include "ui/gfx/geometry/resize_utils.h"
  #include "ui/gfx/geometry/skia_conversions.h"
@@ -71,14 +79,24 @@
  #include "ui/gfx/text_constants.h"
  #include "ui/views/background.h"
  #include "ui/views/controls/image_view.h"
-@@ -117,7 +120,17 @@
+@@ -106,7 +110,8 @@
+ 
+ // Lower bound size of the window is a fixed value to allow for minimal sizes
+ // on UI affordances, such as buttons.
+-constexpr gfx::Size kMinWindowSize(284, 160);
++// baa: smaller than Chrome's 284x160, so the first size below can be.
++constexpr gfx::Size kMinWindowSize(224, 126);
+ 
+ constexpr int kOverlayBorderThickness = 10;
+ 
+@@ -117,8 +122,23 @@
  constexpr gfx::Size kActionButtonSize(28, 28);
  
  // The amount of time the seek buttons next to the play button seek.
 -constexpr base::TimeDelta kSeekTime = base::Seconds(10);
 +// baa: 15 s, as Arc.
 +constexpr base::TimeDelta kSeekTime = base::Seconds(15);
-+
+ 
 +// baa: gap between the window and the work area's edge at a corner.
 +constexpr int kCornerMargin = 16;
 +
@@ -87,10 +105,16 @@
 +
 +// baa: two-finger travel, in points, that sends the window to a corner.
 +constexpr float kFlickDistance = 40;
- 
++
++// baa: release speed, in pixels per second, above which a drag throws the
++// window to a corner; slower, it stays where it was let go.
++// ponytail: one number tuned by hand; raise it if slow drags still snap.
++constexpr float kThrowSpeed = 900;
++
  // The size of the view containing the favicon.
  constexpr gfx::Size kFaviconSize(24, 24);
-@@ -259,8 +272,9 @@
+ 
+@@ -259,8 +279,9 @@
        return window_component;
      }
  
@@ -102,7 +126,17 @@
    }
  #if BUILDFLAG(IS_CHROMEOS)
    void UpdateWindowRoundedCorners() override {
-@@ -650,6 +664,10 @@
+@@ -469,7 +490,8 @@
+ 
+   gfx::Size window_size = bounds.size();
+   if (!has_been_shown_) {
+-    window_size = gfx::Size(work_area.width() / 5, work_area.height() / 5);
++    // baa: a seventh of the work area, as Arc's; Chrome opens at a fifth.
++    window_size = gfx::Size(work_area.width() / 7, work_area.height() / 7);
+   }
+ 
+   // Even though we define the minimum and maximum sizes for our views::Widget,
+@@ -650,6 +672,10 @@
  }
  
  void VideoOverlayWindowViews::OnMouseEvent(ui::MouseEvent* event) {
@@ -113,12 +147,10 @@
    switch (event->type()) {
        // Only show the media controls when the mouse is hovering over the
        // window.
-@@ -697,8 +715,151 @@
-   MaybeUpdateMeetsUserInteraction(*event);
- 
+@@ -699,6 +725,158 @@
    views::Widget::OnMouseEvent(event);
-+}
-+
+ }
+ 
 +bool VideoOverlayWindowViews::HandleDrag(ui::MouseEvent* event) {
 +  const gfx::Point cursor = display::Screen::Get()->GetCursorScreenPoint();
 +  const base::TimeTicks now = base::TimeTicks::Now();
@@ -167,10 +199,17 @@
 +      if ((now - drag_last_time_) > base::Milliseconds(80)) {
 +        drag_velocity_ = gfx::Vector2dF();
 +      }
-+      // The corner nearest where the throw would carry the window's centre in
-+      // a quarter second.
 +      const gfx::Rect area = GetWorkAreaForWindow();
 +      const gfx::Size size = GetWindowBoundsInScreen().size();
++      // A slow drag leaves the window where it was let go, kept on screen.
++      if (drag_velocity_.Length() < kThrowSpeed) {
++        gfx::Rect at(glide_target_, size);
++        at.AdjustToFit(area);
++        GlideTo(at.origin());
++        return true;
++      }
++      // A throw: the corner nearest where it would carry the window's centre
++      // in a quarter second.
 +      const gfx::PointF centre =
 +          gfx::PointF(glide_target_.x() + size.width() / 2.f,
 +                      glide_target_.y() + size.height() / 2.f) +
@@ -182,8 +221,10 @@
 +    default:
 +      return false;
 +  }
- }
- 
++}
++
++BaaPipBackToTabFn g_baa_pip_back_to_tab = nullptr;
++
 +void VideoOverlayWindowViews::OnScrollEvent(ui::ScrollEvent* event) {
 +  // baa: a two-finger flick on the trackpad sends the window to the corner in
 +  // that direction. AppKit marks a trackpad stroke with a begin phase (a mouse
@@ -265,7 +306,19 @@
  bool VideoOverlayWindowViews::ShowControlsForGestureIfNecessary(
      ui::GestureEvent* event) {
    if (event->type() != ui::EventType::kGestureTap) {
-@@ -1139,9 +1300,8 @@
+@@ -1125,6 +1303,11 @@
+   auto back_to_tab_button =
+       std::make_unique<OverlayWindowBackToTabButton>(base::BindRepeating(
+           [](VideoOverlayWindowViews* overlay) {
++            // baa: Chrome's activation only reaches the tab's hidden window;
++            // the app is told to show the tab itself.
++            if (g_baa_pip_back_to_tab && overlay->GetController()) {
++              g_baa_pip_back_to_tab(overlay->GetController()->GetWebContents());
++            }
+             PictureInPictureWindowManager::GetInstance()
+                 ->ExitPictureInPictureViaWindowUi(
+                     PictureInPictureWindowManager::UiBehavior::
+@@ -1139,9 +1322,8 @@
                  overlay->Replay10Seconds();
                },
                base::Unretained(this)),
@@ -277,7 +330,7 @@
    replay_10_seconds_button->SetSize(kActionButtonSize);
  
    auto forward_10_seconds_button =
-@@ -1151,9 +1311,8 @@
+@@ -1151,9 +1333,8 @@
                  overlay->Forward10Seconds();
                },
                base::Unretained(this)),
@@ -289,20 +342,20 @@
    forward_10_seconds_button->SetSize(kActionButtonSize);
  
    auto previous_track_controls_view =
-@@ -1576,6 +1735,12 @@
- 
+@@ -1576,6 +1757,12 @@
    minimize_button_->SetPosition(GetBounds().size());
    back_to_tab_button_->SetPosition(GetBounds().size());
-+
+ 
 +  // baa: Arc's controls only: back to tab, close, seek, play/pause and the
 +  // progress bar. No origin, minimize, track skip, timestamp, mute or captions.
 +  title_view_->SetVisible(false);
 +  minimize_button_->SetVisible(false);
 +  minimize_button_->SetSize(gfx::Size());
- 
++
    const bool showing_vc_controls = show_toggle_camera_button_ ||
                                     show_toggle_microphone_button_ ||
-@@ -1635,7 +1800,8 @@
+                                    show_hang_up_button_;
+@@ -1634,7 +1821,8 @@
        show_previous_track_button_ || show_previous_slide_button_;
    const bool should_enable_next =
        show_next_track_button_ || show_next_slide_button_;
@@ -312,7 +365,7 @@
    previous_track_controls_view_->SetVisible(should_show_prev_next);
    next_track_controls_view_->SetVisible(should_show_prev_next);
    previous_track_controls_view_->SetEnabled(should_enable_prev);
-@@ -1650,9 +1816,11 @@
+@@ -1649,9 +1837,11 @@
    const int used_horizontal_space_left_of_progress_bar =
        should_show_prev_next ? kPreviousNextTrackWidthPlusHorizontalMargins
                              : kBottomControlsHorizontalMargin;
@@ -325,7 +378,7 @@
    progress_view_->SetSize(
        {bounds.width() - (2 * used_horizontal_space_left_of_progress_bar),
         kProgressBarHeight});
-@@ -1665,7 +1833,7 @@
+@@ -1664,7 +1854,7 @@
        bottom_controls_bounds.width() - (2 * kTimestampHorizontalMargin);
    timestamp_->SetPosition(timestamp_position);
    timestamp_->SetSize({max_timestamp_width, kTimestampHeight});
@@ -334,7 +387,7 @@
  
    live_status_->SetPosition(timestamp_position);
    live_status_->SetMaximumWidthSingleLine(max_timestamp_width);
-@@ -1673,7 +1841,7 @@
+@@ -1672,7 +1862,7 @@
        {live_status_->GetPreferredSize({max_timestamp_width, kTimestampHeight})
             .width(),
         kTimestampHeight});
@@ -343,7 +396,7 @@
  
    gfx::Rect live_caption_button_bounds(
        bottom_controls_bounds.right() - kBottomControlsHorizontalMargin -
-@@ -1683,11 +1851,13 @@
+@@ -1682,11 +1872,13 @@
        live_caption_button_->width(), live_caption_button_->height());
  
    live_caption_button_->SetPosition(live_caption_button_bounds.origin());
@@ -357,7 +410,7 @@
    }
  
    live_caption_dialog_->SetPosition(
-@@ -2009,6 +2179,7 @@
+@@ -2008,6 +2200,7 @@
  }
  
  void VideoOverlayWindowViews::OnNativeWidgetDestroying() {
@@ -365,6 +418,33 @@
    views::Widget::OnNativeWidgetDestroying();
    MaybeUnregisterFrameSinkHierarchy();
  }
+--- a/chrome/browser/ui/views/overlay/BUILD.gn
++++ b/chrome/browser/ui/views/overlay/BUILD.gn
+@@ -10,6 +10,7 @@
+   public = [
+     "back_to_tab_button.h",
+     "back_to_tab_label_button.h",
++    "baa_pip_hook.h",
+     "close_image_button.h",
+     "constants.h",
+     "hang_up_button.h",
+--- /dev/null
++++ b/chrome/browser/ui/views/overlay/baa_pip_hook.h
+@@ -0,0 +1,14 @@
++// baa: lets the embedding app (//baa) show the tab a picture-in-picture window
++// goes back to. //chrome cannot depend on //baa, so //baa sets this pointer.
++#ifndef CHROME_BROWSER_UI_VIEWS_OVERLAY_BAA_PIP_HOOK_H_
++#define CHROME_BROWSER_UI_VIEWS_OVERLAY_BAA_PIP_HOOK_H_
++
++namespace content {
++class WebContents;
++}
++
++// Called when the user clicks back to tab, before Chrome closes the window.
++using BaaPipBackToTabFn = void (*)(content::WebContents* contents);
++extern BaaPipBackToTabFn g_baa_pip_back_to_tab;
++
++#endif  // CHROME_BROWSER_UI_VIEWS_OVERLAY_BAA_PIP_HOOK_H_
 --- a/components/vector_icons/BUILD.gn
 +++ b/components/vector_icons/BUILD.gn
 @@ -202,6 +202,7 @@

@@ -114,3 +114,18 @@ fn switching_tabs_puts_the_playing_video_in_pip(cx: &mut TestAppContext) {
     assert_eq!(pips(cx), 2, "paused: no PiP");
     assert_eq!(exits(cx), 2, "only PiP baa opened is closed");
 }
+
+#[gpui::test]
+fn back_to_tab_from_pip_shows_the_favorite(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let (fav, page) = open_page(&b, "youtube.com", cx);
+    b.update(cx, |b, _| {
+        let space = b.session.active_space().unwrap();
+        b.session.move_tab(fav, space, baa_model::Zone::Favorite, 0);
+    });
+    let (other, _) = open_page(&b, "example.com", cx);
+    assert_eq!(b.read_with(cx, |b, _| b.active_tab()), Some(other));
+    page.update(cx, |_, cx| cx.emit(PageEvent::FocusRequested));
+    cx.run_until_parked();
+    assert_eq!(b.read_with(cx, |b, _| b.active_tab()), Some(fav));
+}

@@ -160,6 +160,8 @@ pub enum PageEvent {
     Console { level: ConsoleLevel, text: String },
     /// The tab's media session changed.
     Media(Media),
+    /// The user clicked back to tab on the tab's picture-in-picture window.
+    FocusRequested,
     /// The tab's audio was muted or unmuted, by the app or by Chrome.
     Muted(bool),
 }

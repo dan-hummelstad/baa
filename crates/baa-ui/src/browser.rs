@@ -640,6 +640,12 @@ impl<H: WebHost> Browser<H> {
             // E4's badge saw it above (`console_event`); Claude's `console_logs` buffers it here.
             PageEvent::Console { level, text } => return self.agent_console(id, *level, text),
             PageEvent::Media(media) => return self.on_media(id, media, cx),
+            // From the PiP window's own button, never the page: show the tab and the app.
+            PageEvent::FocusRequested => {
+                cx.activate(true);
+                window.activate_window();
+                return self.activate_tab(id, window, cx);
+            }
             PageEvent::Muted(on) => {
                 if *on {
                     self.muted.insert(id);

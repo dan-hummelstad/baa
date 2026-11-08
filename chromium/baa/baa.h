@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 10
+#define BAA_ABI_VERSION 11
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -321,6 +321,10 @@ typedef struct {
   // The tab's media session changed. Not sent until it has something (a
   // title, an action or playback).
   void (*media)(void* ctx, BaaTabId tab, const BaaMedia* media);
+
+  // The user clicked back to tab on the tab's picture-in-picture window: show
+  // the tab (its Space, and the app). Chrome closes the window itself.
+  void (*focus_requested)(void* ctx, BaaTabId tab);
 } BaaCallbacks;
 
 // ---- App -------------------------------------------------------------------

@@ -83,6 +83,7 @@ void EnsureStarted() {
   PinRegistrar().Add(prefs::kProfileLastUsed, base::BindRepeating(reset, local_state));
   reset(local_state);
   InstallContextMenuHook();
+  InstallPipHook();
   InstallAppModalFactory();
 }
 }  // namespace baa
@@ -150,6 +151,7 @@ void baa_install_app(int argc,
   REQUIRE(load_unpacked_done);
   REQUIRE(cdp);
   REQUIRE(media);
+  REQUIRE(focus_requested);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;

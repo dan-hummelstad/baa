@@ -32,6 +32,7 @@ source_set("baa") {
     "//chrome/browser/hang_monitor",
     "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame:browser_window_factory",
+    "//chrome/browser/ui/views/overlay",
     "//components/content_settings/core/browser",
     "//components/download/public/common:public",
     "//components/favicon/content",

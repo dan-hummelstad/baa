@@ -208,6 +208,7 @@ mod app {
         load_unpacked_done: on_load_unpacked_done,
         cdp: on_cdp,
         media: on_media,
+        focus_requested: on_focus_requested,
     };
 
     thread_local! {
@@ -437,6 +438,10 @@ mod app {
     extern "C" fn on_cdp(_: *mut c_void, tab: ffi::TabId, id: u64, json: *const c_char) {
         let json: String = text(json).chars().take(300).collect();
         eprintln!("baa: cdp tab={} id={id} {json}", tab_index(tab));
+    }
+
+    extern "C" fn on_focus_requested(_: *mut c_void, tab: ffi::TabId) {
+        eprintln!("baa: focus_requested tab={}", tab_index(tab));
     }
 
     extern "C" fn on_media(_: *mut c_void, tab: ffi::TabId, m: *const ffi::Media) {

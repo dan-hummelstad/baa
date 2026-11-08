@@ -495,6 +495,9 @@ pub(super) fn callbacks() -> Callbacks {
         };
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::Media(media)));
     }
+    extern "C" fn focus_requested(ctx: *mut c_void, tab: TabId) {
+        unsafe { dispatch(ctx) }.on_page(tab, |_, cx| cx.emit(PageEvent::FocusRequested));
+    }
     Callbacks {
         key,
         tab_created,
@@ -517,6 +520,7 @@ pub(super) fn callbacks() -> Callbacks {
         load_unpacked_done,
         cdp,
         media,
+        focus_requested,
     }
 }
 

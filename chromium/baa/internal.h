@@ -34,6 +34,7 @@ void* CallbackContext();
 // menu hook, app-modal factory). Idempotent; called once Chrome is up.
 void EnsureStarted();
 void InstallContextMenuHook();  // menu.mm
+void InstallPipHook();          // media.mm
 void InstallAppModalFactory();  // dialogs: after Chrome installed its own
 
 // ---- tab.mm and profile.mm: handles and lookups the other files share. A BaaTab is any page
