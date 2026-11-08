@@ -9,6 +9,12 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - Never run two Chromium builds (`pgrep -x siso`); never remove the hand-off guards in `chromium-phase.yml`.
 - Tests: `cargo test -p <crate>`. `//baa` changes are tested by `crates/baa-chromium/ci.sh` (CI runs it; it opens real windows, so agents do not run it unasked).
 
+## Git: trunk-based
+- Everything lands on `main`. No feature branches that live past the task, no PRs, no "merge this?" hand-offs.
+- Commit small and often, each commit building and passing `cargo test` for the crates it touches.
+- An agent isolated in a worktree still commits there, then lands on main: `git fetch origin && git rebase origin/main && git push origin HEAD:main` (fast-forward only; never force-push). Delete the worktree's branch afterwards.
+- The user's checkout of `main` catches up with `git pull --ff-only`.
+
 ## Ownership (one crate per orchestrator; do not edit outside yours)
 - `crates/baa-model`   data + SQLite + settings
 - `crates/baa-privacy` switches, prefs, proxy allowlist
