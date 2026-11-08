@@ -137,7 +137,7 @@ impl<H: WebHost> Browser<H> {
         asks.reveal(now);
         if ok && is_install(&ask.dialog) {
             if let Some(space) = self.session.tab(tab).map(|t| t.space) {
-                self.install_accepted(space, ask.target, cx);
+                self.install_accepted(space, ask.target, &ask.dialog.title, cx);
             }
         }
         if let Some((page, _)) = self.pages.get(&tab) {

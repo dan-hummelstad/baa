@@ -21,10 +21,15 @@ pub(crate) struct PendingInstall {
     profile: ProfileId,
     before: Vec<String>,
     target: InstallTarget,
+    /// The prompt's title, `Add "X"?`: the new extension must be the one it names.
+    title: String,
 }
 
 // ponytail: Chrome does not say which extension the prompt installed, so the profile is
-// polled for a new id; gives up after POLL_TRIES (a slow download is then left where it landed).
+// polled for a new id whose name the prompt's title quotes; gives up after POLL_TRIES (a
+// slow download is then left where it landed), or when two new ones match. The clean fix
+// is the engine sending the extension id with the EXTENSION_INSTALL dialog (an ABI change).
+// A translated title with other quote marks never matches, so the extension stays Here.
 const POLL_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 const POLL_TRIES: u32 = 120;
 
@@ -140,12 +145,12 @@ impl<H: WebHost> Browser<H> {
 
     /// The install prompt was accepted in `space` for `target`; carried out once the
     /// extension shows up there.
-    pub(crate) fn install_accepted(&mut self, space: SpaceId, target: InstallTarget, cx: &mut Context<Self>) {
+    pub(crate) fn install_accepted(&mut self, space: SpaceId, target: InstallTarget, title: &str, cx: &mut Context<Self>) {
         let Some(profile) = self.session.space(space).map(|s| s.profile) else { return };
         if target == InstallTarget::Here || self.session.space(space).is_some_and(|s| s.ephemeral) {
             return;
         }
-        self.pending_install = Some(PendingInstall { profile, before: self.installed(profile), target });
+        self.pending_install = Some(PendingInstall { profile, before: self.installed(profile), target, title: title.into() });
         cx.spawn(async move |this, cx| {
             for _ in 0..POLL_TRIES {
                 cx.background_executor().timer(POLL_EVERY).await;
@@ -162,9 +167,22 @@ impl<H: WebHost> Browser<H> {
     /// True once the pending install is carried out (or gone).
     fn poll_install(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(p) = &self.pending_install else { return true };
-        let Some(id) = self.installed(p.profile).into_iter().find(|id| !p.before.contains(id)) else { return false };
+        let named = |name: &str| {
+            !name.is_empty() && [('"', '"'), ('\u{201C}', '\u{201D}')].iter().any(|(l, r)| p.title.contains(&format!("{l}{name}{r}")))
+        };
+        let mut matches = self
+            .host
+            .extensions(p.profile)
+            .into_iter()
+            .filter(|e| !p.before.contains(&e.id) && named(&e.name))
+            .map(|e| e.id);
+        let (Some(id), extra) = (matches.next(), matches.next()) else { return false };
         let (from, target) = (p.profile, p.target);
         self.pending_install = None;
+        if extra.is_some() {
+            log::warn!("two new extensions match the install prompt; leaving both where they landed");
+            return true;
+        }
         match target {
             InstallTarget::Here => {}
             InstallTarget::All => self.set_extension_shared(&id, true, cx),

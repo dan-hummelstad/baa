@@ -66,7 +66,7 @@ fn the_install_prompt_sends_the_new_extension_where_asked(cx: &mut TestAppContex
     let [(first, p1), (second, p2)] = two_spaces(&b, &[], cx);
 
     // "All Spaces": shared once it shows up.
-    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::All, cx));
+    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::All, "Add \"PW\"?", cx));
     b.update(cx, |b, _| b.host.profile_extensions.borrow_mut().get_mut(&p1).unwrap().push(ext("pw")));
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
@@ -74,7 +74,7 @@ fn the_install_prompt_sends_the_new_extension_where_asked(cx: &mut TestAppContex
     assert!(has(&b, p2, "pw", cx));
 
     // Another Space: copied there, then removed here.
-    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::Space(second), cx));
+    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::Space(second), "Add \"DARK\"?", cx));
     b.update(cx, |b, _| b.host.profile_extensions.borrow_mut().get_mut(&p1).unwrap().push(ext("dark")));
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
@@ -82,6 +82,34 @@ fn the_install_prompt_sends_the_new_extension_where_asked(cx: &mut TestAppContex
     assert!(!b.read_with(cx, |b, _| b.is_extension_shared("dark")));
     let changes = b.read_with(cx, |b, _| b.host.extension_changes.borrow().clone());
     assert_eq!(changes, [("dark".to_string(), ExtensionChange::Remove)], "the copy here goes");
+}
+
+#[gpui::test]
+fn only_the_extension_the_prompt_named_is_moved(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let [(first, p1), (second, p2)] = two_spaces(&b, &[], cx);
+    let mut evil = ext("evil");
+    evil.name = "Dark".into();
+    let mut dark = ext("dark");
+    dark.name = "Dark Reader".into();
+
+    // Another extension landing in the same window is left alone.
+    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::Space(second), "Add \"Dark Reader\"?", cx));
+    b.update(cx, |b, _| b.host.profile_extensions.borrow_mut().get_mut(&p1).unwrap().extend([evil.clone(), dark.clone()]));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert!(has(&b, p2, "dark", cx));
+    assert!(!has(&b, p2, "evil", cx));
+
+    // Two new ones with the name the prompt quoted: neither moves.
+    let (mut one, mut two) = (ext("one"), ext("two"));
+    (one.name, two.name) = ("Dark".into(), "Dark".into());
+    b.update(cx, |b, cx| b.install_accepted(first, InstallTarget::Space(second), "Add \"Dark\"?", cx));
+    b.update(cx, |b, _| b.host.profile_extensions.borrow_mut().get_mut(&p1).unwrap().extend([one, two]));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert!(!has(&b, p2, "one", cx) && !has(&b, p2, "two", cx));
+    assert!(b.read_with(cx, |b, _| b.pending_install.is_none()), "given up, not left polling");
 }
 
 #[gpui::test]
