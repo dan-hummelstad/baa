@@ -713,7 +713,7 @@ impl<H: WebHost> Browser<H> {
         let glyph = match &folder.live {
             Some(baa_model::LiveSource::GitHub { .. }) => "git-pull-request",
             Some(baa_model::LiveSource::Feed { .. }) => "rss",
-            Some(baa_model::LiveSource::DevServers) => "code-xml",
+            Some(baa_model::LiveSource::DevServers) => "terminal",
             None if open => "folder-open",
             None => "folder",
         };

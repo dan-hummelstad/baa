@@ -16,7 +16,13 @@ impl<H: WebHost> Browser<H> {
         }
         let content = match page {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
-            None => crate::start::render(theme).into_any_element(),
+            None => {
+                let this = cx.entity().downgrade();
+                let open: crate::start::OpenTab = std::rc::Rc::new(move |id, window, cx| {
+                    this.update(cx, |b, cx| b.activate_tab(id, window, cx)).ok();
+                });
+                crate::start::render(theme, &self.dev_server_tabs(), open).into_any_element()
+            }
         };
         // Only the active tab's DevTools shows; the rest keep their state hidden.
         let active = self.active_tab();

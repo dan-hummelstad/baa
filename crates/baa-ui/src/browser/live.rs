@@ -6,6 +6,9 @@ use super::*;
 
 // ponytail: one fixed interval for every live folder; per-folder schedules if a source needs it.
 const REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// Dev servers come and go as you work; lsof is local and cheap.
+const DEV_SERVERS_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+const DEV_SERVERS: &str = "Dev servers";
 
 impl<H: WebHost> Browser<H> {
     pub(super) fn start_live_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -16,6 +19,59 @@ impl<H: WebHost> Browser<H> {
             cx.background_executor().timer(REFRESH_EVERY).await;
         })
         .detach();
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor().timer(DEV_SERVERS_EVERY).await;
+            let tick = this.update_in(cx, |this, window, cx| {
+                if window.is_window_active() {
+                    for id in this.dev_server_folders() {
+                        this.refresh_live(Some(id), window, cx);
+                    }
+                }
+            });
+            if tick.is_err() {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn dev_server_folders(&self) -> Vec<FolderId> {
+        let spaces = self.session.spaces().iter();
+        spaces.flat_map(|s| self.session.folders(s.id)).filter(|f| f.live == Some(LiveSource::DevServers)).map(|f| f.id).collect()
+    }
+
+    pub(crate) fn has_dev_servers_folder(&self) -> bool {
+        !self.dev_server_folders().is_empty()
+    }
+
+    /// Settings → Developer: adds the "Dev servers" folder to the Space in front (the first
+    /// saved Space when that one is incognito), or removes every one.
+    pub(crate) fn set_dev_servers_folder(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let folders = self.dev_server_folders();
+        if !on {
+            for id in folders {
+                self.session.remove_folder(id);
+                self.live_items.remove(&id);
+            }
+            self.save();
+            return self.sync(window, cx);
+        }
+        if !folders.is_empty() {
+            return;
+        }
+        let saved = |id: &SpaceId| self.session.space(*id).is_some_and(|s| !s.ephemeral);
+        let space = self.session.active_space().filter(saved).or_else(|| self.session.spaces().iter().map(|s| s.id).find(saved));
+        let Some(space) = space else { return };
+        let id = self.session.add_live_folder(space, DEV_SERVERS, LiveSource::DevServers);
+        self.save();
+        self.sync(window, cx);
+        self.refresh_live(Some(id), window, cx);
+    }
+
+    /// The dev servers' tabs, for the start page: clicking one activates it as its sidebar row does.
+    pub(crate) fn dev_server_tabs(&self) -> Vec<(TabId, String)> {
+        let folders = self.dev_server_folders();
+        folders.iter().flat_map(|id| self.session.folder_tabs(*id)).map(|t| (t.id, t.title.clone())).collect()
     }
 
     /// Fetches `only`, or every live folder, off the UI thread.
@@ -42,9 +98,12 @@ impl<H: WebHost> Browser<H> {
                         Ok(items) => {
                             this.live_errors.remove(&id);
                             this.live_fetched.insert(id, now());
-                            this.live_items.insert(id, items);
-                            this.show_live_items(id);
-                            this.save();
+                            // Dev servers ask every 5 s; baa.db is written only when the list changes.
+                            if this.live_items.get(&id) != Some(&items) {
+                                this.live_items.insert(id, items);
+                                this.show_live_items(id);
+                                this.save();
+                            }
                         }
                         Err(e) => {
                             log::warn!("live folder {}: {e}", id.0);
