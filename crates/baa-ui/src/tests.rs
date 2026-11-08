@@ -749,6 +749,33 @@ fn downloads_show_in_the_header(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn incognito_downloads_leave_no_record(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let list = b.read_with(cx, |b, _| b.host.downloads());
+    for (id, ephemeral) in [(1, true), (2, false)] {
+        list.update(cx, |list, cx| {
+            list.upsert(baa_web::Download {
+                id,
+                url: "https://a.example/f.zip".into(),
+                path: format!("/tmp/f{id}.zip"),
+                received_bytes: 10,
+                total_bytes: 10,
+                state: baa_web::DownloadState::Complete,
+                ephemeral,
+                danger: None,
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+    b.read_with(cx, |b, _| {
+        let saved: Vec<String> = b.store().unwrap().downloads().unwrap().into_iter().map(|d| d.path).collect();
+        assert_eq!(saved, ["/tmp/f2.zip"]);
+        assert_eq!(b.saved_downloads.len(), 1);
+    });
+}
+
+#[gpui::test]
 fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let list = b.read_with(cx, |b, _| b.host.downloads());

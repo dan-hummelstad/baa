@@ -151,7 +151,8 @@ impl<H: WebHost> Browser<H> {
 
     /// Finished downloads go into the store, so the Library keeps them.
     pub(crate) fn remember_downloads(&mut self, items: &[baa_web::Download]) {
-        for d in items.iter().filter(|d| d.state == DownloadState::Complete) {
+        // An incognito download is the user's file, but no record of it is kept.
+        for d in items.iter().filter(|d| d.state == DownloadState::Complete && !d.ephemeral) {
             if !self.recorded_downloads.insert(d.id) {
                 continue;
             }
