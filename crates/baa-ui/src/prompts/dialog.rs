@@ -6,7 +6,7 @@ use crate::theme::r;
 use baa_web::{Dialog, DialogAnswer, DialogKind, PageHandle, WebHost};
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEvent, SharedString, Window};
 
-use super::{button, site_name};
+use super::{button, site_name, ACTIVATION_DELAY};
 use crate::{
     browser::{drop_in, shadow, Browser, InstallTarget},
     icons::icon,
@@ -25,6 +25,7 @@ pub(crate) struct DialogAsk {
     pub on_password: bool,
     /// Extension installs only: where the extension goes.
     pub target: InstallTarget,
+    pub shown_at: std::time::Instant,
 }
 
 /// An extension install prompt, not a re-enable or a permission increase (those keep
@@ -36,7 +37,7 @@ fn is_install(d: &Dialog) -> bool {
 }
 
 impl DialogAsk {
-    pub(crate) fn new(d: &Dialog) -> Self {
+    pub(crate) fn new(d: &Dialog, shown_at: std::time::Instant) -> Self {
         let field = if d.kind == DialogKind::Prompt { TextField::selected(d.default_text.clone()) } else { TextField::default() };
         Self {
             dialog: d.clone(),
@@ -45,6 +46,7 @@ impl DialogAsk {
             password: TextField { masked: true, ..Default::default() },
             on_password: false,
             target: InstallTarget::Here,
+            shown_at,
         }
     }
 }
@@ -64,7 +66,7 @@ impl<H: WebHost> Browser<H> {
         };
         let kind = ask.dialog.kind;
         let auth = kind == DialogKind::Auth;
-        if event.keystroke.key == "space" && kind != DialogKind::Prompt && !auth && !ask.dialog.check_label.is_empty() {
+        if event.keystroke.key == "space" && !event.is_held && kind != DialogKind::Prompt && !auth && !ask.dialog.check_label.is_empty() {
             ask.checked = !ask.checked;
             cx.notify();
             return;
@@ -81,7 +83,12 @@ impl<H: WebHost> Browser<H> {
             DialogKind::Auth | DialogKind::Prompt => &mut ask.field,
             _ => &mut scratch,
         };
+        // A held key repeats into whatever appears next, and a risky dialog (open an
+        // app, install an extension) is never accepted from the keyboard.
+        let risky = matches!(kind, DialogKind::ExternalProtocol | DialogKind::ExtensionInstall);
         match field.handle(&event.keystroke, cx) {
+            Key::Submit | Key::Cancel if event.is_held => {}
+            Key::Submit if risky => {}
             Key::Submit => self.answer_dialog(true, window, cx),
             Key::Cancel => self.answer_dialog(false, window, cx),
             Key::Edited => cx.notify(),
@@ -98,9 +105,13 @@ impl<H: WebHost> Browser<H> {
 
     pub(crate) fn answer_dialog(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else { return };
-        let Some(ask) = self.asks.get_mut(&tab).and_then(|a| a.dialog.take()) else {
+        let now = cx.background_executor().now();
+        let Some(asks) = self.asks.get_mut(&tab) else { return };
+        if ok && asks.dialog.as_ref().is_some_and(|a| now < a.shown_at + ACTIVATION_DELAY) {
             return;
-        };
+        }
+        let Some(ask) = asks.dialog.take() else { return };
+        asks.reveal(now);
         if ok && is_install(&ask.dialog) {
             if let Some(space) = self.session.tab(tab).map(|t| t.space) {
                 self.install_accepted(space, ask.target, cx);
@@ -205,7 +216,7 @@ impl<H: WebHost> Browser<H> {
         let checkbox = (!d.check_label.is_empty()).then(|| {
             let on = ask.checked;
             div()
-                .id("dialog-check")
+                .id(("dialog-check", d.id))
                 .debug_selector(|| "dialog-check".into())
                 .flex()
                 .items_center()
@@ -279,11 +290,12 @@ impl<H: WebHost> Browser<H> {
                     .justify_end()
                     .gap(px(8.))
                     .children(cancel.map(|label| {
-                        button("dialog-cancel", label, false, theme, self, cx)
+                        button(("dialog-cancel", d.id), label, false, theme, self, cx)
                             .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(false, window, cx)))
                     }))
                     .child(
-                        button("dialog-ok", ok, true, theme, self, cx)
+                        button(("dialog-ok", d.id), ok, true, theme, self, cx)
+                            .debug_selector(|| "dialog-ok".into())
                             .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(true, window, cx))),
                     ),
             );

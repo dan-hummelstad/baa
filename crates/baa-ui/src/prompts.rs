@@ -4,7 +4,10 @@
 //! Chromium's app-modal panels.
 
 use crate::theme::r;
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 mod dialog;
 pub(crate) use dialog::DialogAsk;
@@ -20,6 +23,10 @@ use crate::{
     theme::{fade, mix, surface, Theme},
 };
 
+/// How long a prompt ignores OK/Allow after it appears, so a click or Enter aimed
+/// at what was there before cannot land on it.
+pub(crate) const ACTIVATION_DELAY: Duration = Duration::from_millis(500);
+
 #[derive(Default)]
 pub(crate) struct Asks {
     /// Oldest first; the first is shown.
@@ -27,10 +34,21 @@ pub(crate) struct Asks {
     pub dialog: Option<DialogAsk>,
 }
 
+impl Asks {
+    /// The dialog or the first permission went away: the next permission shows
+    /// from now on.
+    fn reveal(&mut self, now: Instant) {
+        if let Some(next) = self.permissions.first_mut() {
+            next.shown_at = now;
+        }
+    }
+}
+
 pub(crate) struct PermissionAsk {
     pub id: u64,
     pub origin: String,
     pub kinds: Vec<Permission>,
+    pub shown_at: Instant,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -138,14 +156,13 @@ fn download_status(d: &Download) -> String {
 
 /// A plain or accent button on a light surface.
 fn button<H: WebHost>(
-    id: &'static str,
+    key: (&'static str, u64),
     label: impl Into<SharedString>,
     primary: bool,
     theme: &Theme,
     browser: &Browser<H>,
     cx: &mut Context<Browser<H>>,
 ) -> gpui::Stateful<gpui::Div> {
-    let key = (id, 0);
     let (h, p) = (browser.motion.get(key, Feel::Hover), browser.motion.get(key, Feel::Press));
     let bg: Hsla = if primary {
         mix(theme.accent, gpui::black(), 0.12 * h)
@@ -153,7 +170,7 @@ fn button<H: WebHost>(
         mix(surface::key().into(), surface::line().into(), h)
     };
     let el = div()
-        .id(id)
+        .id(key)
         .h(px(28.))
         .px(px(12.))
         .mx(px(1.5 * p))
@@ -170,6 +187,7 @@ fn button<H: WebHost>(
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn on_ask(&mut self, tab: TabId, event: &PageEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
         let asks = self.asks.entry(tab).or_default();
         match event {
             PageEvent::PermissionRequested { id, origin, kinds } => {
@@ -177,19 +195,25 @@ impl<H: WebHost> Browser<H> {
                     id: *id,
                     origin: origin.clone(),
                     kinds: kinds.clone(),
+                    shown_at: now,
                 });
                 self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
             }
             PageEvent::Dialog(d) => {
-                asks.dialog = Some(DialogAsk::new(d));
+                asks.dialog = Some(DialogAsk::new(d, now));
                 if Some(tab) == self.active_tab() && self.bar.is_none() {
                     window.focus(&self.input_focus, cx);
                 }
             }
             PageEvent::AskClosed(id) => {
+                if asks.permissions.first().is_some_and(|a| a.id == *id) {
+                    asks.permissions.remove(0);
+                    asks.reveal(now);
+                }
                 asks.permissions.retain(|a| a.id != *id);
                 if asks.dialog.as_ref().is_some_and(|a| a.dialog.id == *id) {
                     asks.dialog = None;
+                    asks.reveal(now);
                     if Some(tab) == self.active_tab() {
                         self.close_overlays(window, cx);
                     }
@@ -210,10 +234,13 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn answer_permission(&mut self, allow: bool, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else { return };
         let Some(asks) = self.asks.get_mut(&tab) else { return };
-        if asks.permissions.is_empty() {
+        let now = cx.background_executor().now();
+        let Some(first) = asks.permissions.first() else { return };
+        if allow && now < first.shown_at + ACTIVATION_DELAY {
             return;
         }
         let ask = asks.permissions.remove(0);
+        asks.reveal(now);
         if let Some((page, _)) = self.pages.get(&tab) {
             page.read(cx).answer_permission(ask.id, allow);
         }
@@ -418,7 +445,7 @@ impl<H: WebHost> Browser<H> {
                         .flex()
                         .border_t_1()
                         .border_color(surface::line())
-                        .child(button("extensions-manage", "Manage Extensions", false, theme, self, cx).on_click(
+                        .child(button(("extensions-manage", 0), "Manage Extensions", false, theme, self, cx).on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.open_own_page("baa://extensions", window, cx);
                             }),
@@ -511,11 +538,11 @@ impl<H: WebHost> Browser<H> {
                         .flex()
                         .gap(px(6.))
                         .child(
-                            button("perm-deny", "Don't Allow", false, theme, self, cx)
+                            button(("perm-deny", ask.id), "Don't Allow", false, theme, self, cx)
                                 .on_click(cx.listener(|this, _, _, cx| this.answer_permission(false, cx))),
                         )
                         .child(
-                            button("perm-allow", "Allow", true, theme, self, cx)
+                            button(("perm-allow", ask.id), "Allow", true, theme, self, cx)
                                 .on_click(cx.listener(|this, _, _, cx| this.answer_permission(true, cx))),
                         ),
                 );
@@ -679,14 +706,14 @@ impl<H: WebHost> Browser<H> {
             .border_t_1()
             .border_color(surface::line())
             .child(
-                button("downloads-all", "Show All", false, theme, self, cx).on_click(cx.listener(
+                button(("downloads-all", 0), "Show All", false, theme, self, cx).on_click(cx.listener(
                     |this, _, window, cx| {
                         this.close_overlays(window, cx);
                         this.open_library(crate::library::Section::Downloads, cx);
                     },
                 )),
             )
-            .child(button("downloads-clear", "Clear", false, theme, self, cx).on_click(cx.listener(
+            .child(button(("downloads-clear", 0), "Clear", false, theme, self, cx).on_click(cx.listener(
                 |this, _, window, cx| {
                     let done: Vec<u64> = this
                         .visible_downloads(cx)

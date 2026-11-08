@@ -579,6 +579,7 @@ fn page_dialogs_take_the_keyboard_and_answer_the_page(cx: &mut TestAppContext) {
     cx.run_until_parked();
     // The default text is selected, so typing replaces it.
     cx.simulate_input("sam");
+    cx.executor().advance_clock(crate::prompts::ACTIVATION_DELAY);
     cx.simulate_keystrokes("enter");
     page.update(cx, |_, cx| {
         cx.emit(PageEvent::Dialog(baa_web::Dialog {
@@ -616,6 +617,9 @@ fn permission_requests_wait_for_an_answer(cx: &mut TestAppContext) {
         cx.emit(PageEvent::AskClosed(8));
     });
     cx.run_until_parked();
+    b.update(cx, |b, cx| b.answer_permission(true, cx));
+    page.read_with(cx, |p, _| assert!(p.answers.borrow().is_empty(), "Allow waits out the activation delay"));
+    cx.executor().advance_clock(crate::prompts::ACTIVATION_DELAY);
     b.update(cx, |b, cx| b.answer_permission(true, cx));
     page.read_with(cx, |p, _| assert_eq!(*p.answers.borrow(), ["permission 7 true"]));
     b.read_with(cx, |b, _| assert!(b.asks.values().all(|a| a.permissions.is_empty())));
