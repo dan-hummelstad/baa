@@ -23,12 +23,17 @@ icons!(
     "skip-forward", "sliders-horizontal", "sparkles", "square", "sun", "terminal", "trash-2", "triangle-alert", "volume-2", "volume-x", "x",
 );
 
+/// baa's own mark ("The leap, solid" in baa.pen, also the app icon: assets/baa.icns), for `img(MARK)`.
+pub const MARK: &str = "baa.png";
+const IMAGES: &[(&str, &[u8])] = &[(MARK, include_bytes!("../assets/baa.png"))];
+
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
         Ok(ICONS
             .iter()
+            .chain(IMAGES)
             .find(|(p, _)| *p == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -36,6 +41,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(IMAGES)
             .filter(|(p, _)| p.starts_with(path))
             .map(|(p, _)| (*p).into())
             .collect())
@@ -61,5 +67,6 @@ mod tests {
             assert!(Assets.load(path).unwrap().is_some_and(|b| b.starts_with(b"<!--")), "{path}");
         }
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
+        assert!(Assets.load(MARK).unwrap().is_some_and(|b| b.starts_with(b"\x89PNG")));
     }
 }

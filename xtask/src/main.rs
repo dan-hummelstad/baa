@@ -160,6 +160,18 @@ fn bundle(b: Bundle) -> Result<()> {
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
         run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;
     }
+    set_icon(&app)?;
+    // The Alerts helper draws notifications with its own icon. Only an unsigned bundle
+    // gets it: dev_sign seals the outer app alone, so editing a helper would break its
+    // signature; release re-signs every helper afterwards.
+    if !b.sign {
+        for helper in fs::read_dir(app.join(FRAMEWORK).join("Helpers"))? {
+            let helper = helper?.path();
+            if helper.to_string_lossy().contains("(Alerts)") {
+                set_icon(&helper)?;
+            }
+        }
+    }
     if b.sign {
         mac::dev_sign(&app)?;
     }
@@ -168,6 +180,19 @@ fn bundle(b: Bundle) -> Result<()> {
         Some(args) => run(Command::new(app.join("Contents/MacOS/baa")).args(args)),
         None => Ok(()),
     }
+}
+
+/// baa's icon in place of Chromium's. CFBundleIconName points macOS at Assets.car,
+/// which still holds Chromium's art, so it goes and CFBundleIconFile (app.icns) wins.
+fn set_icon(app: &Path) -> Result<()> {
+    let icns = app.join("Contents/Resources/app.icns");
+    // Unlink first: a hard link from ditto would write through to the engine.
+    let _ = fs::remove_file(&icns);
+    fs::copy(workspace_root().join("assets/baa.icns"), &icns)?;
+    let plist = app.join("Contents/Info.plist");
+    // Absent key is fine: plutil fails and there is nothing to remove.
+    let _ = Command::new("plutil").args(["-remove", "CFBundleIconName"]).arg(&plist).output();
+    run(Command::new("plutil").args(["-replace", "CFBundleIconFile", "-string", "app.icns"]).arg(&plist))
 }
 
 mod mac {

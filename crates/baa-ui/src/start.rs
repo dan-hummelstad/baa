@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use baa_model::TabId;
 use crate::theme::r;
-use gpui::{div, prelude::*, px, rgb, App, FontWeight, SharedString, Window};
+use gpui::{div, img, prelude::*, px, rgb, App, FontWeight, SharedString, Window};
 
 use crate::theme::Theme;
 
@@ -91,6 +91,7 @@ pub fn render(theme: &Theme, dev_servers: &[(TabId, String)], open: OpenTab) -> 
             .w(px(560.))
             .flex()
             .flex_col()
+            .child(img(crate::icons::MARK).size(px(40.)).mb(px(20.)))
             .child(
                 div()
                     .text_size(px(11.))

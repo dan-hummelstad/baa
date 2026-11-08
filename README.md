@@ -11,7 +11,8 @@ motion, on baa's own Chromium build.
   command bar over it.
 - Privacy: Helium patches out Google services; baa's switches cover the rest; CI checks it. No
   baa.me backend, no telemetry.
-- Icons: [Lucide](https://lucide.dev) (ISC), embedded from `crates/baa-ui/assets/icons`.
+- Icons: [Lucide](https://lucide.dev) (ISC), embedded from `crates/baa-ui/assets/icons`. App icon: "The leap, solid"
+  from the design file, as `assets/baa.icns` (`cargo bundle` installs it) and `crates/baa-ui/assets/baa.png`.
 - Extensions: Chrome Web Store extensions install per Space profile and run in every tab. uBlock
   Origin (Helium's) is built in, one per Space, also in ephemeral Spaces. Its default filter lists
   are bundled and update with the engine; a list you add in its settings downloads from that
