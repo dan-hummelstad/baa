@@ -278,3 +278,242 @@ fn the_chat_panel_docks_opposite_the_sidebar_and_slides(cx: &mut TestAppContext)
         assert_eq!(b.agent_w.target(), 0.0, "closing slides the slot shut rather than dropping it");
     });
 }
+
+// The handshake (pairing token, connect sheet, the panel's nonce).
+
+const CLAUDE: &str = "/Users/me/.local/share/claude/versions/2.1.318";
+const BAD: &str = "A process tried to connect to Claude with a bad token";
+const INIT: &str = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
+
+/// A new client on agent.sock, before its hello; pid and path as the app shell found them.
+fn connect(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> u64 {
+    b.update(cx, |b, _| b.agent_connect(None, Some(4242), Some(CLAUDE.into())))
+}
+
+fn send(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64, line: &str) -> Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    b.update_in(cx, |b, window, cx| b.agent_line(conn, line, tx, window, cx));
+    cx.run_until_parked();
+    rx
+}
+
+fn hello(key: &str, secret: &str) -> String {
+    json!({"baa": "hello", key: secret}).to_string()
+}
+
+fn token(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> String {
+    b.read_with(cx, |b, _| b.settings.claude.token.clone())
+}
+
+fn toast(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Option<String> {
+    b.read_with(cx, |b, _| b.toast.as_ref().map(|t| t.to_string()))
+}
+
+fn last_activity(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> (&'static str, String, bool) {
+    b.read_with(cx, |b, _| b.agent.activity.last().map(|a| (a.tool, a.target.clone(), a.refused)).unwrap())
+}
+
+fn served(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64) -> bool {
+    b.read_with(cx, |b, _| matches!(b.agent.state.get(&conn), Some(crate::agent::Conn::Open)))
+}
+
+fn closed(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64) -> bool {
+    b.read_with(cx, |b, _| !b.agent.state.contains_key(&conn))
+}
+
+#[gpui::test]
+fn a_paired_client_is_served_only_after_allow(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let conn = connect(&b, cx);
+    let t = token(&b, cx);
+    let hello_rx = send(&b, cx, conn, &hello("token", &t));
+    assert_eq!(asks(&b, cx), 1, "a right token raises the connect sheet");
+    b.read_with(cx, |b, _| {
+        let ask = b.agent.asks.front().unwrap();
+        assert_eq!(ask.connect, Some((CLAUDE.to_string(), Some(4242))));
+        assert!(ask.every_time, "no \"for this session\" for a connection");
+    });
+    // Not even initialize is answered while the sheet is up.
+    let init_rx = send(&b, cx, conn, INIT);
+    let tools_rx = send(&b, cx, conn, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
+    assert!(hello_rx.try_recv().is_err() && init_rx.try_recv().is_err() && tools_rx.try_recv().is_err());
+    assert!(!b.read_with(cx, |b, _| b.agent.connected()), "no strip before Allow");
+
+    // Within 500 ms of the sheet an answer is ignored.
+    cx.executor().advance_clock(ACTIVATION_DELAY / 2);
+    b.update_in(cx, |b, window, cx| b.answer_agent_ask(Answer::Once, window, cx));
+    assert_eq!(asks(&b, cx), 1);
+    assert!(!served(&b, cx, conn));
+
+    decide(&b, cx, Answer::Once);
+    assert!(served(&b, cx, conn));
+    // What waited is answered in order, on the connection's writer.
+    let first: Value = serde_json::from_str(&hello_rx.try_recv().unwrap()).unwrap();
+    assert_eq!(first["id"], 0);
+    assert_eq!(first["result"]["serverInfo"]["name"], "baa");
+    let second: Value = serde_json::from_str(&hello_rx.try_recv().unwrap()).unwrap();
+    assert_eq!(second["id"], 1);
+    assert!(b.read_with(cx, |b, _| b.agent.connected() && b.agent.status.as_deref() == Some("connected (2.1.318)")));
+    assert_eq!(last_activity(&b, cx), ("connect", "2.1.318".into(), false));
+    assert!(toast(&b, cx).is_none());
+}
+
+#[gpui::test]
+fn a_bad_hello_is_closed_with_a_toast_and_no_sheet(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let t = token(&b, cx);
+    let mut wrong = t.clone();
+    wrong.replace_range(..1, if t.starts_with('0') { "1" } else { "0" });
+    let firsts = [
+        hello("token", &wrong),
+        hello("token", ""),
+        hello("token", &t[..32]),
+        INIT.to_string(),
+        json!({"baa": "hello"}).to_string(),
+        json!({"baa": "hello", "token": t, "nonce": t}).to_string(),
+    ];
+    for first in firsts {
+        b.update(cx, |b, _| b.toast = None);
+        let conn = connect(&b, cx);
+        let rx = send(&b, cx, conn, &first);
+        assert_eq!(asks(&b, cx), 0, "{first}");
+        assert!(closed(&b, cx, conn), "{first}");
+        assert_eq!(toast(&b, cx).as_deref(), Some(BAD));
+        let (tool, _, refused) = last_activity(&b, cx);
+        assert!(tool == "connect" && refused);
+        // Whatever it sends next goes nowhere.
+        let after = send(&b, cx, conn, INIT);
+        assert!(rx.try_recv().is_err() && after.try_recv().is_err(), "{first}");
+    }
+    assert!(!b.read_with(cx, |b, _| b.agent.connected()));
+    let logged = b.read_with(cx, |b, _| b.agent.activity.iter().map(|a| a.target.clone()).collect::<Vec<_>>().join(" "));
+    assert!(!logged.contains(&t[..16]) && !logged.contains(&wrong[..16]), "the activity log never holds a secret");
+}
+
+#[gpui::test]
+fn deny_closes_the_connection(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let conn = connect(&b, cx);
+    let t = token(&b, cx);
+    let rx = send(&b, cx, conn, &hello("token", &t));
+    send(&b, cx, conn, INIT);
+    decide(&b, cx, Answer::Deny);
+    assert_eq!(asks(&b, cx), 0);
+    assert!(closed(&b, cx, conn) && !b.read_with(cx, |b, _| b.agent.connected()));
+    assert!(rx.try_recv().is_err(), "initialize was never answered");
+    assert_eq!(last_activity(&b, cx), ("connect", "denied".into(), true));
+    assert!(toast(&b, cx).is_none(), "the user said no; nothing to warn about");
+    assert!(send(&b, cx, conn, INIT).try_recv().is_err());
+}
+
+#[gpui::test]
+fn the_panel_nonce_skips_the_sheet_once(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let nonce = crate::agent::secret();
+    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    cx.executor().advance_clock(std::time::Duration::from_secs(30));
+
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("nonce", &nonce));
+    assert_eq!(asks(&b, cx), 0, "baa started this client itself");
+    assert!(served(&b, cx, conn));
+    assert!(send(&b, cx, conn, INIT).try_recv().is_ok(), "served at once");
+    assert!(b.read_with(cx, |b, _| b.agent.nonce.is_none() && b.agent.status.as_deref() == Some("connected (claude)")));
+
+    // Used up: the same nonce again is a bad hello.
+    let again = connect(&b, cx);
+    send(&b, cx, again, &hello("nonce", &nonce));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(closed(&b, cx, again));
+    assert_eq!(toast(&b, cx).as_deref(), Some(BAD));
+
+    // The token is not a nonce, nor the other way round.
+    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    let t = token(&b, cx);
+    let swapped = connect(&b, cx);
+    send(&b, cx, swapped, &hello("nonce", &t));
+    assert!(closed(&b, cx, swapped));
+    let swapped = connect(&b, cx);
+    send(&b, cx, swapped, &hello("token", &nonce));
+    assert!(closed(&b, cx, swapped));
+    assert_eq!(asks(&b, cx), 0);
+
+    // Stop forgets it.
+    b.update(cx, |b, cx| b.stop_agent(cx));
+    assert!(b.read_with(cx, |b, _| b.agent.nonce.is_none()));
+}
+
+#[gpui::test]
+fn an_expired_nonce_is_refused(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let nonce = crate::agent::secret();
+    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    cx.executor().advance_clock(crate::agent::NONCE_FOR);
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("nonce", &nonce));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(closed(&b, cx, conn) && b.read_with(cx, |b, _| b.agent.nonce.is_none()));
+    assert_eq!(last_activity(&b, cx), ("connect", "expired nonce".into(), true));
+    assert_eq!(toast(&b, cx).as_deref(), Some(BAD));
+}
+
+#[gpui::test]
+fn turning_claude_on_makes_a_new_token_and_off_clears_it(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    assert!(token(&b, cx).is_empty());
+    enabled_with(&b, cx, "https://github.com/");
+    let first = token(&b, cx);
+    assert!(first.len() == 64 && first.bytes().all(|c| c.is_ascii_hexdigit()), "{first}");
+    b.update(cx, |b, cx| b.set_claude_enabled(true, cx));
+    assert_eq!(token(&b, cx), first, "on while on keeps the token a pasted command holds");
+    b.update(cx, |b, cx| b.set_claude_enabled(false, cx));
+    assert!(token(&b, cx).is_empty());
+    b.update(cx, |b, cx| b.set_claude_enabled(true, cx));
+    let second = token(&b, cx);
+    assert!(second.len() == 64 && second != first);
+    // The old command no longer pairs.
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("token", &first));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(closed(&b, cx, conn));
+}
+
+// serve_agent's reader threads cannot run under the deterministic test scheduler, so these hand
+// agent_line the lines and check what happens to the real socket.
+#[gpui::test]
+fn bad_hellos_and_deny_shut_the_socket(cx: &mut TestAppContext) {
+    use std::{io::Read as _, os::unix::net::UnixStream};
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let t = token(&b, cx);
+    let eof = |mut client: UnixStream| {
+        let mut buf = Vec::new();
+        client.read_to_end(&mut buf).is_ok() && buf.is_empty()
+    };
+
+    let (client, server) = UnixStream::pair().unwrap();
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None));
+    send(&b, cx, conn, &hello("token", "00"));
+    assert!(eof(client), "a bad token is closed without a word");
+
+    let (client, server) = UnixStream::pair().unwrap();
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), Some(7), Some("/x/claude".into())));
+    send(&b, cx, conn, &hello("token", &t));
+    send(&b, cx, conn, INIT);
+    decide(&b, cx, Answer::Deny);
+    assert!(eof(client), "deny closes the socket");
+
+    // Stop with a sheet up: the sheet goes and the socket closes.
+    let (client, server) = UnixStream::pair().unwrap();
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None));
+    send(&b, cx, conn, &hello("token", &t));
+    assert_eq!(asks(&b, cx), 1);
+    b.update(cx, |b, cx| b.stop_agent(cx));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(eof(client));
+}

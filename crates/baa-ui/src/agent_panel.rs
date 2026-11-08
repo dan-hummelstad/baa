@@ -110,9 +110,10 @@ fn needs_login(text: &str) -> bool {
 }
 
 /// Arguments after the binary. `--mcp-config`, `--allowedTools` and `--tools` are variadic, so each is
-/// followed by another flag, never by a positional; the prompt comes over stdin.
-fn argv(exe: &Path) -> Vec<String> {
-    let config = json!({"mcpServers": {"baa": {"type": "stdio", "command": exe.to_string_lossy(), "args": ["mcp"]}}});
+/// followed by another flag, never by a positional; the prompt comes over stdin. `nonce` goes in the
+/// MCP server's own environment, so only `baa mcp` gets it, not `claude`'s other children.
+fn argv(exe: &Path, nonce: &str) -> Vec<String> {
+    let config = json!({"mcpServers": {"baa": {"type": "stdio", "command": exe.to_string_lossy(), "args": ["mcp"], "env": {"BAA_AGENT_NONCE": nonce}}}});
     [
         "-p",
         "--input-format",
@@ -189,6 +190,7 @@ impl<H: WebHost> Browser<H> {
         p.generation += 1;
         p.stdin = None;
         p.busy = false;
+        self.agent.nonce = None;
         if let Some(mut child) = p.child.take() {
             let _ = child.kill();
             std::thread::spawn(move || {
@@ -266,8 +268,10 @@ impl<H: WebHost> Browser<H> {
         let exe = std::env::current_exe()?;
         let dir = agent_dir();
         std::fs::create_dir_all(&dir)?;
+        // The hello of the `baa mcp` this child starts: lets it in without the connect sheet, once.
+        let nonce = crate::agent::secret();
         let mut child = Command::new(claude)
-            .args(argv(&exe))
+            .args(argv(&exe, &nonce))
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -292,6 +296,7 @@ impl<H: WebHost> Browser<H> {
                 let _ = tx.unbounded_send(Msg::Stderr(tail.into_iter().rev().collect::<Vec<_>>().join("\n")));
             });
         }
+        self.agent.nonce = Some((nonce, cx.background_executor().now()));
         let p = &mut self.agent.panel;
         p.stdin = child.stdin.take();
         p.child = Some(child);
@@ -340,6 +345,7 @@ impl<H: WebHost> Browser<H> {
                 }
             }
             Msg::Closed => {
+                self.agent.nonce = None;
                 let p = &mut self.agent.panel;
                 p.generation += 1;
                 p.stdin = None;
@@ -539,7 +545,7 @@ mod tests {
 
     #[test]
     fn argv_keeps_variadic_flags_apart_and_has_no_positional_prompt() {
-        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"));
+        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"), "n0nce");
         let at = |f: &str| a.iter().position(|x| x == f).unwrap_or_else(|| panic!("{f} missing"));
         assert_eq!(a[at("--tools") + 1], "");
         assert_eq!(a[at("--permission-prompt-tool") + 1], "mcp__baa__approve");
@@ -550,6 +556,7 @@ mod tests {
         }
         let cfg: Value = serde_json::from_str(&a[at("--mcp-config") + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["baa"]["args"][0], "mcp");
+        assert_eq!(cfg["mcpServers"]["baa"]["env"]["BAA_AGENT_NONCE"], "n0nce", "only the MCP server gets the nonce");
     }
 
     #[test]

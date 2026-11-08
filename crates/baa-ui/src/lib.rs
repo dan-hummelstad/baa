@@ -36,7 +36,7 @@ mod tests_dev;
 #[cfg(test)]
 mod tests_agent;
 
-pub use agent::AgentSwitch;
+pub use agent::{AgentPeer, AgentSwitch};
 pub use browser::Browser;
 pub use icons::Assets;
 pub use settings::KeymapPath;

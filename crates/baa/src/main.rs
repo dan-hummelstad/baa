@@ -8,14 +8,14 @@ compile_error!("baa runs on macOS only until the //baa Windows port");
 use std::{
     cell::RefCell,
     fs::File,
-    os::unix::{fs::PermissionsExt as _, io::AsRawFd as _, net::{UnixListener, UnixStream}},
+    os::unix::{ffi::OsStrExt as _, fs::PermissionsExt as _, io::AsRawFd as _, net::{UnixListener, UnixStream}},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{atomic::{AtomicBool, Ordering}, Arc},
 };
 
 use baa_model::{Settings, Store};
-use baa_ui::Browser;
+use baa_ui::{AgentPeer, Browser};
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
@@ -70,7 +70,7 @@ fn main() {
         tx.unbounded_send(url).ok();
     }
     listen(&dir, tx.clone());
-    let (agent_tx, agent_rx) = mpsc::unbounded::<UnixStream>();
+    let (agent_tx, agent_rx) = mpsc::unbounded::<AgentPeer>();
     let mut agent = AgentSocket { path: dir.join("agent.sock"), tx: agent_tx, stop: None };
     agent.set(settings.claude.enabled);
 
@@ -109,7 +109,7 @@ fn launch<H: WebHost>(
     settings: Settings,
     dir: PathBuf,
     mut rx: mpsc::UnboundedReceiver<String>,
-    mut agent_rx: mpsc::UnboundedReceiver<UnixStream>,
+    mut agent_rx: mpsc::UnboundedReceiver<AgentPeer>,
     cx: &mut App,
 ) {
     baa_ui::init(cx);
@@ -148,8 +148,8 @@ fn launch<H: WebHost>(
     .detach();
 
     cx.spawn(async move |cx| {
-        while let Some(stream) = agent_rx.next().await {
-            if window.update(cx, |browser, window, cx| browser.serve_agent(stream, window, cx)).is_err() {
+        while let Some(peer) = agent_rx.next().await {
+            if window.update(cx, |browser, window, cx| browser.serve_agent(peer, window, cx)).is_err() {
                 break;
             }
         }
@@ -237,13 +237,73 @@ fn is_me(stream: &UnixStream) -> bool {
     peer_uid(stream) == Some(unsafe { libc::geteuid() })
 }
 
-/// `baa mcp`: stdin to agent.sock, agent.sock to stdout, until either side closes.
+/// The pid on the other end of a unix socket, as of its connect.
+fn peer_pid(stream: &UnixStream) -> Option<libc::pid_t> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: a valid fd for the call's duration; the out-param is a pid_t and `len` says so.
+    let ok = unsafe {
+        libc::getsockopt(stream.as_raw_fd(), libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&raw mut pid).cast(), &mut len)
+    } == 0;
+    (ok && pid > 0).then_some(pid)
+}
+
+fn pid_path(pid: libc::pid_t) -> Option<PathBuf> {
+    // PROC_PIDPATHINFO_MAXSIZE.
+    let mut buf = vec![0u8; 4 * libc::PATH_MAX as usize];
+    // SAFETY: the buffer is as long as the size passed; proc_pidpath writes at most that.
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    (n > 0).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..n as usize])))
+}
+
+fn parent_pid(pid: libc::pid_t) -> Option<libc::pid_t> {
+    // SAFETY: proc_bsdinfo is plain old data; all zeroes is a valid value.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a proc_bsdinfo and `size` is its size.
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (n == size).then_some(info.pbi_ppid as libc::pid_t).filter(|p| *p > 0)
+}
+
+/// The process the connect sheet names. A peer that is our own binary is a `baa mcp` bridge
+/// whose client is its parent (Claude Code, or whatever ran it).
+// ponytail: a pid can be reused between the connect and these lookups; the sheet informs, the
+// token and the user's Allow are the gate.
+fn agent_peer(stream: UnixStream) -> AgentPeer {
+    let me = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    let mut pid = peer_pid(&stream);
+    let mut path = pid.and_then(pid_path);
+    if me.is_some() && path.as_ref().and_then(|p| p.canonicalize().ok()) == me {
+        pid = pid.and_then(parent_pid);
+        path = pid.and_then(pid_path);
+    }
+    AgentPeer { stream, pid, path: path.map(|p| p.display().to_string()) }
+}
+
+/// `baa mcp`: a hello line (BAA_AGENT_NONCE from the chat panel's `claude`, else the pairing
+/// token from `claude mcp add -e BAA_AGENT_TOKEN=…`), then stdin to agent.sock and agent.sock to
+/// stdout, until either side closes.
 fn mcp_bridge(dir: &Path) {
+    use std::io::Write as _;
+    let var = |name| std::env::var(name).ok().filter(|v: &String| !v.is_empty());
+    let (key, secret) = match (var("BAA_AGENT_NONCE"), var("BAA_AGENT_TOKEN")) {
+        (Some(nonce), _) => ("nonce", nonce),
+        (None, Some(token)) => ("token", token),
+        (None, None) => fail("BAA_AGENT_TOKEN is not set", "copy the command from Settings → Claude again"),
+    };
+    // Both are hex, so the line below is valid JSON without an encoder.
+    if !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
+        fail("BAA_AGENT_TOKEN", "copy the command from Settings → Claude again");
+    }
+    let hello = format!(r#"{{"baa":"hello","{key}":"{secret}"}}"#);
     let stream = UnixStream::connect(dir.join("agent.sock"))
         .unwrap_or_else(|e| fail("baa is not running, or Claude is off in Settings → Claude", e));
     // Talk only to our own app, whoever else could have put a socket there.
     if !is_me(&stream) {
         fail("agent.sock", "it belongs to another user");
+    }
+    if writeln!(&stream, "{hello}").is_err() {
+        fail("agent.sock", "baa closed the connection");
     }
     let mut to_app = stream.try_clone().unwrap_or_else(|e| fail("agent.sock", e));
     std::thread::spawn(move || {
@@ -258,7 +318,7 @@ fn mcp_bridge(dir: &Path) {
 /// also covers one that races the chmod.
 struct AgentSocket {
     path: PathBuf,
-    tx: mpsc::UnboundedSender<UnixStream>,
+    tx: mpsc::UnboundedSender<AgentPeer>,
     /// Set while bound: tells the accept thread to stop.
     stop: Option<Arc<AtomicBool>>,
 }
@@ -299,7 +359,7 @@ impl AgentSocket {
                     log::warn!("agent socket: refused a connection from another user");
                     continue;
                 }
-                if tx.unbounded_send(stream).is_err() {
+                if tx.unbounded_send(agent_peer(stream)).is_err() {
                     break;
                 }
             }

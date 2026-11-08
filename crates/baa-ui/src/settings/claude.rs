@@ -53,15 +53,21 @@ impl<H: WebHost> SettingsView<H> {
             _ => "Leave empty to find it automatically.".into(),
         };
         out.push(self.row("claude_path", &found, self.field(Field::ClaudePath, "claude-path", "/path/to/claude", 220., cx)));
+        out.push(self.section("Terminal"));
+        // No token while off, so no command to copy.
+        if !on {
+            out.push(self.row("claude_terminal", "Turn Claude on to get the command for a terminal.", div().into_any_element()));
+            return out;
+        }
         let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "baa".into());
         // Quoted for the shell it is pasted into.
         let exe = if exe.contains(char::is_whitespace) { format!("'{}'", exe.replace('\'', "'\\''")) } else { exe };
-        let command = format!("claude mcp add baa -- {exe} mcp");
+        // The token pairs this command with this enabling of Claude; turning Claude off and on makes a new one.
+        let command = format!("claude mcp add baa -e BAA_AGENT_TOKEN={} -- {exe} mcp", s.claude.token);
         let copy = command.clone();
-        out.push(self.section("Terminal"));
         out.push(self.row(
             "claude_terminal",
-            "",
+            "Run it in a terminal. After turning Claude off and on, run `claude mcp remove baa` and add it again.",
             self.button("claude-copy", "Copy", false, cx)
                 .on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()))))
                 .into_any_element(),

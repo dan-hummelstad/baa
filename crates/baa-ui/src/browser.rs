@@ -247,10 +247,17 @@ pub struct Browser<H: WebHost> {
 
 impl<H: WebHost> Browser<H> {
     pub fn new(host: H, store: Store, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let settings = store.load_settings().unwrap_or_else(|e| {
+        let mut settings = store.load_settings().unwrap_or_else(|e| {
             log::error!("settings unreadable, using defaults: {e}");
             Default::default()
         });
+        // Claude was turned on before pairing existed: give it a token now, as turning it on would.
+        if settings.claude.enabled && settings.claude.token.is_empty() {
+            settings.claude.token = crate::agent::secret();
+            if let Err(e) = store.save_settings(&settings) {
+                log::error!("saving settings: {e}");
+            }
+        }
         let (mut session, store) = match store.load_session() {
             Ok(session) => (session, Some(store)),
             Err(e) => {

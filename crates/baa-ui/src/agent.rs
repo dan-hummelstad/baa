@@ -4,7 +4,9 @@
 // ponytail: a hand-rolled MCP subset (initialize, ping, tools/list, tools/call) on serde_json,
 // no SDK crate. Upgrade if the spec's other capabilities are needed.
 //
-// Security (D4): only ticked, non-ephemeral Spaces and only http(s) pages are visible; lil-baa
+// Security (D4): a client is served only after a hello line: the pairing token from
+// Settings → Claude and then the user's Allow on the connect sheet, or the one-time nonce baa
+// handed the panel's own `claude`. Only ticked, non-ephemeral Spaces and only http(s) pages are visible; lil-baa
 // and Peek pages are not session tabs, so no tool can name them. Every act tool asks per origin
 // first; approvals live in memory and go on disable, Stop and quit.
 
@@ -38,6 +40,84 @@ const READ_DEFAULT: u64 = 20_000;
 const READ_MAX: u64 = 100_000;
 const WAIT_DEFAULT: u64 = 5_000;
 const WAIT_MAX: u64 = 15_000;
+/// How long the panel's nonce waits for its `baa mcp` to connect.
+pub(crate) const NONCE_FOR: Duration = Duration::from_secs(60);
+/// Lines a client may send while its connect sheet is up (Claude Code sends one, `initialize`).
+const PENDING_CAP: usize = 16;
+const BAD_HELLO: &str = "A process tried to connect to Claude with a bad token";
+
+/// A client accepted on agent.sock (uid already checked by the app shell) and the process
+/// the connect sheet names: the peer, or the peer's parent when the peer is our own `baa mcp`.
+pub struct AgentPeer {
+    pub stream: UnixStream,
+    pub pid: Option<i32>,
+    pub path: Option<String>,
+}
+
+/// Where a client is in the handshake.
+pub(crate) enum Conn {
+    /// Its first line must be the hello.
+    Hello { pid: Option<i32>, path: Option<String> },
+    /// Paired by token, the connect sheet is up; what it sent meanwhile waits here unanswered.
+    Asking { lines: Vec<String>, tx: std_mpsc::Sender<String> },
+    /// Allowed (or the panel's own child): served.
+    Open,
+}
+
+/// How a valid hello paired.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Hello {
+    Token,
+    Nonce,
+}
+
+/// Hex of 32 bytes from the kernel's CSPRNG; "" if it cannot be read, which pairs nothing.
+pub(crate) fn secret() -> String {
+    use std::io::Read as _;
+    let mut b = [0u8; 32];
+    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)) {
+        Ok(()) => b.iter().map(|x| format!("{x:02x}")).collect(),
+        Err(e) => {
+            log::error!("agent: no randomness for the pairing secret: {e}");
+            String::new()
+        }
+    }
+}
+
+/// Constant-time over equal lengths; an empty expected secret matches nothing.
+fn same_secret(given: &str, expected: &str) -> bool {
+    let (a, b) = (given.as_bytes(), expected.as_bytes());
+    if b.is_empty() || a.len() != b.len() {
+        return false;
+    }
+    std::hint::black_box(a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y))) == 0
+}
+
+/// A client's first line: `{"baa":"hello","token":"…"}` or `{"baa":"hello","nonce":"…"}`, never
+/// both. `nonce` is the panel's unused one, if any. The error says why, without the secret.
+pub(crate) fn check_hello(line: &str, token: &str, nonce: Option<&(String, Instant)>, now: Instant) -> Result<Hello, &'static str> {
+    let v: Value = serde_json::from_str(line).map_err(|_| "no hello")?;
+    if v.get("baa").and_then(Value::as_str) != Some("hello") {
+        return Err("no hello");
+    }
+    match (v.get("token"), v.get("nonce")) {
+        (Some(t), None) => match t.as_str() {
+            Some(t) if same_secret(t, token) => Ok(Hello::Token),
+            _ => Err("bad token"),
+        },
+        (None, Some(n)) => match (n.as_str(), nonce) {
+            (Some(n), Some((want, at))) if same_secret(n, want) => {
+                if now.saturating_duration_since(*at) < NONCE_FOR {
+                    Ok(Hello::Nonce)
+                } else {
+                    Err("expired nonce")
+                }
+            }
+            _ => Err("bad nonce"),
+        },
+        _ => Err("bad token"),
+    }
+}
 
 pub(crate) struct Activity {
     /// The tool's name, "list_tabs".
@@ -73,8 +153,10 @@ pub(crate) struct AgentAsk<H: WebHost> {
     origin: String,
     /// What the sheet says Claude wants to do: "click", "run JavaScript".
     pub what: &'static str,
-    /// `evaluate`: no "For this session", and the answer covers this call only.
+    /// `evaluate` and connect: no "For this session", and the answer covers this call only.
     pub every_time: bool,
+    /// A connect sheet: the client's process path and pid, instead of an origin.
+    pub connect: Option<(String, Option<i32>)>,
     pub shown_at: Instant,
     then: Then<H>,
 }
@@ -115,8 +197,13 @@ pub(crate) struct Agent<H: WebHost> {
     pub panel: crate::agent_panel::Panel,
     /// Newest last, capped.
     pub activity: Vec<Activity>,
-    /// Each client's socket, kept to shut it down on disable or Stop.
+    /// Each client's socket, kept to shut it down on disable, Stop or a refused hello.
     conns: HashMap<u64, UnixStream>,
+    /// Each client's handshake; a client with none is closed or refused and gets nothing.
+    pub(crate) state: HashMap<u64, Conn>,
+    /// The panel child's one-time nonce and when it was made: used up by its first hello,
+    /// gone when the child exits or on Stop.
+    pub(crate) nonce: Option<(String, Instant)>,
     /// Clients counted when the socket is not ours (tests).
     next_conn: u64,
     grants: HashMap<String, Grant>,
@@ -137,6 +224,8 @@ impl<H: WebHost> Default for Agent<H> {
             panel: Default::default(),
             activity: Vec::new(),
             conns: HashMap::new(),
+            state: HashMap::new(),
+            nonce: None,
             next_conn: 0,
             grants: HashMap::new(),
             asks: VecDeque::new(),
@@ -149,9 +238,9 @@ impl<H: WebHost> Default for Agent<H> {
 }
 
 impl<H: WebHost> Agent<H> {
-    /// Any MCP client (the panel's `claude` or an external one) is connected.
+    /// Any MCP client (the panel's `claude` or an external one) is past the handshake.
     pub(crate) fn connected(&self) -> bool {
-        !self.conns.is_empty()
+        self.state.values().any(|c| matches!(c, Conn::Open))
     }
 }
 
@@ -323,13 +412,15 @@ fn what(tool: &str) -> &'static str {
 
 impl<H: WebHost> Browser<H> {
     /// A client accepted on agent.sock (its uid already checked by the app shell). Dropped at
-    /// once while Claude is off.
-    pub fn serve_agent(&mut self, stream: UnixStream, window: &mut Window, cx: &mut Context<Self>) {
+    /// once while Claude is off. Its first line must be the hello; nothing is read as JSON-RPC
+    /// before the hello and, for a token, the user's Allow.
+    pub fn serve_agent(&mut self, peer: AgentPeer, window: &mut Window, cx: &mut Context<Self>) {
         if !self.settings.claude.enabled {
             return;
         }
+        let AgentPeer { stream, pid, path } = peer;
         let (Ok(read), Ok(mut write)) = (stream.try_clone(), stream.try_clone()) else { return };
-        let conn = self.agent_connect(Some(stream));
+        let conn = self.agent_connect(Some(stream), pid, path);
         let (reply_tx, reply_rx) = std_mpsc::channel::<String>();
         std::thread::spawn(move || {
             for line in reply_rx {
@@ -349,7 +440,7 @@ impl<H: WebHost> Browser<H> {
         cx.spawn_in(window, async move |this, cx| {
             while let Some(line) = lines.next().await {
                 let tx = reply_tx.clone();
-                if this.update_in(cx, |b, window, cx| b.agent_message(conn, &line, tx, window, cx)).is_err() {
+                if this.update_in(cx, |b, window, cx| b.agent_line(conn, &line, tx, window, cx)).is_err() {
                     return;
                 }
             }
@@ -358,17 +449,114 @@ impl<H: WebHost> Browser<H> {
         .detach();
     }
 
-    pub(crate) fn agent_connect(&mut self, stream: Option<UnixStream>) -> u64 {
+    /// A new client waiting for its hello. `stream` is `None` in tests.
+    pub(crate) fn agent_connect(&mut self, stream: Option<UnixStream>, pid: Option<i32>, path: Option<String>) -> u64 {
         self.agent.next_conn += 1;
         let conn = self.agent.next_conn;
         if let Some(stream) = stream {
             self.agent.conns.insert(conn, stream);
         }
+        self.agent.state.insert(conn, Conn::Hello { pid, path });
         conn
+    }
+
+    /// One line from client `conn`, through the handshake.
+    pub(crate) fn agent_line(&mut self, conn: u64, line: &str, tx: std_mpsc::Sender<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings.claude.enabled {
+            return;
+        }
+        match self.agent.state.get_mut(&conn) {
+            Some(Conn::Open) => self.agent_message(conn, line, tx, window, cx),
+            Some(Conn::Asking { lines, .. }) if lines.len() < PENDING_CAP => lines.push(line.to_string()),
+            Some(Conn::Asking { .. }) => self.agent_refuse(conn, "too many messages before Allow", false, window, cx),
+            Some(Conn::Hello { .. }) => {
+                let Some(Conn::Hello { pid, path }) = self.agent.state.remove(&conn) else { return };
+                self.agent_hello(conn, line, pid, path, tx, window, cx);
+            }
+            None => {}
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn agent_hello(&mut self, conn: u64, line: &str, pid: Option<i32>, path: Option<String>, tx: std_mpsc::Sender<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let hello = check_hello(line, &self.settings.claude.token, self.agent.nonce.as_ref(), now);
+        if hello == Err("expired nonce") {
+            self.agent.nonce = None;
+        }
+        match hello {
+            Err(why) => self.agent_refuse(conn, why, true, window, cx),
+            // baa started this process itself: no sheet. Used up.
+            Ok(Hello::Nonce) => {
+                self.agent.nonce = None;
+                self.agent.state.insert(conn, Conn::Open);
+                self.agent_open(conn, "claude", window, cx);
+            }
+            Ok(Hello::Token) => {
+                let path = path.unwrap_or_else(|| "an unknown process".into());
+                let name = std::path::Path::new(&path).file_name().map_or("claude".into(), |n| n.to_string_lossy().into_owned());
+                self.agent.state.insert(conn, Conn::Asking { lines: Vec::new(), tx });
+                self.agent.next_ask += 1;
+                let first = self.agent.asks.is_empty();
+                self.agent.asks.push_back(AgentAsk {
+                    id: self.agent.next_ask,
+                    conn,
+                    origin: String::new(),
+                    what: "connect to baa",
+                    every_time: true,
+                    connect: Some((path, pid)),
+                    shown_at: now,
+                    then: Box::new(move |b, allowed, window, cx| {
+                        if allowed {
+                            b.agent_open(conn, &name, window, cx)
+                        } else {
+                            b.agent_refuse(conn, "denied", false, window, cx)
+                        }
+                    }),
+                });
+                // Focus never leaves a visible prompt.
+                if first {
+                    window.focus(&self.input_focus, cx);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Serves `conn` from now on, starting with what it sent while the sheet was up.
+    fn agent_open(&mut self, conn: u64, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Gone while the sheet was up (closed, Stop, off): stays gone.
+        let Some(state) = self.agent.state.get_mut(&conn) else { return };
+        let waiting = match std::mem::replace(state, Conn::Open) {
+            Conn::Asking { lines, tx } => Some((lines, tx)),
+            Conn::Hello { .. } | Conn::Open => None,
+        };
+        self.activity("connect", name, false);
+        self.agent.status = Some(format!("connected ({name})"));
+        if let Some((lines, tx)) = waiting {
+            for line in lines {
+                self.agent_message(conn, &line, tx.clone(), window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Closes `conn` unserved, logs why (never the secret) and, for a bad hello, tells the user.
+    fn agent_refuse(&mut self, conn: u64, why: &'static str, toast: bool, window: &mut Window, cx: &mut Context<Self>) {
+        log::warn!("agent socket: refused a client: {why}");
+        self.activity("connect", why, true);
+        if let Some(stream) = self.agent.conns.remove(&conn) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        self.agent_disconnected(conn, window, cx);
+        if toast {
+            self.show_toast(BAD_HELLO, cx);
+        }
     }
 
     pub(crate) fn agent_disconnected(&mut self, conn: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.conns.remove(&conn);
+        self.agent.state.remove(&conn);
         let had = self.agent.asks.len();
         self.agent.asks.retain(|a| a.conn != conn);
         if self.agent.asks.len() != had {
@@ -380,7 +568,7 @@ impl<H: WebHost> Browser<H> {
                 self.focus_page(window, cx);
             }
         }
-        if self.agent.conns.is_empty() {
+        if !self.agent.connected() {
             self.agent.driven.clear();
             self.agent.status = None;
         }
@@ -395,7 +583,14 @@ impl<H: WebHost> Browser<H> {
                 self.settings.claude.allowed_spaces.push(space.id);
             }
         }
-        self.settings.claude.enabled = on;
+        let c = &mut self.settings.claude;
+        // A new token on every off→on, so a command copied before stops pairing; none while off.
+        if on && !c.enabled {
+            c.token = secret();
+        } else if !on {
+            c.token.clear();
+        }
+        c.enabled = on;
         if !on {
             self.stop_agent(cx);
         }
@@ -411,6 +606,7 @@ impl<H: WebHost> Browser<H> {
         for (_, stream) in self.agent.conns.drain() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
+        self.agent.state.clear();
         self.agent.asks.clear();
         self.agent.grants.clear();
         self.agent.driven.clear();
@@ -430,11 +626,15 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    fn log(&mut self, tool: &'static str, kind: Kind, target: &str, refused: bool) {
+    fn activity(&mut self, tool: &'static str, target: &str, refused: bool) {
         if self.agent.activity.len() == ACTIVITY_CAP {
             self.agent.activity.remove(0);
         }
         self.agent.activity.push(Activity { tool, target: target.into(), at: SystemTime::now(), refused });
+    }
+
+    fn log(&mut self, tool: &'static str, kind: Kind, target: &str, refused: bool) {
+        self.activity(tool, target, refused);
         if !target.is_empty() {
             self.agent.status = Some(format!("{} {target}", verb(kind, tool)));
         }
@@ -841,6 +1041,7 @@ impl<H: WebHost> Browser<H> {
             origin,
             what: what(tool),
             every_time,
+            connect: None,
             shown_at: cx.background_executor().now(),
             then: Box::new(move |b, allowed, window, cx| {
                 b.log(tool, kind, &host, !allowed);
@@ -921,20 +1122,39 @@ impl<H: WebHost> Browser<H> {
             .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 16., 40.)])
             .track_focus(&self.input_focus)
             .on_key_down(cx.listener(Self::on_input_key))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.))
-                    .text_size(px(14.))
-                    .text_color(surface::ink())
-                    .child(div().flex_none().child(SharedString::from(format!("Claude wants to {}", ask.what))))
-                    .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(host)),
-            )
-            .child(div().text_size(px(12.5)).text_color(surface::muted()).child(if ask.every_time {
-                "It runs with the page's access to everything on this site. You are asked every time."
-            } else {
-                "Text on pages can try to steer Claude. Allow only sites you are happy for it to use."
-            }))
+            .when_some(ask.connect.as_ref(), |d, (path, pid)| {
+                let pid = pid.map_or_else(|| "pid unknown".to_string(), |p| format!("pid {p}"));
+                d.child(div().text_size(px(14.)).text_color(surface::ink()).child("Claude Code wants to connect to baa"))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(4.))
+                            .text_size(px(12.5))
+                            .font_family("Menlo")
+                            .text_color(surface::ink())
+                            .child(cut_left(div().min_w_0()).child(SharedString::from(path.clone())))
+                            .child(div().flex_none().child(SharedString::from(format!("({pid})")))),
+                    )
+                    .child(div().text_size(px(12.5)).text_color(surface::muted()).child(
+                        "Allow only if you just started Claude Code with the command from Settings → Claude. Nothing is shared before you allow.",
+                    ))
+            })
+            .when(ask.connect.is_none(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .text_size(px(14.))
+                        .text_color(surface::ink())
+                        .child(div().flex_none().child(SharedString::from(format!("Claude wants to {}", ask.what))))
+                        .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(host)),
+                )
+                .child(div().text_size(px(12.5)).text_color(surface::muted()).child(if ask.every_time {
+                    "It runs with the page's access to everything on this site. You are asked every time."
+                } else {
+                    "Text on pages can try to steer Claude. Allow only sites you are happy for it to use."
+                }))
+            })
             .child(
                 div()
                     .flex()
@@ -944,7 +1164,7 @@ impl<H: WebHost> Browser<H> {
                     .when(!ask.every_time, |d| {
                         d.child(button(("agent-session", id), "For this session", false, theme, self, cx).on_click(session))
                     })
-                    .child(button(("agent-once", id), "Allow once", true, theme, self, cx).on_click(once)),
+                    .child(button(("agent-once", id), if ask.connect.is_some() { "Allow" } else { "Allow once" }, true, theme, self, cx).on_click(once)),
             );
         Some(
             div()
@@ -1024,6 +1244,38 @@ mod tests {
     fn selectors_cannot_break_out_of_the_script() {
         let s = center_script("a'); alert(1); ('\"\\");
         assert!(s.ends_with(r#"})("a'); alert(1); ('\"\\")"#), "{s}");
+    }
+
+    #[test]
+    fn secrets_compare_only_whole_and_never_empty() {
+        let s = secret();
+        assert!(s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(s, secret());
+        assert!(same_secret(&s, &s.clone()));
+        assert!(!same_secret(&s[..63], &s) && !same_secret(&format!("{s}0"), &s));
+        assert!(!same_secret("", ""), "an empty expected secret matches nothing");
+        assert!(!same_secret(&s.to_uppercase(), &s) || s.bytes().all(|b| b.is_ascii_digit()));
+    }
+
+    #[test]
+    fn the_hello_names_one_secret() {
+        let now = Instant::now();
+        let tok = "ab".repeat(32);
+        let nonce = ("cd".repeat(32), now);
+        let h = |v: Value| check_hello(&v.to_string(), &tok, Some(&nonce), now);
+        assert_eq!(h(json!({"baa": "hello", "token": tok})), Ok(Hello::Token));
+        assert_eq!(h(json!({"baa": "hello", "nonce": nonce.0})), Ok(Hello::Nonce));
+        assert_eq!(h(json!({"baa": "hello", "token": nonce.0})), Err("bad token"));
+        assert_eq!(h(json!({"baa": "hello", "nonce": tok})), Err("bad nonce"));
+        assert_eq!(h(json!({"baa": "hello", "token": tok, "nonce": nonce.0})), Err("bad token"));
+        assert_eq!(h(json!({"baa": "hello", "token": 1})), Err("bad token"));
+        assert_eq!(h(json!({"baa": "hi", "token": tok})), Err("no hello"));
+        assert_eq!(h(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"})), Err("no hello"));
+        assert_eq!(check_hello("not json", &tok, None, now), Err("no hello"));
+        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.0}).to_string(), &tok, None, now), Err("bad nonce"));
+        assert_eq!(check_hello(&json!({"baa": "hello", "token": ""}).to_string(), "", None, now), Err("bad token"));
+        let later = now + NONCE_FOR;
+        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.0}).to_string(), &tok, Some(&nonce), later), Err("expired nonce"));
     }
 
     #[test]
