@@ -104,6 +104,7 @@
       "cmd-shift-r": "baa::HardReload",
       "cmd-alt-r": "baa::ReaderMode",
       "cmd-shift-j": "baa::ShowDownloads",
+      "cmd-j": "baa::ToggleAgent",
       "cmd-y": "baa::ShowHistory",
       "cmd-shift-k": "baa::ClearToday",
       "cmd-shift-a": "baa::ShowArchive",

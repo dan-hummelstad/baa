@@ -598,6 +598,7 @@ dependencies = [
  "anyhow",
  "baa-model",
  "baa-web",
+ "futures",
  "gpui",
  "log",
  "serde",

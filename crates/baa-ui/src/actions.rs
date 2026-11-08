@@ -12,6 +12,7 @@ gpui::actions!(
     baa,
     [
         CommandBar,
+        ToggleAgent,
         FocusAddress,
         ToggleSidebar,
         CloseTab,

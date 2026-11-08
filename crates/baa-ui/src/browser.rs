@@ -239,6 +239,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) gradient_to: (Rgba, Rgba),
     shown_space: Option<SpaceId>,
     last_frame: Instant,
+    /// Claude's tool server: clients, approvals, the chat panel (PLAN-m4-features D).
+    pub(crate) agent: crate::agent::Agent<H>,
 }
 
 impl<H: WebHost> Browser<H> {
@@ -374,6 +376,7 @@ impl<H: WebHost> Browser<H> {
             gradient_from: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
             gradient_to: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
             last_frame: cx.background_executor().now(),
+            agent: Default::default(),
         };
         this.sync(window, cx);
         this.start_live_refresh(window, cx);
@@ -525,8 +528,8 @@ impl<H: WebHost> Browser<H> {
     /// Keyboard goes to the active page; a hidden page's element is not in the
     /// tree, so focus left there would swallow every action. A prompt on screen
     /// keeps the keyboard, or keys typed for the page would land in it unseen.
-    fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_dialog().is_some() {
+    pub(crate) fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return window.focus(&self.input_focus, cx);
         }
         let target = self
@@ -621,8 +624,8 @@ impl<H: WebHost> Browser<H> {
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::Focused => return self.on_page_focused(id, window, cx),
-            // ABI 10, not used by the UI yet (M4 D, E).
-            PageEvent::Console { .. } => return,
+            // E4's badge saw it above (`console_event`); Claude's `console_logs` buffers it here.
+            PageEvent::Console { level, text } => return self.agent_console(id, *level, text),
             PageEvent::Media(media) => return self.on_media(id, media, cx),
             PageEvent::Muted(on) => {
                 if *on {
@@ -662,7 +665,7 @@ impl<H: WebHost> Browser<H> {
     /// A click in another split pane makes it the focused one. A dialog on screen keeps
     /// the keyboard, whichever page the click went to.
     fn on_page_focused(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_dialog().is_some() {
+        if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return self.focus_page(window, cx);
         }
         if self.active_tab() != Some(id) && self.shown_panes().contains(&id) {
@@ -854,7 +857,9 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) {
         let shift = event.keystroke.modifiers.shift;
-        if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() && self.active_dialog().is_some() {
+        if !self.agent.asks.is_empty() {
+            self.on_agent_ask_key(event, window, cx);
+        } else if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() && self.active_dialog().is_some() {
             self.on_dialog_key(event, window, cx);
         } else if let Some(field) = &mut self.renaming {
             match field.handle(&event.keystroke, cx) {
@@ -1123,7 +1128,9 @@ impl<H: WebHost> Render for Browser<H> {
             .children(self.render_toast(cx))
             .children(popover)
             .children(history)
-            .children(self.space_picker.as_ref().map(|p| p.render()));
+            .children(self.space_picker.as_ref().map(|p| p.render()))
+            .children(self.render_agent_panel(&theme, window, cx))
+            .children(self.render_agent_ask(&theme, cx));
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {

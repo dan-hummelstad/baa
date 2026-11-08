@@ -109,8 +109,9 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn clear_today(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = self.session.active_space() else { return };
         let shown = self.active_tab();
-        // Split panes (PLAN-m4 A) and tabs Claude drives (D) go in `keep` once they exist.
-        let ids = self.session.clear_today(space, baa_model::now(), |_| false);
+        // Tabs Claude is driving stay. Split panes (PLAN-m4 A) go in `keep` once they exist.
+        let driven = &self.agent.driven;
+        let ids = self.session.clear_today(space, baa_model::now(), |id| driven.contains(&id));
         if ids.is_empty() {
             return;
         }

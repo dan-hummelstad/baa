@@ -18,11 +18,12 @@ pub(crate) enum Tab {
     Spaces,
     Keyboard,
     Developer,
+    Claude,
     System,
 }
 
 impl Tab {
-    pub(crate) const ALL: [Tab; 11] = [
+    pub(crate) const ALL: [Tab; 12] = [
         Tab::General,
         Tab::Appearance,
         Tab::Search,
@@ -33,6 +34,7 @@ impl Tab {
         Tab::Spaces,
         Tab::Keyboard,
         Tab::Developer,
+        Tab::Claude,
         Tab::System,
     ];
 
@@ -48,6 +50,7 @@ impl Tab {
             Tab::Spaces => "Spaces",
             Tab::Keyboard => "Keyboard",
             Tab::Developer => "Developer",
+            Tab::Claude => "Claude",
             Tab::System => "System",
         }
     }
@@ -73,6 +76,7 @@ impl Tab {
             Tab::Spaces => "house",
             Tab::Keyboard => "code-xml",
             Tab::Developer => "terminal",
+            Tab::Claude => "link",
             Tab::System => "sliders-horizontal",
         }
     }
@@ -157,6 +161,11 @@ pub(crate) static ROWS: &[Row] = &[
     row(Developer, "environments", "Environments", "local staging production prod origin project env"),
     row(Developer, "dev_servers", "Dev servers folder", "localhost ports node vite live"),
     row(Developer, "console_badge", "Console errors on localhost tabs", "badge console error devtools localhost"),
+    row(Claude, "claude_enabled", "Let Claude use baa", "mcp agent ai assistant"),
+    row(Claude, "claude_spaces", "Spaces Claude can see", "allowed incognito"),
+    row(Claude, "claude_evaluate", "Allow evaluate", "javascript run script"),
+    row(Claude, "claude_path", "claude path", "binary cli install"),
+    row(Claude, "claude_terminal", "Use from Claude Code in Terminal", "mcp add command copy"),
     row(System, "hw_accel", "Graphics acceleration", "gpu hardware"),
     row(System, "memory_saver", "Memory saver", "discard tabs performance"),
     row(System, "reset", "Reset settings…", "defaults restore"),

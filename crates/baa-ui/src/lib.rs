@@ -1,6 +1,8 @@
 //! GPUI views (PLAN.md §3, §8, §10). Codes only against `baa_web::WebHost`.
 
 pub mod actions;
+mod agent;
+mod agent_panel;
 mod browser;
 mod command_bar;
 mod fuzzy;
@@ -31,6 +33,8 @@ mod tests_m3_bar;
 mod tests_settings;
 #[cfg(test)]
 mod tests_dev;
+#[cfg(test)]
+mod tests_agent;
 
 pub use browser::Browser;
 pub use icons::Assets;

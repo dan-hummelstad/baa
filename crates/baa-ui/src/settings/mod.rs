@@ -6,6 +6,7 @@
 //! The view holds no settings itself: it reads and writes the `Browser`
 //! entity, so the browser window and this one cannot disagree.
 
+mod claude;
 mod developer;
 mod extensions;
 mod privacy;
@@ -53,6 +54,7 @@ pub(crate) enum Field {
     EnvProject,
     EnvLabel,
     EnvOrigin,
+    ClaudePath,
 }
 
 pub(crate) struct SettingsView<H: WebHost> {
@@ -226,6 +228,7 @@ impl<H: WebHost> SettingsView<H> {
     pub(super) fn seed_fields(&mut self, cx: &mut Context<Self>) {
         let s = self.browser.read(cx).settings.clone();
         self.field_mut(Field::Languages).text = s.web.languages.unwrap_or_default();
+        self.field_mut(Field::ClaudePath).text = s.claude.claude_path.clone().unwrap_or_default();
         if let baa_model::SecureDns::Custom(t) = &s.web.secure_dns {
             self.field_mut(Field::DnsTemplate).text = t.clone();
         }
@@ -298,6 +301,12 @@ impl<H: WebHost> SettingsView<H> {
                 let new = (!text.is_empty()).then_some(text);
                 if self.browser.read(cx).settings.web.languages != new {
                     self.change(cx, |s| s.web.languages = new);
+                }
+            }
+            Field::ClaudePath => {
+                let new = (!text.is_empty()).then_some(text);
+                if self.browser.read(cx).settings.claude.claude_path != new {
+                    self.change(cx, |s| s.claude.claude_path = new);
                 }
             }
             Field::DnsTemplate if baa_model::SecureDns::valid_template(&text) => {
@@ -447,7 +456,7 @@ impl<H: WebHost> SettingsView<H> {
             Field::SpaceName(id) => self.finish_rename(id, cx),
             Field::EngineName | Field::EngineUrl => self.add_engine(cx),
             Field::EnvProject | Field::EnvLabel | Field::EnvOrigin => self.add_env(cx),
-            Field::Languages | Field::DnsTemplate => self.commit(field, cx),
+            Field::Languages | Field::DnsTemplate | Field::ClaudePath => self.commit(field, cx),
             _ => {}
         }
     }
@@ -735,6 +744,7 @@ impl<H: WebHost> SettingsView<H> {
             Tab::Spaces => self.spaces_tab(cx),
             Tab::Keyboard => self.keyboard(cx),
             Tab::Developer => self.developer(&s, cx),
+            Tab::Claude => self.claude(&s, cx),
             Tab::System => self.system(&s, cx),
         }
     }

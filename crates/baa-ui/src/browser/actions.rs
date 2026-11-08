@@ -107,6 +107,7 @@ impl<H: WebHost> Browser<H> {
                 _ => this.open_library(crate::library::Section::Downloads, cx),
             }
         }))
+        .on_action(cx.listener(|this, _: &ToggleAgent, window, cx| this.toggle_agent_panel(window, cx)))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
         .on_action(cx.listener(|this, _: &ClearToday, window, cx| this.clear_today(window, cx)))
         .on_action(cx.listener(|this, _: &ShowArchive, window, cx| {

@@ -157,7 +157,7 @@ fn download_status(d: &Download) -> String {
 }
 
 /// A plain or accent button on a light surface.
-fn button<H: WebHost>(
+pub(crate) fn button<H: WebHost>(
     key: (&'static str, u64),
     label: impl Into<SharedString>,
     primary: bool,

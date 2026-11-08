@@ -235,6 +235,7 @@ impl<H: WebHost> Browser<H> {
             .child(self.render_favorites(space, theme, cx))
             .child(lists)
             .children(self.render_mini_player(theme, cx))
+            .children(self.render_agent_strip(theme, cx))
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
     }
@@ -489,6 +490,8 @@ impl<H: WebHost> Browser<H> {
             .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .bg(mix(fade(theme.hover, h), theme.glass_strong, sel))
+            // Claude is driving it (PLAN-m4 D4: visible at all times).
+            .when(self.agent.driven.contains(&id), |d| d.border_1().border_color(Hsla { a: 0.7, ..accent }))
             .when(sel > 0.0, |d| {
                 d.shadow(vec![shadow(Hsla { a: 0.14 * sel, ..theme.ink }, 1., 3.)])
             })

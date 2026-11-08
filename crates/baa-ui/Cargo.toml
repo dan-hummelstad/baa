@@ -14,6 +14,9 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
+# Already in the graph via gpui (and the app shell): channels from the agent socket's and the
+# chat child's reader threads into the foreground.
+futures = "0.3"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

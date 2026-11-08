@@ -104,6 +104,7 @@
       "shift-f5": "baa::HardReload",
       "ctrl-alt-r": "baa::ReaderMode",
       "ctrl-j": "baa::ShowDownloads",
+      "ctrl-shift-.": "baa::ToggleAgent",
       "ctrl-h": "baa::ShowHistory",
       "ctrl-shift-k": "baa::ClearToday",
       "ctrl-shift-a": "baa::ShowArchive",

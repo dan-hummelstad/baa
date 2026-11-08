@@ -552,3 +552,14 @@ fn the_site_details_address_opens_one_site_and_sets_its_permission(cx: &mut Test
     click(&mut s, "site-back");
     assert!(drawn(&mut s, "add-rule:site.popups"), "back to the list");
 }
+
+#[gpui::test]
+fn the_claude_switch_goes_through_the_browser(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    h.update(&mut s, |v, _, cx| v.select_tab(Tab::Claude, cx)).unwrap();
+    assert!(!b.read_with(&s, |b, _| b.settings.claude.enabled));
+    click(&mut s, "pref-claude");
+    assert!(b.read_with(&s, |b, _| b.settings.claude.enabled));
+}
