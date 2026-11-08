@@ -37,6 +37,9 @@ mod groups;
 mod live;
 mod page_state;
 mod shared_extensions;
+mod media;
+#[cfg(test)]
+mod tests_media;
 pub(crate) use shared_extensions::InstallTarget;
 #[cfg(test)]
 mod tests_shared_extensions;
@@ -173,9 +176,13 @@ pub struct Browser<H: WebHost> {
     // ponytail: not saved; a restart before such a background tab is shown
     // loads its URL as the user's. Persist it if that matters.
     supplied: HashSet<TabId>,
-    /// Tabs playing sound, and tabs the user muted.
+    /// Tabs playing sound, and tabs Chrome says are muted (by us or by Chrome).
     pub(crate) audible: HashSet<TabId>,
     pub(crate) muted: HashSet<TabId>,
+    /// Each tab's media session, and when it last played (a count, higher is later).
+    pub(crate) media: HashMap<TabId, (baa_web::Media, u64)>,
+    /// The tab the mini-player shows, kept while it fades out.
+    pub(crate) mini_tab: Option<TabId>,
     /// Header popovers: the download list, the site's settings.
     pub(crate) popover: Option<crate::prompts::Popover>,
     /// Downloads the user cleared from the list.
@@ -324,6 +331,8 @@ impl<H: WebHost> Browser<H> {
             supplied: HashSet::new(),
             audible: HashSet::new(),
             muted: HashSet::new(),
+            media: HashMap::new(),
+            mini_tab: None,
             popover: None,
             cleared_downloads: HashSet::new(),
             downloads_seen: 0,
@@ -437,6 +446,9 @@ impl<H: WebHost> Browser<H> {
             for s in [self.shown_space, space].into_iter().flatten() {
                 self.motion.to(("space-sel", s.0), Feel::Glide, (Some(s) == space) as u8 as f32);
             }
+            if let Some(left) = self.shown_space {
+                self.pip_on_leaving(left, cx);
+            }
             self.shown_space = space;
             self.session
                 .archive_expired(now(), self.settings.archive_after_hours);
@@ -450,6 +462,7 @@ impl<H: WebHost> Browser<H> {
         self.asks.retain(|id, _| pages.contains_key(id));
         self.audible.retain(|id| pages.contains_key(id));
         self.muted.retain(|id| pages.contains_key(id));
+        self.media.retain(|id, _| pages.contains_key(id));
         let active = self.active_tab();
         if active != self.shown_tab {
             for (id, on) in [(self.shown_tab, 0.0), (active, 1.0)] {
@@ -469,6 +482,7 @@ impl<H: WebHost> Browser<H> {
             }
         }
         self.show_pages(cx);
+        self.retarget_mini_player();
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
             self.focus_page(window, cx);
         }
@@ -594,8 +608,17 @@ impl<H: WebHost> Browser<H> {
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::Focused => return self.on_page_focused(id, window, cx),
-            // ABI 10, not used by the UI yet (M4 C, D, E).
-            PageEvent::Console { .. } | PageEvent::Media(_) | PageEvent::Muted(_) => return,
+            // ABI 10, not used by the UI yet (M4 D, E).
+            PageEvent::Console { .. } => return,
+            PageEvent::Media(media) => return self.on_media(id, media, cx),
+            PageEvent::Muted(on) => {
+                if *on {
+                    self.muted.insert(id);
+                } else {
+                    self.muted.remove(&id);
+                }
+                return cx.notify();
+            }
             PageEvent::DevToolsRequested { x, y } => {
                 // Inspect always opens (or moves to) the element, never closes.
                 self.devtools.remove(&id);

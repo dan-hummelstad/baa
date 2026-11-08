@@ -703,6 +703,8 @@ fn playing_tabs_can_be_muted(cx: &mut TestAppContext) {
     b.read_with(cx, |b, _| assert_eq!(b.audible.len(), 1));
     cx.dispatch_action(MuteTab);
     page.read_with(cx, |p, _| assert!(p.muted.get()));
+    // Chrome confirms; the next press unmutes.
+    page.update(cx, |_, cx| cx.emit(PageEvent::Muted(true)));
     cx.dispatch_action(MuteTab);
     page.read_with(cx, |p, _| assert!(!p.muted.get()));
 }

@@ -101,6 +101,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(General, "on_launch", "On launch", "startup restore tabs pinned"),
     row(General, "external_links", "Links from other apps", "little baa lil-baa external open"),
     row(General, "peek_links", "Links that open a new tab", "peek preview"),
+    row(General, "auto_pip", "Picture in Picture when switching away", "pip video float automatic"),
     row(General, "archive", "Archive Today tabs after", "auto archive hours"),
     row(General, "download_dir", "Save downloads to", "downloads folder location"),
     row(General, "ask_save", "Ask where to save each file", "download prompt"),

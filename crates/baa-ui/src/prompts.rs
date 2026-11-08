@@ -250,12 +250,8 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn toggle_mute(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        // `muted` follows Chrome's PageEvent::Muted, not this guess.
         let muted = !self.muted.contains(&tab);
-        if muted {
-            self.muted.insert(tab);
-        } else {
-            self.muted.remove(&tab);
-        }
         if let Some((page, _)) = self.pages.get(&tab) {
             page.read(cx).set_muted(muted);
         }

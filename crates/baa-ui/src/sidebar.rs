@@ -234,6 +234,7 @@ impl<H: WebHost> Browser<H> {
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
             .child(self.render_favorites(space, theme, cx))
             .child(lists)
+            .children(self.render_mini_player(theme, cx))
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
     }

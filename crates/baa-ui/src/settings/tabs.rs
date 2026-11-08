@@ -99,6 +99,12 @@ impl<H: WebHost> SettingsView<H> {
                 "",
                 self.segments("pref-peek", labels(&[(true, "Peek"), (false, "New tab")]), s.peek_links, |v, s| s.peek_links = v, cx),
             ),
+            self.section("Media"),
+            self.row(
+                "auto_pip",
+                "A playing video keeps floating when you switch tab or Space.",
+                self.toggle("pref-auto-pip", s.auto_pip, |s, v| s.auto_pip = v, cx),
+            ),
             self.section("Downloads"),
             self.row("download_dir", "", dir_control),
             self.row("ask_save", "", self.toggle("pref-ask-save", s.web.ask_where_to_save, |s, v| s.web.ask_where_to_save = v, cx)),
