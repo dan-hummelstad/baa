@@ -9,6 +9,7 @@ mod fuzzy;
 mod icons;
 mod input;
 mod library;
+mod markdown;
 mod lil_baa;
 mod motion;
 mod pages;

@@ -20,8 +20,9 @@ use crate::{
     icons::icon,
     input::{Key, TextField},
     library::{ink_mid, ink_soft, raised, Section},
+    markdown,
     settings::Tab,
-    theme::{ascii, fade, mix, r, Theme},
+    theme::{ascii, fade, r, Theme},
 };
 
 const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
@@ -30,6 +31,7 @@ const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 pub(crate) enum Entry {
     User(String),
     Assistant(String),
+    Thinking(String),
     ToolUse { name: String, summary: String },
     Notice(String),
     /// The turn ended; not drawn.
@@ -89,6 +91,7 @@ fn parse_line(line: &str) -> Vec<Entry> {
             .flatten()
             .filter_map(|b| match b["type"].as_str()? {
                 "text" => Some(Entry::Assistant(b["text"].as_str()?.trim().to_string())).filter(|e| *e != Entry::Assistant(String::new())),
+                "thinking" => Some(Entry::Thinking(b["thinking"].as_str()?.trim().to_string())).filter(|e| *e != Entry::Thinking(String::new())),
                 "tool_use" => Some(Entry::ToolUse {
                     name: b["name"].as_str()?.trim_start_matches("mcp__baa__").to_string(),
                     summary: summarize(&b["input"]),
@@ -121,6 +124,13 @@ fn summarize(input: &Value) -> String {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s,
     }
+}
+
+/// `read_page` reads as "Read page".
+fn tool_label(name: &str) -> String {
+    let s = name.replace('_', " ");
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 fn needs_login(text: &str) -> bool {
@@ -397,7 +407,7 @@ impl<H: WebHost> Browser<H> {
                     match e {
                         Entry::Done => p.busy = false,
                         Entry::Notice(ref t) if needs_login(t) => p.not_logged_in = true,
-                        Entry::Notice(_) | Entry::Assistant(_) | Entry::ToolUse { .. } | Entry::User(_) => {}
+                        Entry::Notice(_) | Entry::Assistant(_) | Entry::Thinking(_) | Entry::ToolUse { .. } | Entry::User(_) => {}
                     }
                     if e != Entry::Done && !matches!(&e, Entry::Notice(t) if needs_login(t)) {
                         p.transcript.push(e);
@@ -529,7 +539,6 @@ impl<H: WebHost> Browser<H> {
                 .hover(|d| d.bg(theme.hover))
                 .child(icon(name, size, theme.ink_muted))
         };
-        let running = p.child.is_some() || self.agent.connected();
         let header = div()
             .flex_none()
             .relative()
@@ -565,7 +574,6 @@ impl<H: WebHost> Browser<H> {
                     .right_0()
                     .flex()
                     .gap(px(2.))
-                    .when(running, |d| d.child(icon_btn("agent-stop", "square", 12.).on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))))
                     .child(icon_btn("agent-close", "x", 16.).on_click(cx.listener(|this, _, window, cx| this.close_library(window, cx)))),
             );
 
@@ -638,6 +646,16 @@ impl<H: WebHost> Browser<H> {
                 )
         });
 
+        let step = |name: &'static str, label: String, detail: String| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .text_size(px(11.5))
+                .child(icon(name, 12., soft))
+                .child(div().flex_none().font_weight(gpui::FontWeight::MEDIUM).text_color(mid).child(label))
+                .when(!detail.is_empty(), |d| d.child(div().min_w_0().truncate().text_color(soft).child(detail)))
+        };
         let transcript = div()
             .id("agent-transcript")
             .flex_1()
@@ -668,12 +686,27 @@ impl<H: WebHost> Browser<H> {
                             .text_color(theme.ink)
                             .child(SharedString::from(t.clone())),
                     ),
-                    Entry::Assistant(t) => row.px(px(4.)).text_color(mix(theme.ink_muted, theme.ink, 0.7)).child(SharedString::from(t.clone())),
-                    Entry::ToolUse { name, summary } => row
+                    Entry::Assistant(t) => row.px(px(4.)).text_color(theme.ink).child(markdown::render(&markdown::parse(t), theme)),
+                    // Claude.ai and ChatGPT show reasoning as a quiet, indented aside, not as the answer.
+                    Entry::Thinking(t) => row
                         .px(px(4.))
-                        .text_size(px(11.5))
-                        .text_color(soft)
-                        .child(SharedString::from(format!("{name} {summary}"))),
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(step("sparkles", "Thinking".into(), String::new()))
+                        .child(
+                            div()
+                                .ml(px(5.))
+                                .pl(px(12.))
+                                .border_l_1()
+                                .border_color(fade(theme.ink, 0.15))
+                                .text_size(px(11.5))
+                                .text_color(soft)
+                                // ponytail: clamped preview, no expand toggle; add one if long reasoning must be readable here.
+                                .line_clamp(4)
+                                .child(SharedString::from(t.clone())),
+                        ),
+                    Entry::ToolUse { name, summary } => row.px(px(4.)).child(step("terminal", tool_label(name), summary.clone())),
                     Entry::Notice(t) => row.px(px(4.)).text_color(theme.accent).child(SharedString::from(t.clone())),
                     Entry::Done => return None,
                 })
@@ -802,13 +835,25 @@ impl<H: WebHost> Browser<H> {
                             soft,
                             Hsla { a: 0.25, ..theme.accent },
                         )))
-                        .child(
+                        .child(if p.busy {
+                            div()
+                                .id("agent-stop")
+                                .flex_none()
+                                .size(px(22.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(r(6.))
+                                .bg(theme.ink)
+                                .on_click(cx.listener(|this, _, _, cx| this.stop_agent(cx)))
+                                .child(icon("square", 10., theme.glass_strong))
+                        } else {
                             div()
                                 .id("agent-send")
                                 .flex_none()
                                 .on_click(cx.listener(|this, _, _, cx| this.send_agent_message(cx)))
-                                .child(icon("arrow-up", 16., if ready { theme.ink } else { theme.ink_muted })),
-                        ),
+                                .child(icon("arrow-up", 16., if ready { theme.ink } else { theme.ink_muted }))
+                        }),
                 )
         };
 
@@ -855,6 +900,14 @@ mod tests {
         assert_eq!(e[1], Entry::Done);
         assert_eq!(parse_line(r#"{"type":"result","is_error":false,"result":"ok"}"#), [Entry::Done]);
         assert!(!needs_login("rate limited"));
+    }
+
+    #[test]
+    fn thinking_is_its_own_entry_and_tools_read_as_words() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":" plan "},{"type":"thinking","thinking":""}]}}"#;
+        assert_eq!(parse_line(line), vec![Entry::Thinking("plan".into())]);
+        assert_eq!(tool_label("read_page"), "Read page");
+        assert_eq!(tool_label(""), "");
     }
 
     #[test]
