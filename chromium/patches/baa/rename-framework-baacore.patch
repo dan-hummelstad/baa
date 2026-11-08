@@ -64,4 +64,15 @@
 +        return '{0.app_dir}/Contents/Frameworks/BaaCore.framework'.format(
              self
          )
- 
+
+--- a/content/public/app/BUILD.gn
++++ b/content/public/app/BUILD.gn
+@@ -123,7 +123,7 @@
+         "-Wl,-rpath,@loader_path/../../../../../../..",
+       ]
+     } else {
+-      ldflags += [ "-Wl,-install_name,@executable_path/../Frameworks/$chrome_product_full_name Framework.framework/Versions/$chrome_version_full/Libraries/libaperitif.dylib" ]
++      ldflags += [ "-Wl,-install_name,@executable_path/../Frameworks/BaaCore.framework/Versions/$chrome_version_full/Libraries/libaperitif.dylib" ]
+     }
+
+     allow_circular_includes_from = [
