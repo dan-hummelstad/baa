@@ -287,6 +287,52 @@ fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_click_in_the_peek_card_keeps_it_open_and_one_on_the_scrim_closes_it(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let page = b.read_with(cx, |b, _| b.pages.values().next().unwrap().0.clone());
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::OpenRequested { url: "https://accounts.example".into(), from_user_gesture: true, background: false })
+    });
+    cx.run_until_parked();
+    let card = cx.debug_bounds("peek-card").expect("the card renders");
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    assert!(b.read_with(cx, |b, _| b.peek.is_some()), "a click on a still-blank page is the page's");
+    let scrim = gpui::point(card.left() - gpui::px(10.), card.center().y);
+    cx.simulate_click(scrim, gpui::Modifiers::none());
+    assert!(b.read_with(cx, |b, _| b.peek.is_none()), "the scrim still dismisses");
+}
+
+#[gpui::test]
+fn favorites_fill_their_row_four_at_most(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let add = |n: usize, b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| {
+        b.update(cx, |b, _| {
+            let space = b.session.active_space().unwrap();
+            for i in 0..n {
+                let tab = b.session.open_tab(space, &format!("https://f{i}.example"), 0);
+                b.session.move_tab(tab, space, Zone::Favorite, usize::MAX);
+            }
+        });
+        b.update_in(cx, |b, window, cx| b.sync(window, cx));
+        cx.run_until_parked();
+    };
+    const NAMES: [&str; 5] = ["favorite-0", "favorite-1", "favorite-2", "favorite-3", "favorite-4"];
+    let width = |i: usize, cx: &mut VisualTestContext| f32::from(cx.debug_bounds(NAMES[i]).unwrap().size.width);
+    add(2, &b, cx);
+    let two = width(0, cx);
+    assert_eq!(two, width(1, cx));
+    add(3, &b, cx);
+    let (four, last) = (width(0, cx), width(4, cx));
+    assert!(four < two, "four share a row: {four} vs {two}");
+    assert!(last > two, "the fifth starts a row of its own and fills it: {last}");
+    let (a, e) = (cx.debug_bounds("favorite-0").unwrap(), cx.debug_bounds("favorite-4").unwrap());
+    assert!(e.top() > a.top(), "the fifth wraps");
+}
+
+#[gpui::test]
 fn links_that_open_a_tab_peek_and_expand_into_one(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");

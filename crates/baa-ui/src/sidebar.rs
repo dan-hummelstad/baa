@@ -24,8 +24,8 @@ use crate::{
 fn row_h() -> f32 {
     if ascii() { 24. } else { 38. }
 }
-/// Favourite tiles, four to a row (pen.dev "Favorite").
-const FAV_W: f32 = 53.;
+/// Favourite tiles share their row's width, at most this many to a row.
+const FAV_PER_ROW: usize = 4;
 const FAV_H: f32 = 44.;
 
 #[derive(Clone)]
@@ -559,8 +559,7 @@ impl<H: WebHost> Browser<H> {
             // The tile shrinks inside a fixed cell, so pressing never moves its neighbours.
             let inset = 3. * p + 16. * hidden;
             let tile = div()
-                .w(px(FAV_W - 2. * inset))
-                .h(px(FAV_H - 2. * inset))
+                .size_full()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -580,8 +579,11 @@ impl<H: WebHost> Browser<H> {
                 ));
             let cell = div()
                 .id(("favorite", id.0))
-                .w(px(FAV_W))
+                .debug_selector(move || format!("favorite-{i}"))
+                .flex_1()
+                .min_w_0()
                 .h(px(FAV_H))
+                .p(px(inset))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -600,15 +602,23 @@ impl<H: WebHost> Browser<H> {
                     this.session.move_tab(d.id, space, Zone::Favorite, i);
                     this.sync(window, cx);
                 }));
-            feel(cell, key, cx)
-        }).collect::<Vec<_>>();
+            feel(cell, key, cx).into_any_element()
+        });
+        let mut rows: Vec<Vec<AnyElement>> = Vec::new();
+        for (i, tile) in tiles.enumerate() {
+            if i % FAV_PER_ROW == 0 {
+                rows.push(Vec::new());
+            }
+            rows.last_mut().expect("pushed above").push(tile);
+        }
+        let rows = rows.into_iter().map(|row| div().flex().gap(px(8.)).children(row));
         div()
             .id("favorites")
             .flex_none()
             .when(empty, |d| d.h(px(8.)))
             .when(!empty, |d| d.mt(px(4.)).mb(px(8.)))
             .flex()
-            .flex_wrap()
+            .flex_col()
             .gap(px(8.))
             .rounded(r(10.))
             .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass).min_h(px(FAV_H)))
@@ -616,7 +626,7 @@ impl<H: WebHost> Browser<H> {
                 this.session.move_tab(d.id, space, Zone::Favorite, usize::MAX);
                 this.sync(window, cx);
             }))
-            .children(tiles)
+            .children(rows)
     }
 
     /// A folder row, then its subfolders and tabs indented unless it is collapsed (its

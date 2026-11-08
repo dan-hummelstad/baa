@@ -347,6 +347,12 @@ impl<H: WebHost> Browser<H> {
             .child(controls)
             .child(
                 div()
+                    .id("peek-card")
+                    .debug_selector(|| "peek-card".into())
+                    // Clicks in the card are not clicks on the scrim. The page's own hitbox does not
+                    // block it, and while the page is blank (loading) Chromium leaves the mouse-up to
+                    // gpui, so the scrim saw a whole click and closed the Peek.
+                    .occlude()
                     .size_full()
                     .rounded(r(PEEK_RADIUS))
                     .overflow_hidden()
