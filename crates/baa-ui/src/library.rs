@@ -262,7 +262,10 @@ impl<H: WebHost> Browser<H> {
             Section::Archive => "Search Archived Tabs…",
             Section::Chat => {
                 let chat = self.render_agent_panel(theme, cx).unwrap_or_else(|| div().into_any_element());
-                return library_box(chat).into_any_element();
+                // Vertical scrolls stay with the transcript: the swipe takes only mostly-horizontal ones.
+                return library_box(chat)
+                    .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+                    .into_any_element();
             }
         };
         let search = div()
