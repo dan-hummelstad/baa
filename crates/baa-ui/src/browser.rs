@@ -590,8 +590,7 @@ impl<H: WebHost> Browser<H> {
             | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
             PageEvent::GroupChanged { group, title } => return self.on_group_changed(id, *group, title, window, cx),
-            // ponytail: the notice itself is drawn in a later change.
-            PageEvent::ExclusiveAccess { .. } => return,
+            PageEvent::ExclusiveAccess { .. } |
             PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) => {
                 return self.on_page_state_event(id, event, window, cx)
             }

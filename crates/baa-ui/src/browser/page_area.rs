@@ -94,6 +94,7 @@ impl<H: WebHost> Browser<H> {
         });
         let asks = self.render_asks(theme, cx);
         let crashed = self.crash_overlay(cx);
+        let notice = self.exclusive_notice();
         let count = self.page_state.find_result;
         let find = self.find.as_ref().map(|field| {
             drop_in(div()
@@ -160,6 +161,7 @@ impl<H: WebHost> Browser<H> {
             .children(crashed)
             .children(asks)
             .children(find)
+            .children(notice)
     }
 
     /// DevTools for the active tab where the settings put it; docked ones close

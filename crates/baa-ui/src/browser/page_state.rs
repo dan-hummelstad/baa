@@ -1,6 +1,21 @@
 //! Page fullscreen, the find bar's match count, and the crashed-page overlay (PLAN-m3 §2.3).
 
 use super::*;
+use baa_web::ExclusiveKind;
+
+/// How long Chrome's fullscreen / pointer lock notice stays up.
+pub(crate) const NOTICE_FOR: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What the notice says: who took the screen, keyboard or cursor, and how to get
+/// it back, so a page cannot pose as the browser or the desktop.
+pub(crate) fn notice_text(origin: &str, kind: ExclusiveKind) -> String {
+    let site = Some(host_of(origin)).filter(|h| !h.is_empty()).unwrap_or_else(|| origin.to_string());
+    match kind {
+        ExclusiveKind::Fullscreen => format!("{site} is full screen. Press Esc to exit"),
+        ExclusiveKind::KeyboardLock => format!("{site} is full screen. Press and hold Esc to exit"),
+        ExclusiveKind::PointerLock => format!("{site} hid your cursor. Press Esc to show your cursor"),
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct PageState {
@@ -12,6 +27,10 @@ pub(crate) struct PageState {
     pub(crate) find_result: Option<(u32, u32)>,
     pub(crate) crashed: HashSet<TabId>,
     pub(crate) groups: super::groups::Groups,
+    /// The fullscreen / pointer lock notice while it shows, and a count so only
+    /// the newest one's timer hides it.
+    pub(crate) notice: Option<String>,
+    notice_count: u64,
 }
 
 impl<H: WebHost> Browser<H> {
@@ -35,6 +54,22 @@ impl<H: WebHost> Browser<H> {
             PageEvent::Fullscreen(false) if self.fullscreen == Some(id) => self.end_fullscreen(false, window, cx),
             PageEvent::FindResult { active, total } if self.active_tab() == Some(id) => {
                 self.page_state.find_result = Some((*active, *total));
+            }
+            PageEvent::ExclusiveAccess { origin, kind } if self.active_tab() == Some(id) => {
+                self.page_state.notice = kind.map(|k| notice_text(origin, k));
+                self.page_state.notice_count += 1;
+                let count = self.page_state.notice_count;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(NOTICE_FOR).await;
+                    this.update(cx, |this, cx| {
+                        if this.page_state.notice_count == count {
+                            this.page_state.notice = None;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
             }
             PageEvent::Crashed(on) => {
                 if *on {
@@ -87,7 +122,27 @@ impl<H: WebHost> Browser<H> {
                 .size_full()
                 .bg(gpui::black())
                 .child(content)
-                .children(self.render_asks(&theme, cx)),
+                .children(self.render_asks(&theme, cx))
+                .children(self.exclusive_notice()),
+        )
+    }
+
+    pub(super) fn exclusive_notice(&self) -> Option<impl IntoElement> {
+        let text = self.page_state.notice.clone()?;
+        Some(
+            div().absolute().top(px(24.)).left_0().right_0().flex().justify_center().child(
+                cut_left(div())
+                    .id("exclusive-notice")
+                    .debug_selector(|| "exclusive-notice".into())
+                    .max_w(relative(0.9))
+                    .px(px(16.))
+                    .py(px(10.))
+                    .rounded(r(10.))
+                    .bg(gpui::rgba(0x141018E6))
+                    .text_color(gpui::white())
+                    .text_size(px(14.))
+                    .child(SharedString::from(text)),
+            ),
         )
     }
 

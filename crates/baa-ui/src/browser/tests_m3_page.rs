@@ -4,6 +4,7 @@ use baa_model::{Store, Zone};
 use baa_web::PageEvent;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
+use super::page_state::NOTICE_FOR;
 use crate::{mock::{MockHost, MockPage}, Browser};
 
 fn browser(cx: &mut TestAppContext) -> (Entity<Browser<MockHost>>, &mut VisualTestContext) {
@@ -48,6 +49,32 @@ fn page_leaving_fullscreen_clears_it_without_telling_it_back(cx: &mut TestAppCon
     emit(&page, PageEvent::Fullscreen(false), cx);
     assert_eq!(b.read_with(cx, |b, _| b.fullscreen), None);
     assert_eq!(page.read_with(cx, |p, _| p.exited_fullscreen.get()), 0);
+}
+
+#[gpui::test]
+fn fullscreen_and_pointer_lock_name_the_site_and_the_way_out(cx: &mut TestAppContext) {
+    use baa_web::ExclusiveKind;
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "https://a.example/", cx);
+    emit(&page, PageEvent::Fullscreen(true), cx);
+    let notice = |kind| PageEvent::ExclusiveAccess { origin: "https://user@evil.example:8443".into(), kind };
+    emit(&page, notice(Some(ExclusiveKind::KeyboardLock)), cx);
+    cx.run_until_parked();
+    let shown = |cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.page_state.notice.clone());
+    assert_eq!(shown(cx).as_deref(), Some("evil.example:8443 is full screen. Press and hold Esc to exit"));
+    assert!(cx.debug_bounds("exclusive-notice").is_some(), "drawn over the fullscreen page");
+    cx.executor().advance_clock(NOTICE_FOR);
+    cx.run_until_parked();
+    assert_eq!(shown(cx), None, "gone after three seconds");
+    assert!(cx.debug_bounds("exclusive-notice").is_none());
+
+    emit(&page, PageEvent::Fullscreen(false), cx);
+    emit(&page, notice(Some(ExclusiveKind::PointerLock)), cx);
+    cx.run_until_parked();
+    assert!(shown(cx).unwrap().ends_with("Press Esc to show your cursor"));
+    assert!(cx.debug_bounds("exclusive-notice").is_some(), "pointer lock outside fullscreen too");
+    emit(&page, notice(None), cx);
+    assert_eq!(shown(cx), None);
 }
 
 #[gpui::test]
