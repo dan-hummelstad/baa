@@ -42,6 +42,7 @@ fn run(cmd: &mut Command) -> Result<()> {
 }
 
 const FRAMEWORK: &str = "Contents/Frameworks/BaaCore.framework";
+const SHARED_ROOT: &str = "/Users/Shared/hb";
 const SHARED_ENGINE: &str = "/Users/Shared/hb/helium-macos/build/src/out/Default";
 
 struct Bundle {
@@ -71,14 +72,27 @@ fn parse_bundle(args: &[&str]) -> Result<Bundle> {
 }
 
 /// The engine directory (it holds `baa.app`): `--engine`, `$BAA_ENGINE`, the shared
-/// local Chromium tree, `target/engine`.
+/// local Chromium tree if only you control it, `target/engine`.
 fn find_engine(arg: Option<PathBuf>) -> Result<PathBuf> {
-    let shared = PathBuf::from(SHARED_ENGINE);
-    let candidates = [arg, env::var_os("BAA_ENGINE").map(PathBuf::from), Some(shared), Some(workspace_root().join("target/engine"))];
-    for dir in candidates.into_iter().flatten() {
-        if dir.join("baa.app").is_dir() {
-            return Ok(dir);
+    let explicit = arg.or_else(|| env::var_os("BAA_ENGINE").map(PathBuf::from));
+    if let Some(dir) = explicit.filter(|d| d.join("baa.app").is_dir()) {
+        return Ok(dir);
+    }
+    // Any account can create /Users/Shared/hb first, and the bundle gets signed with
+    // your identity and run: use it unasked only when it is yours alone.
+    let shared = Path::new(SHARED_ENGINE);
+    if shared.join("baa.app").is_dir() {
+        if only_mine(Path::new(SHARED_ROOT), &shared.join("baa.app")) {
+            return Ok(shared.to_path_buf());
         }
+        eprintln!(
+            "warning: ignoring {SHARED_ENGINE}: a directory from {SHARED_ROOT} down to baa.app is a symlink, \
+             not yours, or writable by group/others. Fix it, or pass --engine / BAA_ENGINE to use it anyway."
+        );
+    }
+    let local = workspace_root().join("target/engine");
+    if local.join("baa.app").is_dir() {
+        return Ok(local);
     }
     bail!(
         "no engine (a directory with baa.app) found. Get one:\n  \
@@ -87,6 +101,24 @@ fn find_engine(arg: Option<PathBuf>) -> Result<PathBuf> {
          C++ work: unpack chromium-tree at /Users/Shared/hb and run chromium/local-build.sh\n\
          (README \"Build\"); then pass --engine DIR or set BAA_ENGINE"
     )
+}
+
+/// True when `path` lies under `top`, has no symlink in it, and every directory from `top`
+/// down to `path` is owned by this user and not writable by group or others.
+fn only_mine(top: &Path, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    unsafe extern "C" {
+        safe fn getuid() -> u32;
+    }
+    let Ok(rest) = path.strip_prefix(top) else { return false };
+    if fs::canonicalize(path).ok().as_deref() != Some(path) {
+        return false;
+    }
+    let mut dir = top.to_path_buf();
+    std::iter::once(None).chain(rest.components().map(Some)).all(|c| {
+        dir.extend(c);
+        fs::symlink_metadata(&dir).is_ok_and(|m| m.uid() == getuid() && m.mode() & 0o022 == 0)
+    })
 }
 
 fn modified(path: &Path) -> Option<std::time::SystemTime> {
@@ -188,5 +220,38 @@ mod mac {
             );
         }
         run(Command::new("xcrun").args(["stapler", "staple"]).arg(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn only_mine_rejects_group_or_world_writable_and_symlinked_trees() {
+        let top = env::temp_dir().join(format!("xtask-only-mine-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        let app = top.join("out/baa.app");
+        fs::create_dir_all(&app).unwrap();
+        let top = fs::canonicalize(&top).unwrap();
+        let app = top.join("out/baa.app");
+        let mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+        for p in [&top, &top.join("out"), &app] {
+            mode(p, 0o755);
+        }
+        assert!(only_mine(&top, &app));
+        mode(&top.join("out"), 0o777);
+        assert!(!only_mine(&top, &app));
+        mode(&top.join("out"), 0o775);
+        assert!(!only_mine(&top, &app));
+        mode(&top.join("out"), 0o755);
+        mode(&top, 0o777);
+        assert!(!only_mine(&top, &app));
+        mode(&top, 0o755);
+        std::os::unix::fs::symlink(&app, top.join("link")).unwrap();
+        assert!(!only_mine(&top, &top.join("link")));
+        assert!(!only_mine(&top.join("out"), &top));
+        fs::remove_dir_all(&top).unwrap();
     }
 }

@@ -19,6 +19,21 @@ trap 'rmdir "$LOCK"' EXIT
 ! pgrep -x siso >/dev/null || { echo "a siso build is running; wait for it" >&2; exit 1; }
 [ -f "$SRC/out/Default/args.gn" ] || { echo "no dev tree at $ROOT; unpack a chromium-tree-xcode* artifact there" >&2; exit 1; }
 
+# Any account can create a directory in /Users/Shared first; build and run only
+# what is yours alone: no symlink, owned by you, not group/other writable.
+mine() { # mine <dir> <top>: <dir> and each parent up to <top>
+  local p=$1
+  while :; do
+    if [ -L "$p" ] || [ "$(stat -f %u "$p")" != "$(id -u)" ] || (( 0$(stat -f %Lp "$p") & 022 )); then
+      echo "$p is a symlink, not yours, or writable by group/others; fix it before building" >&2; exit 1
+    fi
+    [ "$p" != "$2" ] || return 0
+    p=$(dirname "$p")
+  done
+}
+mine "$SRC/out/Default" "$ROOT"
+[ ! -e "$CACHE" ] || mine "$CACHE" "$CACHE"
+
 # By content, no times: a changed file gets a new mtime and rebuilds, the rest stay.
 sync() { "$RSYNC" -rlpc --delete "$@"; }
 

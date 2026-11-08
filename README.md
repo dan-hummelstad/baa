@@ -96,6 +96,9 @@ cargo bundle --run --enable-logging=stderr --v=1    # Chromium's own log
 
 `cargo bundle [--release] [--engine DIR] [--no-sign] [--run [args…]]` finds the engine in `--engine`,
 else `$BAA_ENGINE`, else `/Users/Shared/hb/helium-macos/build/src/out/Default`, else `target/engine`.
+Any account can write to `/Users/Shared`, so the third is used, and `chromium/local-build.sh` builds,
+only when every directory from `/Users/Shared/hb` down is yours, is not a symlink and is not writable
+by group or others.
 A component engine (the dev tree) bundles in place as `<engine>/baa Dev.app`; an official engine
 bundles to `target/bundle/baa.app`. Without `--run` it prints the app path. A debug build lays out
 GPUI too slowly to present more than ~60 fps.
