@@ -16,6 +16,7 @@ pub use settings::{
     SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
 };
 pub use live::{LiveItem, LiveSource};
+pub use settings::{Env, Project};
 pub use store::{DownloadRecord, HistoryItem, Store};
 
 use serde::{Deserialize, Serialize};

@@ -228,6 +228,48 @@ pub struct Settings {
     /// Engines the user added, beside [`SEARCH_ENGINES`].
     pub search_engines: Vec<SearchEngine>,
     pub web: WebPrefs,
+    /// A site's local, staging and production origins: the header names the one a tab is on,
+    /// and ⌥⌘E moves the tab to the next.
+    pub environments: Vec<Project>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Project {
+    pub name: String,
+    pub envs: Vec<Env>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Env {
+    pub label: String,
+    /// `scheme://host[:port]`, as [`Env::origin_of`] wrote it.
+    pub origin: String,
+}
+
+impl Env {
+    /// Typed text as an env origin: http(s) with a host, and nothing after it. A bare host gets
+    /// `https://`, or `http://` on loopback, as the command bar does.
+    pub fn origin_of(text: &str) -> Option<String> {
+        let text = text.trim();
+        let typed = if text.contains("://") { text.to_string() } else { format!("https://{text}") };
+        let mut u = url::Url::parse(&typed).ok()?;
+        let loopback = match u.host()? {
+            url::Host::Domain(d) => d == "localhost",
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        };
+        if loopback && !text.contains("://") {
+            u.set_scheme("http").ok()?;
+        }
+        let bare = u.username().is_empty() && u.password().is_none() && u.path() == "/" && u.query().is_none() && u.fragment().is_none();
+        (crate::store::is_web(u.as_str()) && bare).then(|| u.origin().ascii_serialization())
+    }
+
+    fn origin(&self) -> Option<url::Origin> {
+        url::Url::parse(&self.origin).ok().map(|u| u.origin())
+    }
 }
 
 impl Default for Settings {
@@ -248,11 +290,35 @@ impl Default for Settings {
             page_scheme: PageScheme::default(),
             search_engines: Vec::new(),
             web: WebPrefs::default(),
+            environments: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    /// The env whose origin `url` is on, and its project.
+    pub fn env_of(&self, url: &str) -> Option<(&Project, &Env)> {
+        let origin = url::Url::parse(url).ok()?.origin();
+        self.environments.iter().find_map(|p| p.envs.iter().find(|e| e.origin() == Some(origin.clone())).map(|e| (p, e)))
+    }
+
+    /// `url`'s path and query on another env of its project: the one labelled `label`, or the next.
+    pub fn env_url(&self, url: &str, label: Option<&str>) -> Option<String> {
+        let (project, here) = self.env_of(url)?;
+        let to = match label {
+            Some(l) => project.envs.iter().find(|e| e.label.eq_ignore_ascii_case(l.trim()))?,
+            None => {
+                let i = project.envs.iter().position(|e| std::ptr::eq(e, here))?;
+                &project.envs[(i + 1) % project.envs.len()]
+            }
+        };
+        let from = url::Url::parse(url).ok()?;
+        let mut next = url::Url::parse(&to.origin).ok()?;
+        next.set_path(from.path());
+        next.set_query(from.query());
+        Some(next.into())
+    }
+
     /// Command-bar text → URL to load: a URL as typed, a bare host gets `https://`
     /// (`http://` for loopback, where dev servers rarely have TLS), anything else is a search.
     // ponytail: heuristic only (no public-suffix list); "1.5" counts as an IPv4 host.
@@ -330,7 +396,40 @@ mod tests {
         s.web.developer_mode = true;
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
+        s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn env_origins_are_bare_web_origins() {
+        assert_eq!(Env::origin_of("localhost:3000").as_deref(), Some("http://localhost:3000"));
+        assert_eq!(Env::origin_of("127.0.0.1:8080/").as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(Env::origin_of("staging.example.com").as_deref(), Some("https://staging.example.com"));
+        assert_eq!(Env::origin_of(" https://Example.com:443 ").as_deref(), Some("https://example.com"));
+        assert_eq!(Env::origin_of("https://localhost:3000").as_deref(), Some("https://localhost:3000"), "a typed scheme stays");
+        for bad in ["", "file:///etc", "javascript:alert(1)", "https://a.com/path", "https://a.com/?q", "https://u:p@a.com", "ftp://a.com", "rust lang"] {
+            assert_eq!(Env::origin_of(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn env_url_keeps_path_and_query_and_cycles() {
+        let env = |label: &str, origin: &str| Env { label: label.into(), origin: origin.into() };
+        let s = Settings {
+            environments: vec![Project {
+                name: "shop".into(),
+                envs: vec![env("Local", "http://localhost:3000"), env("Staging", "https://staging.shop.com"), env("Prod", "https://shop.com")],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(s.env_of("https://shop.com/cart?id=1").map(|(p, e)| (p.name.as_str(), e.label.as_str())), Some(("shop", "Prod")));
+        assert_eq!(s.env_of("https://shop.com:8443/"), None, "another port is another origin");
+        assert_eq!(s.env_of("http://shop.com/"), None, "and so is another scheme");
+        assert_eq!(s.env_url("http://localhost:3000/cart?id=1#top", None).as_deref(), Some("https://staging.shop.com/cart?id=1"));
+        assert_eq!(s.env_url("https://shop.com/a", None).as_deref(), Some("http://localhost:3000/a"), "wraps around");
+        assert_eq!(s.env_url("https://staging.shop.com/a", Some("prod")).as_deref(), Some("https://shop.com/a"));
+        assert_eq!(s.env_url("https://staging.shop.com/a", Some("qa")), None);
+        assert_eq!(s.env_url("https://other.com/a", None), None);
     }
 }
