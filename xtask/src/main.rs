@@ -42,6 +42,7 @@ fn run(cmd: &mut Command) -> Result<()> {
 }
 
 const FRAMEWORK: &str = "Contents/Frameworks/BaaCore.framework";
+const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const SHARED_ROOT: &str = "/Users/Shared/hb";
 const SHARED_ENGINE: &str = "/Users/Shared/hb/helium-macos/build/src/out/Default";
 
@@ -161,6 +162,10 @@ fn bundle(b: Bundle) -> Result<()> {
         run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;
     }
     set_icon(&app)?;
+    // LaunchServices keeps a bundle's icon by path and rereads Info.plist only when the
+    // bundle's own mtime moves, which edits inside it (or a reused component bundle) never do.
+    run(Command::new("touch").arg(&app))?;
+    run(Command::new(LSREGISTER).arg("-f").arg(&app))?;
     // The Alerts helper draws notifications with its own icon. Only an unsigned bundle
     // gets it: dev_sign seals the outer app alone, so editing a helper would break its
     // signature; release re-signs every helper afterwards.
