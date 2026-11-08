@@ -585,6 +585,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::PreferredSize(_) => return,
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
+            PageEvent::Focused => return,
             PageEvent::DevToolsRequested { x, y } => {
                 // Inspect always opens (or moves to) the element, never closes.
                 self.devtools.remove(&id);

@@ -154,6 +154,8 @@ pub enum PageEvent {
     /// Docked DevTools' own dock-side picker chose this ("right", "bottom",
     /// "left", or "undocked").
     DevToolsDock(String),
+    /// The page got keyboard focus (a click on it, say): split view makes it the focused pane.
+    Focused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

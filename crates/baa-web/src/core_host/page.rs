@@ -162,7 +162,10 @@ impl CorePage {
 /// the page is focused, so typing and IME go to Chromium natively.
 fn subscribe(focus_handle: &FocusHandle, window: &mut Window, cx: &mut Context<CorePage>) -> [Subscription; 2] {
     [
-        cx.on_focus_in(focus_handle, window, |page, _, _| page.set_browser_focus(true)),
+        cx.on_focus_in(focus_handle, window, |page, _, cx| {
+            page.set_browser_focus(true);
+            cx.emit(PageEvent::Focused);
+        }),
         cx.on_focus_out(focus_handle, window, |page, _, _, _| page.set_browser_focus(false)),
     ]
 }
