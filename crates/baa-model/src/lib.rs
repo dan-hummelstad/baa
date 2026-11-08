@@ -81,6 +81,27 @@ pub struct Space {
     /// Overrides [`Settings::sidebar_side`] for this Space.
     pub sidebar_side: Option<SidebarSide>,
     pub active_tab: Option<TabId>,
+    /// Shown while `active_tab` is one of its panes; another tab leaves it standing, as in Arc.
+    #[serde(default)]
+    pub split: Option<Split>,
+}
+
+/// Split view: 2 to [`SPLIT_MAX`] live tabs of one Space side by side, left to right.
+/// Never a favourite (one is copied in) and never another Space's tab.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Split {
+    pub tabs: Vec<TabId>,
+    /// One per pane, summing to 1.
+    pub widths: Vec<f32>,
+}
+
+pub const SPLIT_MAX: usize = 4;
+
+impl Split {
+    fn even(tabs: Vec<TabId>) -> Self {
+        let widths = vec![1. / tabs.len() as f32; tabs.len()];
+        Split { tabs, widths }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +211,7 @@ impl Session {
             ephemeral,
             sidebar_side: None,
             active_tab: None,
+            split: None,
         });
         id
     }
@@ -332,7 +354,7 @@ impl Session {
     /// unless a Space is showing it.
     pub fn set_live_items(&mut self, folder: FolderId, items: &[LiveItem]) {
         let Some(space) = self.folder(folder).filter(|f| f.live.is_some()).map(|f| f.space) else { return };
-        let shown: Vec<TabId> = self.spaces.iter().filter_map(|s| s.active_tab).collect();
+        let shown = self.shown_tabs();
         let (mut old, rest): (Vec<Tab>, Vec<Tab>) =
             std::mem::take(&mut self.tabs).into_iter().partition(|t| t.folder == Some(folder));
         self.tabs = rest;
@@ -467,6 +489,8 @@ impl Session {
         self.insert(tab, index);
         if from != space {
             self.pick_neighbour(from, id, old_zone, old_index);
+        } else if zone == Zone::Favorite {
+            self.leave_split(from, id);
         }
     }
 
@@ -502,19 +526,131 @@ impl Session {
 
     /// If `id` (already gone from `space`) was its active tab, hand that to the tab now at
     /// `index` in `zone` (the one below it), else the one above, else any tab left in the Space.
+    /// A split pane hands it to the pane beside it.
     fn pick_neighbour(&mut self, space: SpaceId, id: TabId, zone: Zone, index: usize) {
+        let pane = self.leave_split(space, id);
         if self.space(space).and_then(|s| s.active_tab) != Some(id) {
             return;
         }
-        let next = self
-            .tabs(space, zone)
-            .nth(index)
-            .or_else(|| self.tabs(space, zone).nth(index.checked_sub(1)?))
-            .or_else(|| self.space_tabs(space).next())
-            .map(|t| t.id);
+        let next = pane.or_else(|| {
+            self.tabs(space, zone)
+                .nth(index)
+                .or_else(|| self.tabs(space, zone).nth(index.checked_sub(1)?))
+                .or_else(|| self.space_tabs(space).next())
+                .map(|t| t.id)
+        });
         if let Some(s) = self.space_mut(space) {
             s.active_tab = next;
         }
+    }
+
+    /// Every Space's active tab and split panes: what auto-archive and live folders leave alone.
+    fn shown_tabs(&self) -> Vec<TabId> {
+        let panes = self.spaces.iter().flat_map(|s| s.split.iter().flat_map(|p| p.tabs.iter().copied()));
+        self.spaces.iter().filter_map(|s| s.active_tab).chain(panes).collect()
+    }
+
+    /// Takes `id` out of `space`'s split, which dissolves at one pane. Returns the pane
+    /// left of it (or the new first one) to take over focus.
+    fn leave_split(&mut self, space: SpaceId, id: TabId) -> Option<TabId> {
+        let s = self.space_mut(space)?;
+        let split = s.split.as_mut()?;
+        let i = split.tabs.iter().position(|&t| t == id)?;
+        split.tabs.remove(i);
+        let next = split.tabs.get(i.saturating_sub(1)).copied();
+        *split = Split::even(std::mem::take(&mut split.tabs));
+        if split.tabs.len() < 2 {
+            s.split = None;
+        }
+        next
+    }
+
+    /// Puts `tab` in `space`'s split at `index` (clamped), making one with the Space's
+    /// active tab if there is none, and focuses it. A favourite goes in as a copy opened in
+    /// `space` (also when it is the active tab), so a pane never belongs to another Space.
+    /// Returns the pane's tab; `None` for another Space's tab or a full split.
+    pub fn add_to_split(&mut self, space: SpaceId, tab: TabId, index: usize, now: u64) -> Option<TabId> {
+        let active = self.space(space)?.active_tab;
+        let mut tabs = match self.space(space)?.split.clone() {
+            Some(split) if active.is_some_and(|a| split.tabs.contains(&a)) => split.tabs,
+            // The old split is not on screen: the new one replaces it.
+            _ => vec![self.pane_of(space, active?, now)?],
+        };
+        let tab = self.pane_of(space, tab, now)?;
+        if tabs.contains(&tab) {
+            return None;
+        }
+        if tabs.len() >= SPLIT_MAX {
+            return None;
+        }
+        tabs.insert(index.min(tabs.len()), tab);
+        self.space_mut(space)?.split = Some(Split::even(tabs));
+        self.activate_tab(tab, now);
+        Some(tab)
+    }
+
+    /// The tab itself if it is a live tab of `space`, a copy at the top of Today for a favourite.
+    fn pane_of(&mut self, space: SpaceId, id: TabId, now: u64) -> Option<TabId> {
+        let tab = self.tab(id)?.clone();
+        if tab.zone != Zone::Favorite {
+            return (tab.space == space).then_some(id);
+        }
+        let copy = Tab {
+            id: TabId(self.alloc()),
+            space,
+            zone: Zone::Today,
+            folder: None,
+            last_active: now,
+            archived_at: None,
+            ..tab
+        };
+        let copy_id = copy.id;
+        self.insert(copy, 0);
+        if self.space(space).is_some_and(|s| s.active_tab == Some(id)) {
+            self.space_mut(space)?.active_tab = Some(copy_id);
+        }
+        Some(copy_id)
+    }
+
+    /// ⌃⇧=: splits with the Space's most recently shown other tab.
+    pub fn split_with_recent(&mut self, space: SpaceId, now: u64) -> Option<TabId> {
+        let s = self.space(space)?;
+        let panes = s.split.as_ref().map_or(&[][..], |p| &p.tabs[..]);
+        let recent = self
+            .space_tabs(space)
+            .filter(|t| Some(t.id) != s.active_tab && !panes.contains(&t.id))
+            .max_by_key(|t| t.last_active)?
+            .id;
+        self.add_to_split(space, recent, usize::MAX, now)
+    }
+
+    /// The tab stays open, out of the split.
+    pub fn remove_from_split(&mut self, tab: TabId) {
+        let Some(space) = self.spaces.iter().find(|s| s.split.as_ref().is_some_and(|p| p.tabs.contains(&tab))) else {
+            return;
+        };
+        let (space, active) = (space.id, space.active_tab);
+        let next = self.leave_split(space, tab);
+        if active == Some(tab) {
+            if let Some(s) = self.space_mut(space) {
+                s.active_tab = next.or(Some(tab));
+            }
+        }
+    }
+
+    /// Seam drags; ignored unless there is one width per pane.
+    pub fn set_split_widths(&mut self, space: SpaceId, widths: Vec<f32>) {
+        if let Some(split) = self.space_mut(space).and_then(|s| s.split.as_mut()) {
+            if split.widths.len() == widths.len() {
+                split.widths = widths;
+            }
+        }
+    }
+
+    /// The split on screen in `space`: there is one and its active tab is a pane.
+    pub fn shown_split(&self, space: SpaceId) -> Option<&Split> {
+        let s = self.space(space)?;
+        s.split.as_ref().filter(|p| s.active_tab.is_some_and(|a| p.tabs.contains(&a)))
     }
 
     /// ⌘W. Pushes onto the reopen stack and, unless incognito, the archive.
@@ -589,7 +725,7 @@ impl Session {
     }
 
     fn archive_today_where(&mut self, now: u64, old: impl Fn(&Tab) -> bool) -> Vec<TabId> {
-        let keep: Vec<TabId> = self.spaces.iter().filter_map(|s| s.active_tab).collect();
+        let keep = self.shown_tabs();
         let ephemeral: Vec<SpaceId> = self.spaces.iter().filter(|s| s.ephemeral).map(|s| s.id).collect();
         let (expired, live): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs).into_iter().partition(|t| {
             t.zone == Zone::Today && old(t) && !keep.contains(&t.id) && !ephemeral.contains(&t.space)
@@ -897,6 +1033,65 @@ mod tests {
         assert_eq!(s.add_subfolder(f, "no"), None);
         s.remove_folder(f);
         assert_eq!(s.space_tabs(sp).count(), 1, "its tabs go with it");
+    }
+
+    #[test]
+    fn split_keeps_focus_on_a_pane_and_dissolves_at_one() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        let c = s.open_tab(sp, "c", 3);
+        assert_eq!(s.split_with_recent(sp, 4), Some(b), "the most recent other tab");
+        let split = s.shown_split(sp).unwrap();
+        assert_eq!((split.tabs.clone(), split.widths.clone()), (vec![c, b], vec![0.5, 0.5]));
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(b));
+        assert_eq!(s.add_to_split(sp, a, 0, 5), Some(a));
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, c, b]);
+        assert_eq!(s.add_to_split(sp, a, 0, 5), None, "already a pane");
+        s.close_tab(a, 6);
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(c), "the pane beside it takes focus, not a sidebar neighbour");
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [c, b]);
+        let d = s.open_tab(sp, "d", 7);
+        assert!(s.shown_split(sp).is_none(), "another tab leaves the split standing, off screen");
+        assert!(s.space(sp).unwrap().split.is_some());
+        assert_eq!(s.archive_today(8), Vec::<TabId>::new(), "panes and the active tab are kept");
+        s.activate_tab(b, 9);
+        assert!(s.shown_split(sp).is_some());
+        let work = s.add_space("Work", "💼", None);
+        s.move_tab(b, work, Zone::Today, 0);
+        assert!(s.space(sp).unwrap().split.is_none(), "a split of one dissolves");
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(c));
+        assert_eq!(s.add_to_split(sp, b, 0, 10), None, "no panes from another Space");
+        assert!(s.tab(d).is_some());
+    }
+
+    #[test]
+    fn split_takes_a_favourite_as_a_copy_and_drops_gone_panes() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let fav = s.open_tab(sp, "fav", 0);
+        s.move_tab(fav, sp, Zone::Favorite, 0);
+        let a = s.open_tab(sp, "a", 1);
+        let copy = s.add_to_split(sp, fav, usize::MAX, 2).unwrap();
+        assert_ne!(copy, fav);
+        assert_eq!((s.tab(copy).unwrap().url.as_str(), s.tab(copy).unwrap().zone), ("fav", Zone::Today));
+        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, copy]);
+        s.set_split_widths(sp, vec![0.3, 0.7]);
+        s.set_split_widths(sp, vec![1.]);
+        assert_eq!(s.shown_split(sp).unwrap().widths, [0.3, 0.7]);
+        s.remove_from_split(copy);
+        assert!(s.space(sp).unwrap().split.is_none());
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(a));
+        assert!(s.tab(copy).is_some(), "out of the split, still open");
+        s.add_to_split(sp, copy, 0, 3);
+        s.drop_tabs(|t| t.id == a);
+        assert!(s.space(sp).unwrap().split.is_none());
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(copy));
+        s.add_to_split(sp, fav, 0, 4);
+        let pane = s.space(sp).unwrap().split.as_ref().unwrap().tabs[1];
+        s.move_tab(pane, sp, Zone::Favorite, 0);
+        assert!(s.space(sp).unwrap().split.is_none(), "a pane made a favourite leaves the split");
     }
 
     #[test]
