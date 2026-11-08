@@ -38,7 +38,8 @@ fn playing(page: &Entity<MockPage>, cx: &mut VisualTestContext) {
 fn mini_player_only_while_sound_plays(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let (a, page_a) = open_page(&b, "a.example", cx);
-    open_page(&b, "b.example", cx);
+    let (bb, _) = open_page(&b, "b.example", cx);
+    let (c, _) = open_page(&b, "c.example", cx);
     let silent = Media { title: "Muted autoplay".into(), playing: true, ..Media::default() };
     page_a.update(cx, |_, cx| cx.emit(PageEvent::Media(silent)));
     assert_eq!(mini(&b, cx), None, "playing without sound");
@@ -48,10 +49,14 @@ fn mini_player_only_while_sound_plays(cx: &mut TestAppContext) {
     page_a.update(cx, |_, cx| cx.emit(PageEvent::AudibleChanged(false)));
     assert_eq!(mini(&b, cx), Some(a), "muted by the user keeps its controls");
     page_a.update(cx, |_, cx| cx.emit(PageEvent::Muted(false)));
-    assert_eq!(mini(&b, cx), None, "silent again");
-    playing(&page_a, cx);
     page_a.update(cx, |_, cx| cx.emit(PageEvent::Media(Media { playing: false, ..Media::default() })));
-    assert_eq!(mini(&b, cx), None, "paused");
+    assert_eq!(mini(&b, cx), Some(a), "a paused track stays");
+    b.update_in(cx, |b, window, cx| b.activate_tab(bb, window, cx));
+    assert_eq!(mini(&b, cx), None, "until you switch away");
+    playing(&page_a, cx);
+    assert_eq!(mini(&b, cx), Some(a), "playing again brings it back");
+    b.update_in(cx, |b, window, cx| b.activate_tab(c, window, cx));
+    assert_eq!(mini(&b, cx), Some(a), "a switch keeps one that is still playing");
 }
 
 fn mini(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Option<baa_model::TabId> {

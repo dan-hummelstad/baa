@@ -22,7 +22,8 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The tab that played last and is not on screen, from any Space, while it is playing
-    /// sound (or would be, but is muted). An incognito Space's media shows only in that Space.
+    /// sound (or would be, but is muted). Once shown it stays through a pause until the next
+    /// tab or Space switch. An incognito Space's media shows only in that Space.
     pub(crate) fn mini_player_tab(&self) -> Option<TabId> {
         let shown = self.shown_panes();
         let active = self.session.active_space();
@@ -35,7 +36,7 @@ impl<H: WebHost> Browser<H> {
             .filter(|(id, (m, played))| {
                 // Chrome's audible flag, so a silent autoplay video or a paused track shows nothing.
                 let sounding = m.playing && (self.audible.contains(id) || self.muted.contains(id));
-                *played > 0 && sounding && !shown.contains(id) && !private(**id)
+                *played > 0 && (sounding || self.mini_hold == Some(**id)) && !shown.contains(id) && !private(**id)
             })
             .max_by_key(|(_, (_, played))| *played)
             .map(|(id, _)| *id)
@@ -45,6 +46,7 @@ impl<H: WebHost> Browser<H> {
         let tab = self.mini_player_tab();
         if tab.is_some() {
             self.mini_tab = tab;
+            self.mini_hold = tab;
         }
         self.motion.to(MINI, Feel::Glide, tab.is_some() as u8 as f32);
     }

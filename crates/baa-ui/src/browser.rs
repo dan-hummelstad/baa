@@ -191,6 +191,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) media: HashMap<TabId, (baa_web::Media, u64)>,
     /// The tab the mini-player shows, kept while it fades out.
     pub(crate) mini_tab: Option<TabId>,
+    /// The mini-player's tab, kept on screen after it pauses until what is on screen changes.
+    pub(crate) mini_hold: Option<TabId>,
     /// Split panes showing their page as a phone (E2); in memory only.
     pub(crate) phone_panes: HashSet<TabId>,
     /// Console errors on each localhost tab since its last load (E4), and the pages asked to report them.
@@ -357,6 +359,7 @@ impl<H: WebHost> Browser<H> {
             muted: HashSet::new(),
             media: HashMap::new(),
             mini_tab: None,
+            mini_hold: None,
             phone_panes: HashSet::new(),
             console_errors: HashMap::new(),
             console_watched: HashSet::new(),
@@ -509,6 +512,9 @@ impl<H: WebHost> Browser<H> {
         }
         let on_screen = self.shown_panes();
         let before = std::mem::replace(&mut self.on_screen, on_screen);
+        if before != self.on_screen {
+            self.mini_hold = None;
+        }
         self.pip_on_screen_change(&before, cx);
         self.show_pages(cx);
         self.retarget_mini_player();
