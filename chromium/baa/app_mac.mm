@@ -142,6 +142,7 @@ void baa_install_app(int argc,
   REQUIRE(resized);
   REQUIRE(devtools_dock);
   REQUIRE(fullscreen);
+  REQUIRE(exclusive_access);
   REQUIRE(find_result);
   REQUIRE(tab_group);
   REQUIRE(autocomplete);

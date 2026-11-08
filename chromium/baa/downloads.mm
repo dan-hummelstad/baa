@@ -121,3 +121,7 @@ void baa_download_cancel(uint64_t id) {
     it->second->Cancel();
   }
 }
+
+// ABI 9; filled in by the next commit.
+void baa_download_validate(uint64_t) {}
+void baa_download_discard(uint64_t) {}

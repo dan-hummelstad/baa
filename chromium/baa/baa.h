@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 8
+#define BAA_ABI_VERSION 9
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -116,12 +116,28 @@ typedef struct {
   int64_t received_bytes;
   int64_t total_bytes;   // -1 or 0 when unknown
   int state;             // BAA_DOWNLOAD_*
+  // From an off-the-record profile: the receiver keeps no record of it.
+  bool ephemeral;
+  // Chrome's download::DownloadDangerType while the file waits for the user's
+  // Keep or Discard (baa_download_validate / baa_download_discard); 0 when it
+  // is not dangerous or the user already decided. Chrome holds the file until then.
+  int danger;
+  // A mixed-content download (an http file from an https page), held like a
+  // dangerous one until the user decides.
+  bool insecure;
 } BaaDownload;
 
 enum {
   BAA_DOWNLOAD_IN_PROGRESS = 0,
   BAA_DOWNLOAD_COMPLETE = 1,
   BAA_DOWNLOAD_CANCELED = 2,  // also interrupted
+};
+
+enum {
+  BAA_EXCLUSIVE_NONE = 0,          // hide the notice
+  BAA_EXCLUSIVE_FULLSCREEN = 1,    // "Press Esc to exit"
+  BAA_EXCLUSIVE_POINTER_LOCK = 2,  // the mouse is captured, not fullscreen
+  BAA_EXCLUSIVE_KEYBOARD_LOCK = 3, // Esc goes to the page: "Press and hold Esc"
 };
 
 enum {
@@ -138,12 +154,15 @@ enum {
 };
 
 // A question the page or Chrome waits on. JS dialogs (ALERT..BEFOREUNLOAD_RELOAD)
-// leave title and the labels "" (the app words them); Chrome's own fill them in
-// the UI language.
+// leave the labels "" (the app words them); Chrome's own fill them in the UI
+// language.
 typedef struct {
   int kind;                  // BAA_DIALOG_*
   const char* message;       // may hold '\n'-separated lines
   const char* default_text;  // PROMPT only
+  // Chrome's title, e.g. "x.com says" or "An embedded page at y.com says": it
+  // names the frame that asked, which the tab's URL may not. "" when Chrome has
+  // none (beforeunload).
   const char* title;
   const char* ok_label;
   const char* cancel_label;
@@ -239,6 +258,13 @@ typedef struct {
   // The page went fullscreen (true; Chrome already counts the window as
   // fullscreen) or left it (false).
   void (*fullscreen)(void* ctx, BaaTabId tab, bool on);
+
+  // Chrome's fullscreen / pointer lock / keyboard lock notice: show `origin`
+  // (who took the screen or the input) and how to leave, as Chrome's bubble
+  // would, so a page cannot pose as the browser unannounced. `kind`
+  // BAA_EXCLUSIVE_*; BAA_EXCLUSIVE_NONE with origin "" hides the notice.
+  void (*exclusive_access)(void* ctx, BaaTabId tab, const char* origin,
+                           int kind);
 
   // baa_tab_find's progress: the active match (1-based, 0 for none) and the
   // number found so far.
@@ -574,6 +600,12 @@ BAA_EXPORT void baa_context_menu_done(uint64_t id, int command);
 
 // Stops a running download; finished ones are left alone.
 BAA_EXPORT void baa_download_cancel(uint64_t id);
+
+// The user's answer to a download with `danger` or `insecure` set: validate
+// keeps the file (Chrome then finishes it), discard removes the item and its
+// partial file. Anything else does nothing.
+BAA_EXPORT void baa_download_validate(uint64_t id);
+BAA_EXPORT void baa_download_discard(uint64_t id);
 
 #ifdef __cplusplus
 }
