@@ -284,21 +284,14 @@ impl<H: WebHost> SettingsView<H> {
         ]
     }
 
-    /// The sidebar's Theme Colour list, as a menu over this window.
-    fn pick_color(&mut self, id: SpaceId, accent: u32, at: gpui::Point<gpui::Pixels>, window: &mut gpui::Window, cx: &mut Context<Self>) {
-        let items = crate::browser::PALETTE
-            .iter()
-            .zip(crate::browser::PALETTE_NAMES)
-            .enumerate()
-            .map(|(i, ((top, _), name))| baa_web::MenuItem::Action { label: name.into(), enabled: true, checked: *top == accent, id: i })
-            .collect();
-        let this = cx.entity().downgrade();
-        let done: baa_web::MenuDone = Box::new(move |picked, _, cx| {
-            if let Some(i) = picked {
-                let _ = this.update(cx, |this, cx| this.in_browser(cx, false, move |b, w, cx| b.set_color_of(id, i, w, cx)));
-            }
-        });
-        self.browser.update(cx, |b, cx| b.host.show_menu(at, items, window, cx, done));
+    /// The colour picker (`icon` false) or the emoji picker, hung over this window.
+    fn open_picker(&mut self, id: SpaceId, icon: bool, at: gpui::Point<gpui::Pixels>, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let browser = self.browser.clone();
+        self.picker = Some(crate::space_picker::Shown::open(icon, &browser, id, at, window, cx, |this, window, cx| {
+            this.picker = None;
+            window.focus(&this.focus, cx);
+        }));
+        cx.notify();
     }
 
     pub(super) fn spaces_tab(&self, cx: &mut Context<Self>) -> Vec<Item> {
@@ -335,7 +328,10 @@ impl<H: WebHost> SettingsView<H> {
                             .on_click(cx.listener(move |this, _, _, cx| this.toggle_rename(id, cx))),
                     )
                     .child(self.button("space-color", "Colour", false, cx).on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
-                        this.pick_color(id, accent, e.position(), window, cx)
+                        this.open_picker(id, false, e.position(), window, cx)
+                    })))
+                    .child(self.button("space-icon", "Icon", false, cx).on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                        this.open_picker(id, true, e.position(), window, cx)
                     })));
             }
             if many {

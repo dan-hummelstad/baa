@@ -54,6 +54,7 @@ impl<H: WebHost> Browser<H> {
         let items = flatten(self.sidebar_menu(&kind), &mut actions);
         let this = cx.entity().downgrade();
         self.menu_open = true;
+        self.menu_at = at;
         self.host.show_menu(at, items, window, cx, Box::new(move |picked, window, cx| {
             let _ = this.update(cx, |this, cx| {
                 this.menu_open = false;
@@ -199,27 +200,14 @@ impl<H: WebHost> Browser<H> {
                 let Some(space) = self.session.space(id) else { return items };
                 if !space.ephemeral {
                     items.push(MenuEntry::item("Rename Space", Box::new(|this, window, cx| this.start_rename(window, cx))));
-                    let colors = PALETTE
-                        .iter()
-                        .zip(PALETTE_NAMES)
-                        .enumerate()
-                        .map(|(i, ((top, _), name))| {
-                            MenuEntry::check(name, *top == space.accent, Box::new(move |this, window, cx| this.set_color_of(id, i, window, cx)))
-                        })
-                        .collect();
-                    items.push(MenuEntry::Submenu("Theme Colour".into(), colors));
-                    // ponytail: a fixed emoji set; any other emoji goes in through Rename ("🦊 Work").
-                    let icons = ICONS
-                        .iter()
-                        .chain(&["🏠", "💼", "🎨", "📚", "🎮", "🎵", "✈️", "🧪"])
-                        .map(|&icon| {
-                            MenuEntry::check(icon, icon == space.icon, Box::new(move |this, _, cx| {
-                                this.set_icon_of(id, icon);
-                                cx.notify();
-                            }))
-                        })
-                        .collect();
-                    items.push(MenuEntry::Submenu("Icon".into(), icons));
+                    items.push(MenuEntry::item(
+                        "Edit Theme Colour…",
+                        Box::new(move |this, window, cx| this.open_space_picker(id, false, this.menu_at, window, cx)),
+                    ));
+                    items.push(MenuEntry::item(
+                        "Change Icon…",
+                        Box::new(move |this, window, cx| this.open_space_picker(id, true, this.menu_at, window, cx)),
+                    ));
                     items.push(MenuEntry::Separator);
                 }
                 items.push(MenuEntry::item(

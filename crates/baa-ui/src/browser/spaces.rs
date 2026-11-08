@@ -83,12 +83,27 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn set_color_of(&mut self, id: SpaceId, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(space) = self.session.space_mut(id) else {
-            return;
-        };
         let (top, bottom) = PALETTE[index];
-        (space.accent, space.accent_to) = (top, Some(bottom));
+        self.set_space_gradient(id, top, bottom, cx);
         self.sync(window, cx);
+    }
+
+    /// Live, for the colour picker's drags: no save, no sync.
+    pub(crate) fn set_space_gradient(&mut self, id: SpaceId, top: u32, bottom: u32, cx: &mut Context<Self>) {
+        if let Some(space) = self.session.space_mut(id) {
+            (space.accent, space.accent_to) = (top, Some(bottom));
+            self.retheme();
+            cx.notify();
+        }
+    }
+
+    /// The colour picker (`icon` false) or the emoji picker for `id`, at `at`.
+    pub(crate) fn open_space_picker(&mut self, id: SpaceId, icon: bool, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let me = cx.entity();
+        self.space_picker = Some(crate::space_picker::Shown::open(icon, &me, id, at, window, cx, |this, window, cx| {
+            this.close_overlays(window, cx)
+        }));
+        cx.notify();
     }
 
     pub(crate) fn set_icon_of(&mut self, id: SpaceId, icon: &str) {

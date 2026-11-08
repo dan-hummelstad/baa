@@ -13,6 +13,7 @@ mod pages;
 mod prompts;
 mod settings;
 mod skin;
+mod space_picker;
 mod sidebar;
 mod start;
 mod theme;

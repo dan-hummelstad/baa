@@ -64,6 +64,8 @@ pub(crate) struct SettingsView<H: WebHost> {
     pub(crate) motion: Motion,
     last_frame: Instant,
     focus: FocusHandle,
+    /// A Space's colour or icon picker, from the Spaces tab.
+    pub(crate) picker: Option<crate::space_picker::Shown>,
     scroll: ScrollHandle,
     /// A row to scroll to and flash at the next frame, and the one flashing.
     jump: Option<&'static str>,
@@ -194,6 +196,7 @@ impl<H: WebHost> SettingsView<H> {
             motion,
             last_frame: cx.background_executor().now(),
             focus,
+            picker: None,
             scroll: ScrollHandle::new(),
             jump: None,
             flash: None,
@@ -902,5 +905,6 @@ impl<H: WebHost> Render for SettingsView<H> {
             .child(self.toolbar(cx))
             .child(body)
             .children(sheet)
+            .children(self.picker.as_ref().map(|p| p.render()))
     }
 }

@@ -109,7 +109,16 @@ impl<H: WebHost> Browser<H> {
                             this.open_menu(MenuKind::Space(space), e.position, window, cx);
                         }),
                     )
-                    .child(div().text_size(px(11.)).child(SharedString::from(space_icon)))
+                    .child(
+                        div()
+                            .id("space-icon")
+                            .text_size(px(11.))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                this.open_space_picker(space, true, e.position(), window, cx)
+                            }))
+                            .child(SharedString::from(space_icon)),
+                    )
                     .child(match self.renaming.as_ref().filter(|_| self.renaming_folder.is_none()) {
                         // Named in place: Enter keeps it, Esc leaves it as it was.
                         Some(field) => div()

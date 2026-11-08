@@ -79,7 +79,6 @@ pub(crate) const PALETTE: [(u32, u32); 9] = [
     (0xAFD3E8, 0x7AB6D8), // blue
     (0x5F5F7F, 0x34344A), // slate, the dark one
 ];
-pub(crate) const PALETTE_NAMES: [&str; 9] = ["Cream", "Pink", "Purple", "Red", "Orange", "Yellow", "Green", "Blue", "Slate"];
 const ICONS: [&str; 7] = ["🐑", "🌿", "🔥", "🌊", "⭐", "🍋", "🪐"];
 const INCOGNITO: (u32, u32) = (0x4A4856, 0x2A2932);
 
@@ -122,6 +121,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) page_state: page_state::PageState,
     /// A native context menu is open (it runs modally).
     pub(crate) menu_open: bool,
+    /// Where the last native menu opened, for what its items open next.
+    pub(crate) menu_at: Point<Pixels>,
+    /// The Space colour or icon picker.
+    pub(crate) space_picker: Option<crate::space_picker::Shown>,
     /// A link previewed over the page (Peek), or an extension's popup.
     pub(crate) peek: Option<PeekPage<H::Page>>,
     /// The Space name being edited in place.
@@ -278,6 +281,8 @@ impl<H: WebHost> Browser<H> {
             fullscreen: None,
             page_state: Default::default(),
             menu_open: false,
+            menu_at: Point::default(),
+            space_picker: None,
             peek: None,
             renaming: None,
             renaming_folder: None,
@@ -415,15 +420,7 @@ impl<H: WebHost> Browser<H> {
             self.session
                 .archive_expired(now(), self.settings.archive_after_hours);
         }
-        let gradient = self
-            .active_space()
-            .map_or(self.gradient_to, |s| space_gradient(s.accent, s.accent_to));
-        if gradient != self.gradient_to {
-            self.gradient_from = self.gradient(); // mid-flight colours, so rapid switches never jump
-            self.gradient_to = gradient;
-            self.fade.snap(0.0);
-            self.fade.set_target(1.0);
-        }
+        self.retheme();
 
         let session = &self.session;
         self.pages.retain(|id, _| session.tab(*id).is_some());
@@ -451,7 +448,7 @@ impl<H: WebHost> Browser<H> {
         for (id, (page, _)) in &self.pages {
             page.read(cx).set_visible(Some(*id) == active);
         }
-        if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() {
+        if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
             match self.active_dialog() {
                 Some(_) => window.focus(&self.input_focus, cx),
                 None => self.focus_page(window, cx),
@@ -467,6 +464,19 @@ impl<H: WebHost> Browser<H> {
         self.sync_groups(cx);
         self.save();
         cx.notify();
+    }
+
+    /// Fades the window toward the active Space's colours.
+    pub(crate) fn retheme(&mut self) {
+        let gradient = self
+            .active_space()
+            .map_or(self.gradient_to, |s| space_gradient(s.accent, s.accent_to));
+        if gradient != self.gradient_to {
+            self.gradient_from = self.gradient(); // mid-flight colours, so rapid switches never jump
+            self.gradient_to = gradient;
+            self.fade.snap(0.0);
+            self.fade.set_target(1.0);
+        }
     }
 
     /// Keyboard goes to the active page; a hidden page's element is not in the
@@ -728,6 +738,9 @@ impl<H: WebHost> Browser<H> {
         self.renaming = None;
         self.renaming_folder = None;
         self.history_menu = None;
+        if self.space_picker.take().is_some() {
+            self.save();
+        }
         if self.find.take().is_some() {
             self.with_page(cx, |p| p.find("", true));
         }
@@ -1000,7 +1013,8 @@ impl<H: WebHost> Render for Browser<H> {
             .children(bar)
             .children(self.render_toast())
             .children(popover)
-            .children(history);
+            .children(history)
+            .children(self.space_picker.as_ref().map(|p| p.render()));
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {
