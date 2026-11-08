@@ -97,3 +97,23 @@ fn js_confirm_still_names_the_site(cx: &mut TestAppContext) {
     // The title is drawn, not stored; the sheet being up with no Chrome title is the check.
     b.read_with(cx, |b, _| assert!(b.active_dialog().unwrap().dialog.title.is_empty()));
 }
+
+#[gpui::test]
+fn closing_a_peek_leaves_the_keyboard_on_the_base_tabs_dialog(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    p.update(cx, |_, cx| {
+        cx.emit(PageEvent::OpenRequested { url: "https://peek.example".into(), from_user_gesture: true, background: false })
+    });
+    cx.run_until_parked();
+    let peek = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(11, DialogKind::Auth))));
+    cx.run_until_parked();
+    peek.update(cx, |_, cx| cx.emit(PageEvent::Closed));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let b = b.read(cx);
+        assert!(b.peek.is_none());
+        assert!(b.input_focus.is_focused(window), "the dialog keeps the keyboard");
+        assert!(!p.read(cx).focus.is_focused(window), "not the page under it");
+    });
+}

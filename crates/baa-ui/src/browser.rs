@@ -449,10 +449,7 @@ impl<H: WebHost> Browser<H> {
             page.read(cx).set_visible(Some(*id) == active);
         }
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
-            match self.active_dialog() {
-                Some(_) => window.focus(&self.input_focus, cx),
-                None => self.focus_page(window, cx),
-            }
+            self.focus_page(window, cx);
         }
         // ponytail: re-read on every session change; an install shows up at
         // the next tab or Space switch.
@@ -480,8 +477,12 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// Keyboard goes to the active page; a hidden page's element is not in the
-    /// tree, so focus left there would swallow every action.
+    /// tree, so focus left there would swallow every action. A prompt on screen
+    /// keeps the keyboard, or keys typed for the page would land in it unseen.
     fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_dialog().is_some() {
+            return window.focus(&self.input_focus, cx);
+        }
         let target = self
             .active_page()
             .map(|p| p.read(cx).focus_handle(cx))
@@ -752,10 +753,9 @@ impl<H: WebHost> Browser<H> {
         self.motion.forget("menu");
         self.motion.forget("bar-row");
         self.motion.forget("bar-sel");
-        match (&self.peek, self.active_dialog()) {
-            (Some(peek), _) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
-            (None, Some(_)) => window.focus(&self.input_focus, cx),
-            (None, None) => self.focus_page(window, cx),
+        match &self.peek {
+            Some(peek) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
+            None => self.focus_page(window, cx),
         }
         cx.notify();
     }
