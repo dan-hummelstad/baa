@@ -3,6 +3,7 @@
 #ifndef BAA_WINDOW_H_
 #define BAA_WINDOW_H_
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -256,6 +257,7 @@ class Window : public BrowserWindow,
 
  private:
   class StubLocationBar;
+  class ContentsDialogHost;
   NSView* ActiveView() const;
   void CloseNow();
   // The app's stand-in for Chrome's exclusive access bubble.
@@ -266,6 +268,9 @@ class Window : public BrowserWindow,
   raw_ptr<BrowserWindowInterface> browser_;
   std::unique_ptr<StubLocationBar> location_bar_;
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
+  // Tab-modal hosts, one per WebContents that asked (GetWebContentsModalDialogHostFor); each
+  // leaves when its WebContents is destroyed.
+  std::map<content::WebContents*, std::unique_ptr<ContentsDialogHost>> dialog_hosts_;
   const bool hidden_;
   bool closing_ = false;
   bool fullscreen_ = false;

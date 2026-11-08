@@ -28,6 +28,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_manager.h"
@@ -375,6 +376,83 @@ std::unique_ptr<content::EyeDropper> Window::OpenEyeDropper(
   return nullptr;
 }
 
+namespace {
+
+// The views dialogs of M2 (HTTP auth, install prompts) become top-level
+// windows that are not children of ours, so the position is in screen
+// coordinates: centred at the top of the page.
+gfx::Point DialogPositionOver(NSView* view, const gfx::Size& size) {
+  if (!view || !view.window) {
+    return gfx::Point();
+  }
+  NSRect in_window = [view convertRect:view.bounds toView:nil];
+  gfx::Rect screen = gfx::ScreenRectFromNSRect([view.window convertRectToScreen:in_window]);
+  return gfx::Point(screen.x() + std::max(0, (screen.width() - size.width()) / 2), screen.y());
+}
+
+gfx::Size MaximumDialogSizeIn(NSView* view) {
+  return view ? gfx::Size(view.bounds.size.width, view.bounds.size.height) : gfx::Size();
+}
+
+}  // namespace
+
+// security: Chrome anchors a tab-modal dialog on the tab that asked. The app may show a page that
+// is not the window's active tab (a Peek, lil-baa), so the active tab's view would put one page's
+// dialog over another page.
+class Window::ContentsDialogHost : public web_modal::WebContentsModalDialogHost,
+                                   public content::WebContentsObserver {
+ public:
+  ContentsDialogHost(Window* owner, content::WebContents* wc)
+      : content::WebContentsObserver(wc), owner_(owner) {
+    NSView* view = View();
+    view.postsFrameChangedNotifications = YES;
+    // The app moves and resizes page views itself; the dialog follows.
+    frame_watch_ = [NSNotificationCenter.defaultCenter
+        addObserverForName:NSViewFrameDidChangeNotification
+                    object:view
+                     queue:nil
+                usingBlock:^(NSNotification*) {
+                  NotifyPositionRequiresUpdate();
+                }];
+  }
+  ~ContentsDialogHost() override {
+    [NSNotificationCenter.defaultCenter removeObserver:frame_watch_];
+    for (auto& observer : observers_) {
+      observer.OnHostDestroying();
+    }
+  }
+
+  gfx::NativeView GetHostView() const override { return gfx::NativeView(View()); }
+  gfx::Point GetDialogPosition(const gfx::Size& size) override {
+    return DialogPositionOver(View(), size);
+  }
+  gfx::Size GetMaximumDialogSize() override { return MaximumDialogSizeIn(View()); }
+  void AddObserver(web_modal::ModalDialogHostObserver* observer) override {
+    observers_.AddObserver(observer);
+  }
+  void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override {
+    observers_.RemoveObserver(observer);
+  }
+  void NotifyPositionRequiresUpdate() override {
+    for (auto& observer : observers_) {
+      observer.OnPositionRequiresUpdate();
+    }
+  }
+
+  // Deletes this.
+  void WebContentsDestroyed() override { owner_->dialog_hosts_.erase(web_contents()); }
+
+ private:
+  NSView* View() const {
+    content::WebContents* wc = web_contents();
+    return wc ? wc->GetNativeView().GetNativeNSView() : nil;
+  }
+
+  const raw_ptr<Window> owner_;  // owns this
+  id frame_watch_ = nil;
+  base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
+};
+
 Window::Window(BrowserWindowInterface* browser, bool hidden)
     : browser_(browser), location_bar_(std::make_unique<StubLocationBar>()), hidden_(hidden) {
   // Without one registered, extension context menus and the CDP extensions
@@ -581,33 +659,29 @@ web_modal::WebContentsModalDialogHost* Window::GetWebContentsModalDialogHost() {
 }
 
 web_modal::WebContentsModalDialogHost* Window::GetWebContentsModalDialogHostFor(
-    content::WebContents*) {
-  return this;
+    content::WebContents* wc) {
+  if (!wc) {
+    return this;
+  }
+  auto& host = dialog_hosts_[wc];
+  if (!host) {
+    host = std::make_unique<ContentsDialogHost>(this, wc);
+  }
+  return host.get();
 }
 
-// With a null host every tab-modal views dialog CHECKs; with this one they
-// show as loose windows until M2 intercepts each.
+// Browser-modal dialogs (the install prompt's sheet). With a null host every
+// views dialog CHECKs; with this one they show as loose windows.
 gfx::NativeView Window::GetHostView() const {
   return gfx::NativeView(ActiveView());
 }
 
-// The views dialogs of M2 (HTTP auth, install prompts) become top-level
-// windows that are not children of ours, so the position is in screen
-// coordinates: centred at the top of the page.
 gfx::Point Window::GetDialogPosition(const gfx::Size& size) {
-  NSView* view = ActiveView();
-  if (!view || !view.window) {
-    return gfx::Point();
-  }
-  NSRect in_window = [view convertRect:view.bounds toView:nil];
-  gfx::Rect screen = gfx::ScreenRectFromNSRect([view.window convertRectToScreen:in_window]);
-  return gfx::Point(screen.x() + std::max(0, (screen.width() - size.width()) / 2), screen.y());
+  return DialogPositionOver(ActiveView(), size);
 }
 
 gfx::Size Window::GetMaximumDialogSize() {
-  NSView* view = ActiveView();
-  return view ? gfx::Size(view.bounds.size.width, view.bounds.size.height)
-              : gfx::Size();
+  return MaximumDialogSizeIn(ActiveView());
 }
 
 void Window::AddObserver(web_modal::ModalDialogHostObserver* observer) {
