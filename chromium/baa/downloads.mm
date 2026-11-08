@@ -12,6 +12,7 @@
 #include "base/no_destructor.h"
 #include "components/download/public/common/download_item.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/web_contents.h"
@@ -42,13 +43,6 @@ class ItemWatch : public download::DownloadItem::Observer {
     if (!item_) {
       return;
     }
-    // Chrome shows no prompt; keeping every file is what CEF did.
-    if (item_->IsDangerous()) {
-      item_->ValidateDangerousDownload();
-    }
-    if (item_->IsInsecure()) {
-      item_->ValidateInsecureDownload();
-    }
     std::string url = item_->GetURL().spec();
     std::string path = (item_->GetTargetFilePath().empty() ? item_->GetFullPath()
                                                            : item_->GetTargetFilePath())
@@ -62,6 +56,12 @@ class ItemWatch : public download::DownloadItem::Observer {
     download.state = item_->GetState() == download::DownloadItem::IN_PROGRESS ? BAA_DOWNLOAD_IN_PROGRESS
                      : item_->GetState() == download::DownloadItem::COMPLETE   ? BAA_DOWNLOAD_COMPLETE
                                                                                 : BAA_DOWNLOAD_CANCELED;
+    content::BrowserContext* context = content::DownloadItemUtils::GetBrowserContext(item_);
+    download.ephemeral = context && context->IsOffTheRecord();
+    // security: Chrome's dangerous / mixed-content download hold. The item stays unfinished
+    // (Chrome does not move it to its target) until baa_download_validate or _discard.
+    download.danger = item_->IsDangerous() ? static_cast<int>(item_->GetDangerType()) : 0;
+    download.insecure = item_->IsInsecure();
     content::WebContents* wc = content::DownloadItemUtils::GetWebContents(item_);
     // A tab the app knows of, else none (a service worker, a closed tab).
     BaaTab* tab = wc ? TabFor(wc) : nullptr;
@@ -71,6 +71,23 @@ class ItemWatch : public download::DownloadItem::Observer {
   void Cancel() {
     if (item_ && item_->GetState() == download::DownloadItem::IN_PROGRESS) {
       item_->Cancel(/*user_cancel=*/true);
+    }
+  }
+
+  // Each may run observers that destroy the item and this watch: nothing touches `this` after.
+  void Validate() {
+    if (!item_ || item_->IsDone()) {
+      return;
+    }
+    if (item_->IsDangerous()) {
+      item_->ValidateDangerousDownload();
+    } else if (item_->IsInsecure()) {
+      item_->ValidateInsecureDownload();
+    }
+  }
+  void Discard() {
+    if (item_) {
+      item_->Remove();  // deletes the partial file, then the item, then this
     }
   }
 
@@ -122,6 +139,21 @@ void baa_download_cancel(uint64_t id) {
   }
 }
 
-// ABI 9; filled in by the next commit.
-void baa_download_validate(uint64_t) {}
-void baa_download_discard(uint64_t) {}
+// Called again until neither hold is left: an item can be both dangerous and insecure, and
+// Chrome checks one at a time.
+void baa_download_validate(uint64_t id) {
+  for (int i = 0; i < 2; ++i) {
+    auto it = baa::Items().find(id);
+    if (it == baa::Items().end()) {
+      return;
+    }
+    it->second->Validate();
+  }
+}
+
+void baa_download_discard(uint64_t id) {
+  auto it = baa::Items().find(id);
+  if (it != baa::Items().end()) {
+    it->second->Discard();
+  }
+}
