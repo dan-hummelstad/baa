@@ -543,6 +543,7 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Copy URL", Box::new(CopyUrl)),
         ("Print", Box::new(Print)),
         ("View source", Box::new(ViewSource)),
+        ("Next environment", Box::new(CycleEnvironment)),
         ("Reader mode", Box::new(ReaderMode)),
         ("Picture in picture", Box::new(PictureInPicture)),
         ("Mute tab", Box::new(MuteTab)),

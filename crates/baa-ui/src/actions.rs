@@ -47,6 +47,7 @@ gpui::actions!(
         OpenSettings,
         ClearToday,
         ShowArchive,
+        CycleEnvironment,
     ]
 );
 // ponytail: split view (§8) is milestone 5; its actions are added with its view

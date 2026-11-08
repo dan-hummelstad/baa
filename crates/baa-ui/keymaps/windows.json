@@ -97,6 +97,7 @@
       "ctrl-shift-c": "baa::CopyUrl",
       "ctrl-p": "baa::Print",
       "ctrl-alt-u": "baa::ViewSource",
+      "ctrl-alt-e": "baa::CycleEnvironment",
       "ctrl-shift-r": "baa::HardReload",
       "shift-f5": "baa::HardReload",
       "ctrl-alt-r": "baa::ReaderMode",

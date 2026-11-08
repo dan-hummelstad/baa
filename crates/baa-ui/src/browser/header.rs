@@ -103,6 +103,22 @@ impl<H: WebHost> Browser<H> {
                 Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui::ease_out_quint()),
                 |d, t| d.opacity(t).ml(px(4. * (1. - t))),
             );
+        // The env the page is on, as Settings → Developer names it; production in red.
+        let env = self.settings.env_of(&url).map(|(_, e)| {
+            let prod = ["prod", "production"].iter().any(|p| e.label.trim().eq_ignore_ascii_case(p));
+            let tint: Hsla = if prod { gpui::rgb(0xDC2626).into() } else { theme.accent };
+            div()
+                .debug_selector(|| "env-badge".into())
+                .flex_none()
+                .mr(px(6.))
+                .px(px(5.))
+                .rounded(r(4.))
+                .bg(fade(tint, 0.16))
+                .text_color(tint)
+                .text_size(px(10.))
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(SharedString::from(e.label.trim().to_uppercase()))
+        });
         let accent = theme.accent;
         let progress = loading.then(|| {
             div()
@@ -144,6 +160,7 @@ impl<H: WebHost> Browser<H> {
                     .border_color(crate::theme::ascii::frame())
                     .child(div().text_color(theme.accent).child("▸"))
             })
+            .children(env)
             .child(label)
             .when(crate::theme::ascii(), |d| d.child(div().text_color(theme.ink_faint).child("⌘L")))
             .children(progress);

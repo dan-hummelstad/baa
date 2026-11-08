@@ -182,6 +182,8 @@ pub(crate) enum Item {
     Page(&'static Page),
     /// A row of the settings window.
     Setting(&'static SettingRow),
+    /// `env <label>`: the active tab on this env of its project.
+    Env(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -282,7 +284,10 @@ pub(crate) fn rows(
         return out;
     }
 
-    let mut out = Vec::new();
+    let mut out = env_rows(query, session, settings);
+    if !out.is_empty() {
+        return out;
+    }
     let url = settings.resolve_input(query);
     // Typing an address: the pages it could be, then the plain "Open".
     let looks_like_page = pages::looks_like_page(query);
@@ -396,6 +401,22 @@ pub(crate) fn rows(
     out
 }
 
+/// `env <label>`: the other envs of the active tab's project whose label starts with `label`.
+fn env_rows(query: &str, session: &Session, settings: &Settings) -> Vec<Row> {
+    let query = query.to_lowercase();
+    let Some(want) = (query == "env").then_some("").or_else(|| query.strip_prefix("env ")).map(str::trim) else {
+        return Vec::new();
+    };
+    let tab = session.active_space().and_then(|id| session.space(id)?.active_tab).and_then(|id| session.tab(id));
+    let Some((project, here)) = tab.and_then(|t| settings.env_of(&t.url)) else { return Vec::new() };
+    project
+        .envs
+        .iter()
+        .filter(|e| !std::ptr::eq(*e, here) && e.label.to_lowercase().starts_with(&want))
+        .map(|e| row(Item::Env(e.label.clone()), format!("Switch to {}", e.label), format!("{} · {}", project.name, e.origin)))
+        .collect()
+}
+
 pub(crate) fn on_key<H: WebHost>(
     this: &mut Browser<H>,
     key: Key,
@@ -505,6 +526,7 @@ fn submit<H: WebHost>(
         Item::Space(id, _) => this.activate_space(id, window, cx),
         Item::Page(page) => this.navigate(page.url, mode == Mode::Address, window, cx),
         Item::Setting(r) => this.open_settings_at(Some(r.tab), Some(r.id), cx),
+        Item::Env(label) => this.switch_env(Some(&label), window, cx),
     }
 }
 
@@ -640,6 +662,7 @@ impl<H: WebHost> Browser<H> {
                     icon("search", 18., icon_color).into_any_element()
                 }
                 Item::Open(_) => icon("globe", 18., icon_color).into_any_element(),
+                Item::Env(_) => icon("code-xml", 18., icon_color).into_any_element(),
             };
             let binding = match &row.item {
                 Item::Command(c) => c.action().and_then(|a| window.highest_precedence_binding_for_action(&*a)),
@@ -656,6 +679,7 @@ impl<H: WebHost> Browser<H> {
                 Item::Command(_) => "Run",
                 Item::Page(_) => "Open",
                 Item::Setting(_) => "Show",
+                Item::Env(_) => "Switch",
             };
             let row_el = div()
                 .id(("bar-row", i))
@@ -897,5 +921,25 @@ mod tests {
             vec!["Ctrl".into(), "Shift".into(), "=".into()]
         };
         assert_eq!(chips(&binding), expected);
+    }
+
+    #[test]
+    fn env_lists_the_other_envs_of_the_tabs_project() {
+        let (mut s, _, _) = session();
+        let sp = s.active_space().unwrap();
+        s.open_tab(sp, "https://staging.shop.com/cart?id=1", 3);
+        let env = |label: &str, origin: &str| baa_model::Env { label: label.into(), origin: origin.into() };
+        let settings = Settings {
+            environments: vec![baa_model::Project {
+                name: "shop".into(),
+                envs: vec![env("Local", "http://localhost:3000"), env("Staging", "https://staging.shop.com"), env("Prod", "https://shop.com")],
+            }],
+            ..Default::default()
+        };
+        let r = rows("env ", &s, &settings, &[]);
+        assert_eq!(r.iter().map(|r| r.item.clone()).collect::<Vec<_>>(), [Item::Env("Local".into()), Item::Env("Prod".into())]);
+        assert_eq!(rows("ENV pr", &s, &settings, &[]).iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Switch to Prod"]);
+        assert!(!rows("env qa", &s, &settings, &[]).iter().any(|r| matches!(r.item, Item::Env(_))), "falls back to a search");
+        assert!(!rows("env prod", &s, &Settings::default(), &[]).iter().any(|r| matches!(r.item, Item::Env(_))));
     }
 }

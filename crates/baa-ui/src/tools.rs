@@ -183,6 +183,17 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
+    /// ⌥⌘E and `env <label>`: the page's path and query on the next env of its project, or the
+    /// one labelled `label`. The origin is one the user typed in Settings, so this is a load.
+    pub(crate) fn switch_env(&mut self, label: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(url) = self.active_tab().and_then(|id| self.session.tab(id)).map(|t| t.url.clone()) else { return };
+        match self.settings.env_url(&url, label) {
+            Some(next) => self.navigate(&next, true, window, cx),
+            None if self.settings.env_of(&url).is_none() => self.show_toast("This site is not in an environment (Settings → Developer)", cx),
+            None => self.show_toast("No such environment", cx),
+        }
+    }
+
     // ponytail: Google Translate's page proxy, opened on the user's request;
     // Chromium's built-in translate talks to Google in the background and is off.
     pub(crate) fn translate_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {

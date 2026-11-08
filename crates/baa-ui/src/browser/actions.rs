@@ -82,6 +82,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
         .on_action(cx.listener(|this, _: &Print, _, cx| this.with_page(cx, |p| p.print())))
         .on_action(cx.listener(|this, _: &ViewSource, window, cx| this.view_source(window, cx)))
+        .on_action(cx.listener(|this, _: &CycleEnvironment, window, cx| this.switch_env(None, window, cx)))
         .on_action(cx.listener(|this, _: &ReaderMode, _, cx| {
             this.with_page(cx, |p| p.eval(crate::tools::READER_SCRIPT))
         }))
