@@ -121,6 +121,15 @@ fn search_finds_rows_and_jumps_to_them(cx: &mut TestAppContext) {
     assert_eq!(h.update(&mut s, |v, _, _| v.selected).unwrap(), 2);
     click(&mut s, "result:cookies");
     assert_eq!(tab(h, &mut s), Tab::Privacy);
+
+    // The toolbar button opens the Search page with its own field; Esc goes back to the tab.
+    click(&mut s, "search");
+    assert!(h.update(&mut s, |v, _, _| v.searching()).unwrap());
+    assert!(drawn(&mut s, "search-field") && !drawn(&mut s, "row:cookies"));
+    s.simulate_keystrokes("escape");
+    assert!(h.update(&mut s, |v, _, _| !v.searching()).unwrap());
+    assert_eq!(tab(h, &mut s), Tab::Privacy);
+    assert!(drawn(&mut s, "row:cookies"));
 }
 
 #[gpui::test]

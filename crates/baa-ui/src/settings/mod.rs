@@ -1,5 +1,5 @@
 //! The settings window (⌘,): its own gpui window, like Safari's, with a
-//! toolbar of tabs and a search field. One per app. Every change is written
+//! toolbar of tabs and a search button that opens a Search page. One per app. Every change is written
 //! to baa-model's `Settings` at once and pushed to the engine through
 //! `WebHost::apply_settings`; there is no Apply.
 //!
@@ -65,6 +65,8 @@ pub(crate) struct SettingsView<H: WebHost> {
     pub(crate) space: SpaceId,
     fields: HashMap<Field, TextField>,
     active: Field,
+    /// The Search page is showing, opened from the toolbar button or by typing.
+    search_open: bool,
     /// Highlighted search result.
     pub(crate) selected: usize,
     pub(crate) motion: Motion,
@@ -198,6 +200,7 @@ impl<H: WebHost> SettingsView<H> {
             space,
             fields: HashMap::new(),
             active: Field::Search,
+            search_open: false,
             selected: 0,
             motion,
             last_frame: cx.background_executor().now(),
@@ -243,7 +246,12 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     pub(crate) fn searching(&self) -> bool {
-        !self.text(Field::Search).trim().is_empty()
+        self.search_open
+    }
+
+    pub(crate) fn open_search(&mut self, cx: &mut Context<Self>) {
+        self.search_open = true;
+        self.focus_field(Field::Search, cx);
     }
 
     /// Search hits in tab order, then by score.
@@ -319,6 +327,7 @@ impl<H: WebHost> SettingsView<H> {
 
     pub(crate) fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.field_mut(Field::Search).text.clear();
+        self.search_open = false;
         self.focus_field(Field::Search, cx);
         self.add_error = None;
         self.adding = None;
@@ -430,6 +439,7 @@ impl<H: WebHost> SettingsView<H> {
         }
         if self.searching() {
             self.field_mut(Field::Search).text.clear();
+            self.search_open = false;
             return;
         }
         if self.active != Field::Search {
@@ -442,6 +452,8 @@ impl<H: WebHost> SettingsView<H> {
     fn edited(&mut self, field: Field) {
         if field == Field::Search {
             self.selected = 0;
+            // Typing with no box focused is a search.
+            self.search_open |= !self.text(Field::Search).trim().is_empty();
         }
         self.add_error = None;
     }
@@ -750,11 +762,38 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     fn render_results(&self, cx: &mut Context<Self>) -> Vec<Item> {
+        let empty = TextField::default();
+        let field = div()
+            .id("settings-search-field")
+            .debug_selector(|| "search-field".to_string())
+            .mt(px(6.))
+            .mb(px(8.))
+            .h(px(40.))
+            .px(px(12.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(9.))
+            .rounded(r(10.))
+            .border_1()
+            .border_color(if self.active == Field::Search { self.theme.accent } else { surface::border().into() })
+            .bg(surface::key())
+            .text_size(px(15.))
+            .on_click(cx.listener(|this, _, _, cx| this.focus_field(Field::Search, cx)))
+            .child(icon("search", 16., surface::icon().into()))
+            .child(
+                self.fields
+                    .get(&Field::Search)
+                    .unwrap_or(&empty)
+                    .render("Search settings", surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..self.theme.accent }),
+            );
+        let mut out: Vec<Item> = vec![(None, field.into_any_element())];
         let hits = self.results();
         if hits.is_empty() {
-            return vec![self.note("No settings match.")];
+            let text = if self.text(Field::Search).trim().is_empty() { "Type to find a setting." } else { "No settings match." };
+            out.push(self.note(text));
+            return out;
         }
-        let mut out = Vec::new();
         let mut group = None;
         for (i, row) in hits.into_iter().enumerate() {
             if group != Some(row.tab) {
@@ -807,29 +846,28 @@ impl<H: WebHost> SettingsView<H> {
                 .child(div().whitespace_nowrap().text_size(px(if crate::theme::ascii() { 10. } else { 11. })).child(tab.label()));
             self.feel(el, key, cx)
         }).collect::<Vec<_>>();
-        let empty = TextField::default();
+        let on = self.searching();
+        let key = ("settings-search-button", 0u64);
+        let h = self.motion.get(key, Feel::Hover);
+        let ink = mix(surface::muted().into(), surface::ink().into(), if on { 1. } else { h });
         let search = div()
-            .w(px(170.))
-            .h(px(28.))
-            .px(px(9.))
-            .flex()
-            .items_center()
-            .gap(px(7.))
-            .rounded(r(8.))
-            .border_1()
-            .border_color(if self.active == Field::Search { self.theme.accent } else { surface::border().into() })
-            .bg(surface::key())
             .id("settings-search")
             .debug_selector(|| "search".to_string())
-            .text_size(px(12.5))
-            .on_click(cx.listener(|this, _, _, cx| this.focus_field(Field::Search, cx)))
-            .child(icon("search", 13., surface::icon().into()))
-            .child(
-                self.fields
-                    .get(&Field::Search)
-                    .unwrap_or(&empty)
-                    .render("Search", surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..self.theme.accent }),
-            );
+            .w(px(TAB_W))
+            .h(px(52.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(4.))
+            .rounded(r(9.))
+            .text_color(ink)
+            .when(on, |d| d.bg(surface::key()))
+            .on_click(cx.listener(|this, _, _, cx| this.open_search(cx)))
+            .child(icon("search", 18., mix(surface::icon().into(), if on { self.theme.accent } else { ink }, if on { 1. } else { h })))
+            .child(div().whitespace_nowrap().text_size(px(if crate::theme::ascii() { 10. } else { 11. })).child("Search"));
+        let search = self.feel(search, key, cx);
         div()
             .h(px(64.))
             .px(px(10.))
