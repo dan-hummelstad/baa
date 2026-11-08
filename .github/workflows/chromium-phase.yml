@@ -86,11 +86,17 @@ jobs:
           set -eu
           R=$GITHUB_REPOSITORY
           want=$(cat baa/chromium/helium/chromium_version.txt)
+          # Only a manual dispatch of chromium.yml in this repo (trusted.sh): any PR run can
+          # name itself "chromium dev" and upload a tree whose out/ the next build would run.
+          # Its tree must carry the checksum Pack tree records; older trees do not.
           usable() {
-            local sha
-            sha=$(gh api "repos/$R/actions/runs/$1" -q 'select(.conclusion == "success" and .display_title == "chromium dev") | .head_sha')
+            local run sha arts
+            run=$(gh api "repos/$R/actions/runs/$1") || return 1
+            baa/.github/actions/engine/trusted.sh "$R" <<<"$run" || return 1
+            sha=$(jq -r 'select(.conclusion == "success" and .display_title == "chromium dev") | .head_sha' <<<"$run")
             [ -n "$sha" ] || return 1
-            [ -n "$(gh api "repos/$R/actions/runs/$1/artifacts" -q '.artifacts[] | select(.name == env.TREE and (.expired | not)) | .id')" ] || return 1
+            arts=$(gh api "repos/$R/actions/runs/$1/artifacts?per_page=100" -q '[.artifacts[] | select(.expired | not) | .name]')
+            jq -e 'index(env.TREE) and index(env.TREE + ".sha256")' <<<"$arts" >/dev/null || return 1
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
           B="${{ inputs.base_run }}"
@@ -113,14 +119,24 @@ jobs:
           github-token: ${{ github.token }}
           path: /Users/Shared
 
+      - name: Restore tree checksum
+        if: inputs.phase != 1 || steps.base.outputs.run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.TREE }}.sha256
+          run-id: ${{ steps.base.outputs.run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: /Users/Shared
+
       - name: Unpack tree
         if: inputs.phase != 1 || steps.base.outputs.run != ''
         working-directory: /Users/Shared
         run: |
           set -eux
           t=$(date +%s)
+          gsha256sum -c tree.tar.zst.sha256
           zstd -dc tree.tar.zst | tar -xf -
-          rm tree.tar.zst
+          rm tree.tar.zst tree.tar.zst.sha256
           echo "unpack_seconds_phase${{ inputs.phase }}=$(( $(date +%s) - t ))" >> hb/stats.txt
           df -h /
           # Siso rebuilds every output whose mtime is older than its depslog entry,
@@ -266,6 +282,7 @@ jobs:
           # posix (pax) keeps sub-second mtimes, which siso compares; the default format drops them.
           gtar --format=posix --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
           ls -lh tree.tar.zst
+          gsha256sum tree.tar.zst | tee tree.tar.zst.sha256
           df -h /
 
       - name: Upload tree
@@ -277,3 +294,12 @@ jobs:
           overwrite: true
           retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
           compression-level: 0
+
+      - name: Upload tree checksum
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TREE }}.sha256
+          path: /Users/Shared/tree.tar.zst.sha256
+          overwrite: true
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}

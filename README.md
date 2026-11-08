@@ -53,22 +53,35 @@ Xcode):
 ```sh
 brew install zstd gh
 T=$(git rev-parse HEAD:chromium)
-RUN=$(gh api "repos/{owner}/{repo}/actions/artifacts?name=baa-engine-$T" -q '[.artifacts[]|select(.expired|not)][0].workflow_run.id // empty')
-[ -n "$RUN" ] || { echo "no engine for tree $T; start one (below)"; exit 1; }
-gh run download "$RUN" -n "baa-engine-$T" -D target/engine
+for RUN in $(gh api "repos/dan-hummelstad/baa/actions/artifacts?name=baa-engine-$T" -q '.artifacts[]|select(.expired|not).workflow_run.id'); do
+  gh api "repos/dan-hummelstad/baa/actions/runs/$RUN" | .github/actions/engine/trusted.sh dan-hummelstad/baa && break
+  RUN=
+done
+[ -n "$RUN" ] || { echo "no trusted engine for tree $T; start one (below)"; exit 1; }
+gh run download "$RUN" -R dan-hummelstad/baa -n "baa-engine-$T" -D target/engine
+gh run download "$RUN" -R dan-hummelstad/baa -n "baa-engine-$T.sha256" -D target/engine
+(cd target/engine && shasum -a 256 -c engine.tar.zst.sha256)
 zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
 ```
 
 If no artifact exists (the check above stops), start one with
 `gh workflow run chromium.yml -f mode=release` (one to two days), or use the second way.
 
+Take an engine or a tree only from a `workflow_dispatch` run of `chromium.yml` in
+`dan-hummelstad/baa` (`trusted.sh` checks this). Any pull request can upload an artifact with the
+same name, and its title can read "chromium dev". To check a run by hand:
+`gh api repos/dan-hummelstad/baa/actions/runs/<run> -q '.event'` must print `workflow_dispatch`.
+
 **C++ / `//baa` work.** Download the newest `chromium-tree-xcode27.2` artifact of a successful
-`chromium dev` run, unpack it at `/Users/Shared/hb`, then build incrementally:
+`chromium dev` run that passes that check, unpack it at `/Users/Shared/hb`, then build incrementally:
 
 ```sh
 brew install coreutils zstd gnu-tar rsync
 pip3 install --user pillow requests
-gh run download <run> -n chromium-tree-xcode27.2 -D /Users/Shared/dl
+gh api repos/dan-hummelstad/baa/actions/runs/<run> -q '.event'   # must print workflow_dispatch
+gh run download <run> -R dan-hummelstad/baa -n chromium-tree-xcode27.2 -D /Users/Shared/dl
+gh run download <run> -R dan-hummelstad/baa -n chromium-tree-xcode27.2.sha256 -D /Users/Shared/dl
+(cd /Users/Shared/dl && gsha256sum -c tree.tar.zst.sha256)
 zstd -dc /Users/Shared/dl/tree.tar.zst | gtar -xf - -C /Users/Shared
 chromium/local-build.sh
 ```
