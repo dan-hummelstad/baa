@@ -23,7 +23,7 @@ use crate::{
     input::{Key, TextField},
     lil_baa::LilBaa,
     motion::{self, Feel, Motion, Spring},
-    theme::{fade, lerp_oklch, mix, space_gradient, surface, Theme},
+    theme::{fade, lerp_oklch, mid_of, mix, space_gradient, surface, Stops, Theme},
 };
 
 mod peek;
@@ -243,8 +243,8 @@ pub struct Browser<H: WebHost> {
     /// Space-switch slide, in sidebar widths (−1…1).
     pub(crate) slide: Spring,
     fade: Spring,
-    gradient_from: (Rgba, Rgba),
-    pub(crate) gradient_to: (Rgba, Rgba),
+    gradient_from: Stops,
+    pub(crate) gradient_to: Stops,
     shown_space: Option<SpaceId>,
     last_frame: Instant,
     /// Claude's tool server: clients, approvals, the chat panel (PLAN-m4-features D).
@@ -391,8 +391,8 @@ impl<H: WebHost> Browser<H> {
             reveal_hover: false,
             slide: Spring::new(0.0),
             fade: Spring::new(1.0),
-            gradient_from: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
-            gradient_to: (rgb(PALETTE[0].0), rgb(PALETTE[0].1)),
+            gradient_from: (rgb(PALETTE[0].0), None, rgb(PALETTE[0].1)),
+            gradient_to: (rgb(PALETTE[0].0), None, rgb(PALETTE[0].1)),
             last_frame: cx.background_executor().now(),
             agent: Default::default(),
         };
@@ -537,7 +537,7 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn retheme(&mut self) {
         let gradient = self
             .active_space()
-            .map_or(self.gradient_to, |s| space_gradient(s.accent, s.accent_to));
+            .map_or(self.gradient_to, space_gradient);
         if gradient != self.gradient_to {
             self.gradient_from = self.gradient(); // mid-flight colours, so rapid switches never jump
             self.gradient_to = gradient;
@@ -929,17 +929,20 @@ impl<H: WebHost> Browser<H> {
         self.with_page(cx, |p| p.set_zoom(level));
     }
 
-    fn gradient(&self) -> (Rgba, Rgba) {
-        let t = self.fade.value();
+    fn gradient(&self) -> Stops {
+        let (from, to, t) = (self.gradient_from, self.gradient_to, self.fade.value());
+        // A middle stop fades in from (or out to) the halfway colour of the other side.
+        let mid = (from.1.is_some() || to.1.is_some()) && !(t >= 1. && to.1.is_none());
         (
-            lerp_oklch(self.gradient_from.0, self.gradient_to.0, t),
-            lerp_oklch(self.gradient_from.1, self.gradient_to.1, t),
+            lerp_oklch(from.0, to.0, t),
+            mid.then(|| lerp_oklch(mid_of(from), mid_of(to), t)),
+            lerp_oklch(from.2, to.2, t),
         )
     }
 
     pub(crate) fn theme(&self) -> Theme {
-        let (top, bottom) = self.gradient();
-        Theme::from_gradient(top, bottom)
+        let (top, mid, bottom) = self.gradient();
+        Theme { bg_mid: mid, ..Theme::from_gradient(top, bottom) }
     }
 
 }
@@ -1005,6 +1008,24 @@ pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {
         180.,
         linear_color_stop(theme.bg_top, 0.),
         linear_color_stop(theme.bg_bottom, 1.),
+    )
+}
+
+/// A three-stop gradient over `gradient_fill`, as the first child of a relative
+/// parent: gpui gradients hold two colours, so it paints as two halves.
+pub(crate) fn mid_stop(theme: &Theme, radius: f32) -> Option<Div> {
+    let mid = theme.bg_mid.filter(|_| !crate::theme::ascii())?;
+    let half = |a: Rgba, b: Rgba| div().flex_1().bg(linear_gradient(180., linear_color_stop(a, 0.), linear_color_stop(b, 1.)));
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(r(radius))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(half(theme.bg_top, mid))
+            .child(half(mid, theme.bg_bottom)),
     )
 }
 
@@ -1130,6 +1151,7 @@ impl<H: WebHost> Render for Browser<H> {
             .text_color(theme.ink)
             .text_size(px(13.))
             .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))
+            .children(mid_stop(&theme, 0.))
             .child(header)
             .child(
                 div()

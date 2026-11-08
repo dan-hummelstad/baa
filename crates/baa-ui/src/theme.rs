@@ -1,5 +1,5 @@
-//! Space theme (PLAN.md §3 "theme tints the whole window chrome"): a two-stop
-//! gradient per Space, and every chrome colour derived from it, so a Space
+//! Space theme (PLAN.md §3 "theme tints the whole window chrome"): a two- or
+//! three-stop gradient per Space, and every chrome colour derived from it, so a Space
 //! switch crossfades two colours (§10). Values follow the pen.dev mocks.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,9 +72,10 @@ pub mod ascii {
 
 #[derive(Clone, Copy)]
 pub struct Theme {
-    /// Window gradient, top and bottom.
+    /// Window gradient, top and bottom, and a Space's optional middle stop.
     pub bg_top: Rgba,
     pub bg_bottom: Rgba,
+    pub bg_mid: Option<Rgba>,
     /// Text and icons on the gradient, and its muted and faint variants.
     pub ink: Hsla,
     pub ink_muted: Hsla,
@@ -139,6 +140,7 @@ impl Theme {
         Self {
             bg_top: top,
             bg_bottom: bottom,
+            bg_mid: None,
             ink,
             ink_muted: with_alpha(ink, 0.56),
             ink_faint: with_alpha(ink, 0.30),
@@ -159,6 +161,7 @@ impl Theme {
         Self {
             bg_top: from_oklch([0.31, 0.055, h]),
             bg_bottom: gpui::rgb(0x06080D),
+            bg_mid: None,
             ink: rgb(0xC7D2E4),
             ink_muted: rgb(0x7F8DA6),
             ink_faint: rgb(0x4C5A70),
@@ -171,17 +174,34 @@ impl Theme {
     }
 }
 
-/// A Space's gradient: stored stops, or for a single colour, a light-to-mid
-/// ramp of its hue.
-pub fn space_gradient(accent: u32, accent_to: Option<u32>) -> (Rgba, Rgba) {
-    let from = gpui::rgb(accent);
-    match accent_to {
-        Some(to) => (from, gpui::rgb(to)),
-        None => {
-            let [_, c, h] = to_oklch(from);
-            (from_oklch([0.88, (c * 0.5).min(0.06), h]), from_oklch([0.72, c.min(0.13), h]))
-        }
-    }
+/// A gradient as drawn: top, an optional middle, bottom.
+pub type Stops = (Rgba, Option<Rgba>, Rgba);
+
+/// A Space's gradient: stored stops in its mode, or for a Space from before
+/// gradients, a light-to-mid ramp of its one colour.
+pub fn space_gradient(s: &baa_model::Space) -> Stops {
+    let from = gpui::rgb(s.accent);
+    let Some(to) = s.accent_to else {
+        let [_, c, h] = to_oklch(from);
+        return (from_oklch([0.88, (c * 0.5).min(0.06), h]), None, from_oklch([0.72, c.min(0.13), h]));
+    };
+    // The picker's lightness range, squeezed into a pale or a deep band so the
+    // ink (chosen from the bottom stop) lands dark or light.
+    let band = |c: Rgba| {
+        let (lo, hi) = match s.mode {
+            baa_model::ThemeMode::Auto => return c,
+            baa_model::ThemeMode::Light => (0.76, 0.96),
+            baa_model::ThemeMode::Dark => (0.16, 0.40),
+        };
+        let [l, c, h] = to_oklch(c);
+        from_oklch([lo + (hi - lo) * ((l - 0.30) / 0.65).clamp(0., 1.), c, h])
+    };
+    (band(from), s.accent_mid.map(|m| band(gpui::rgb(m))), band(gpui::rgb(to)))
+}
+
+/// The middle colour of `s`, its own or halfway between the ends.
+pub fn mid_of(s: Stops) -> Rgba {
+    s.1.unwrap_or_else(|| lerp_oklch(s.0, s.2, 0.5))
 }
 
 pub fn lerp_oklch(a: Rgba, b: Rgba, t: f32) -> Rgba {
@@ -346,5 +366,24 @@ mod tests {
         let b = from_oklch([0.6, 0.15, 10.0]);
         let h = to_oklch(lerp_oklch(a, b, 0.5))[2];
         assert!(!(30.0..330.0).contains(&h), "hue {h}");
+    }
+
+    #[test]
+    fn light_and_dark_modes_pick_the_ink_whatever_the_colours() {
+        let mut s = baa_model::Session::default();
+        let id = s.add_space("A", "🐑", None);
+        let space = s.space_mut(id).unwrap();
+        (space.accent, space.accent_mid, space.accent_to) = (0x9C7096, Some(0x5F5F7F), Some(0x34344A));
+        let ink = |space: &baa_model::Space| {
+            let (top, mid, bottom) = space_gradient(space);
+            assert!(mid.is_some(), "the middle stop survives every mode");
+            Theme::from_gradient(top, bottom).ink.l
+        };
+        assert!(ink(space) > 0.8, "Auto keeps the deep slate, so light ink");
+        space.mode = baa_model::ThemeMode::Light;
+        assert!(ink(space) < 0.3);
+        space.mode = baa_model::ThemeMode::Dark;
+        (space.accent, space.accent_to) = (0xF6F0ED, Some(0xF0E6E1));
+        assert!(ink(space) > 0.8, "Dark turns even cream deep");
     }
 }

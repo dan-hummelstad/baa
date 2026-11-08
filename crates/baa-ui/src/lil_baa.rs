@@ -13,9 +13,9 @@ use gpui::{
 
 use crate::{
     actions::OpenInBrowser,
-    browser::{cut_left, gradient_fill, host_of, shadow, Browser, PAGE_RADIUS},
+    browser::{cut_left, gradient_fill, host_of, mid_stop, shadow, Browser, PAGE_RADIUS},
     icons::icon,
-    theme::{space_gradient, surface, Theme},
+    theme::{surface, Theme},
 };
 
 pub fn window_options(cx: &App) -> WindowOptions {
@@ -57,7 +57,7 @@ pub struct SpaceChoice {
     pub id: SpaceId,
     pub label: String,
     pub name: String,
-    pub gradient: (u32, Option<u32>),
+    pub gradient: crate::theme::Stops,
 }
 
 impl<H: WebHost> LilBaa<H> {
@@ -195,9 +195,8 @@ impl<H: WebHost> Render for LilBaa<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let choice = self.spaces.iter().find(|s| s.id == self.space);
         let name = choice.map_or("baa".into(), |s| s.name.clone());
-        let (accent, accent_to) = choice.map_or((0xDCCFFB, Some(0xA592EC)), |s| s.gradient);
-        let (top, bottom) = space_gradient(accent, accent_to);
-        let theme = Theme::from_gradient(top, bottom);
+        let (top, mid, bottom) = choice.map_or((gpui::rgb(0xDCCFFB), None, gpui::rgb(0xA592EC)), |s| s.gradient);
+        let theme = Theme { bg_mid: mid, ..Theme::from_gradient(top, bottom) };
         let content = self
             .page
             .clone()
@@ -215,6 +214,8 @@ impl<H: WebHost> Render for LilBaa<H> {
             .px(px(8.))
             .pb(px(8.))
             .bg(gradient_fill(&theme))
+            .relative()
+            .children(mid_stop(&theme, 0.))
             .text_color(theme.ink)
             .text_size(px(13.))
             .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))

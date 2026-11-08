@@ -1,12 +1,12 @@
-//! Arc's Space editors: the theme colour (a dotted canvas, angle hue and radius
-//! vividness; the swatches; a lightness slider; a dial for how far the top stop
-//! fades toward white) and the icon (every emoji macOS has a name for).
+//! Arc's Space editors: the theme colour (a dotted canvas of up to three stops,
+//! angle hue and radius vividness, with the auto/light/dark modes; the swatches;
+//! a lightness slider; a dial that turns every hue) and the icon (every emoji macOS has a name for).
 //! Each is its own view so the browser window and the settings window can both
 //! hang one; they change the Space through the browser, live.
 
 use std::{cell::Cell, ops::Range, rc::Rc, sync::LazyLock};
 
-use baa_model::SpaceId;
+use baa_model::{SpaceId, ThemeMode};
 use baa_web::WebHost;
 use gpui::{
     anchored, canvas, deferred, div, prelude::*, px, AnyView, Bounds, Context,
@@ -58,8 +58,7 @@ impl Shown {
             let p = cx.new(|cx| EmojiPicker::new(browser, space.id, space.icon.clone(), cx));
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         } else {
-            let bottom = space.accent_to.unwrap_or(space.accent);
-            let p = cx.new(|cx| ColorPicker::new(browser, space.id, space.accent, bottom, cx));
+            let p = cx.new(|cx| ColorPicker::new(browser, space, cx));
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         };
         window.focus(&focus, cx);
@@ -116,21 +115,28 @@ const TRACK: (f32, f32) = (224., 27.5);
 const THUMB: (f32, f32) = (20., 42.);
 const DIAL: f32 = 88.;
 const TICKS: usize = 28;
+/// Gradient stops a Space holds.
+const MAX_STOPS: usize = 3;
+/// The mode buttons across the canvas top and the −/+ across its bottom: (centre y, half width).
+const MODES_ROW: (f32, f32) = (40., 56.);
+const STOPS_ROW: (f32, f32) = (308., 40.);
 
 #[derive(Clone, Copy)]
 enum Drag {
     Canvas,
     Light,
-    Spread,
+    Spin,
 }
 
 pub(crate) struct ColorPicker<H: WebHost> {
     browser: WeakEntity<Browser<H>>,
     space: SpaceId,
-    /// OKLCH of the Space's bottom stop, the big stop on the canvas.
-    lch: [f32; 3],
-    /// How far the top stop is mixed toward white: the dial, 0..=1.
-    spread: f32,
+    /// OKLCH of each stop, top to bottom; `sel` is the one the controls edit.
+    stops: Vec<[f32; 3]>,
+    sel: usize,
+    mode: ThemeMode,
+    /// The dial's angle: turning it turns every stop's hue with it.
+    spin: f32,
     drag: Option<Drag>,
     canvas: Rc<Cell<Bounds<Pixels>>>,
     slider: Rc<Cell<Bounds<Pixels>>>,
@@ -139,21 +145,6 @@ pub(crate) struct ColorPicker<H: WebHost> {
 }
 
 impl<H: WebHost> EventEmitter<DismissEvent> for ColorPicker<H> {}
-
-/// The gradient's top stop: the bottom one `spread` of the way to white.
-fn top_of(bottom: Rgba, spread: f32) -> Rgba {
-    let up = |v: f32| v + (1. - v) * spread;
-    Rgba { r: up(bottom.r), g: up(bottom.g), b: up(bottom.b), a: 1. }
-}
-
-/// `top_of` undone, read off the channel with the most headroom (the least rounding).
-fn spread_of(top: Rgba, bottom: Rgba) -> f32 {
-    let (t, b) = [(top.r, bottom.r), (top.g, bottom.g), (top.b, bottom.b)]
-        .into_iter()
-        .min_by(|x, y| x.1.total_cmp(&y.1))
-        .unwrap_or_default();
-    if b > 0.98 { 0. } else { ((t - b) / (1. - b)).clamp(0., 1.) }
-}
 
 fn hex(c: Rgba) -> u32 {
     let b = |v: f32| (v.clamp(0., 1.) * 255.).round() as u32;
@@ -178,6 +169,16 @@ fn from_canvas(dx: f32, dy: f32) -> (f32, f32) {
     (((dx * dx + dy * dy).sqrt() / RING).min(1.) * MAX_C, (-dy).atan2(dx).to_degrees().rem_euclid(360.))
 }
 
+/// The stops as a Space stores them: `accent`, then `accent_mid`, then `accent_to`;
+/// one colour when both ends match (or for a Space from before gradients).
+fn stops_of(s: &baa_model::Space) -> Vec<u32> {
+    match (s.accent_mid, s.accent_to) {
+        (Some(mid), Some(to)) => vec![s.accent, mid, to],
+        (None, Some(to)) if to != s.accent => vec![s.accent, to],
+        _ => vec![s.accent],
+    }
+}
+
 fn ring(size: f32, border: f32) -> gpui::Div {
     div()
         .absolute()
@@ -199,12 +200,15 @@ fn glow(color: Hsla, blur: f32, spread: f32) -> Vec<gpui::BoxShadow> {
 }
 
 impl<H: WebHost> ColorPicker<H> {
-    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, top: u32, bottom: u32, cx: &mut Context<Self>) -> Self {
+    fn new(browser: WeakEntity<Browser<H>>, space: &baa_model::Space, cx: &mut Context<Self>) -> Self {
+        let stops: Vec<_> = stops_of(space).into_iter().map(|c| to_oklch(gpui::rgb(c))).collect();
         Self {
             browser,
-            space,
-            lch: to_oklch(gpui::rgb(bottom)),
-            spread: spread_of(gpui::rgb(top), gpui::rgb(bottom)),
+            space: space.id,
+            sel: stops.len() - 1,
+            stops,
+            mode: space.mode,
+            spin: 0.,
             drag: None,
             canvas: Rc::default(),
             slider: Rc::default(),
@@ -213,43 +217,90 @@ impl<H: WebHost> ColorPicker<H> {
         }
     }
 
-    fn set(&mut self, top: u32, bottom: u32, cx: &mut Context<Self>) {
-        let space = self.space;
+    fn save(&mut self, cx: &mut Context<Self>) {
+        let (space, mode) = (self.space, self.mode);
+        let stops: Vec<u32> = self.stops.iter().map(|&s| hex(from_oklch(s))).collect();
         if let Some(b) = self.browser.upgrade() {
-            b.update(cx, |b, cx| b.set_space_gradient(space, top, bottom, cx));
+            b.update(cx, |b, cx| b.set_space_theme(space, &stops, mode, cx));
         }
         cx.notify();
     }
 
     fn swatch(&mut self, i: usize, cx: &mut Context<Self>) {
-        let (top, bottom) = PALETTE[i];
-        self.lch = to_oklch(gpui::rgb(bottom));
-        self.spread = spread_of(gpui::rgb(top), gpui::rgb(bottom));
-        self.set(top, bottom, cx);
+        self.stops[self.sel] = to_oklch(gpui::rgb(PALETTE[i].1));
+        self.save(cx);
+    }
+
+    /// A new stop after the selected one, a little round the hue circle from it.
+    fn add_stop(&mut self, cx: &mut Context<Self>) {
+        if self.stops.len() < MAX_STOPS {
+            let [l, c, h] = self.stops[self.sel];
+            self.sel += 1;
+            self.stops.insert(self.sel, [l, c.max(0.06), (h + 45.) % 360.]);
+            self.save(cx);
+        }
+    }
+
+    fn remove_stop(&mut self, cx: &mut Context<Self>) {
+        if self.stops.len() > 1 {
+            self.stops.remove(self.sel);
+            self.sel = self.sel.min(self.stops.len() - 1);
+            self.save(cx);
+        }
     }
 
     fn drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let off = |b: Bounds<Pixels>| (f32::from(at.x - b.center().x), f32::from(at.y - b.center().y));
+        let sel = &mut self.stops[self.sel];
         match self.drag {
             Some(Drag::Canvas) => {
                 let (dx, dy) = off(self.canvas.get());
-                (self.lch[1], self.lch[2]) = from_canvas(dx, dy);
+                (sel[1], sel[2]) = from_canvas(dx, dy);
             }
-            Some(Drag::Light) => self.lch[0] = LIGHT.0 + fraction(at, self.slider.get()).0 * (LIGHT.1 - LIGHT.0),
-            Some(Drag::Spread) => {
+            Some(Drag::Light) => sel[0] = LIGHT.0 + fraction(at, self.slider.get()).0 * (LIGHT.1 - LIGHT.0),
+            Some(Drag::Spin) => {
                 let (dx, dy) = off(self.dial.get());
-                self.spread = dx.atan2(-dy).to_degrees().rem_euclid(360.) / 360.;
+                let to = dx.atan2(-dy).to_degrees().rem_euclid(360.);
+                let turn = to - self.spin;
+                self.spin = to;
+                for s in &mut self.stops {
+                    s[2] = (s[2] + turn).rem_euclid(360.);
+                }
             }
             None => return,
         }
-        let bottom = from_oklch(self.lch);
-        self.set(hex(top_of(bottom, self.spread)), hex(bottom), cx);
+        self.save(cx);
     }
 
     fn start(drag: Drag) -> impl Fn(&mut Self, &MouseDownEvent, &mut Window, &mut Context<Self>) {
         move |this, e, _, cx| {
             this.drag = Some(drag);
             this.drag_to(e.position, cx);
+        }
+    }
+
+    /// A press on the canvas picks up the stop under it, or moves the selected
+    /// one there; the mode and −/+ rows are buttons, not canvas.
+    fn press_canvas(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let b = self.canvas.get();
+        let (x, y) = (f32::from(e.position.x - b.center().x), f32::from(e.position.y - b.origin.y));
+        let on = |(row, half): (f32, f32)| (y - row).abs() < 16. && x.abs() < half;
+        if on(MODES_ROW) || on(STOPS_ROW) {
+            return;
+        }
+        let dy = f32::from(e.position.y - b.center().y);
+        let hit = self.stops.iter().enumerate().rev().find(|(i, s)| {
+            let (sx, sy) = on_canvas(s[1], s[2]);
+            let r = if *i == self.sel { 22. } else { 14. };
+            (sx - x).hypot(sy - dy) < r
+        });
+        self.drag = Some(Drag::Canvas);
+        match hit {
+            Some((i, _)) => {
+                self.sel = i;
+                cx.notify();
+            }
+            None => self.drag_to(e.position, cx),
         }
     }
 }
@@ -262,26 +313,32 @@ fn measure(cell: &Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
 
 impl<H: WebHost> Render for ColorPicker<H> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bottom = from_oklch(self.lch);
-        let top = top_of(bottom, self.spread);
-        let current = PALETTE.iter().position(|&(_, b)| b == hex(bottom));
+        let sel = self.stops[self.sel];
+        let sel_rgb = from_oklch(sel);
+        let current = PALETTE.iter().position(|&(_, b)| b == hex(sel_rgb));
         let (mid_x, mid_y) = (CANVAS.0 / 2., CANVAS.1 / 2.);
-        let stop = |[_, c, h]: [f32; 3], size: f32, border: f32, fill: Rgba| {
-            let (dx, dy) = on_canvas(c, h);
-            ring(size, border).left(px(mid_x + dx - size / 2.)).top(px(mid_y + dy - size / 2.)).bg(fill)
-        };
-        // Soft hue glows past the ring: a legend for the angle.
-        let auras = (0..6).map(|i| {
-            let hue = 30. + i as f32 * 60.;
-            let (dx, dy) = on_canvas(MAX_C * 1.1, hue);
-            let tint = Hsla { a: 0.22, ..Hsla::from(from_oklch([0.75, 0.12, hue])) };
+        // Unselected stops first, so the big one sits on top.
+        let mut order: Vec<usize> = (0..self.stops.len()).filter(|&i| i != self.sel).collect();
+        order.push(self.sel);
+        let stops = order.into_iter().map(|i| {
+            let s = self.stops[i];
+            let (size, border) = if i == self.sel { (41., 2.5) } else { (23.5, 2.) };
+            let (dx, dy) = on_canvas(s[1], s[2]);
+            ring(size, border).left(px(mid_x + dx - size / 2.)).top(px(mid_y + dy - size / 2.)).bg(from_oklch(s))
+        });
+        // Hue glows round the edge: a legend for the angle.
+        let auras = (0..8).map(|i| {
+            let hue = 22.5 + i as f32 * 45.;
+            let (dx, dy) = on_canvas(MAX_C, hue);
+            let tint = Hsla { a: 0.5, ..Hsla::from(from_oklch([0.76, 0.15, hue])) };
             div()
                 .absolute()
-                .left(px(mid_x + dx * 1.1 - 25.))
-                .top(px(mid_y + dy * 1.1 - 25.))
-                .size(px(50.))
+                .left(px(mid_x + dx * 1.08 - 30.))
+                .top(px(mid_y + dy * 1.08 - 30.))
+                .size(px(60.))
                 .rounded_full()
-                .shadow(glow(tint, 24., 8.))
+                .bg(Hsla { a: 0.25, ..tint })
+                .shadow(glow(tint, 36., 14.))
         });
         let dots = canvas(|_, _, _| {}, |b, _, window, _| {
             const STEP: f32 = 7.2;
@@ -300,6 +357,48 @@ impl<H: WebHost> Render for ColorPicker<H> {
         })
         .absolute()
         .inset_0();
+        let modes = div()
+            .absolute()
+            .top(px(MODES_ROW.0 - 14.))
+            .left(px(mid_x - MODES_ROW.1))
+            .w(px(MODES_ROW.1 * 2.))
+            .flex()
+            .justify_between()
+            .children([(ThemeMode::Auto, "sparkles"), (ThemeMode::Light, "sun"), (ThemeMode::Dark, "moon-star")].map(|(mode, name)| {
+                div()
+                    .id(name)
+                    .size(px(28.))
+                    .rounded(r(7.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(self.mode == mode, |d| d.bg(gpui::rgba(0x00000017)))
+                    .hover(|d| d.bg(gpui::rgba(0x0000000D)))
+                    .child(icon(name, 15., surface::icon().into()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.mode = mode;
+                        this.save(cx);
+                    }))
+            }));
+        let step = |id: &'static str, name: &'static str, on: bool, f: fn(&mut Self, &mut Context<Self>)| {
+            div()
+                .id(id)
+                .p(px(4.))
+                .when(on, |d| d.cursor_pointer())
+                .opacity(if on { 1. } else { 0.35 })
+                .child(icon(name, 13., surface::muted().into()))
+                .on_click(cx.listener(move |this, _, _, cx| f(this, cx)))
+        };
+        let plus_minus = div()
+            .absolute()
+            .top(px(STOPS_ROW.0 - 10.5))
+            .left(px(mid_x - STOPS_ROW.1))
+            .w(px(STOPS_ROW.1 * 2.))
+            .flex()
+            .justify_between()
+            .child(step("theme-stop-remove", "minus", self.stops.len() > 1, Self::remove_stop))
+            .child(step("theme-stop-add", "plus", self.stops.len() < MAX_STOPS, Self::add_stop));
         let field = div()
             .id("theme-field")
             .relative()
@@ -312,9 +411,10 @@ impl<H: WebHost> Render for ColorPicker<H> {
             .children(auras)
             .child(dots)
             .child(measure(&self.canvas))
-            .child(stop(to_oklch(top), 23.5, 2., top))
-            .child(stop(self.lch, 41., 2.5, bottom))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Canvas)));
+            .children(stops)
+            .child(modes)
+            .child(plus_minus)
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::press_canvas));
 
         let chevron = |id: &'static str, name: &'static str, step: usize| {
             div()
@@ -349,7 +449,7 @@ impl<H: WebHost> Render for ColorPicker<H> {
             }))
             .child(chevron("theme-next", "chevron-right", 1));
 
-        let t = ((self.lch[0] - LIGHT.0) / (LIGHT.1 - LIGHT.0)).clamp(0., 1.);
+        let t = ((sel[0] - LIGHT.0) / (LIGHT.1 - LIGHT.0)).clamp(0., 1.);
         let wave = canvas(|_, _, _| {}, |b, _, window, _| {
             const CYCLES: f32 = 7.;
             let (w, mid) = (f32::from(b.size.width), f32::from(b.size.height) / 2.);
@@ -393,8 +493,8 @@ impl<H: WebHost> Render for ColorPicker<H> {
             )
             .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Light)));
 
-        // Ticks up to the handle take the colour, so the dial reads at a glance.
-        let lit = (self.spread * TICKS as f32).round() as usize;
+        // Ticks up to the handle take the selected colour, so the turn reads at a glance.
+        let lit = (self.spin / 360. * TICKS as f32).round() as usize;
         let around = |deg: f32, size: f32| {
             let a = deg.to_radians();
             (DIAL / 2. + a.sin() * 34. - size / 2., DIAL / 2. - a.cos() * 34. - size / 2.)
@@ -407,11 +507,11 @@ impl<H: WebHost> Render for ColorPicker<H> {
                 .top(px(y))
                 .size(px(3.5))
                 .rounded_full()
-                .bg(if i < lit { Hsla::from(bottom) } else { Hsla::from(surface::border()) })
+                .bg(if i < lit { Hsla::from(sel_rgb) } else { Hsla::from(surface::border()) })
         });
-        let (hx, hy) = around(self.spread * 360., 11.);
+        let (hx, hy) = around(self.spin, 11.);
         let dial = div()
-            .id("theme-spread")
+            .id("theme-spin")
             .relative()
             .size(px(DIAL))
             .cursor_pointer()
@@ -429,7 +529,7 @@ impl<H: WebHost> Render for ColorPicker<H> {
             )
             .child(ring(11., 0.).left(px(hx)).top(px(hy)).bg(surface::raised()))
             .child(measure(&self.dial))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Spread)));
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::start(Drag::Spin)));
 
         card("theme-picker")
             .w(px(CANVAS.0 + 12.))
@@ -711,11 +811,20 @@ mod tests {
             let back = hex(from_oklch([l, c, h]));
             let d = |s: u32| ((back >> s & 0xFF) as i32 - (bottom >> s & 0xFF) as i32).abs();
             assert!(d(16) <= 1 && d(8) <= 1 && d(0) <= 1, "{bottom:06X} came back {back:06X}");
-            for spread in [0., 0.25, 0.4, 0.9] {
-                let top = gpui::rgb(hex(top_of(gpui::rgb(bottom), spread)));
-                let back = spread_of(top, gpui::rgb(bottom));
-                assert!((back - spread).abs() < 0.02, "{bottom:06X} at {spread} read as {back}");
-            }
         }
+    }
+
+    #[test]
+    fn stops_read_back_as_the_picker_writes_them() {
+        let mut s = baa_model::Session::default();
+        let id = s.add_space("A", "🐑", None);
+        let space = s.space_mut(id).unwrap();
+        assert_eq!(stops_of(space), [0x6c9cff], "a Space from before gradients is one colour");
+        (space.accent, space.accent_to) = (1, Some(1));
+        assert_eq!(stops_of(space), [1], "matching ends are one flat colour");
+        space.accent_to = Some(3);
+        assert_eq!(stops_of(space), [1, 3]);
+        space.accent_mid = Some(2);
+        assert_eq!(stops_of(space), [1, 2, 3]);
     }
 }

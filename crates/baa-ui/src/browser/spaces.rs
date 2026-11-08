@@ -88,10 +88,18 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    /// Live, for the colour picker's drags: no save, no sync.
     pub(crate) fn set_space_gradient(&mut self, id: SpaceId, top: u32, bottom: u32, cx: &mut Context<Self>) {
+        let mode = self.session.space(id).map(|s| s.mode).unwrap_or_default();
+        self.set_space_theme(id, &[top, bottom], mode, cx);
+    }
+
+    /// 1 to 3 stops, top to bottom; one is a flat colour. Live, for the colour
+    /// picker's drags: no save, no sync.
+    pub(crate) fn set_space_theme(&mut self, id: SpaceId, stops: &[u32], mode: baa_model::ThemeMode, cx: &mut Context<Self>) {
+        let (Some(&first), Some(&last)) = (stops.first(), stops.last()) else { return };
         if let Some(space) = self.session.space_mut(id) {
-            (space.accent, space.accent_to) = (top, Some(bottom));
+            (space.accent, space.accent_to, space.mode) = (first, Some(last), mode);
+            space.accent_mid = (stops.len() == 3).then(|| stops[1]);
             self.retheme();
             cx.notify();
         }

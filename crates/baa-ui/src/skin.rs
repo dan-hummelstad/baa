@@ -12,7 +12,7 @@ impl<H: WebHost> Browser<H> {
     /// Tells the engine the skin for the active Space's Chrome pages when it changed.
     pub(crate) fn push_webui_skin(&mut self) {
         let Some(profile) = self.active_space().map(|s| s.profile) else { return };
-        let ((top, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
+        let ((top, _, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
         let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(ascii as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
         if self.skin_sent == Some((profile, key)) {
             return;

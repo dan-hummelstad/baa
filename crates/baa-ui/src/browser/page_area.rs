@@ -573,6 +573,7 @@ impl<H: WebHost> Browser<H> {
                 .rounded(r(PAGE_RADIUS))
                 .overflow_hidden()
                 .bg(gradient_fill(theme))
+                .children(crate::browser::mid_stop(theme, PAGE_RADIUS - 1.))
                 .border_1()
                 .border_color(Hsla { a: 0.10, ..theme.ink })
                 .shadow(vec![
