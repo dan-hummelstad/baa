@@ -11,13 +11,15 @@ use std::{
 
 mod dialog;
 pub(crate) use dialog::DialogAsk;
+#[cfg(test)]
+pub(crate) use dialog::wording;
 
 use baa_model::TabId;
 use baa_web::{Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
 
 use crate::{
-    browser::{drop_in, feel, host_of, shadow, Browser, HEADER_H, INSET},
+    browser::{cut_left, drop_in, feel, host_of, shadow, Browser, HEADER_H, INSET},
     icons::icon,
     motion::Feel,
     theme::{fade, mix, surface, Theme},
@@ -529,7 +531,7 @@ impl<H: WebHost> Browser<H> {
                             div()
                                 .flex()
                                 .gap(px(4.))
-                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(SharedString::from(host)))
+                                .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(SharedString::from(host)))
                                 .child(SharedString::from(format!("wants to {}", permission_sentence(&ask.kinds)))),
                         ),
                 )
@@ -790,7 +792,7 @@ impl<H: WebHost> Browser<H> {
             drop_in(
                 Self::popover_card("site-panel", 340.)
                     .child(
-                        div()
+                        cut_left(div())
                             .px(px(8.))
                             .pt(px(6.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)

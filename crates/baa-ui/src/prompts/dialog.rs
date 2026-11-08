@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEven
 
 use super::{button, site_name, ACTIVATION_DELAY};
 use crate::{
-    browser::{drop_in, shadow, Browser, InstallTarget},
+    browser::{cut_left, drop_in, shadow, Browser, InstallTarget},
     icons::icon,
     input::{Key, TextField},
     theme::{surface, Theme},
@@ -34,6 +34,29 @@ pub(crate) struct DialogAsk {
 // hides the Space picker. Pass the prompt type through the ABI if that matters.
 fn is_install(d: &Dialog) -> bool {
     d.kind == DialogKind::ExtensionInstall && (d.ok_label.is_empty() || d.ok_label.starts_with("Add"))
+}
+
+/// Title, message, OK and Cancel. Chrome's own wording when it sent any (its titles
+/// name the frame's origin, "An embedded page at X says"); ours otherwise, where a
+/// JS dialog names the tab's site only because Chrome gave no title.
+pub(crate) fn wording(d: &Dialog, url: &str) -> (String, String, String, Option<String>) {
+    let pick = |chrome: &str, ours: &str| if chrome.is_empty() { ours.to_string() } else { chrome.to_string() };
+    let says = || pick(&d.title, &format!("{} says", site_name(url)));
+    let chrome = |title, ok, cancel| (pick(&d.title, title), d.message.clone(), pick(&d.ok_label, ok), Some(pick(&d.cancel_label, cancel)));
+    match d.kind {
+        DialogKind::BeforeUnload { is_reload } => (
+            if is_reload { "Reload site?" } else { "Leave site?" }.into(),
+            "Changes you made may not be saved.".into(),
+            if is_reload { "Reload" } else { "Leave" }.into(),
+            Some("Stay".into()),
+        ),
+        DialogKind::Alert => (says(), d.message.clone(), "OK".into(), None),
+        DialogKind::Confirm | DialogKind::Prompt => (says(), d.message.clone(), "OK".into(), Some("Cancel".into())),
+        DialogKind::Auth => chrome("Sign in", "Sign In", "Cancel"),
+        DialogKind::ExternalProtocol => chrome("Open external app?", "Open", "Cancel"),
+        DialogKind::Unresponsive => chrome("Page unresponsive", "Exit pages", "Wait"),
+        DialogKind::ExtensionInstall => chrome("Add extension?", "Add extension", "Cancel"),
+    }
 }
 
 impl DialogAsk {
@@ -173,24 +196,7 @@ impl<H: WebHost> Browser<H> {
     /// The scrim and the sheet over the page.
     pub(super) fn render_dialog(&self, ask: &DialogAsk, url: &str, theme: &Theme, cx: &mut Context<Self>) -> [AnyElement; 2] {
         let d = &ask.dialog;
-        let says = || format!("{} says", site_name(url));
-        let pick = |chrome: &str, ours: &str| if chrome.is_empty() { ours.to_string() } else { chrome.to_string() };
-        // Chrome's own dialogs bring localized wording; ours is the fallback.
-        let chrome = |title, ok, cancel| (pick(&d.title, title), d.message.clone(), pick(&d.ok_label, ok), Some(pick(&d.cancel_label, cancel)));
-        let (title, message, ok, cancel): (String, String, String, Option<String>) = match d.kind {
-            DialogKind::BeforeUnload { is_reload } => (
-                if is_reload { "Reload site?" } else { "Leave site?" }.into(),
-                "Changes you made may not be saved.".into(),
-                if is_reload { "Reload" } else { "Leave" }.into(),
-                Some("Stay".into()),
-            ),
-            DialogKind::Alert => (says(), d.message.clone(), "OK".into(), None),
-            DialogKind::Confirm | DialogKind::Prompt => (says(), d.message.clone(), "OK".into(), Some("Cancel".into())),
-            DialogKind::Auth => chrome("Sign in", "Sign In", "Cancel"),
-            DialogKind::ExternalProtocol => chrome("Open external app?", "Open", "Cancel"),
-            DialogKind::Unresponsive => chrome("Page unresponsive", "Exit pages", "Wait"),
-            DialogKind::ExtensionInstall => chrome("Add extension?", "Add extension", "Cancel"),
-        };
+        let (title, message, ok, cancel) = wording(d, url);
         let field_box = |f: &TextField, focused: bool, placeholder: &'static str| {
             div()
                 .h(px(32.))
@@ -259,7 +265,7 @@ impl<H: WebHost> Browser<H> {
             .track_focus(&self.input_focus)
             .on_key_down(cx.listener(Self::on_input_key))
             .child(
-                div()
+                cut_left(div())
                     .text_size(px(14.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(surface::ink())

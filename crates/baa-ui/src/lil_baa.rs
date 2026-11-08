@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::{
     actions::OpenInBrowser,
-    browser::{gradient_fill, host_of, shadow, Browser, PAGE_RADIUS},
+    browser::{cut_left, gradient_fill, host_of, shadow, Browser, PAGE_RADIUS},
     icons::icon,
     theme::{space_gradient, surface, Theme},
 };
@@ -239,10 +239,9 @@ impl<H: WebHost> Render for LilBaa<H> {
                             .bg(theme.glass)
                             .child(icon("globe", 14., theme.ink))
                             .child(
-                                div()
+                                cut_left(div())
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .child(host),
                             )

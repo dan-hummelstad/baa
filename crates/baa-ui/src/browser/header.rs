@@ -96,7 +96,7 @@ impl<H: WebHost> Browser<H> {
             .gap(px(6.))
             .min_w_0()
             .when(!host.is_empty(), |d| d.child(link_icon))
-            .child(div().truncate().child(label.clone()))
+            .child(cut_left(div().min_w_0()).child(label.clone()))
             .children(self.render_site_button(theme, ink, cx))
             .with_animation(
                 ElementId::Name(label),

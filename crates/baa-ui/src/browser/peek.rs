@@ -275,7 +275,8 @@ impl<H: WebHost> Browser<H> {
                 cx.listener(|this, _, window, cx| this.expand_peek(window, cx)),
             ))
             .child(
-                div()
+                cut_left(div())
+                    .max_w(px(320.))
                     .px(px(10.))
                     .py(px(5.))
                     .rounded(r(8.))

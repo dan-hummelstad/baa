@@ -911,16 +911,38 @@ pub(crate) fn shadow(color: Hsla, y: f32, blur: f32) -> BoxShadow {
     }
 }
 
-/// "https://www.example.com/a" → "example.com".
+/// "https://www.example.com/a" → "example.com"; a port only when it is not the
+/// scheme's default; "" for URLs with no host (data:, file:, about:). Userinfo is
+/// never shown: "https://bank.com@evil.com" is evil.com.
 pub(crate) fn host_of(url: &str) -> String {
-    let host = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    host.strip_prefix("www.").unwrap_or(host).to_string()
+    let Ok(url) = url::Url::parse(url) else { return String::new() };
+    let Some(host) = url.host_str() else { return String::new() };
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    }
+}
+
+/// One line of origin text, cut on the left when too long, so the end of the host
+/// (the part that names the site) always stays visible.
+pub(crate) fn cut_left<E: Styled>(el: E) -> E {
+    el.overflow_hidden().whitespace_nowrap().text_ellipsis_start()
+}
+
+#[cfg(test)]
+#[test]
+fn host_of_shows_the_real_host() {
+    assert_eq!(host_of("https://a.com@b.com/"), "b.com");
+    assert_eq!(host_of("https://user:pw@b.com:8443/x"), "b.com:8443");
+    assert_eq!(host_of("https://www.b.com:443/x?y#z"), "b.com");
+    assert_eq!(host_of("http://b.com:80"), "b.com");
+    assert_eq!(host_of("https://bücher.example/"), "xn--bcher-kva.example");
+    let long = format!("{}.evil.example", "a".repeat(240));
+    assert_eq!(host_of(&format!("https://{long}/")), long);
+    for none in ["data:text/html,x", "file:///tmp/a.html", "about:blank", "not a url", ""] {
+        assert_eq!(host_of(none), "", "{none}");
+    }
 }
 
 pub(crate) fn tab_title(tab: &Tab) -> &str {

@@ -4,7 +4,7 @@ use baa_model::Store;
 use baa_web::{Dialog, DialogAnswer, DialogKind, PageEvent};
 use gpui::{Entity, Keystroke, Modifiers, TestAppContext, VisualTestContext};
 
-use crate::{mock::{MockHost, MockPage}, prompts::ACTIVATION_DELAY, Browser};
+use crate::{mock::{MockHost, MockPage}, prompts::{wording, ACTIVATION_DELAY}, Browser};
 
 fn dialog(id: u64, kind: DialogKind) -> Dialog {
     Dialog {
@@ -158,8 +158,19 @@ fn js_confirm_still_names_the_site(cx: &mut TestAppContext) {
     let (b, p, cx) = page(cx);
     p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(10, DialogKind::Confirm))));
     cx.run_until_parked();
-    // The title is drawn, not stored; the sheet being up with no Chrome title is the check.
     b.read_with(cx, |b, _| assert!(b.active_dialog().unwrap().dialog.title.is_empty()));
+    assert_eq!(wording(&dialog(10, DialogKind::Confirm), "https://a.example/").0, "a.example says");
+}
+
+#[test]
+fn a_js_dialog_shows_the_title_chrome_sent_not_the_tabs_host() {
+    for kind in [DialogKind::Alert, DialogKind::Confirm, DialogKind::Prompt] {
+        let mut d = dialog(12, kind);
+        d.title = "evil.example says".into();
+        assert_eq!(wording(&d, "https://a.example/").0, "evil.example says");
+    }
+    let d = dialog(13, DialogKind::Alert);
+    assert_eq!(wording(&d, "https://user@a.example:8443/").0, "a.example:8443 says");
 }
 
 #[gpui::test]
