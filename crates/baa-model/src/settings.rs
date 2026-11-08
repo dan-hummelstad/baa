@@ -224,6 +224,9 @@ pub struct Settings {
     pub external_links: ExternalLinks,
     /// Links that open a new tab show in Peek first.
     pub peek_links: bool,
+    /// A playing video floats in Picture in Picture when you switch tab or Space
+    /// (Chrome's auto PiP content setting at Allow, and a Space switch asks for it).
+    pub auto_pip: bool,
     pub page_scheme: PageScheme,
     /// Engines the user added, beside [`SEARCH_ENGINES`].
     pub search_engines: Vec<SearchEngine>,
@@ -287,6 +290,7 @@ impl Default for Settings {
             restore_today: true,
             external_links: ExternalLinks::default(),
             peek_links: true,
+            auto_pip: true,
             page_scheme: PageScheme::default(),
             search_engines: Vec::new(),
             web: WebPrefs::default(),
@@ -389,11 +393,12 @@ mod tests {
     fn old_json_loads_and_new_fields_round_trip() {
         let s: Settings = serde_json::from_str(r#"{"search_engine":{"name":"Kagi","url":"https://kagi.com/?q=%s"},"chrome":"Ascii"}"#).unwrap();
         assert_eq!(s.web, WebPrefs::default());
-        assert!(s.restore_today && s.peek_links);
+        assert!(s.restore_today && s.peek_links && s.auto_pip);
         let mut s = Settings::default();
         s.web.secure_dns = SecureDns::Custom("https://dns.quad9.net/dns-query".into());
         s.web.site_defaults = vec![(crate::Permission::Popups, crate::PermissionState::Allow)];
         s.web.developer_mode = true;
+        s.auto_pip = false;
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
         s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];
