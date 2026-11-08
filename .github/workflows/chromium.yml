@@ -25,7 +25,7 @@ on:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""
       base_run:
-        description: "dev: build on this finished run's tree; empty picks the newest, none builds from scratch"
+        description: "dev: build on this finished run's tree; empty picks the newest, none builds from scratch. release: an earlier release run's tree, else from scratch"
         default: ""
 
 # actions: read lets phase 1 find and download an earlier run's tree.

@@ -83,10 +83,11 @@ jobs:
 
       # A dev chain builds on the newest finished dev tree of the same Chromium
       # version, so it only recompiles what changed since. base_run: "" picks one,
-      # a run id names one, "none" builds from scratch. Release builds always do.
+      # a run id names one, "none" builds from scratch. A release builds from scratch
+      # unless base_run names an earlier release run, e.g. one that failed mid-chain.
       - name: Pick base tree (phase 1)
         id: base
-        if: inputs.phase == 1 && inputs.mode == 'dev' && inputs.base_run != 'none'
+        if: inputs.phase == 1 && inputs.base_run != 'none' && (inputs.mode == 'dev' || inputs.base_run != '')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -96,29 +97,55 @@ jobs:
           # Only a manual dispatch of chromium.yml in this repo (trusted.sh): any PR run can
           # name itself "chromium dev" and upload a tree whose out/ the next build would run.
           # Its tree must carry the checksum Pack tree records; older trees do not.
+          # A release base may be a failed chain: its last phase's tree is what is left to finish.
           usable() {
             local run sha arts
             run=$(gh api "repos/$R/actions/runs/$1") || return 1
             baa/.github/actions/engine/trusted.sh "$R" <<<"$run" || return 1
-            sha=$(jq -r 'select(.conclusion == "success" and .display_title == "chromium dev") | .head_sha' <<<"$run")
+            sha=$(jq -r 'select(.display_title == "chromium " + env.BAA_MODE and (.conclusion == "success" or env.BAA_MODE == "release")) | .head_sha' <<<"$run")
             [ -n "$sha" ] || return 1
-            arts=$(gh api "repos/$R/actions/runs/$1/artifacts?per_page=100" -q '[.artifacts[] | select(.expired | not) | .name]')
-            jq -e 'index(env.TREE) and index(env.TREE + ".sha256")' <<<"$arts" >/dev/null || return 1
+            arts=$(gh api "repos/$R/actions/runs/$1/artifacts?per_page=100" -q '[.artifacts[] | select(.expired | not)]')
+            jq -e 'any(.name == env.TREE)' <<<"$arts" >/dev/null || return 1
+            if ! jq -e 'any(.name == env.TREE + ".sha256")' <<<"$arts" >/dev/null; then
+              # Release trees from before the producer checksum (39b112cd) are checked
+              # against the sha256 GitHub recorded when the producer uploaded them.
+              [ "$BAA_MODE" = release ] || return 1
+              ID=$(jq -r 'map(select(.name == env.TREE))[0].id' <<<"$arts")
+              DIGEST=$(jq -r 'map(select(.name == env.TREE))[0].digest // empty' <<<"$arts")
+              case $DIGEST in sha256:?*) ;; *) return 1 ;; esac
+            fi
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
+          ID= DIGEST=
           B=$BAA_BASE_RUN
           if [ -n "$B" ]; then
-            usable "$B" || { echo "::error::run $B has no finished, unexpired Chromium $want dev tree"; exit 1; }
+            usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium $want $BAA_MODE tree"; exit 1; }
           else
             for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=success&per_page=50" -q '.workflow_runs[].id'); do
               if usable "$r"; then B=$r; break; fi
             done
           fi
-          echo "run=$B" >> "$GITHUB_OUTPUT"
-          echo "- base tree: ${B:-none, building from scratch}" >> "$GITHUB_STEP_SUMMARY"
+          { echo "run=$B"; echo "id=$ID"; echo "digest=$DIGEST"; } >> "$GITHUB_OUTPUT"
+          echo "- base tree: ${B:-none, building from scratch}${DIGEST:+ (checked by GitHub's digest)}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore tree by GitHub's digest
+        if: steps.base.outputs.digest != ''
+        working-directory: /Users/Shared
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ steps.base.outputs.id }}
+          DIGEST: ${{ steps.base.outputs.digest }}
+        run: |
+          set -eu
+          # curl drops the Authorization header on the redirect to blob storage.
+          curl -fsSL --proto =https --proto-redir =https -H "Authorization: Bearer $GH_TOKEN" \
+            -o tree.zip "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip"
+          echo "${DIGEST#sha256:}  tree.zip" | gsha256sum -c
+          unzip -q tree.zip tree.tar.zst && rm tree.zip
+          gsha256sum tree.tar.zst > tree.tar.zst.sha256
 
       - name: Restore tree
-        if: inputs.phase != 1 || steps.base.outputs.run != ''
+        if: inputs.phase != 1 || (steps.base.outputs.run != '' && steps.base.outputs.digest == '')
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ env.TREE }}
@@ -127,7 +154,7 @@ jobs:
           path: /Users/Shared
 
       - name: Restore tree checksum
-        if: inputs.phase != 1 || steps.base.outputs.run != ''
+        if: inputs.phase != 1 || (steps.base.outputs.run != '' && steps.base.outputs.digest == '')
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ env.TREE }}.sha256
