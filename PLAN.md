@@ -85,7 +85,7 @@ Must-haves (in the brief) are bold.
 **Keybinds (desktop friendly)** — Arc's defaults, remappable. Table in §8.
 
 **Explicitly out of scope for v1**: Boosts (CSS/JS injection), Easels, Notes, Arc Max/AI, sync, iOS companion,
-extensions UI, password manager, Picture-in-Picture auto-pop.
+extensions UI, password manager.
 Not out of scope: ad blocking. uBlock Origin (Helium's) is built in, one per Space, with bundled filter lists.
 
 ---
