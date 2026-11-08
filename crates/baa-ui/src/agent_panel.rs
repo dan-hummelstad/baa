@@ -9,21 +9,19 @@ use std::{
     time::SystemTime,
 };
 
-use baa_model::SidebarSide;
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt};
 use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, ScrollHandle, SharedString, Window};
 use serde_json::{json, Value};
 
 use crate::{
-    browser::{Browser, INSET},
+    browser::Browser,
+    library::Section,
     icons::icon,
     input::{Key, TextField},
     settings::Tab,
     theme::{r, surface, Theme},
 };
-
-pub(crate) const PANEL_WIDTH: f32 = 360.0;
 
 const INSTALL: &str = "curl -fsSL https://claude.ai/install.sh | bash";
 
@@ -45,7 +43,6 @@ enum Msg {
 
 #[derive(Default)]
 pub(crate) struct Panel {
-    pub open: bool,
     focus: Option<FocusHandle>,
     field: TextField,
     transcript: Vec<Entry>,
@@ -166,22 +163,19 @@ fn resolve_claude(configured: Option<String>, found: Option<String>) -> Option<S
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn toggle_agent_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.agent.panel.open {
-            return self.close_agent_panel(window, cx);
+        if self.library.as_ref().is_some_and(|l| l.section == Section::Chat) {
+            return self.close_library(window, cx);
         }
-        let panel = &mut self.agent.panel;
-        panel.open = true;
-        let focus = panel.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-        window.focus(&focus, cx);
-        self.agent_w.set_target(PANEL_WIDTH);
-        cx.notify();
+        self.open_chat(window, cx);
     }
 
-    pub(crate) fn close_agent_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.agent.panel.open = false;
-        self.agent_w.set_target(0.0);
-        self.focus_page(window, cx);
-        cx.notify();
+    /// The Library's Chat section, with the sidebar brought out if it was collapsed.
+    pub(crate) fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Docked wins over the reveal card while open, so the reveal needs no reset here.
+        self.sidebar_open = true;
+        self.open_library(Section::Chat, cx);
+        let focus = self.agent.panel.focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        window.focus(&focus, cx);
     }
 
     /// Kills the child and reaps it off the main thread.
@@ -364,18 +358,15 @@ impl<H: WebHost> Browser<H> {
         let key = self.agent.panel.field.handle(&event.keystroke, cx);
         match key {
             Key::Submit if !event.is_held => self.send_agent_message(cx),
-            Key::Cancel => self.close_agent_panel(window, cx),
+            Key::Cancel => self.close_library(window, cx),
             _ => {}
         }
         cx.notify();
     }
 
-    pub(crate) fn render_agent_panel(&self, theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The Library's Chat section body.
+    pub(crate) fn render_agent_panel(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = &self.agent.panel;
-        // Drawn while it slides shut too.
-        if !p.open && self.agent_w.value() < 0.5 {
-            return None;
-        }
         let focus = p.focus.clone()?;
         let btn = |id: &'static str, label: &'static str| {
             div()
@@ -409,7 +400,7 @@ impl<H: WebHost> Browser<H> {
                     .justify_center()
                     .rounded(r(6.))
                     .hover(|d| d.bg(surface::key()))
-                    .on_click(cx.listener(|this, _, window, cx| this.close_agent_panel(window, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_library(window, cx)))
                     .child(icon("x", 13., surface::icon().into())),
             );
 
@@ -489,17 +480,12 @@ impl<H: WebHost> Browser<H> {
                 )
         };
 
-        // Docked like the sidebar: a fixed-width sheet in a slot the browser widens, clipped
-        // while it slides. Its outer padding stands in for the row's inset on that side.
-        let right = self.side() != SidebarSide::Right;
         Some(
             div()
                 .id("agent-panel")
-                .w(px(PANEL_WIDTH))
+                .flex_1()
+                .min_w_0()
                 .h_full()
-                .when(right, |d| d.pr(px(INSET)).pl(px(10.)))
-                .when(!right, |d| d.pl(px(INSET)).pr(px(10.)))
-                .pb(px(4.))
                 .flex()
                 .flex_col()
                 .track_focus(&focus)

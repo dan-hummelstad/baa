@@ -18,7 +18,7 @@ icons!(
     "camera", "check", "chevron-down", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "file",
     "file-archive", "file-image", "file-music", "file-spreadsheet", "file-text",
     "file-video-camera", "folder", "folder-open", "git-pull-request", "globe", "history", "house", "import",
-    "key-round", "languages", "link", "list-filter", "lock", "map-pin", "maximize-2", "mic",
+    "key-round", "languages", "link", "list-filter", "lock", "map-pin", "maximize-2", "message-circle", "mic",
     "panel-left", "pause", "picture-in-picture-2", "pin", "pin-off", "play", "plus", "printer", "puzzle", "rotate-cw", "rss", "search", "settings",
     "skip-forward", "sliders-horizontal", "terminal", "trash-2", "triangle-alert", "volume-2", "volume-x", "x",
 );

@@ -1,7 +1,7 @@
 //! Arc's Library, in the sidebar: what lives outside any Space. Opened from
 //! the archive button or by swiping right past the first Space. Sections:
 //! Downloads (kept across launches, grouped by age, searchable and filtered by
-//! kind) and Archived Tabs.
+//! kind), Archived Tabs, and Chat (the Claude panel, ⌘J).
 
 use crate::theme::r;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ const NAV_W: f32 = 92.0;
 pub(crate) enum Section {
     Downloads,
     Archive,
+    Chat,
 }
 
 /// What the Downloads filter keeps.
@@ -210,7 +211,10 @@ impl<H: WebHost> Browser<H> {
                 .text_size(px(11.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
-                .on_click(cx.listener(move |this, _, _, cx| this.open_library(section, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| match section {
+                    Section::Chat => this.open_chat(window, cx),
+                    _ => this.open_library(section, cx),
+                }))
                 .child(icon(name, 22., if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) }))
                 .child(label);
             feel(el, key, cx)
@@ -233,13 +237,33 @@ impl<H: WebHost> Browser<H> {
                     .justify_center()
                     .gap(px(8.))
                     .child(nav_item(Section::Downloads, "circle-arrow-down", "Downloads", cx))
-                    .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx)),
+                    .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx))
+                    .child(nav_item(Section::Chat, "message-circle", "Chat", cx)),
             )
             .child(div().h(px(32.)).flex().items_center().child(back));
 
+        let library_box = |body: AnyElement| {
+            div()
+                .w(px(LIBRARY_WIDTH))
+                .h_full()
+                .pl(px(10.))
+                .pr(px(12.))
+                .pt(px(4.))
+                .flex()
+                .gap(px(10.))
+                // Comes in from the left, where it sits before the first Space.
+                .ml(px(-40. * (1. - t)))
+                .opacity(t.clamp(0., 1.))
+                .child(nav)
+                .child(body)
+        };
         let placeholder = match library.section {
             Section::Downloads => "Search Downloads…",
             Section::Archive => "Search Archived Tabs…",
+            Section::Chat => {
+                let chat = self.render_agent_panel(theme, cx).unwrap_or_else(|| div().into_any_element());
+                return library_box(chat).into_any_element();
+            }
         };
         let search = div()
             .id("library-search")
@@ -289,6 +313,7 @@ impl<H: WebHost> Browser<H> {
         let list = match library.section {
             Section::Downloads => self.download_rows(library, theme, cx),
             Section::Archive => self.archive_rows(library, theme, cx),
+            Section::Chat => Vec::new(),
         };
         let empty = list.is_empty();
         let body = div()
@@ -319,24 +344,13 @@ impl<H: WebHost> Browser<H> {
                                 .child(match library.section {
                                     Section::Downloads => "No downloads",
                                     Section::Archive => "No archived tabs",
+                                    Section::Chat => "",
                                 }),
                         )
                     }),
             );
-        div()
-            .w(px(LIBRARY_WIDTH))
-            .h_full()
-            .pl(px(10.))
-            .pr(px(12.))
-            .pt(px(4.))
-            .flex()
-            .gap(px(10.))
-            // Comes in from the left, where it sits before the first Space.
-            .ml(px(-40. * (1. - t)))
-            .opacity(t.clamp(0., 1.))
+        library_box(body.into_any_element())
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
-            .child(nav)
-            .child(body)
             .into_any_element()
     }
 

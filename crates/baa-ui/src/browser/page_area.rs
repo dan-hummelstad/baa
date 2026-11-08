@@ -551,7 +551,6 @@ impl<H: WebHost> Browser<H> {
         }
         for spring in [
             &mut self.sidebar_w,
-            &mut self.agent_w,
             &mut self.reveal_w,
             &mut self.reveal,
             &mut self.slide,
