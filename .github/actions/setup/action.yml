@@ -4,7 +4,7 @@ description: Rust build environment for baa
 runs:
   using: composite
   steps:
-    - uses: mozilla-actions/sccache-action@v0.0.11
+    - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
     - run: rustup toolchain install
       shell: bash
     - shell: bash

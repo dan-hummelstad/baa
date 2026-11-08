@@ -33,7 +33,9 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
         run: |
           version=${GITHUB_REF_NAME#v}
@@ -47,7 +49,9 @@ jobs:
       run: ${{ steps.engine.outputs.run }}
       name: ${{ steps.engine.outputs.name }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: engine
         uses: ./.github/actions/engine
         with:
@@ -62,15 +66,17 @@ jobs:
       # Secrets cannot appear in `if:`; this can.
       SIGNED: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.engine.outputs.name }}
           run-id: ${{ needs.engine.outputs.run }}
           github-token: ${{ github.token }}
           path: engine
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.engine.outputs.name }}.sha256
           run-id: ${{ needs.engine.outputs.run }}
@@ -85,7 +91,7 @@ jobs:
           # comes from this checkout, never the artifact: this job holds the signing secrets.
           cp -R chromium/packaging "target/bundle/baa Packaging"
           cargo run --release -p baa-privacy --example proxy_allowlist > proxy-allowlist.txt
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: pip install mitmproxy
@@ -94,7 +100,7 @@ jobs:
           cargo install cargo-about --locked --features cli
           cargo about generate about.hbs > target/bundle/baa.app/Contents/Resources/rust-credits.html
       - if: env.SIGNED == 'true'
-        uses: apple-actions/import-codesign-certs@v7
+        uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c # v7.2.0
         with:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -135,7 +141,7 @@ jobs:
             cargo run --release -p xtask -- sign "$DMG"
             cargo run --release -p xtask -- notarize "$DMG"
           fi
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
           path: |
@@ -143,7 +149,7 @@ jobs:
             engine/engine.json
           if-no-files-found: error
       - if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: privacy-netlog
           path: netlog.json
@@ -155,7 +161,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos
           path: dist

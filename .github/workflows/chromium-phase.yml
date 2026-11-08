@@ -38,6 +38,12 @@ on:
 env:
   ROOT: /Users/Shared/hb
   TREE: chromium-tree-xcode${{ inputs.xcode }}
+  # Inputs reach scripts as variables, never spliced into the script text.
+  BAA_MODE: ${{ inputs.mode }}
+  BAA_XCODE: ${{ inputs.xcode }}
+  BAA_BASE_RUN: ${{ inputs.base_run }}
+  BAA_BUDGET: ${{ inputs.budget_minutes }}
+  BAA_RUNNER: ${{ inputs.runner }}
 
 jobs:
   phase:
@@ -49,8 +55,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           path: baa
 
       - name: Prepare runner
@@ -66,7 +73,7 @@ jobs:
           xcrun simctl delete all || true
           sudo rm -rf ~/Library/Developer/CoreSimulator
           # Images list each Xcode under symlinked aliases too; keep the real one.
-          XCODE=$(realpath /Applications/Xcode_${{ inputs.xcode }}.app)
+          XCODE=$(realpath "/Applications/Xcode_$BAA_XCODE.app")
           sudo xcode-select -s "$XCODE"
           for x in /Applications/Xcode_*.app; do [ -L "$x" ] || [ "$x" = "$XCODE" ] || sudo rm -rf "$x"; done
           xcodebuild -downloadComponent MetalToolchain || true
@@ -99,7 +106,7 @@ jobs:
             jq -e 'index(env.TREE) and index(env.TREE + ".sha256")' <<<"$arts" >/dev/null || return 1
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
-          B="${{ inputs.base_run }}"
+          B=$BAA_BASE_RUN
           if [ -n "$B" ]; then
             usable "$B" || { echo "::error::run $B has no finished, unexpired Chromium $want dev tree"; exit 1; }
           else
@@ -112,7 +119,7 @@ jobs:
 
       - name: Restore tree
         if: inputs.phase != 1 || steps.base.outputs.run != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ env.TREE }}
           run-id: ${{ steps.base.outputs.run || github.run_id }}
@@ -121,7 +128,7 @@ jobs:
 
       - name: Restore tree checksum
         if: inputs.phase != 1 || steps.base.outputs.run != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ env.TREE }}.sha256
           run-id: ${{ steps.base.outputs.run || github.run_id }}
@@ -173,7 +180,7 @@ jobs:
           fi
           echo "prepare_seconds=$(( $(date +%s) - t ))" > "$ROOT/stats.txt"
           [ -z "$BASE" ] || echo "base_run=$BASE" >> "$ROOT/stats.txt"
-          write_gn_args arm64 "${{ inputs.mode }}"
+          write_gn_args arm64 "$BAA_MODE"
           cat "$_out_dir/args.gn"
           gn_gen
           du -sh "$_src_dir"
@@ -187,11 +194,11 @@ jobs:
           source helium-macos/devutils/shared.sh
           # Leave 75 min of the 6 h limit to pack and upload ~tens of GB.
           left=$(( 360*60 - 75*60 - $(date +%s) + JOB_START ))
-          B="${{ inputs.budget_minutes }}"; [ -z "$B" ] || left=$(( B * 60 ))
+          B=$BAA_BUDGET; [ -z "$B" ] || left=$(( B * 60 ))
           if [ $left -lt 60 ]; then echo "status=running" >> "$GITHUB_OUTPUT"; exit 0; fi
           t=$(date +%s)
           # Release also builds the packaging dir (dmg_tool, hfs_tool) the engine artifact carries.
-          targets=chrome; [ "${{ inputs.mode }}" = dev ] || targets="chrome chrome/installer/mac"
+          targets=chrome; [ "$BAA_MODE" = dev ] || targets="chrome chrome/installer/mac"
           # The step shell runs with -e -o pipefail: capture the timeout's 124 instead of dying on it.
           set +e
           (cd "$_src_dir" && SISO_PATH="$_siso_path" gtimeout -k 7m -s SIGTERM "${left}s" python3 "$_depot_tools_dir/autoninja.py" -C "$_out_dir" $targets) 2>&1 | tee build.log
@@ -229,7 +236,7 @@ jobs:
           du -sh "$_out_dir/baa.app"
           STARTED=$(date -j -u -f %Y-%m-%dT%H:%M:%SZ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -q .run_started_at)" +%s)
           {
-            echo "## baa Chromium $(cat helium/chromium_version.txt) ${{ inputs.mode }} build on ${{ inputs.runner }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "## baa Chromium $(cat helium/chromium_version.txt) $BAA_MODE build on $BAA_RUNNER, $(xcodebuild -version | tr '\n' ' ')"
             echo "- phases: ${{ inputs.phase }}"
             echo "- commit: $GITHUB_SHA"
             echo "- wall clock incl. queueing: $(( ($(date +%s) - STARTED) / 3600 )) h $(( ($(date +%s) - STARTED) % 3600 / 60 )) m"
@@ -258,7 +265,7 @@ jobs:
 
       - name: Upload engine
         if: steps.build.outputs.status == 'finished' && inputs.mode == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.ENGINE }}
           path: /Users/Shared/engine.tar.zst
@@ -267,7 +274,7 @@ jobs:
 
       - name: Upload engine checksum
         if: steps.build.outputs.status == 'finished' && inputs.mode == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.ENGINE }}.sha256
           path: /Users/Shared/engine.tar.zst.sha256
@@ -287,7 +294,7 @@ jobs:
 
       - name: Upload tree
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}
           path: /Users/Shared/tree.tar.zst
@@ -297,7 +304,7 @@ jobs:
 
       - name: Upload tree checksum
         if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}.sha256
           path: /Users/Shared/tree.tar.zst.sha256

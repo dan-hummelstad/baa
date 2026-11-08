@@ -1,0 +1,10 @@
+self-hosted-runner:
+  # chromium.yml's default runner label (a larger macOS image).
+  labels: [xcode-27]
+paths:
+  # The Build step splits $targets on purpose and names a variable `done`; it holds the
+  # phase hand-off guards, which are not reworded for a linter.
+  .github/workflows/chromium-phase.yml:
+    ignore:
+      - 'SC2086'
+      - 'SC1010'

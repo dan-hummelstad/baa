@@ -1,0 +1,5 @@
+rules:
+  artipacked:
+    ignore:
+      # It pushes the bot branch with the checkout's credentials and uploads no artifact.
+      - helium-bump.yml

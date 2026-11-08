@@ -1,0 +1,24 @@
+# actionlint (workflow syntax, shellcheck on run: scripts) and zizmor (Actions security:
+# template injection, artifact poisoning, unpinned actions, credential persistence) on
+# every change to .github/.
+name: actions-lint
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/**"]
+  pull_request:
+    paths: [".github/**"]
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Exact versions: a new release cannot fail (or pass) a PR unseen.
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: pipx run zizmor==1.32.0 --offline --min-severity medium .github

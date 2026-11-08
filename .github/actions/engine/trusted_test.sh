@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline test of trusted.sh; ci.yml runs it on every PR.
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 R=dan-hummelstad/baa
 run() { # event path head_repo
   printf '{"event":"%s","path":"%s","head_repository":{"full_name":"%s"},"repository":{"full_name":"%s"}}' "$1" "$2" "$3" "$R"
