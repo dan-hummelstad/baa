@@ -60,7 +60,7 @@ impl<H: WebHost> Browser<H> {
         let page = if popup {
             self.host.create_popup(profile, url, window, cx)
         } else {
-            self.host.create_page(profile, url, window, cx)
+            self.host.create_page(profile, url, true, window, cx)
         };
         page.read(cx).set_corner_radius(f32::from(r(PEEK_RADIUS)));
         page.read(cx).set_floating(true);
@@ -231,7 +231,7 @@ impl<H: WebHost> Browser<H> {
             .collect();
         let options = crate::lil_baa::window_options(cx);
         let opened = cx.open_window(options, |window, cx| {
-            let page = host.create_page(profile, &url, window, cx);
+            let page = host.create_page(profile, &url, true, window, cx);
             cx.new(|cx| LilBaa::new(browser, page, (space, profile), url.clone(), spaces, window, cx))
         });
         if let Err(e) = opened {

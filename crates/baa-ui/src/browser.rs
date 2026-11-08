@@ -497,7 +497,7 @@ impl<H: WebHost> Browser<H> {
         let Some(space) = self.session.space(tab.space) else {
             return;
         };
-        let page = self.host.create_page(space.profile, &tab.url, window, cx);
+        let page = self.host.create_page(space.profile, &tab.url, true, window, cx);
         let sub = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
             this.on_page_event(id, event, window, cx)
         });
@@ -578,6 +578,8 @@ impl<H: WebHost> Browser<H> {
             | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
             PageEvent::GroupChanged { group, title } => return self.on_group_changed(id, *group, title, window, cx),
+            // ponytail: the notice itself is drawn in a later change.
+            PageEvent::ExclusiveAccess { .. } => return,
             PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) => {
                 return self.on_page_state_event(id, event, window, cx)
             }

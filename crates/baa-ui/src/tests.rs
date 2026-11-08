@@ -670,6 +670,8 @@ fn downloads_show_in_the_header(cx: &mut TestAppContext) {
             received_bytes: 5,
             total_bytes: 10,
             state: baa_web::DownloadState::InProgress,
+            ephemeral: false,
+            danger: None,
         });
         cx.notify();
     });
@@ -690,6 +692,8 @@ fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
                 received_bytes: 10,
                 total_bytes: 10,
                 state,
+                ephemeral: false,
+                danger: None,
             });
             cx.notify();
         });

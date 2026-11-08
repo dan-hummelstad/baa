@@ -199,7 +199,7 @@ impl WebHost for MockHost {
     type Page = MockPage;
     fn create_devtools(&self, of: &Entity<MockPage>, _inspect_at: Option<(i32, i32)>, _side: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
         let url = format!("devtools://{}", of.read(cx).url.borrow());
-        self.create_page(ProfileId(0), &url, window, cx)
+        self.create_page(ProfileId(0), &url, true, window, cx)
     }
     fn show_menu(&self, _at: gpui::Point<gpui::Pixels>, items: Vec<baa_web::MenuItem>, window: &mut Window, cx: &mut App, done: baa_web::MenuDone) {
         self.menus.borrow_mut().push(items);
@@ -210,6 +210,7 @@ impl WebHost for MockHost {
         &self,
         profile: ProfileId,
         url: &str,
+        _user_initiated: bool,
         _: &mut Window,
         cx: &mut App,
     ) -> Entity<MockPage> {
@@ -233,7 +234,7 @@ impl WebHost for MockHost {
     }
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
         self.popups.borrow_mut().push(url.into());
-        self.create_page(profile, url, window, cx)
+        self.create_page(profile, url, true, window, cx)
     }
     fn ephemeral_profile(&self) -> ProfileId {
         ProfileId(u64::MAX)
@@ -295,6 +296,8 @@ impl WebHost for MockHost {
         self.chrome_tabs.clone()
     }
     fn cancel_download(&self, _: u64) {}
+    fn download_validate(&self, _: u64) {}
+    fn download_discard(&self, _: u64) {}
     fn site_permission(&self, _: ProfileId, url: &str, kind: Permission) -> PermissionState {
         self.permissions
             .borrow()
