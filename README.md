@@ -43,15 +43,28 @@ Edge start its helper). The UI follows the pen.dev mocks. Still to come from mil
 
 ## Build
 
-baa needs an engine: a directory with `baa.app` (BaaCore.framework and Chromium's helpers). There are
-two ways to get one. Both need macOS, `rustup toolchain install stable` and the GitHub CLI (`gh`, logged in).
-Only the second needs Xcode `27.2`.
+baa is a Rust app (`cargo bundle`) on top of an **engine**: a Chromium build with baa's `//baa`
+layer (BaaCore.framework and Chromium's helpers). You set up an engine once, then build and run the
+app as often as you like.
 
-**Rust-only work.** Download a release engine for your `chromium/` tree (about 350 MB, needs no
-Xcode):
+### Requirements
+
+- macOS, [Homebrew](https://brew.sh).
+- Rust: `rustup toolchain install stable`.
+- GitHub CLI, logged in: `brew install gh && gh auth login`.
+- Only to build the engine yourself (setup B): Xcode `27.2`, Python 3, and
+  `brew install coreutils zstd gnu-tar rsync && pip3 install --user pillow requests`.
+- Only for the engine test harness: `node`.
+
+### First-time setup: get an engine
+
+Pick one.
+
+**A. Download a prebuilt engine** (about 350 MB, no Xcode). Use this for Rust-only work. It lands in
+`target/engine`.
 
 ```sh
-brew install zstd gh
+brew install zstd
 T=$(git rev-parse HEAD:chromium)
 for RUN in $(gh api "repos/dan-hummelstad/baa/actions/artifacts?name=baa-engine-$T" -q '.artifacts[]|select(.expired|not).workflow_run.id'); do
   gh api "repos/dan-hummelstad/baa/actions/runs/$RUN" | .github/actions/engine/trusted.sh dan-hummelstad/baa && break
@@ -64,20 +77,14 @@ gh run download "$RUN" -R dan-hummelstad/baa -n "baa-engine-$T.sha256" -D target
 zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
 ```
 
-If no artifact exists (the check above stops), start one with
-`gh workflow run chromium.yml -f mode=release` (one to two days), or use the second way.
+An engine exists only for `chromium/` trees CI has built. If the loop stops with "no trusted
+engine", start one with `gh workflow run chromium.yml -f mode=release` (one to two days), or use B.
 
-Take an engine or a tree only from a `workflow_dispatch` run of `chromium.yml` in
-`dan-hummelstad/baa` (`trusted.sh` checks this). Any pull request can upload an artifact with the
-same name, and its title can read "chromium dev". To check a run by hand:
-`gh api repos/dan-hummelstad/baa/actions/runs/<run> -q '.event'` must print `workflow_dispatch`.
-
-**C++ / `//baa` work.** Download the newest `chromium-tree-xcode27.2` artifact of a successful
-`chromium dev` run that passes that check, unpack it at `/Users/Shared/hb`, then build incrementally:
+**B. Build the engine from source** (needs Xcode). Use this for C++ / `//baa` work, or to keep up
+with `chromium/` changes without waiting for CI. Download the newest `chromium-tree-xcode27.2`
+artifact of a successful `chromium dev` run, unpack it at `/Users/Shared/hb`, and build it once:
 
 ```sh
-brew install coreutils zstd gnu-tar rsync
-pip3 install --user pillow requests
 gh api repos/dan-hummelstad/baa/actions/runs/<run> -q '.event'   # must print workflow_dispatch
 gh run download <run> -R dan-hummelstad/baa -n chromium-tree-xcode27.2 -D /Users/Shared/dl
 gh run download <run> -R dan-hummelstad/baa -n chromium-tree-xcode27.2.sha256 -D /Users/Shared/dl
@@ -86,7 +93,16 @@ zstd -dc /Users/Shared/dl/tree.tar.zst | gtar -xf - -C /Users/Shared
 chromium/local-build.sh
 ```
 
-Then build the app and run it:
+The engine is then `/Users/Shared/hb/helium-macos/build/src/out/Default`. Any account can write to
+`/Users/Shared`, so `local-build.sh` builds, and `cargo bundle` uses this engine, only when every
+directory from `/Users/Shared/hb` down is yours, is not a symlink and is not writable by group or
+others.
+
+Take an engine or a tree only from a `workflow_dispatch` run of `chromium.yml` in
+`dan-hummelstad/baa` (`trusted.sh` checks this in A; the first line of B checks it by hand). Any
+pull request can upload an artifact with the same name, and its title can read "chromium dev".
+
+### Build and run
 
 ```sh
 cargo bundle --run                                  # build, sign, run in the foreground
@@ -94,32 +110,44 @@ cargo bundle --release --run                        # judge smoothness only on t
 cargo bundle --run --enable-logging=stderr --v=1    # Chromium's own log
 ```
 
-`cargo bundle [--release] [--engine DIR] [--no-sign] [--run [args…]]` finds the engine in `--engine`,
-else `$BAA_ENGINE`, else `/Users/Shared/hb/helium-macos/build/src/out/Default`, else `target/engine`.
-Any account can write to `/Users/Shared`, so the third is used, and `chromium/local-build.sh` builds,
-only when every directory from `/Users/Shared/hb` down is yours, is not a symlink and is not writable
-by group or others.
-A component engine (the dev tree) bundles in place as `<engine>/baa Dev.app`; an official engine
-bundles to `target/bundle/baa.app`. Without `--run` it prints the app path. A debug build lays out
-GPUI too slowly to present more than ~60 fps.
+A debug build lays out GPUI too slowly to present more than ~60 fps.
 
-The bundle is signed with `$BAA_SIGN_IDENTITY`, else your first "Apple Development" identity, else
-ad hoc. A stable identity keeps the Keychain's "Always Allow" for "baa Storage Key" and stops macOS
-from asking for Documents access on every rebuild.
+**After pulling.** If the pull changed `chromium/`, bring the engine up to date before running:
 
-Development loop: `cargo check -p <crate>` and `cargo test -p <crate>`. A full `cargo build -p baa`
-is slow; run it once at the end. CI runs `cargo test --release --workspace` and
+```sh
+git pull --ff-only
+chromium/local-build.sh     # setup B: incremental, rebuilds only what changed
+                            # setup A: run the download again instead (the tree hash changed)
+cargo bundle --run
+```
+
+A stale engine stops the app at launch with `BaaCore ABI mismatch` (`left` is the engine's version,
+`right` the one the Rust side expects). Rebuilding or downloading the engine fixes it.
+
+**Development loop.** `cargo check -p <crate>` and `cargo test -p <crate>`. A full
+`cargo build -p baa` is slow; run it once at the end. CI runs `cargo test --release --workspace` and
 `cargo clippy --release --workspace --all-targets -- -D warnings`.
 
-The `//baa` layer (permissions, dialogs, menus, downloads, DevTools, extensions, tab and window
-events) is tested by a harness, not by hand: `crates/baa-chromium` is a small gpui app that drives
-BaaCore through the C ABI and logs every callback. `crates/baa-chromium/ci.sh [--engine DIR] [--only NAME]`
-bundles it into an engine (same engine search as `cargo bundle`), runs every `tests/*.expect` with a
-fresh profile, a local download server and the test extension, and exits non-zero with what differed.
-A test is a harness script (`tests/<name>.txt`, steps documented in `src/main.rs`) plus an `.expect`
-file (patterns that must or must not appear in the log, CDP probes; syntax at the top of `ci.py`).
-It opens real windows and needs `node` and network. CI runs it in `ci.yml` and `chromium.yml` on the
-release engine of the commit's `chromium/` tree.
+**Which engine, where the app goes.**
+`cargo bundle [--release] [--engine DIR] [--no-sign] [--run [args…]]` takes the engine from
+`--engine`, else `$BAA_ENGINE`, else `/Users/Shared/hb/helium-macos/build/src/out/Default` (setup B),
+else `target/engine` (setup A). A component engine (B) bundles in place as `<engine>/baa Dev.app`;
+an official engine (A) bundles to `target/bundle/baa.app`. Without `--run` it prints the app path.
+
+**Signing.** The bundle is signed with `$BAA_SIGN_IDENTITY`, else your first "Apple Development"
+identity, else ad hoc. A stable identity keeps the Keychain's "Always Allow" for "baa Storage Key"
+and stops macOS from asking for Documents access on every rebuild.
+
+**Engine tests.** The `//baa` layer (permissions, dialogs, menus, downloads, DevTools, extensions,
+tab and window events) is tested by a harness, not by hand: `crates/baa-chromium` is a small gpui
+app that drives BaaCore through the C ABI and logs every callback.
+`crates/baa-chromium/ci.sh [--engine DIR] [--only NAME]` bundles it into an engine (same engine
+search as `cargo bundle`), runs every `tests/*.expect` with a fresh profile, a local download server
+and the test extension, and exits non-zero with what differed. A test is a harness script
+(`tests/<name>.txt`, steps documented in `src/main.rs`) plus an `.expect` file (patterns that must
+or must not appear in the log, CDP probes; syntax at the top of `ci.py`). It opens real windows and
+needs `node` and network. CI runs it in `ci.yml` and `chromium.yml` on the release engine of the
+commit's `chromium/` tree.
 
 Useful environment variables when running the bundle:
 
