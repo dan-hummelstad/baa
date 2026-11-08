@@ -179,6 +179,18 @@ fn stops_of(s: &baa_model::Space) -> Vec<u32> {
     }
 }
 
+/// Ties the stops to the one at `by`: all as vivid, their hues evenly round the
+/// wheel from it (two opposite, three a third apart), in stop order. Lightness
+/// stays each stop's own.
+fn anchor(stops: &mut [[f32; 3]], by: usize) {
+    let [_, c, h] = stops[by];
+    let n = stops.len();
+    for (i, s) in stops.iter_mut().enumerate() {
+        let steps = (i + n - by) % n;
+        (s[1], s[2]) = (c, (h + steps as f32 * 360. / n as f32).rem_euclid(360.));
+    }
+}
+
 fn ring(size: f32, border: f32) -> gpui::Div {
     div()
         .absolute()
@@ -228,15 +240,18 @@ impl<H: WebHost> ColorPicker<H> {
 
     fn swatch(&mut self, i: usize, cx: &mut Context<Self>) {
         self.stops[self.sel] = to_oklch(gpui::rgb(PALETTE[i].1));
+        anchor(&mut self.stops, self.sel);
         self.save(cx);
     }
 
-    /// A new stop after the selected one, a little round the hue circle from it.
+    /// A new stop after the selected one; the stops then spread evenly round the wheel.
     fn add_stop(&mut self, cx: &mut Context<Self>) {
         if self.stops.len() < MAX_STOPS {
-            let [l, c, h] = self.stops[self.sel];
+            // Off the centre, or the new stop would sit under the others.
+            self.stops[self.sel][1] = self.stops[self.sel][1].max(0.06);
+            self.stops.insert(self.sel + 1, self.stops[self.sel]);
+            anchor(&mut self.stops, self.sel);
             self.sel += 1;
-            self.stops.insert(self.sel, [l, c.max(0.06), (h + 45.) % 360.]);
             self.save(cx);
         }
     }
@@ -245,6 +260,7 @@ impl<H: WebHost> ColorPicker<H> {
         if self.stops.len() > 1 {
             self.stops.remove(self.sel);
             self.sel = self.sel.min(self.stops.len() - 1);
+            anchor(&mut self.stops, self.sel);
             self.save(cx);
         }
     }
@@ -256,6 +272,7 @@ impl<H: WebHost> ColorPicker<H> {
             Some(Drag::Canvas) => {
                 let (dx, dy) = off(self.canvas.get());
                 (sel[1], sel[2]) = from_canvas(dx, dy);
+                anchor(&mut self.stops, self.sel);
             }
             Some(Drag::Light) => sel[0] = LIGHT.0 + fraction(at, self.slider.get()).0 * (LIGHT.1 - LIGHT.0),
             Some(Drag::Spin) => {
@@ -826,5 +843,16 @@ mod tests {
         assert_eq!(stops_of(space), [1, 3]);
         space.accent_mid = Some(2);
         assert_eq!(stops_of(space), [1, 2, 3]);
+    }
+
+    #[test]
+    fn stops_move_together_round_the_wheel() {
+        let mut two = [[0.5, 0.1, 30.], [0.7, 0.02, 100.]];
+        anchor(&mut two, 0);
+        assert_eq!(two, [[0.5, 0.1, 30.], [0.7, 0.1, 210.]], "two sit opposite, each keeps its lightness");
+        let mut three = [[0.5, 0., 0.], [0.5, 0.12, 350.], [0.5, 0., 0.]];
+        anchor(&mut three, 1);
+        assert_eq!(three.map(|s| s[2]), [230., 350., 110.], "three a third apart, from the one moved");
+        assert!(three.iter().all(|s| s[1] == 0.12));
     }
 }
