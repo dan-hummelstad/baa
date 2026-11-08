@@ -26,7 +26,7 @@ use super::{
     *,
 };
 use crate::{
-    Dialog, DialogAnswer, DialogKind, DownloadState, ExtensionChange, MenuItem, PageEvent, PageHandle, Permission, PermissionState,
+    DangerKind, Dialog, DialogAnswer, DialogKind, DownloadState, ExclusiveKind, ExtensionChange, MenuItem, PageEvent, PageHandle, Permission, PermissionState,
     ProfileId, SiteAccess, WebHost,
 };
 
@@ -195,6 +195,12 @@ extern "C" fn context_menu_done(id: u64, command: c_int) {
 extern "C" fn download_cancel(id: u64) {
     log(format!("download_cancel {id}"));
 }
+extern "C" fn download_validate(id: u64) {
+    log(format!("download_validate {id}"));
+}
+extern "C" fn download_discard(id: u64) {
+    log(format!("download_discard {id}"));
+}
 extern "C" fn tab_get_state(_: TabId, state: *mut TabState) -> bool {
     unsafe {
         (*state).url = FIRST_URL.with(Cell::get).as_ptr();
@@ -301,6 +307,8 @@ fn fake_core() -> &'static Core {
         answer,
         context_menu_done,
         download_cancel,
+        download_validate,
+        download_discard,
     }))
 }
 

@@ -23,7 +23,9 @@ use super::{
     page::CorePage,
     PageKind, Shared, Snapshot,
 };
-use crate::{Callback, ChromeTabs, DialogKind, DownloadState, Downloads, PageEvent, SuggestUpdate, Suggestion};
+use crate::{
+    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, PageEvent, SuggestUpdate, Suggestion,
+};
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
 pub(super) const ADOPTION_EXPIRY: Duration = Duration::from_secs(60);
@@ -399,6 +401,12 @@ pub(super) fn callbacks() -> Callbacks {
                 ffi::DOWNLOAD_COMPLETE => DownloadState::Complete,
                 _ => DownloadState::Canceled,
             },
+            ephemeral: download.ephemeral,
+            danger: if download.danger != 0 {
+                Some(DangerKind::Dangerous)
+            } else {
+                download.insecure.then_some(DangerKind::Insecure)
+            },
         };
         unsafe { dispatch(ctx) }.download(tab, download);
     }
@@ -417,6 +425,16 @@ pub(super) fn callbacks() -> Callbacks {
     }
     extern "C" fn fullscreen(ctx: *mut c_void, tab: TabId, on: bool) {
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::Fullscreen(on)));
+    }
+    extern "C" fn exclusive_access(ctx: *mut c_void, tab: TabId, origin: *const c_char, kind: c_int) {
+        let origin = unsafe { from_c(origin) };
+        let kind = match kind {
+            ffi::EXCLUSIVE_FULLSCREEN => Some(ExclusiveKind::Fullscreen),
+            ffi::EXCLUSIVE_POINTER_LOCK => Some(ExclusiveKind::PointerLock),
+            ffi::EXCLUSIVE_KEYBOARD_LOCK => Some(ExclusiveKind::KeyboardLock),
+            _ => None,
+        };
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::ExclusiveAccess { origin, kind }));
     }
     extern "C" fn find_result(ctx: *mut c_void, tab: TabId, active: c_int, count: c_int) {
         let (active, total) = (active.max(0) as u32, count.max(0) as u32);
@@ -459,6 +477,7 @@ pub(super) fn callbacks() -> Callbacks {
         resized,
         devtools_dock,
         fullscreen,
+        exclusive_access,
         find_result,
         tab_group,
         autocomplete,

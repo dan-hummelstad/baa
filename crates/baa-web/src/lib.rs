@@ -91,6 +91,19 @@ pub struct Download {
     /// `-1` while unknown.
     pub total_bytes: i64,
     pub state: DownloadState,
+    /// From an incognito profile: nothing about it may be written to disk.
+    pub ephemeral: bool,
+    /// Chrome holds the file until [`WebHost::download_validate`] (Keep) or
+    /// [`WebHost::download_discard`]; `None` once decided or never risky.
+    pub danger: Option<DangerKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DangerKind {
+    /// Chrome flagged the file type or content as dangerous.
+    Dangerous,
+    /// An http file from an https page (mixed content).
+    Insecure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +134,9 @@ pub enum PageEvent {
     AskClosed(u64),
     /// The page went fullscreen, or left it. While on, the UI shows the page alone.
     Fullscreen(bool),
+    /// Chrome's fullscreen / pointer lock / keyboard lock notice: show `origin`
+    /// and how to leave, so a page cannot pose as the browser. `None` hides it.
+    ExclusiveAccess { origin: String, kind: Option<ExclusiveKind> },
     /// Find in page: the active match (1-based, 0 for none) and the count so far.
     FindResult { active: u32, total: u32 },
     /// The renderer is gone; `reload` brings it back.
@@ -138,6 +154,16 @@ pub enum PageEvent {
     /// Docked DevTools' own dock-side picker chose this ("right", "bottom",
     /// "left", or "undocked").
     DevToolsDock(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExclusiveKind {
+    /// "Press Esc to exit full screen".
+    Fullscreen,
+    /// The mouse is captured, the page is not fullscreen.
+    PointerLock,
+    /// Esc goes to the page: "Press and hold Esc to exit".
+    KeyboardLock,
 }
 
 /// URLs waiting to be opened as tabs, oldest first.
@@ -250,6 +276,10 @@ pub trait WebHost: 'static {
     /// observe it and take them as tabs.
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
     fn cancel_download(&self, id: u64);
+    /// The user chose Keep for a download with `danger`: Chrome finishes it.
+    fn download_validate(&self, id: u64);
+    /// The user chose Discard: the item and its partial file are removed.
+    fn download_discard(&self, id: u64);
     /// What `profile` remembers about `kind` for `url`'s site.
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState;
     fn set_site_permission(&self, profile: ProfileId, url: &str, kind: Permission, state: PermissionState);
@@ -373,12 +403,15 @@ mod tests {
             received_bytes: received,
             total_bytes: 10,
             state: DownloadState::InProgress,
+            ephemeral: false,
+            danger: None,
         };
         let mut list = Downloads::default();
-        list.upsert(download(1, 0));
+        list.upsert(Download { danger: Some(DangerKind::Insecure), ..download(1, 0) });
         list.upsert(download(2, 0));
         list.upsert(download(1, 5));
         assert_eq!(list.items.len(), 2);
         assert_eq!(list.items[0].received_bytes, 5);
+        assert_eq!(list.items[0].danger, None, "Keep clears the warning");
     }
 }

@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 8;
+pub const ABI_VERSION: c_int = 9;
 
 #[repr(C)]
 pub struct Profile {
@@ -118,7 +118,16 @@ pub struct Download {
     pub received_bytes: i64,
     pub total_bytes: i64,
     pub state: c_int,
+    pub ephemeral: bool,
+    pub danger: c_int,
+    pub insecure: bool,
 }
+
+#[allow(dead_code)]
+pub const EXCLUSIVE_NONE: c_int = 0;
+pub const EXCLUSIVE_FULLSCREEN: c_int = 1;
+pub const EXCLUSIVE_POINTER_LOCK: c_int = 2;
+pub const EXCLUSIVE_KEYBOARD_LOCK: c_int = 3;
 
 /// `BaaDialog`: a question the page or Chrome waits on.
 #[repr(C)]
@@ -203,6 +212,7 @@ pub struct Callbacks {
     pub resized: extern "C" fn(ctx: *mut c_void, tab: TabId, width: c_int, height: c_int),
     pub devtools_dock: extern "C" fn(ctx: *mut c_void, front: TabId, side: c_int),
     pub fullscreen: extern "C" fn(ctx: *mut c_void, tab: TabId, on: bool),
+    pub exclusive_access: extern "C" fn(ctx: *mut c_void, tab: TabId, origin: *const c_char, kind: c_int),
     pub find_result: extern "C" fn(ctx: *mut c_void, tab: TabId, active: c_int, count: c_int),
     pub tab_group: extern "C" fn(ctx: *mut c_void, tab: TabId, group: u64, title: *const c_char),
     pub autocomplete: extern "C" fn(ctx: *mut c_void, id: u64, matches: *const Match, count: usize, done: bool),
@@ -267,6 +277,8 @@ pub struct Core {
     pub answer: extern "C" fn(u64, *const Answer),
     pub context_menu_done: extern "C" fn(u64, c_int),
     pub download_cancel: extern "C" fn(u64),
+    pub download_validate: extern "C" fn(u64),
+    pub download_discard: extern "C" fn(u64),
 }
 
 impl Core {
@@ -360,6 +372,8 @@ pub fn load() -> &'static Core {
             answer,
             context_menu_done,
             download_cancel,
+            download_validate,
+            download_discard,
         )))
     }
 }
@@ -487,6 +501,10 @@ mod tests {
             ("BAA_DOWNLOAD_IN_PROGRESS", DOWNLOAD_IN_PROGRESS as i64),
             ("BAA_DOWNLOAD_COMPLETE", DOWNLOAD_COMPLETE as i64),
             ("BAA_DOWNLOAD_CANCELED", DOWNLOAD_CANCELED as i64),
+            ("BAA_EXCLUSIVE_NONE", EXCLUSIVE_NONE as i64),
+            ("BAA_EXCLUSIVE_FULLSCREEN", EXCLUSIVE_FULLSCREEN as i64),
+            ("BAA_EXCLUSIVE_POINTER_LOCK", EXCLUSIVE_POINTER_LOCK as i64),
+            ("BAA_EXCLUSIVE_KEYBOARD_LOCK", EXCLUSIVE_KEYBOARD_LOCK as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

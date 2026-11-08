@@ -23,6 +23,8 @@ fn page_callbacks_become_events(cx: &mut TestAppContext) {
     let seen = events(&page, cx);
 
     (env.callbacks.fullscreen)(env.ctx(), tab, true);
+    (env.callbacks.exclusive_access)(env.ctx(), tab, c"example.com".as_ptr(), 3);
+    (env.callbacks.exclusive_access)(env.ctx(), tab, c"".as_ptr(), 0);
     (env.callbacks.find_result)(env.ctx(), tab, 2, 5);
     (env.callbacks.tab_group)(env.ctx(), tab, 1 << 63 | 5, c"X".as_ptr());
     (env.callbacks.tab_group)(env.ctx(), tab, 0, c"".as_ptr());
@@ -31,6 +33,8 @@ fn page_callbacks_become_events(cx: &mut TestAppContext) {
         *seen.borrow(),
         [
             PageEvent::Fullscreen(true),
+            PageEvent::ExclusiveAccess { origin: "example.com".into(), kind: Some(ExclusiveKind::KeyboardLock) },
+            PageEvent::ExclusiveAccess { origin: String::new(), kind: None },
             PageEvent::FindResult { active: 2, total: 5 },
             PageEvent::GroupChanged { group: Some(1 << 63 | 5), title: "X".into() },
             PageEvent::GroupChanged { group: None, title: String::new() },

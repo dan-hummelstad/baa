@@ -84,6 +84,9 @@ fn a_download_is_listed_in_place_and_announced_once(cx: &mut TestAppContext) {
             received_bytes: received,
             total_bytes: 10,
             state,
+            ephemeral: false,
+            danger: 0,
+            insecure: false,
         };
         (env.callbacks.download)(env.ctx(), tab, &download);
     };
@@ -102,4 +105,34 @@ fn a_download_is_listed_in_place_and_announced_once(cx: &mut TestAppContext) {
 
     env.host.cancel_download(5u64);
     assert_eq!(calls("download_cancel"), ["download_cancel 5"]);
+}
+
+#[gpui::test]
+fn a_held_download_carries_incognito_and_danger_and_waits_for_the_user(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let send = |id: u64, ephemeral: bool, danger: c_int, insecure: bool| {
+        let download = ffi::Download {
+            id,
+            url: c"http://a.test/f.command".as_ptr(),
+            path: c"".as_ptr(),
+            received_bytes: 0,
+            total_bytes: -1,
+            state: ffi::DOWNLOAD_IN_PROGRESS,
+            ephemeral,
+            danger,
+            insecure,
+        };
+        (env.callbacks.download)(env.ctx(), 0, &download);
+    };
+    send(1, true, 1, false);
+    send(2, false, 0, true);
+    send(3, false, 0, false);
+    cx.run_until_parked();
+    let items = env.host.downloads().read_with(cx, |list, _| list.items.clone());
+    let got: Vec<_> = items.iter().map(|d| (d.ephemeral, d.danger)).collect();
+    assert_eq!(got, [(true, Some(DangerKind::Dangerous)), (false, Some(DangerKind::Insecure)), (false, None)]);
+
+    env.host.download_validate(1);
+    env.host.download_discard(2);
+    assert_eq!(calls("download_"), ["download_validate 1", "download_discard 2"]);
 }

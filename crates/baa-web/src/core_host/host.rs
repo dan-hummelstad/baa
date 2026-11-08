@@ -293,6 +293,14 @@ impl WebHost for CoreWebHost {
         (self.core.download_cancel)(id);
     }
 
+    fn download_validate(&self, id: u64) {
+        (self.core.download_validate)(id);
+    }
+
+    fn download_discard(&self, id: u64) {
+        (self.core.download_discard)(id);
+    }
+
     fn site_permission(&self, profile: ProfileId, url: &str, kind: Permission) -> PermissionState {
         let handle = self.profile_handle(profile);
         let Some(bit) = permission_bit(kind).filter(|_| !handle.is_null()) else { return PermissionState::Ask };
