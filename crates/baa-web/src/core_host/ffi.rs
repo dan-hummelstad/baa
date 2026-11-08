@@ -145,6 +145,7 @@ pub const MEDIA_PAUSE: u32 = 1 << 1;
 pub const MEDIA_NEXT: u32 = 1 << 2;
 pub const MEDIA_PREVIOUS: u32 = 1 << 3;
 pub const MEDIA_PICTURE_IN_PICTURE: u32 = 1 << 4;
+pub const MEDIA_EXIT_PICTURE_IN_PICTURE: u32 = 1 << 5;
 
 /// `BaaDialog`: a question the page or Chrome waits on.
 #[repr(C)]
@@ -534,6 +535,7 @@ mod tests {
             ("BAA_MEDIA_NEXT", MEDIA_NEXT as i64),
             ("BAA_MEDIA_PREVIOUS", MEDIA_PREVIOUS as i64),
             ("BAA_MEDIA_PICTURE_IN_PICTURE", MEDIA_PICTURE_IN_PICTURE as i64),
+            ("BAA_MEDIA_EXIT_PICTURE_IN_PICTURE", MEDIA_EXIT_PICTURE_IN_PICTURE as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

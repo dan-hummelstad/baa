@@ -157,6 +157,8 @@ enum {
   BAA_MEDIA_NEXT = 1 << 2,
   BAA_MEDIA_PREVIOUS = 1 << 3,
   BAA_MEDIA_PICTURE_IN_PICTURE = 1 << 4,
+  // Only sent: closes the tab's PiP window if this tab owns it; never reported.
+  BAA_MEDIA_EXIT_PICTURE_IN_PICTURE = 1 << 5,
 };
 
 enum {

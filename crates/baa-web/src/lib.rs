@@ -193,6 +193,8 @@ pub enum MediaAction {
     Next,
     Previous,
     PictureInPicture,
+    /// Closes the tab's PiP window if it has one; never in [`Media::actions`].
+    ExitPictureInPicture,
 }
 
 /// What [`PageHandle::set_emulation`] shows the page as.

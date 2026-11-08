@@ -138,5 +138,11 @@ void baa_tab_media_action(BaaTabId tab_id, uint32_t action) {
     case BAA_MEDIA_PICTURE_IN_PICTURE:
       session->EnterPictureInPicture();
       break;
+    case BAA_MEDIA_EXIT_PICTURE_IN_PICTURE:
+      // Chrome's exit closes whichever PiP window is open; only this tab's.
+      if (wc->HasPictureInPictureVideo()) {
+        session->ExitPictureInPicture();
+      }
+      break;
   }
 }

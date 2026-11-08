@@ -165,6 +165,8 @@ pub struct Browser<H: WebHost> {
     shown_tab: Option<TabId>,
     /// The panes on screen at the last sync; a playing one that leaves goes to PiP.
     on_screen: Vec<TabId>,
+    /// Tabs baa sent to PiP; coming back on screen closes it.
+    pub(crate) pipped: HashSet<TabId>,
     /// Copies of the URL so far, so only the latest one's check goes away.
     copies: u64,
     /// The command bar on its way out.
@@ -342,6 +344,7 @@ impl<H: WebHost> Browser<H> {
             ghosts: Vec::new(),
             shown_tab: None,
             on_screen: Vec::new(),
+            pipped: HashSet::new(),
             closing_bar: None,
             copies: 0,
             favicons,
@@ -503,9 +506,8 @@ impl<H: WebHost> Browser<H> {
             }
         }
         let on_screen = self.shown_panes();
-        let left: Vec<_> = self.on_screen.iter().filter(|id| !on_screen.contains(id)).copied().collect();
-        self.pip_on_leaving(&left, cx);
-        self.on_screen = on_screen;
+        let before = std::mem::replace(&mut self.on_screen, on_screen);
+        self.pip_on_screen_change(&before, cx);
         self.show_pages(cx);
         self.retarget_mini_player();
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {

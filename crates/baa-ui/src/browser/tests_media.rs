@@ -101,8 +101,10 @@ fn switching_tabs_puts_the_playing_video_in_pip(cx: &mut TestAppContext) {
 
     let (other, _) = open_page(&b, "b.example", cx);
     assert_eq!(pips(cx), 1, "a left the screen while playing");
+    let exits = |cx: &mut VisualTestContext| page.read_with(cx, |p, _| p.cdp.borrow().iter().filter(|c| *c == "media ExitPictureInPicture").count());
     b.update_in(cx, |b, window, cx| b.activate_tab(a, window, cx));
     assert_eq!(pips(cx), 1, "coming back is not leaving");
+    assert_eq!(exits(cx), 1, "coming back closes the PiP baa opened");
     b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
     assert_eq!(pips(cx), 2);
 
@@ -110,4 +112,5 @@ fn switching_tabs_puts_the_playing_video_in_pip(cx: &mut TestAppContext) {
     b.update_in(cx, |b, window, cx| b.activate_tab(a, window, cx));
     b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
     assert_eq!(pips(cx), 2, "paused: no PiP");
+    assert_eq!(exits(cx), 2, "only PiP baa opened is closed");
 }

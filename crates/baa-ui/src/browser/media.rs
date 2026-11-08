@@ -46,20 +46,28 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// A playing video that leaves the screen (tab switch, Space switch, split change) keeps
-    /// playing in Picture in Picture, as Arc does. Chrome's own auto PiP is not relied on: it
-    /// only sees tab switches inside one of its windows (a Space is a window), and needs the
-    /// tab recently audible and focused.
-    pub(crate) fn pip_on_leaving(&self, left: &[TabId], cx: &mut Context<Self>) {
+    /// playing in Picture in Picture, and coming back closes it, as Arc does. Chrome's own auto
+    /// PiP is not relied on: it only sees tab switches inside one of its windows (a Space is a
+    /// window), and needs the tab recently audible and focused. Only PiP baa opened is closed.
+    pub(crate) fn pip_on_screen_change(&mut self, before: &[TabId], cx: &mut Context<Self>) {
+        let pages = &self.pages;
+        self.pipped.retain(|id| pages.contains_key(id));
+        for id in self.on_screen.iter().filter(|id| !before.contains(id)) {
+            if let Some((page, _)) = self.pipped.remove(id).then(|| self.pages.get(id)).flatten() {
+                page.read(cx).set_media_action(MediaAction::ExitPictureInPicture);
+            }
+        }
         if !self.settings.auto_pip {
             return;
         }
-        for id in left {
+        for id in before.iter().filter(|id| !self.on_screen.contains(id)) {
             let pip = self
                 .media
                 .get(id)
                 .is_some_and(|(m, _)| m.playing && m.actions.contains(&MediaAction::PictureInPicture));
             if let Some((page, _)) = self.pages.get(id).filter(|_| pip) {
                 page.read(cx).set_media_action(MediaAction::PictureInPicture);
+                self.pipped.insert(*id);
             }
         }
     }

@@ -29,12 +29,13 @@ use crate::{
 };
 
 /// `BAA_MEDIA_*` bits.
-pub(super) const MEDIA_ACTIONS: [(u32, MediaAction); 5] = [
+pub(super) const MEDIA_ACTIONS: [(u32, MediaAction); 6] = [
     (ffi::MEDIA_PLAY, MediaAction::Play),
     (ffi::MEDIA_PAUSE, MediaAction::Pause),
     (ffi::MEDIA_NEXT, MediaAction::Next),
     (ffi::MEDIA_PREVIOUS, MediaAction::Previous),
     (ffi::MEDIA_PICTURE_IN_PICTURE, MediaAction::PictureInPicture),
+    (ffi::MEDIA_EXIT_PICTURE_IN_PICTURE, MediaAction::ExitPictureInPicture),
 ];
 
 /// How long a tab Chrome opened waits for the UI to take it before it is closed.
