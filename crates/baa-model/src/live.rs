@@ -1,7 +1,9 @@
-//! Live folders, as in Arc: a folder whose tabs mirror a GitHub search or a feed.
+//! Live folders, as in Arc: a folder whose tabs mirror a GitHub search, a feed, or the dev
+//! servers listening on this machine.
 //!
 //! Fetching shells out to the system `curl` (macOS and Windows 10+ ship it), so the
-//! workspace needs no HTTP client. [`fetch`] blocks; call it off the UI thread.
+//! workspace needs no HTTP client, and to `lsof` for dev servers. [`fetch`] blocks; call it
+//! off the UI thread.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -16,6 +18,8 @@ pub enum LiveSource {
     GitHub(GitHub),
     /// An RSS or Atom feed, or a page that links to one.
     Feed { url: String },
+    /// The current user's servers listening on localhost, as `http://localhost:<port>`.
+    DevServers,
 }
 
 /// Open pull requests or issues, as Arc's GitHub live folders list them.
@@ -196,7 +200,7 @@ impl LiveSource {
     pub fn visible(&self, items: &[LiveItem]) -> Vec<LiveItem> {
         let hidden = match self {
             LiveSource::GitHub(gh) => gh.hidden_repos.as_slice(),
-            LiveSource::Feed { .. } => &[],
+            LiveSource::Feed { .. } | LiveSource::DevServers => &[],
         };
         items.iter().filter(|i| repo_of(&i.url).is_none_or(|r| !hidden.contains(&r))).cloned().collect()
     }
@@ -208,6 +212,7 @@ pub fn fetch(source: &LiveSource) -> Result<Vec<LiveItem>, String> {
     let mut items = match source {
         LiveSource::GitHub(gh) => github(&gh.queries())?,
         LiveSource::Feed { url } => feed(url)?,
+        LiveSource::DevServers => dev_servers()?,
     };
     let mut seen = std::collections::HashSet::new();
     items.retain(|i| seen.insert(i.url.clone()));
@@ -309,6 +314,64 @@ fn curl(url: &str, headers: &[String]) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+// ponytail: macOS/Linux only (Windows has no lsof); `netstat -ano` there if baa ships on it.
+/// Listening TCP sockets, numeric (`-nP`: no DNS or port-name lookups), with uids (`-l`) and
+/// whole command names (`+c 0`), so [`parse_lsof`] can keep the current user's. Fixed argv:
+/// nothing typed or fetched goes in.
+fn dev_servers() -> Result<Vec<LiveItem>, String> {
+    let out = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-l", "+c", "0", "-iTCP", "-sTCP:LISTEN"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("lsof: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // lsof exits 1 when nothing listens.
+    if !out.status.success() && !stdout.trim().is_empty() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_lsof(&stdout, &my_uid().ok_or("Couldn't read your user id")?, std::process::id()))
+}
+
+fn my_uid() -> Option<String> {
+    static UID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    UID.get_or_init(|| {
+        let out = Command::new("/usr/bin/id").arg("-u").output().ok().filter(|o| o.status.success())?;
+        Some(String::from_utf8(out.stdout).ok()?.trim().to_string()).filter(|u| !u.is_empty())
+    })
+    .clone()
+}
+
+// ponytail: a name heuristic. Dev servers are command-line tools (node, vite, cargo, python3),
+// named in lower case; apps that listen on loopback (Spotify, Code Helper, ControlCenter) are
+// capitalised. Lower-case macOS daemons are listed by hand; add one when it shows up.
+const NOT_DEV_SERVERS: &[&str] = &["rapportd", "sharingd", "identityservicesd", "remoted"];
+
+/// `lsof -nP -l +c 0 -iTCP -sTCP:LISTEN` lines → one item per port, lowest port first: listeners
+/// of `uid` on loopback or every interface, named by their process. baa itself (pid `me`) is
+/// left out.
+pub fn parse_lsof(out: &str, uid: &str, me: u32) -> Vec<LiveItem> {
+    let mut ports = std::collections::BTreeMap::new();
+    for line in out.lines() {
+        // COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME (LISTEN)
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let [command, pid, user, .., name, "(LISTEN)"] = cols.as_slice() else { continue };
+        let tool = command.starts_with(|c: char| c.is_ascii_lowercase()) && !NOT_DEV_SERVERS.contains(command);
+        if *user != uid || pid.parse() == Ok(me) || !tool {
+            continue;
+        }
+        let Some((host, port)) = name.rsplit_once(':') else { continue };
+        let local = matches!(host, "*" | "localhost" | "[::1]") || host.starts_with("127.");
+        let Ok(port) = port.parse::<u16>() else { continue };
+        if local {
+            ports.entry(port).or_insert(*command);
+        }
+    }
+    ports
+        .into_iter()
+        .map(|(port, command)| LiveItem { url: format!("http://localhost:{port}/"), title: format!("{command} :{port}") })
+        .collect()
 }
 
 // ponytail: string scanning, not an XML parser. Ceiling: feeds that nest <item>/<entry>
@@ -459,6 +522,31 @@ mod tests {
         let dash = args.iter().position(|a| *a == "--").unwrap();
         assert!(args.iter().position(|a| *a == "--proto-redir").unwrap() < dash);
         assert_eq!(args[dash + 1..], ["https://a.example/"]);
+    }
+
+    #[test]
+    fn lsof_keeps_my_local_listeners_once_per_port() {
+        let out = "\
+COMMAND        PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+ControlCenter  612  501    9u  IPv4 0x1d2c3b4a5f6e7d80      0t0  TCP *:7000 (LISTEN)
+node         40123  501   23u  IPv6 0x2d2c3b4a5f6e7d81      0t0  TCP [::1]:5173 (LISTEN)
+node         40123  501   24u  IPv4 0x3d2c3b4a5f6e7d82      0t0  TCP 127.0.0.1:5173 (LISTEN)
+cargo        40200  501    5u  IPv4 0x4d2c3b4a5f6e7d83      0t0  TCP *:8080 (LISTEN)
+postgres       900  502    7u  IPv4 0x5d2c3b4a5f6e7d84      0t0  TCP 127.0.0.1:5432 (LISTEN)
+python3      41000  501    3u  IPv4 0x6d2c3b4a5f6e7d85      0t0  TCP 192.168.1.20:8000 (LISTEN)
+baa          39000  501   40u  IPv4 0x7d2c3b4a5f6e7d86      0t0  TCP 127.0.0.1:9222 (LISTEN)
+Code\\x20Helper 41100  501   8u  IPv4 0x8d2c3b4a5f6e7d87      0t0  TCP 127.0.0.1:49375 (LISTEN)
+rapportd      1255  501   11u  IPv4 0xed74395fe3640065      0t0  TCP *:63869 (LISTEN)
+ruby         41200  501    8u  IPv4 0x9d2c3b4a5f6e7d88      0t0  TCP 127.0.0.1:4000->127.0.0.1:50000 (ESTABLISHED)
+bun          41300  501    8u  IPv6 0xad2c3b4a5f6e7d89      0t0  TCP localhost:3000 (LISTEN)
+garbage line
+";
+        assert_eq!(
+            parse_lsof(out, "501", 39000),
+            [item("http://localhost:3000/", "bun :3000"), item("http://localhost:5173/", "node :5173"), item("http://localhost:8080/", "cargo :8080")],
+            "left out: another user's postgres, a LAN-only listener, a connection, baa itself, apps and macOS daemons"
+        );
+        assert!(parse_lsof("", "501", 1).is_empty());
     }
 
     #[test]
