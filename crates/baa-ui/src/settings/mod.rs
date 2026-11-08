@@ -6,6 +6,7 @@
 //! The view holds no settings itself: it reads and writes the `Browser`
 //! entity, so the browser window and this one cannot disagree.
 
+mod developer;
 mod extensions;
 mod privacy;
 pub(crate) mod rows;
@@ -49,6 +50,9 @@ pub(crate) enum Field {
     DnsTemplate,
     SitePattern,
     SpaceName(SpaceId),
+    EnvProject,
+    EnvLabel,
+    EnvOrigin,
 }
 
 pub(crate) struct SettingsView<H: WebHost> {
@@ -442,6 +446,7 @@ impl<H: WebHost> SettingsView<H> {
             }
             Field::SpaceName(id) => self.finish_rename(id, cx),
             Field::EngineName | Field::EngineUrl => self.add_engine(cx),
+            Field::EnvProject | Field::EnvLabel | Field::EnvOrigin => self.add_env(cx),
             Field::Languages | Field::DnsTemplate => self.commit(field, cx),
             _ => {}
         }
@@ -729,6 +734,7 @@ impl<H: WebHost> SettingsView<H> {
             Tab::Extensions => self.extensions_tab(&s, cx),
             Tab::Spaces => self.spaces_tab(cx),
             Tab::Keyboard => self.keyboard(cx),
+            Tab::Developer => self.developer(&s, cx),
             Tab::System => self.system(&s, cx),
         }
     }

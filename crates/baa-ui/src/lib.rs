@@ -29,6 +29,8 @@ mod tests_dialogs;
 mod tests_m3_bar;
 #[cfg(test)]
 mod tests_settings;
+#[cfg(test)]
+mod tests_dev;
 
 pub use browser::Browser;
 pub use icons::Assets;

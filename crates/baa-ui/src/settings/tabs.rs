@@ -1,7 +1,7 @@
 //! General, Appearance, Search, Passwords, Spaces, Keyboard and System.
 
 use baa_model::{
-    ChromeStyle, DevToolsDock, ExternalLinks, PageScheme, SearchEngine, Settings, SidebarSide, SpaceId, SEARCH_ENGINES,
+    ChromeStyle, ExternalLinks, PageScheme, SearchEngine, Settings, SidebarSide, SpaceId, SEARCH_ENGINES,
 };
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString};
@@ -420,18 +420,6 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     pub(super) fn system(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<Item> {
-        const PAGES: [(&str, &str, &str); 7] = [
-            ("page-flags", "Flags", "baa://flags"),
-            ("page-about", "About", "baa://version"),
-            ("page-certs", "Certificates", "baa://settings/certificates"),
-            ("page-gpu", "GPU", "baa://gpu"),
-            ("page-net", "Net internals", "baa://net-internals"),
-            ("page-inspect", "Inspect devices", "baa://inspect"),
-            ("page-all", "All Chrome pages", "baa://chrome-urls"),
-        ];
-        let pages = div().flex().flex_wrap().justify_end().gap(px(6.)).children(PAGES.into_iter().map(|(id, label, url)| {
-            self.button(id, label, false, cx).on_click(cx.listener(move |this, _, _, cx| this.in_browser(cx, true, move |b, w, cx| b.open_url(url, w, cx))))
-        }));
         let reset: AnyElement = match self.reset {
             None => self
                 .button("reset", "Reset…", false, cx)
@@ -472,19 +460,6 @@ impl<H: WebHost> SettingsView<H> {
             self.section("Performance"),
             self.row("hw_accel", "Applies when baa restarts.", self.toggle("pref-hw", s.web.hardware_acceleration, |s, v| s.web.hardware_acceleration = v, cx)),
             self.row("memory_saver", "Frees memory from tabs you have not used for a while.", self.toggle("pref-memory", s.web.memory_saver, |s, v| s.web.memory_saver = v, cx)),
-            self.section("Developer"),
-            self.row(
-                "devtools",
-                "Where Inspect and ⌥⌘I open DevTools. DevTools' own Dock side menu changes it too.",
-                self.segments(
-                    "pref-devtools",
-                    labels(&[(DevToolsDock::Right, "Right"), (DevToolsDock::Bottom, "Bottom"), (DevToolsDock::Left, "Left"), (DevToolsDock::Window, "Window")]),
-                    s.devtools_dock,
-                    |v, s| s.devtools_dock = v,
-                    cx,
-                ),
-            ),
-            self.row("chrome_pages", "Chrome's own pages open in a tab.", pages.into_any_element()),
             self.section("Reset"),
             self.row("reset", "Puts every setting back to its default. Search engines you added and your toolbar choices are kept.", reset),
         ]

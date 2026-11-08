@@ -17,11 +17,12 @@ pub(crate) enum Tab {
     Extensions,
     Spaces,
     Keyboard,
+    Developer,
     System,
 }
 
 impl Tab {
-    pub(crate) const ALL: [Tab; 10] = [
+    pub(crate) const ALL: [Tab; 11] = [
         Tab::General,
         Tab::Appearance,
         Tab::Search,
@@ -31,6 +32,7 @@ impl Tab {
         Tab::Extensions,
         Tab::Spaces,
         Tab::Keyboard,
+        Tab::Developer,
         Tab::System,
     ];
 
@@ -45,6 +47,7 @@ impl Tab {
             Tab::Extensions => "Extensions",
             Tab::Spaces => "Spaces",
             Tab::Keyboard => "Keyboard",
+            Tab::Developer => "Developer",
             Tab::System => "System",
         }
     }
@@ -69,6 +72,7 @@ impl Tab {
             Tab::Extensions => "puzzle",
             Tab::Spaces => "house",
             Tab::Keyboard => "code-xml",
+            Tab::Developer => "terminal",
             Tab::System => "sliders-horizontal",
         }
     }
@@ -147,10 +151,12 @@ pub(crate) static ROWS: &[Row] = &[
     row(Spaces, "spaces", "Spaces", "rename colour color delete incognito"),
     row(Keyboard, "shortcuts", "Keyboard shortcuts", "keys bindings"),
     row(Keyboard, "keymap", "Edit keymap.json…", "rebind customise"),
+    row(Developer, "devtools", "Developer tools", "inspect dock devtools"),
+    row(Developer, "chrome_pages", "Chrome pages", "flags about gpu net-internals inspect"),
+    row(Developer, "environments", "Environments", "local staging production prod origin project env"),
+    row(Developer, "dev_servers", "Dev servers folder", "localhost ports node vite live"),
     row(System, "hw_accel", "Graphics acceleration", "gpu hardware"),
     row(System, "memory_saver", "Memory saver", "discard tabs performance"),
-    row(System, "devtools", "Developer tools", "inspect dock devtools"),
-    row(System, "chrome_pages", "Chrome pages", "flags about gpu net-internals inspect"),
     row(System, "reset", "Reset settings…", "defaults restore"),
 ];
 

@@ -662,7 +662,7 @@ impl<H: WebHost> Browser<H> {
                     icon("search", 18., icon_color).into_any_element()
                 }
                 Item::Open(_) => icon("globe", 18., icon_color).into_any_element(),
-                Item::Env(_) => icon("code-xml", 18., icon_color).into_any_element(),
+                Item::Env(_) => icon("terminal", 18., icon_color).into_any_element(),
             };
             let binding = match &row.item {
                 Item::Command(c) => c.action().and_then(|a| window.highest_precedence_binding_for_action(&*a)),
