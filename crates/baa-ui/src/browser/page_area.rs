@@ -309,9 +309,8 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// Hides every page but the shown ones. Showing a tab also makes it Chromium's
-    /// active tab (one per window), so the focused pane is shown last.
-    // TODO(split): use PageHandle::activate once landed
+    /// Hides every page but the shown ones, then activates the focused pane:
+    /// Chromium's one active tab per window is the pane the user is on.
     pub(crate) fn show_pages(&self, cx: &mut Context<Self>) {
         let (shown, active) = (self.shown_panes(), self.active_tab());
         for (id, (page, _)) in &self.pages {
@@ -323,6 +322,9 @@ impl<H: WebHost> Browser<H> {
             if let Some((page, _)) = self.pages.get(id) {
                 page.read(cx).set_visible(true);
             }
+        }
+        if let Some((page, _)) = active.and_then(|id| self.pages.get(&id)) {
+            page.read(cx).activate();
         }
     }
 

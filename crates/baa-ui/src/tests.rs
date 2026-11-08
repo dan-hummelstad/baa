@@ -1243,10 +1243,12 @@ fn split_view_shows_its_panes_and_follows_the_clicked_one(cx: &mut TestAppContex
 
     // A click in the other pane focuses it.
     let other = b.read_with(cx, |b, _| b.pages[&c].0.clone());
+    let before = other.read_with(cx, |p, _| p.activations.get());
     other.update(cx, |_, cx| cx.emit(PageEvent::Focused));
     cx.run_until_parked();
     assert_eq!(b.read_with(cx, |b, _| b.active_tab()), Some(c));
     assert_eq!(shown(&b, cx).last(), Some(&c));
+    assert!(other.read_with(cx, |p, _| p.activations.get()) > before, "the focused pane is activated");
 
     // A dialog in the focused pane keeps the focus there.
     let dialog = baa_web::Dialog {

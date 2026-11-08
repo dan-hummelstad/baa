@@ -2,7 +2,10 @@
 
 use std::cell::{Cell, RefCell};
 
-use baa_web::{DialogAnswer, Downloads, Suggestion, PageEvent, PageHandle, Permission, PermissionState, ProfileId, WebHost};
+use baa_web::{
+    Callback, Device, DialogAnswer, Downloads, MediaAction, PageEvent, PageHandle, Permission, PermissionState, ProfileId,
+    Suggestion, WebHost,
+};
 use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, Window};
 
 pub type RuleSet = (ProfileId, Permission, String, Option<PermissionState>);
@@ -71,6 +74,13 @@ pub struct MockPage {
     pub reloads: Cell<u32>,
     pub loads: RefCell<Vec<String>>,
     pub focus: FocusHandle,
+    pub activations: Cell<u32>,
+    /// Each `eval_value` with its `done`, for the test to answer.
+    pub evals: RefCell<Vec<(String, Callback<Result<serde_json::Value, String>>)>>,
+    pub screenshots: RefCell<Vec<Callback<Result<String, String>>>>,
+    /// The other CDP-backed calls, in order: "click 1 2", "insert_text hi",
+    /// "press_key Enter", "emulation Some(Phone)", "media Pause", "watch_console".
+    pub cdp: RefCell<Vec<String>>,
 }
 
 impl EventEmitter<PageEvent> for MockPage {}
@@ -142,6 +152,33 @@ impl PageHandle for MockPage {
                 n.get()
             }));
         }
+    }
+    fn activate(&self) {
+        self.activations.set(self.activations.get() + 1);
+    }
+    fn eval_value(&self, script: &str, done: Callback<Result<serde_json::Value, String>>) {
+        self.evals.borrow_mut().push((script.into(), done));
+    }
+    fn screenshot(&self, done: Callback<Result<String, String>>) {
+        self.screenshots.borrow_mut().push(done);
+    }
+    fn click(&self, x: f32, y: f32) {
+        self.cdp.borrow_mut().push(format!("click {x} {y}"));
+    }
+    fn insert_text(&self, text: &str) {
+        self.cdp.borrow_mut().push(format!("insert_text {text}"));
+    }
+    fn press_key(&self, key: &str) {
+        self.cdp.borrow_mut().push(format!("press_key {key}"));
+    }
+    fn set_emulation(&self, device: Option<Device>) {
+        self.cdp.borrow_mut().push(format!("emulation {device:?}"));
+    }
+    fn set_media_action(&self, action: MediaAction) {
+        self.cdp.borrow_mut().push(format!("media {action:?}"));
+    }
+    fn watch_console(&self) {
+        self.cdp.borrow_mut().push("watch_console".into());
     }
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -254,6 +291,10 @@ impl WebHost for MockHost {
             reloads: Cell::default(),
             loads: RefCell::default(),
             focus: cx.focus_handle(),
+            activations: Cell::default(),
+            evals: RefCell::default(),
+            screenshots: RefCell::default(),
+            cdp: RefCell::default(),
         })
     }
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {

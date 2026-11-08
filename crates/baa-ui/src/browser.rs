@@ -594,6 +594,8 @@ impl<H: WebHost> Browser<H> {
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::Focused => return self.on_page_focused(id, window, cx),
+            // ABI 10, not used by the UI yet (M4 C, D, E).
+            PageEvent::Console { .. } | PageEvent::Media(_) | PageEvent::Muted(_) => return,
             PageEvent::DevToolsRequested { x, y } => {
                 // Inspect always opens (or moves to) the element, never closes.
                 self.devtools.remove(&id);
