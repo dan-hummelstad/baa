@@ -287,7 +287,8 @@ impl<H: WebHost> SettingsView<H> {
     /// The colour picker (`icon` false) or the emoji picker, hung over this window.
     fn open_picker(&mut self, id: SpaceId, icon: bool, at: gpui::Point<gpui::Pixels>, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let browser = self.browser.clone();
-        self.picker = Some(crate::space_picker::Shown::open(icon, &browser, id, at, window, cx, |this, window, cx| {
+        let Some(space) = browser.read(cx).session.space(id).cloned() else { return };
+        self.picker = Some(crate::space_picker::Shown::open(icon, &browser, &space, at, window, cx, |this, window, cx| {
             this.picker = None;
             window.focus(&this.focus, cx);
         }));

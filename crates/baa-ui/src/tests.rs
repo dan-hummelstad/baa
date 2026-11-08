@@ -1011,3 +1011,36 @@ fn devtools_dock_beside_the_tab_and_go_with_it(cx: &mut TestAppContext) {
     });
     assert_eq!(b.read_with(cx, |b, _| b.devtools.len()), 0);
 }
+
+#[gpui::test]
+fn the_space_menu_opens_both_pickers_and_the_emoji_search_picks(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let space = b.read_with(cx, |b, _| b.session.active_space().unwrap());
+    let at = gpui::point(gpui::px(10.), gpui::px(10.));
+    // Items run inside the browser's update, as the native menu runs them.
+    let pick = |b: &Entity<Browser<MockHost>>, label: &str, cx: &mut VisualTestContext| {
+        b.update_in(cx, |b, window, cx| b.open_menu(crate::browser::MenuKind::Space(space), at, window, cx));
+        cx.run_until_parked();
+        let i = b.read_with(cx, |b, _| {
+            b.host.menus.borrow().last().unwrap().iter().filter_map(|i| match i {
+                baa_web::MenuItem::Action { label, id, .. } => Some((label.clone(), *id)),
+                _ => None,
+            }).find(|(l, _)| l == label).unwrap().1
+        });
+        b.update_in(cx, |b, window, cx| {
+            b.host.menu_pick.set(Some(i));
+            b.open_menu(crate::browser::MenuKind::Space(space), at, window, cx)
+        });
+        cx.run_until_parked();
+    };
+    pick(&b, "Edit Theme Colour…", cx);
+    assert!(b.read_with(cx, |b, _| b.space_picker.is_some()));
+    cx.simulate_keystrokes("escape");
+    assert!(b.read_with(cx, |b, _| b.space_picker.is_none()));
+
+    pick(&b, "Change Icon…", cx);
+    cx.simulate_input("sheep");
+    cx.simulate_keystrokes("enter");
+    assert!(b.read_with(cx, |b, _| b.space_picker.is_none()));
+    assert_eq!(b.read_with(cx, |b, _| b.session.space(space).unwrap().icon.clone()), "🐑");
+}

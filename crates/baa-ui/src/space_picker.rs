@@ -29,11 +29,12 @@ pub(crate) struct Shown {
 
 impl Shown {
     /// The emoji picker (`icon`) or the colour picker for `space`, at `at` in
-    /// `cx`'s window; `closed` runs once it goes.
+    /// `cx`'s window; `closed` runs once it goes. `space` is passed in, not read
+    /// through `browser`: the browser may be mid-update (a menu item opening this).
     pub(crate) fn open<H: WebHost, T: 'static>(
         icon: bool,
         browser: &Entity<Browser<H>>,
-        space: SpaceId,
+        space: &baa_model::Space,
         at: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<T>,
@@ -52,10 +53,11 @@ impl Shown {
             })
         }
         let (view, focus, sub): (AnyView, FocusHandle, Subscription) = if icon {
-            let p = cx.new(|cx| EmojiPicker::new(browser, space, cx));
+            let p = cx.new(|cx| EmojiPicker::new(browser, space.id, space.icon.clone(), cx));
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         } else {
-            let p = cx.new(|cx| ColorPicker::new(browser, space, cx));
+            let bottom = space.accent_to.unwrap_or(space.accent);
+            let p = cx.new(|cx| ColorPicker::new(browser, space.id, bottom, cx));
             (p.clone().into(), p.read(cx).focus.clone(), watch(&p, window, cx, closed))
         };
         window.focus(&focus, cx);
@@ -145,11 +147,7 @@ fn fraction(at: Point<Pixels>, b: Bounds<Pixels>) -> (f32, f32) {
 }
 
 impl<H: WebHost> ColorPicker<H> {
-    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, cx: &mut Context<Self>) -> Self {
-        let bottom = browser
-            .upgrade()
-            .and_then(|b| b.read(cx).session.space(space).map(|s| s.accent_to.unwrap_or(s.accent)))
-            .unwrap_or(PALETTE[0].1);
+    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, bottom: u32, cx: &mut Context<Self>) -> Self {
         Self {
             browser,
             space,
@@ -394,11 +392,7 @@ pub(crate) struct EmojiPicker<H: WebHost> {
 impl<H: WebHost> EventEmitter<DismissEvent> for EmojiPicker<H> {}
 
 impl<H: WebHost> EmojiPicker<H> {
-    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, cx: &mut Context<Self>) -> Self {
-        let current = browser
-            .upgrade()
-            .and_then(|b| b.read(cx).session.space(space).map(|s| s.icon.clone()))
-            .unwrap_or_default();
+    fn new(browser: WeakEntity<Browser<H>>, space: SpaceId, current: String, cx: &mut Context<Self>) -> Self {
         Self {
             browser,
             space,

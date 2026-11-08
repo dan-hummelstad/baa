@@ -100,9 +100,11 @@ impl<H: WebHost> Browser<H> {
     /// The colour picker (`icon` false) or the emoji picker for `id`, at `at`.
     pub(crate) fn open_space_picker(&mut self, id: SpaceId, icon: bool, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let me = cx.entity();
-        self.space_picker = Some(crate::space_picker::Shown::open(icon, &me, id, at, window, cx, |this, window, cx| {
+        let Some(space) = self.session.space(id) else { return };
+        let picker = crate::space_picker::Shown::open(icon, &me, space, at, window, cx, |this, window, cx| {
             this.close_overlays(window, cx)
-        }));
+        });
+        self.space_picker = Some(picker);
         cx.notify();
     }
 
