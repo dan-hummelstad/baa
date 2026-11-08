@@ -206,6 +206,8 @@ mod app {
         autocomplete: on_autocomplete,
         clear_done: on_clear_done,
         load_unpacked_done: on_load_unpacked_done,
+        cdp: on_cdp,
+        media: on_media,
     };
 
     thread_local! {
@@ -278,7 +280,7 @@ mod app {
     extern "C" fn on_tab_state(_: *mut c_void, tab: ffi::TabId, s: *const ffi::TabState) {
         let s = unsafe { &*s };
         eprintln!(
-            "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={}",
+            "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={} muted={}",
             tab_index(tab),
             text(s.url),
             text(s.title),
@@ -287,7 +289,8 @@ mod app {
             s.can_go_back,
             s.can_go_forward,
             s.audible,
-            s.secure
+            s.secure,
+            s.muted
         );
         if s.crashed {
             eprintln!("baa: tab_crashed tab={}", tab_index(tab));
@@ -431,6 +434,24 @@ mod app {
         eprintln!("baa: load_unpacked_done id={id} ok={ok} {}", text(message));
     }
 
+    extern "C" fn on_cdp(_: *mut c_void, tab: ffi::TabId, id: u64, json: *const c_char) {
+        let json: String = text(json).chars().take(300).collect();
+        eprintln!("baa: cdp tab={} id={id} {json}", tab_index(tab));
+    }
+
+    extern "C" fn on_media(_: *mut c_void, tab: ffi::TabId, m: *const ffi::Media) {
+        let m = unsafe { &*m };
+        eprintln!(
+            "baa: media tab={} title={:?} artist={:?} artwork={} playing={} actions={}",
+            tab_index(tab),
+            text(m.title),
+            text(m.artist),
+            text(m.artwork_url),
+            m.playing,
+            m.actions
+        );
+    }
+
     extern "C" fn visit_extension(_: *mut c_void, e: *const ffi::Extension) {
         let e = unsafe { &*e };
         eprintln!(
@@ -470,6 +491,7 @@ mod app {
     /// adds more). `use <n>` picks the tab later steps act on; 0 is the page.
     ///   load <url> | back | forward | reload | stop | history | state
     ///   eval <js> | geval <js> (with a user gesture) | find <text> | zoom <f>
+    ///   cdpeval <js> (Runtime.evaluate through baa_tab_cdp) | media <BAA_MEDIA_* bit>
     ///   mute | unmute | print | activate | focus | close | escape | screenshot | sleep <ms> | quit
     ///   click | cmdclick | rclick <x> <y> (real NSEvents at points from the tab's top left)
     ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
@@ -484,7 +506,7 @@ mod app {
             let executor = cx.background_executor().clone();
             let mut current = 0usize;
             let mut shots = 0;
-            let (mut clears, mut unpacked) = (0u64, 0u64);
+            let (mut clears, mut unpacked, mut cdp_id) = (0u64, 0u64, 0u64);
             let mut which: &str = "1";
             // The page's own tab exists once the window does.
             executor.timer(std::time::Duration::from_secs(3)).await;
@@ -511,6 +533,16 @@ mod app {
                         let (url, title) = if ok { (text(s.url), text(s.title)) } else { Default::default() };
                         eprintln!("baa: get_state ok={ok} url={url} title={title:?} loading={}", s.loading);
                     }
+                    "cdpeval" => {
+                        // What baa-web's eval_value sends (cdp.rs allows Runtime.evaluate).
+                        cdp_id += 1;
+                        let expression = arg.replace('\\', "\\\\").replace('"', "\\\"");
+                        let json = format!(
+                            r#"{{"id":{cdp_id},"method":"Runtime.evaluate","params":{{"expression":"{expression}","returnByValue":true,"awaitPromise":true}}}}"#
+                        );
+                        (core.tab_cdp)(tab, cdp_id, c(&json).as_ptr());
+                    }
+                    "media" => (core.tab_media_action)(tab, arg.parse().unwrap()),
                     "eval" => (core.tab_eval)(tab, c(arg).as_ptr(), false),
                     "geval" => (core.tab_eval)(tab, c(arg).as_ptr(), true),
                     "ac" => {

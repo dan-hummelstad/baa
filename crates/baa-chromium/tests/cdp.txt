@@ -1,0 +1,12 @@
+# the Runtime.evaluate baa-web eval_value sends, then a Chrome page that refuses a session
+load https://example.com/
+sleep 3000
+cdpeval 1+1
+sleep 1000
+mute
+sleep 500
+load chrome://version/
+sleep 2000
+cdpeval 2+2
+sleep 1000
+quit

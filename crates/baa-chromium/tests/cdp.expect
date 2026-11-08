@@ -1,0 +1,7 @@
+# the in-process CDP session: Runtime.evaluate replies by id, Chrome pages refuse it, muted is in tab state
+script: cdp.txt
+must: cdp tab=0 id=1 \{"id":1,"result":\{"result":\{"type":"number","value":2
+must: tab_state tab=0 .* muted=true
+must: cdp tab=0 id=0 \{"method":"Baa.detached"
+must: cdp tab=0 id=2 \{"id":2,"error"
+mustnot: cdp tab=0 id=2 \{"id":2,"result"
