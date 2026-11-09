@@ -284,7 +284,7 @@ class Window : public BrowserWindow,
   base::OneShotTimer bubble_timer_;  // running while the notice counts as displayed
   base::TimeTicks bubble_snooze_until_;
   base::CallbackListSubscription close_cancelled_;
-  std::unique_ptr<ExtensionsContainer> extensions_container_;
+  ExtensionsContainerPtr extensions_container_;
   std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;
   base::WeakPtrFactory<Window> weak_factory_{this};
 };

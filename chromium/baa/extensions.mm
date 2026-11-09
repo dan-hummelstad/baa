@@ -226,7 +226,7 @@ void DestroyPopup(Popup* popup) {
 
 // The ExtensionsContainer of a baa window: enough that Chrome's extension code
 // can ask it, and answer "no" (there is no toolbar).
-class Container : public ExtensionsContainer {
+class Container final : public ExtensionsContainer {
  public:
   explicit Container(BrowserWindowInterface* browser) : browser_(browser) {}
   ToolbarActionViewModel* GetActionForId(const std::string&) override { return nullptr; }
@@ -252,8 +252,12 @@ void DestroyAllPopups() {
   }
 }
 
-std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser) {
-  return std::make_unique<Container>(browser);
+void DeleteExtensionsContainer::operator()(ExtensionsContainer* container) const {
+  delete static_cast<Container*>(container);
+}
+
+ExtensionsContainerPtr MakeExtensionsContainer(BrowserWindowInterface* browser) {
+  return ExtensionsContainerPtr(new Container(browser));
 }
 
 }  // namespace baa

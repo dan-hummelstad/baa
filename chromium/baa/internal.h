@@ -136,7 +136,14 @@ bool BrowserIsClosing(BrowserWindowInterface* browser);
 // Destroys, now, every Browser of `profile` that has a baa window (their tabs
 // are already closed).
 void DestroyBrowsersOf(Profile* profile);
-std::unique_ptr<ExtensionsContainer> MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
+// Chrome's ExtensionsContainer has no virtual destructor, so a unique_ptr to it
+// would skip baa's destructor and free with the wrong size (a PartitionAlloc trap
+// in official builds, at every window close).
+struct DeleteExtensionsContainer {
+  void operator()(ExtensionsContainer* container) const;  // extensions.mm
+};
+using ExtensionsContainerPtr = std::unique_ptr<ExtensionsContainer, DeleteExtensionsContainer>;
+ExtensionsContainerPtr MakeExtensionsContainer(BrowserWindowInterface* browser);  // extensions.mm
 // ---- requests.mm: what the app answers later by id. Asks (dialogs, permissions) and context
 // menus register themselves here; baa_answer and baa_context_menu_done look the id up, and
 // request_closed leaves from WithdrawRequest and DropRequestsOf only. Not owning: each subclass
