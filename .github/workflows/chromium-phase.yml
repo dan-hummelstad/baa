@@ -314,8 +314,10 @@ jobs:
           path: /Users/Shared/engine.tar.zst.sha256
           retention-days: 90
 
+      # A finished release keeps its tree too: an engine fix then rebuilds with base_run=<this run>
+      # instead of from scratch.
       - name: Pack tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         working-directory: /Users/Shared
         run: |
           set -eux
@@ -327,7 +329,7 @@ jobs:
           df -h /
 
       - name: Upload tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}
@@ -337,7 +339,7 @@ jobs:
           compression-level: 0
 
       - name: Upload tree checksum
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}.sha256
