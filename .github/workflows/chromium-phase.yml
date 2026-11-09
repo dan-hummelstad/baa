@@ -314,7 +314,7 @@ jobs:
           path: /Users/Shared/engine.tar.zst.sha256
           retention-days: 90
 
-      # A finished release keeps its tree too: an engine fix then rebuilds with base_run=<this run>
+      # A finished run keeps its tree 14 days: an engine fix then rebuilds with base_run=<this run>
       # instead of from scratch.
       - name: Pack tree
         if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
@@ -335,7 +335,7 @@ jobs:
           name: ${{ env.TREE }}
           path: /Users/Shared/tree.tar.zst
           overwrite: true
-          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 14 || 2 }}
           compression-level: 0
 
       - name: Upload tree checksum
@@ -345,7 +345,7 @@ jobs:
           name: ${{ env.TREE }}.sha256
           path: /Users/Shared/tree.tar.zst.sha256
           overwrite: true
-          retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 14 || 2 }}
 
       - name: Fail the build
         if: steps.build.outputs.status == 'failed'
