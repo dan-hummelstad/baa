@@ -33,7 +33,14 @@ fetch_sources() {
     downloads=("$_main_repo/downloads.ini" "$_root_dir/downloads.$host_arch.ini" "${downloads[@]}")
   fi
 
-  python3 "$_main_repo/utils/downloads.py" retrieve -i "${downloads[@]}" -c "$_download_cache" || return
+  # baa: GitHub release downloads 504 for minutes at a time; retrieve resumes
+  # (curl -C -), so wait and try again instead of failing the build.
+  local try
+  for try in 1 2 3 4 5; do
+    python3 "$_main_repo/utils/downloads.py" retrieve -i "${downloads[@]}" -c "$_download_cache" && break
+    [ "$try" -lt 5 ] || return 1
+    sleep $((try * 60))
+  done
   python3 "$_main_repo/utils/downloads.py" unpack -i "${downloads[@]}" -c "$_download_cache" "$_src_dir" || return
 
   # The macOS remote wrapper uses a separate Linux compiler on workers.
