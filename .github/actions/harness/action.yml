@@ -32,8 +32,16 @@ runs:
         zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
         # A runner has no signing identity: "-" signs ad hoc.
         BAA_SIGN_IDENTITY=- crates/baa-chromium/ci.sh --engine target/engine
+    # Official builds strip CHECK messages; the crash report's stack is the only clue.
+    - if: failure()
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/baa-ci-crash"
+        cp ~/Library/Logs/DiagnosticReports/*.ips "$RUNNER_TEMP/baa-ci-crash/" 2>/dev/null || echo "no crash reports"
     - if: failure()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: harness-logs
-        path: ${{ runner.temp }}/baa-ci-*/log
+        path: |
+          ${{ runner.temp }}/baa-ci-*/log
+          ${{ runner.temp }}/baa-ci-crash/
