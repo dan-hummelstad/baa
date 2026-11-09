@@ -116,7 +116,7 @@ jobs:
             fi
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
-          ID= DIGEST=
+          ID='' DIGEST=''
           B=$BAA_BASE_RUN
           if [ -n "$B" ]; then
             usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium $want $BAA_MODE tree"; exit 1; }
@@ -239,7 +239,7 @@ jobs:
           # Diagnostics only: head closes the pipe early, and under pipefail that SIGPIPE must not end the step before the 124 check.
           [ ! -f "$E" ] || { head -15 "$E" | cut -c1-240; sed -E 's/^(output|deps for) [^ ]+/\1 _/; s/ for [^ ]+$//; s/input .*/input/' "$E" | sort | uniq -c | sort -rn | head; } || true
           if [ $code -eq 124 ]; then
-            [ "${{ inputs.last }}" = false ] || { echo "gave up after phase ${{ inputs.phase }}"; exit 1; }
+            [ "${{ inputs.last }}" = false ] || { echo "::error::gave up after phase ${{ inputs.phase }}"; echo "status=failed" >> "$GITHUB_OUTPUT"; exit 0; }
             # A phase that kept the last one's work ends with far fewer steps left.
             # Without this, a lost hand-off only shows as a chain that never ends.
             read -r done remaining < <(grep -oE '[0-9]+ done, [0-9]+ failed, [0-9]+ remaining' build.log | tail -1 | awk '{print $1, $5}')
@@ -251,7 +251,12 @@ jobs:
             echo "$remaining" > remaining.txt
             echo "status=running" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          [ $code -eq 0 ] || exit $code
+          if [ $code -ne 0 ]; then
+            # Keep the hours compiled so far: Pack tree uploads it and a rerun with
+            # base_run=<this run> resumes there. "Fail the build" ends the job red.
+            grep -A12 '^FAILED:' build.log | sed 's/^/::error::/' | head -40 || true
+            echo "status=failed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           echo "status=finished" >> "$GITHUB_OUTPUT"
 
       - name: Report
@@ -310,7 +315,7 @@ jobs:
           retention-days: 90
 
       - name: Pack tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         working-directory: /Users/Shared
         run: |
           set -eux
@@ -322,7 +327,7 @@ jobs:
           df -h /
 
       - name: Upload tree
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}
@@ -332,10 +337,16 @@ jobs:
           compression-level: 0
 
       - name: Upload tree checksum
-        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev')
+        if: steps.build.outputs.status == 'running' || (steps.build.outputs.status == 'finished' && inputs.mode == 'dev') || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ env.TREE }}.sha256
           path: /Users/Shared/tree.tar.zst.sha256
           overwrite: true
           retention-days: ${{ steps.build.outputs.status == 'finished' && 7 || 2 }}
+
+      - name: Fail the build
+        if: steps.build.outputs.status == 'failed'
+        run: |
+          echo "::error::build failed; its tree is uploaded (release): rerun chromium.yml with base_run=$GITHUB_RUN_ID to resume"
+          exit 1
