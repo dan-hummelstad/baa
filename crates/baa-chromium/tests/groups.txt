@@ -1,7 +1,8 @@
-# tab groups: the app groups tab 0 as "Work"; at ~25 s it takes the tab out again
+# tab groups: the app groups tab 0 as "Work"; about 12 s later it takes the tab out again
 load https://example.com/
 sleep 3000
 group 0 7 Work
-sleep 20000
+# ungroup between the first probe (12 s after launch) and the last (about 33 s)
+sleep 12000
 group 0 0 -
 sleep 30000

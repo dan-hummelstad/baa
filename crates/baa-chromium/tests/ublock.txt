@@ -12,13 +12,15 @@ ext blockjmkbacgjkknlgpkjjiijinjdanf enable
 ext blockjmkbacgjkknlgpkjjiijinjdanf remove
 # uBO compiles its bundled lists on a fresh profile before it blocks
 sleep 15000
-eval fetch('https://example.org/',{mode:'no-cors'}).then(()=>fetch('https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js',{mode:'no-cors'}).then(()=>'ad:loaded',()=>'ad:blocked'),()=>'net:down').then(t=>document.title=t)
+# not googlesyndication: uBO answers fetches there with noop.js on purpose ($xhr,redirect=noop.js),
+# so a page's adblock check sees it load.
+eval fetch('https://example.org/',{mode:'no-cors'}).then(()=>fetch('https://www.googleadservices.com/pagead/conversion.js',{mode:'no-cors'}).then(()=>'ad:loaded',()=>'ad:blocked'),()=>'net:down').then(t=>document.title=t)
 sleep 3000
 state
 tab e https://example.com/
 sleep 15000
 use 2
-eval fetch('https://example.org/',{mode:'no-cors'}).then(()=>fetch('https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js',{mode:'no-cors'}).then(()=>'ad:loaded',()=>'ad:blocked'),()=>'net:down').then(t=>document.title=t)
+eval fetch('https://example.org/',{mode:'no-cors'}).then(()=>fetch('https://www.googleadservices.com/pagead/conversion.js',{mode:'no-cors'}).then(()=>'ad:loaded',()=>'ad:blocked'),()=>'net:down').then(t=>document.title=t)
 sleep 3000
 state
 quit

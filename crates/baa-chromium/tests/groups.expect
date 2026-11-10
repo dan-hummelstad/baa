@@ -6,6 +6,6 @@ cdp-after: 12
 cdp-settle: 5
 cdp: sw.js :: chrome.tabGroups.query({}).then(g=>g.map(x=>x.title)) ==> "Work"
 cdp: sw.js :: chrome.tabs.create({url:"https://example.com/?g"}).then(t=>chrome.tabs.group({tabIds:[t.id]})) ==> ^\d+
-cdp: sw.js :: new Promise(r=>setTimeout(r,16000)).then(()=>chrome.tabGroups.query({title:"Work"})).then(g=>g.length) ==> ^0$
+cdp: sw.js :: new Promise(r=>setTimeout(r,20000)).then(()=>chrome.tabGroups.query({title:"Work"})).then(g=>g.length) ==> ^0$
 must: tab_group tab=1 group=9223372036854775\d+ title=""
 count: 0 tab_group tab=0
