@@ -81,7 +81,8 @@ pub enum ExternalLinks {
     Tab,
 }
 
-/// prefers-color-scheme that websites see.
+/// Light or dark: the prefers-color-scheme websites see (`page_scheme`), or
+/// baa's own look (`appearance`). `System` is macOS's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PageScheme {
     #[default]
@@ -228,6 +229,8 @@ pub struct Settings {
     /// (Chrome's auto PiP content setting at Allow, and a Space switch asks for it).
     pub auto_pip: bool,
     pub page_scheme: PageScheme,
+    /// baa's own windows; websites keep `page_scheme`.
+    pub appearance: PageScheme,
     /// Engines the user added, beside [`SEARCH_ENGINES`].
     pub search_engines: Vec<SearchEngine>,
     pub web: WebPrefs,
@@ -314,6 +317,7 @@ impl Default for Settings {
             peek_links: true,
             auto_pip: true,
             page_scheme: PageScheme::default(),
+            appearance: PageScheme::default(),
             search_engines: Vec::new(),
             web: WebPrefs::default(),
             environments: Vec::new(),
@@ -422,11 +426,13 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"search_engine":{"name":"Kagi","url":"https://kagi.com/?q=%s"},"chrome":"Ascii"}"#).unwrap();
         assert_eq!(s.web, WebPrefs::default());
         assert!(s.restore_today && s.peek_links && s.auto_pip);
+        assert_eq!((s.appearance, s.page_scheme), (PageScheme::System, PageScheme::System), "baa's look follows the system until set");
         let mut s = Settings::default();
         s.web.secure_dns = SecureDns::Custom("https://dns.quad9.net/dns-query".into());
         s.web.site_defaults = vec![(crate::Permission::Popups, crate::PermissionState::Allow)];
         s.web.developer_mode = true;
         s.auto_pip = false;
+        s.appearance = PageScheme::Dark;
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
         s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];

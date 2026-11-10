@@ -18,6 +18,18 @@ pub fn set_ascii(on: bool) {
     ASCII.store(on, Ordering::Relaxed);
 }
 
+// ponytail: process-wide like ASCII; every window is on the one system appearance and setting.
+static DARK: AtomicBool = AtomicBool::new(false);
+
+/// baa's own dark look (`Settings::appearance`, or the system's), for the surfaces.
+pub fn dark() -> bool {
+    DARK.load(Ordering::Relaxed)
+}
+
+pub fn set_dark(on: bool) {
+    DARK.store(on, Ordering::Relaxed);
+}
+
 /// A corner radius; ASCII Chrome only rounds as much as a `╭` does.
 pub fn r(v: f32) -> Pixels {
     px(if ascii() { v.min(3.) } else { v })
@@ -90,38 +102,61 @@ pub struct Theme {
     pub accent: Hsla,
 }
 
-/// Light surfaces that sit on any Space: command bar, peek, menus.
+/// Surfaces that sit on any Space: command bar, peek, menus, prompts, settings.
 pub mod surface {
-    use gpui::{rgb, rgba, Rgba};
+    use gpui::{rgba, Rgba};
+    /// A colour as RRGGBBAA in the light, dark and ASCII looks.
+    pub(crate) type Looks = [u32; 3];
+    pub(crate) const BG: Looks = [0xFFFFFFF7, 0x1C1A22F7, 0x090C12FF];
+    pub(crate) const INK: Looks = [0x17151DFF, 0xECEAF2FF, 0xC7D2E4FF];
+    pub(crate) const MUTED: Looks = [0x8A8796FF, 0x9390A0FF, 0x7F8DA6FF];
+    const ICON: Looks = [0x6E6A7AFF, 0xA8A5B4FF, 0x4C5A70FF];
+    const LINE: Looks = [0xEFEDF3FF, 0x2B2833FF, 0x1B2433FF];
+    const BORDER: Looks = [0x18122C29, 0xFFFFFF24, 0x2C3950FF];
+    const KEY: Looks = [0xF3F2F6FF, 0x2B2833FF, 0x102535FF];
+    pub(crate) const RAISED: Looks = [0xFFFFFFFF, 0x3D3947FF, 0x16334CFF];
+    const SCRIM: Looks = [0x1814243D, 0x00000080, 0x04070CCC];
+    pub(crate) const WARN: Looks = [0xC2410CFF, 0xFB923CFF, 0xFB923CFF];
+
+    fn look(c: Looks) -> Rgba {
+        rgba(c[if super::ascii() { 2 } else { super::dark() as usize }])
+    }
     pub fn bg() -> Rgba {
-        if super::ascii() { rgb(0x090C12) } else { rgba(0xFFFFFFF7) }
+        look(BG)
     }
     pub fn ink() -> Rgba {
-        if super::ascii() { rgb(0xC7D2E4) } else { rgb(0x17151D) }
+        look(INK)
     }
     pub fn muted() -> Rgba {
-        if super::ascii() { rgb(0x7F8DA6) } else { rgb(0x8A8796) }
+        look(MUTED)
     }
     pub fn icon() -> Rgba {
-        if super::ascii() { rgb(0x4C5A70) } else { rgb(0x6E6A7A) }
+        look(ICON)
     }
     pub fn line() -> Rgba {
-        if super::ascii() { rgb(0x1B2433) } else { rgb(0xEFEDF3) }
+        look(LINE)
     }
     pub fn border() -> Rgba {
-        if super::ascii() { rgb(0x2C3950) } else { rgba(0x18122C29) }
+        look(BORDER)
     }
     pub fn key() -> Rgba {
-        if super::ascii() { rgb(0x102535) } else { rgb(0xF3F2F6) }
+        look(KEY)
     }
-    /// A raised segment or knob.
+    /// A raised segment or knob, and a text field.
     pub fn raised() -> Rgba {
-        if super::ascii() { rgb(0x16334C) } else { rgb(0xFFFFFF) }
+        look(RAISED)
     }
     pub fn scrim() -> Rgba {
-        if super::ascii() { rgba(0x04070CCC) } else { rgba(0x1814243D) }
+        look(SCRIM)
+    }
+    /// A security warning: an insecure connection, a risky download.
+    pub fn warn() -> Rgba {
+        look(WARN)
     }
 }
+
+/// A bottom stop below this lightness (OKLCH L) is a dark theme: it takes light ink.
+const DEEP: f32 = 0.45;
 
 impl Theme {
     pub fn from_gradient(top: Rgba, bottom: Rgba) -> Self {
@@ -129,7 +164,7 @@ impl Theme {
             return Self::ascii(bottom);
         }
         let [l, c, h] = to_oklch(bottom);
-        let dark = l < 0.45;
+        let dark = l < DEEP;
         let with_alpha = |c: Hsla, a: f32| Hsla { a, ..c };
         let ink = if dark {
             Hsla::from(from_oklch([0.96, 0.01, h]))
@@ -177,26 +212,32 @@ impl Theme {
 /// A gradient as drawn: top, an optional middle, bottom.
 pub type Stops = (Rgba, Option<Rgba>, Rgba);
 
-/// A Space's gradient: stored stops in its mode, or for a Space from before
-/// gradients, a light-to-mid ramp of its one colour.
-pub fn space_gradient(s: &baa_model::Space) -> Stops {
+/// A Space's gradient: stored stops in its mode (`Auto` is baa's own look, `dark`),
+/// or for a Space from before gradients, a light-to-mid ramp of its one colour.
+pub fn space_gradient(s: &baa_model::Space, dark: bool) -> Stops {
     let from = gpui::rgb(s.accent);
     let Some(to) = s.accent_to else {
         let [_, c, h] = to_oklch(from);
         return (from_oklch([0.88, (c * 0.5).min(0.06), h]), None, from_oklch([0.72, c.min(0.13), h]));
     };
+    let to = gpui::rgb(to);
+    let deep = match s.mode {
+        // Colours already on baa's side of the ink's turn stay as picked, and so
+        // does Incognito: its dark is how it is told apart, in either look.
+        baa_model::ThemeMode::Auto if s.ephemeral || (to_oklch(to)[0] < DEEP) == dark => {
+            return (from, s.accent_mid.map(gpui::rgb), to);
+        }
+        baa_model::ThemeMode::Auto => dark,
+        mode => mode == baa_model::ThemeMode::Dark,
+    };
     // The picker's lightness range, squeezed into a pale or a deep band so the
     // ink (chosen from the bottom stop) lands dark or light.
     let band = |c: Rgba| {
-        let (lo, hi) = match s.mode {
-            baa_model::ThemeMode::Auto => return c,
-            baa_model::ThemeMode::Light => (0.76, 0.96),
-            baa_model::ThemeMode::Dark => (0.16, 0.40),
-        };
+        let (lo, hi) = if deep { (0.16, 0.40) } else { (0.76, 0.96) };
         let [l, c, h] = to_oklch(c);
         from_oklch([lo + (hi - lo) * ((l - 0.30) / 0.65).clamp(0., 1.), c, h])
     };
-    (band(from), s.accent_mid.map(|m| band(gpui::rgb(m))), band(gpui::rgb(to)))
+    (band(from), s.accent_mid.map(|m| band(gpui::rgb(m))), band(to))
 }
 
 /// The middle colour of `s`, its own or halfway between the ends.
@@ -374,16 +415,20 @@ mod tests {
         let id = s.add_space("A", "🐑", None);
         let space = s.space_mut(id).unwrap();
         (space.accent, space.accent_mid, space.accent_to) = (0x9C7096, Some(0x5F5F7F), Some(0x34344A));
-        let ink = |space: &baa_model::Space| {
-            let (top, mid, bottom) = space_gradient(space);
+        let ink = |space: &baa_model::Space, dark: bool| {
+            let (top, mid, bottom) = space_gradient(space, dark);
             assert!(mid.is_some(), "the middle stop survives every mode");
             Theme::from_gradient(top, bottom).ink.l
         };
-        assert!(ink(space) > 0.8, "Auto keeps the deep slate, so light ink");
+        assert!(ink(space, false) < 0.3 && ink(space, true) > 0.8, "Auto is baa's own light or dark");
+        assert_eq!(space_gradient(space, true).2, rgb(0x34344A), "and as picked where the colours already suit it");
+        space.ephemeral = true;
+        assert_eq!(space_gradient(space, false).2, rgb(0x34344A), "Incognito stays dark in the light look");
+        space.ephemeral = false;
         space.mode = baa_model::ThemeMode::Light;
-        assert!(ink(space) < 0.3);
+        assert!(ink(space, false) < 0.3 && ink(space, true) < 0.3, "a Space's own mode wins");
         space.mode = baa_model::ThemeMode::Dark;
         (space.accent, space.accent_to) = (0xF6F0ED, Some(0xF0E6E1));
-        assert!(ink(space) > 0.8, "Dark turns even cream deep");
+        assert!(ink(space, false) > 0.8, "Dark turns even cream deep");
     }
 }

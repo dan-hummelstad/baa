@@ -7,13 +7,13 @@ use std::{
     time::Instant,
 };
 
-use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
+use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, PageScheme, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
     relative, rgb, AnyElement, AnyWindowHandle, WindowHandle, BoxShadow, ClipboardItem, Context, Entity,
     Animation, AnimationExt, Div, ElementId, Transformation, FocusHandle, Hsla, KeyDownEvent, MouseButton, Pixels, Point, Rgba,
-    SharedString, Stateful, Subscription, Window,
+    SharedString, Stateful, Subscription, Window, WindowAppearance,
 };
 
 use crate::{
@@ -247,6 +247,8 @@ pub struct Browser<H: WebHost> {
     fade: Spring,
     gradient_from: Stops,
     pub(crate) gradient_to: Stops,
+    /// baa's own look as last drawn; `Auto` Spaces take their band from it.
+    pub(crate) dark: bool,
     shown_space: Option<SpaceId>,
     last_frame: Instant,
     /// Claude's tool server: clients, approvals, the chat panel (PLAN-m4-features D).
@@ -395,10 +397,18 @@ impl<H: WebHost> Browser<H> {
             fade: Spring::new(1.0),
             gradient_from: (rgb(PALETTE[0].0), None, rgb(PALETTE[0].1)),
             gradient_to: (rgb(PALETTE[0].0), None, rgb(PALETTE[0].1)),
+            dark: false,
             last_frame: cx.background_executor().now(),
             agent: Default::default(),
         };
         this.restore_chats();
+        // gpui tells a window its appearance changed and draws nothing by itself.
+        cx.observe_window_appearance(window, |this, window, cx| {
+            this.sync_dark(window);
+            cx.notify();
+        })
+        .detach();
+        this.sync_dark(window);
         this.sync(window, cx);
         this.start_live_refresh(window, cx);
         // ponytail: a fixed wait for Chrome to load each profile's extensions before the
@@ -536,11 +546,29 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// baa's own light or dark: the setting, or the system's as `window` has it.
+    pub(crate) fn dark_in(&self, window: &Window) -> bool {
+        match self.settings.appearance {
+            PageScheme::System => matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
+            scheme => scheme == PageScheme::Dark,
+        }
+    }
+
+    /// Takes baa's look for the surfaces and the Space's colours.
+    pub(crate) fn sync_dark(&mut self, window: &Window) {
+        let dark = self.dark_in(window);
+        crate::theme::set_dark(dark);
+        if dark != self.dark {
+            self.dark = dark;
+            self.retheme();
+        }
+    }
+
     /// Fades the window toward the active Space's colours.
     pub(crate) fn retheme(&mut self) {
         let gradient = self
             .active_space()
-            .map_or(self.gradient_to, space_gradient);
+            .map_or(self.gradient_to, |s| space_gradient(s, self.dark));
         if gradient != self.gradient_to {
             self.gradient_from = self.gradient(); // mid-flight colours, so rapid switches never jump
             self.gradient_to = gradient;
@@ -1097,6 +1125,8 @@ pub(crate) fn tab_title(tab: &Tab) -> &str {
 
 impl<H: WebHost> Render for Browser<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Before the tick, so a changed look starts its fade in this frame.
+        self.sync_dark(window);
         self.tick_motion(window, cx);
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         self.push_webui_skin();

@@ -189,6 +189,7 @@ impl<H: WebHost> SettingsView<H> {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         window.activate_window();
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify()).detach();
         let mut motion = Motion::default();
         let i = tab.index() as f32;
         motion.from(("settings-pill", 0), Feel::Glide, i, i);
@@ -909,6 +910,7 @@ impl<H: WebHost> Render for SettingsView<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = self.browser.read(cx).theme();
         crate::theme::set_ascii(self.browser.read(cx).settings.chrome == baa_model::ChromeStyle::Ascii);
+        crate::theme::set_dark(self.browser.read(cx).dark_in(window));
         self.tick(window, cx);
         if !self.browser.read(cx).session.space(self.space).is_some_and(|s| !s.ephemeral) {
             let first = self.browser.read(cx).session.spaces().iter().find(|s| !s.ephemeral).map(|s| s.id);

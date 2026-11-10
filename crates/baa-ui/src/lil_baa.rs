@@ -57,7 +57,8 @@ pub struct SpaceChoice {
     pub id: SpaceId,
     pub label: String,
     pub name: String,
-    pub gradient: crate::theme::Stops,
+    /// In baa's light look and its dark one.
+    pub gradient: [crate::theme::Stops; 2],
 }
 
 impl<H: WebHost> LilBaa<H> {
@@ -74,6 +75,9 @@ impl<H: WebHost> LilBaa<H> {
             this.on_page_event(event, window, cx)
         });
         window.focus(&page.read(cx).focus_handle(cx), cx);
+        // The browser's own observer has taken the new look by the time this draws.
+        // ponytail: a change of the setting shows here at the next draw, like ASCII.
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify()).detach();
         Self {
             browser,
             page: Some(page),
@@ -195,7 +199,7 @@ impl<H: WebHost> Render for LilBaa<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let choice = self.spaces.iter().find(|s| s.id == self.space);
         let name = choice.map_or("baa".into(), |s| s.name.clone());
-        let (top, mid, bottom) = choice.map_or((gpui::rgb(0xDCCFFB), None, gpui::rgb(0xA592EC)), |s| s.gradient);
+        let (top, mid, bottom) = choice.map_or((gpui::rgb(0xDCCFFB), None, gpui::rgb(0xA592EC)), |s| s.gradient[crate::theme::dark() as usize]);
         let theme = Theme { bg_mid: mid, ..Theme::from_gradient(top, bottom) };
         let content = self
             .page

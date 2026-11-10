@@ -151,6 +151,7 @@ fn incognito_space_uses_ephemeral_profile(cx: &mut TestAppContext) {
         let space = b.active_space().unwrap();
         assert!(space.ephemeral);
         assert_eq!(b.host.created.borrow()[0].0, b.host.ephemeral_profile());
+        assert!(!b.dark && crate::theme::to_oklch(b.gradient_to.2)[0] < 0.35, "Incognito keeps its dark in baa's light look");
     });
 }
 

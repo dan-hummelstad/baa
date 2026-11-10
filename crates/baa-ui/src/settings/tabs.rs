@@ -140,6 +140,11 @@ impl<H: WebHost> SettingsView<H> {
         vec![
             self.section("Window"),
             self.row(
+                "appearance",
+                "baa's own light or dark. A Space on Auto follows it.",
+                self.segments("pref-appearance", labels(&[(PageScheme::System, "System"), (PageScheme::Light, "Light"), (PageScheme::Dark, "Dark")]), s.appearance, |v, s| s.appearance = v, cx),
+            ),
+            self.row(
                 "chrome",
                 "ASCII draws the window in a monospace terminal frame.",
                 self.segments("pref-chrome", labels(&[(ChromeStyle::Arc, "Arc"), (ChromeStyle::Ascii, "ASCII")]), s.chrome, |v, s| s.chrome = v, cx),

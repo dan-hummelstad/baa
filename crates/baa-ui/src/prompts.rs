@@ -626,7 +626,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(icon("triangle-alert", 18., gpui::rgb(0xC2410C).into()))
+                    .child(icon("triangle-alert", 18., surface::warn().into()))
                     .child(
                         div()
                             .flex_1()
@@ -635,7 +635,7 @@ impl<H: WebHost> Browser<H> {
                             .flex_col()
                             .gap(px(3.))
                             .child(div().truncate().font_weight(gpui::FontWeight::MEDIUM).child(SharedString::from(download_name(d))))
-                            .child(div().text_size(px(11.5)).text_color(gpui::rgb(0xC2410C)).child(reason)),
+                            .child(div().text_size(px(11.5)).text_color(surface::warn()).child(reason)),
                     ),
             )
             .child(
@@ -867,7 +867,7 @@ impl<H: WebHost> Browser<H> {
                             .child(icon(
                                 if secure { "lock" } else { "triangle-alert" },
                                 12.,
-                                if secure { surface::muted().into() } else { gpui::rgb(0xC2410C).into() },
+                                if secure { surface::muted().into() } else { surface::warn().into() },
                             ))
                             .child(if secure { "Connection is secure" } else { "Connection is not secure" }),
                     )

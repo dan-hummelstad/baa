@@ -12,14 +12,15 @@ impl<H: WebHost> Browser<H> {
     /// Tells the engine the skin for the active Space's Chrome pages when it changed.
     pub(crate) fn push_webui_skin(&mut self) {
         let Some(profile) = self.active_space().map(|s| s.profile) else { return };
-        let ((top, _, bottom), ascii) = (self.gradient_to, crate::theme::ascii());
-        let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(ascii as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
+        // Dark surfaces, so Chrome's own light/dark rules must be the dark ones.
+        let ((top, _, bottom), dark) = (self.gradient_to, crate::theme::ascii() || self.dark);
+        let key = [top.r, top.g, top.b, bottom.r, bottom.g, bottom.b].iter().fold(crate::theme::ascii() as u64 + 2 * self.dark as u64, |h, c| h.rotate_left(7) ^ u64::from(c.to_bits()));
         if self.skin_sent == Some((profile, key)) {
             return;
         }
         self.skin_sent = Some((profile, key));
         let css = chrome_skin(&Theme::from_gradient(top, bottom));
-        self.host.set_webui_skin(profile, css, ascii);
+        self.host.set_webui_skin(profile, css, dark);
     }
 }
 
@@ -46,6 +47,20 @@ pub(crate) fn chrome_skin(theme: &Theme) -> String {
             gpui::rgb(0x04131B),
             "\"JetBrains Mono\", \"SF Mono\", Menlo, monospace",
             "3px",
+            "dark",
+        )
+    } else if crate::theme::dark() {
+        (
+            surface::bg(),
+            gpui::rgb(0x24212C),
+            surface::key(),
+            surface::line(),
+            surface::border(),
+            surface::ink(),
+            surface::muted(),
+            gpui::rgb(0xFFFFFF),
+            "Inter, -apple-system, system-ui, sans-serif",
+            "12px",
             "dark",
         )
     } else {

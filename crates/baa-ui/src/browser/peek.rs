@@ -229,7 +229,7 @@ impl<H: WebHost> Browser<H> {
                 id: s.id,
                 label: format!("{} {}", s.icon, s.name),
                 name: s.name.clone(),
-                gradient: crate::theme::space_gradient(s),
+                gradient: [false, true].map(|dark| crate::theme::space_gradient(s, dark)),
             })
             .collect();
         let options = crate::lil_baa::window_options(cx);

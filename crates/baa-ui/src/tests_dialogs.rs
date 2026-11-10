@@ -192,3 +192,25 @@ fn closing_a_peek_leaves_the_keyboard_on_the_base_tabs_dialog(cx: &mut TestAppCo
         assert!(!p.read(cx).focus.is_focused(window), "not the page under it");
     });
 }
+
+/// A prompt's text, its fields and its warnings stay readable in the light, dark and ASCII looks.
+#[test]
+fn prompts_stay_legible_in_every_look() {
+    use crate::theme::surface::{BG, INK, MUTED, RAISED, WARN};
+    // WCAG contrast of two RRGGBBAA colours (alpha ignored: the surfaces are near opaque).
+    let contrast = |a: u32, b: u32| {
+        let lum = |c: u32| {
+            let c = gpui::rgba(c);
+            let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b) + 0.05
+        };
+        lum(a).max(lum(b)) / lum(a).min(lum(b))
+    };
+    for look in 0..3 {
+        for under in [BG, RAISED] {
+            assert!(contrast(INK[look], under[look]) > 7., "text, look {look}");
+            assert!(contrast(MUTED[look], under[look]) > 3., "muted text, look {look}");
+            assert!(contrast(WARN[look], under[look]) > 4.5, "a warning, look {look}");
+        }
+    }
+}

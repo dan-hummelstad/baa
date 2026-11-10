@@ -178,7 +178,7 @@ impl<H: WebHost> Browser<H> {
                 .rounded(r(7.))
                 .border_1()
                 .border_color(if on { theme.accent } else { surface::border().into() })
-                .bg(if on { Hsla { a: 0.12, ..theme.accent } } else { gpui::white() })
+                .bg(if on { Hsla { a: 0.12, ..theme.accent } } else { surface::raised().into() })
                 .text_size(px(12.5))
                 .text_color(surface::ink())
                 .child(SharedString::from(label))
@@ -206,7 +206,7 @@ impl<H: WebHost> Browser<H> {
                 .rounded(r(7.))
                 .border_1()
                 .border_color(if focused { theme.accent } else { surface::border().into() })
-                .bg(gpui::white())
+                .bg(surface::raised())
                 .text_size(px(13.))
                 .child(f.render(placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..theme.accent }))
         };
@@ -238,7 +238,7 @@ impl<H: WebHost> Browser<H> {
                         .rounded(r(4.))
                         .border_1()
                         .border_color(if on { theme.accent } else { surface::border().into() })
-                        .bg(if on { theme.accent } else { gpui::white() })
+                        .bg(if on { theme.accent } else { surface::raised().into() })
                         .when(on, |d| d.child(icon("check", 11., gpui::white()))),
                 )
                 .child(SharedString::from(d.check_label.clone()))

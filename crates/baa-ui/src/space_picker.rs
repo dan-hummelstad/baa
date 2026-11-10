@@ -390,8 +390,8 @@ impl<H: WebHost> Render for ColorPicker<H> {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .when(self.mode == mode, |d| d.bg(gpui::rgba(0x00000017)))
-                    .hover(|d| d.bg(gpui::rgba(0x0000000D)))
+                    .when(self.mode == mode, |d| d.bg(crate::theme::fade(surface::ink().into(), 0.09)))
+                    .hover(|d| d.bg(crate::theme::fade(surface::ink().into(), 0.05)))
                     .child(icon(name, 15., surface::icon().into()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.mode = mode;

@@ -572,3 +572,25 @@ fn the_claude_switch_goes_through_the_browser(cx: &mut TestAppContext) {
     click(&mut s, "pref-claude");
     assert!(b.read_with(&s, |b, _| b.settings.claude.enabled));
 }
+
+#[gpui::test]
+fn baas_own_appearance_turns_auto_spaces_and_chrome_pages_dark_and_leaves_websites(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Appearance");
+    let bottom = |b: &Browser<MockHost>| crate::theme::to_oklch(b.gradient_to.2)[0];
+    b.read_with(&s, |b, _| assert!(!b.dark && bottom(b) > 0.6, "System is the window's appearance, light under test"));
+    click(&mut s, "pref-appearance:2");
+    b.read_with(&s, |b, _| {
+        assert!(b.dark && bottom(b) < 0.45, "an Auto Space goes deep");
+        assert!(b.host.skins.borrow().last().unwrap().2, "Chrome's pages are told dark");
+        assert_eq!(b.settings.page_scheme, baa_model::PageScheme::System, "websites keep their own setting");
+        assert_eq!(b.store().unwrap().load_settings().unwrap().appearance, baa_model::PageScheme::Dark, "saved");
+    });
+    click(&mut s, "pref-appearance:1");
+    b.read_with(&s, |b, _| {
+        assert!(!b.dark && bottom(b) > 0.6);
+        assert!(!b.host.skins.borrow().last().unwrap().2);
+    });
+}

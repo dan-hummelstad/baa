@@ -113,6 +113,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(General, "spellcheck", "Spell check", "spelling"),
     row(General, "more_languages", "More language settings…", "translate fonts"),
     row(General, "import", "Import from Arc and other browsers", "arc history spaces"),
+    row(Appearance, "appearance", "Appearance", "dark light mode theme baa system"),
     row(Appearance, "chrome", "Window style", "arc ascii terminal chrome"),
     row(Appearance, "side", "Sidebar side", "left right"),
     row(Appearance, "page_scheme", "Website appearance", "dark light mode theme prefers-color-scheme"),
