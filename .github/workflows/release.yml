@@ -154,11 +154,46 @@ jobs:
             cargo run --release -p xtask -- sign "$DMG"
             cargo run --release -p xtask -- notarize "$DMG"
           fi
+      # Sparkle's feed: Info.plist's SUFeedURL (xtask) is releases/latest/download/appcast.xml, so
+      # each release's appcast names its own DMG. sign_update is pinned by hash and gets the key on
+      # stdin; the app accepts only DMGs signed with it (SUPublicEDKey).
+      - name: Sparkle appcast
+        if: env.SIGNED == 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          VER: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          [ -n "$SPARKLE_ED_PRIVATE_KEY" ] || { echo "::error::no SPARKLE_ED_PRIVATE_KEY secret: this release would have no update feed"; exit 1; }
+          S="$RUNNER_TEMP/sparkle"
+          mkdir "$S"
+          curl -fsSL --proto =https --proto-redir =https -o "$S/sparkle.tar.xz" \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz
+          echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $S/sparkle.tar.xz" | shasum -a 256 -c
+          tar -xJf "$S/sparkle.tar.xz" -C "$S"
+          DMG="baa-$VER-macos-arm64.dmg"
+          ATTRS=$(printenv SPARKLE_ED_PRIVATE_KEY | "$S/bin/sign_update" --ed-key-file - "$DMG")
+          case $ATTRS in
+            'sparkle:edSignature="'*'" length="'*'"') ;;
+            *) echo "::error::unexpected sign_update output"; exit 1 ;;
+          esac
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$DMG"
+          {
+            echo '<?xml version="1.0" encoding="utf-8"?>'
+            echo '<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">'
+            echo '<channel><title>baa</title><item>'
+            echo "<title>baa $VER</title><pubDate>$(date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>"
+            echo "<sparkle:version>$VER</sparkle:version><sparkle:shortVersionString>$VER</sparkle:shortVersionString>"
+            echo "<enclosure url=\"$URL\" type=\"application/octet-stream\" $ATTRS/>"
+            echo '</item></channel></rss>'
+          } > appcast.xml
+          cat appcast.xml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
           path: |
             baa-*.dmg
+            appcast.xml
             engine/engine.json
           if-no-files-found: error
       - if: failure()
@@ -191,5 +226,8 @@ jobs:
             notes="$notes"$'\n\n'"Not signed with a Developer ID or notarised yet: open it with right-click → Open (or \`xattr -dr com.apple.quarantine /Applications/baa.app\`)."
           fi
           # ponytail: GitHub Release only; mirroring to baa.me/dl (§13) waits until baa.me hosts anything.
-          gh release create "$GITHUB_REF_NAME" dist/baa-*.dmg dist/engine/engine.json --repo "$GITHUB_REPOSITORY" \
+          # An unsigned release has no appcast: Sparkle would reject its ad-hoc signature anyway.
+          files=(dist/baa-*.dmg dist/engine/engine.json)
+          [ ! -f dist/appcast.xml ] || files+=(dist/appcast.xml)
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "baa $VER" --notes "$notes" --generate-notes

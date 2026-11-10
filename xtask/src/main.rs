@@ -14,6 +14,11 @@ use std::{
     process::Command,
 };
 
+const SPARKLE_FEED: &str = "https://github.com/dan-hummelstad/baa/releases/latest/download/appcast.xml";
+/// The public half of the release signing key (also in chromium/helium-macos/devutils/shared.sh);
+/// the private half is the SPARKLE_ED_PRIVATE_KEY secret.
+const SPARKLE_PUBLIC_KEY: &str = "gW1tepVcmsDlemYLiwxqNJf0teQBBpPAYljw+bpefMI=";
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -160,6 +165,17 @@ fn bundle(b: Bundle) -> Result<()> {
     let plist = app.join("Contents/Info.plist");
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
         run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;
+    }
+    // Sparkle, in release engines only (crates/baa starts it): the feed release.yml publishes, and
+    // the key its updates must be signed with. Checks run daily without asking first.
+    if !component {
+        for (key, kind, value) in [
+            ("SUFeedURL", "-string", SPARKLE_FEED),
+            ("SUPublicEDKey", "-string", SPARKLE_PUBLIC_KEY),
+            ("SUEnableAutomaticChecks", "-bool", "YES"),
+        ] {
+            run(Command::new("plutil").args(["-replace", key, kind, value]).arg(&plist))?;
+        }
     }
     set_icon(&app)?;
     // LaunchServices keeps a bundle's icon by path and rereads Info.plist only when the

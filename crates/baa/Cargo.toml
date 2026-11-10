@@ -22,3 +22,5 @@ env_logger.workspace = true
 futures = "0.3"
 # Already in the graph via gpui: getpeereid on agent.sock connections.
 libc = "0.2"
+# Already in the graph via baa-web: starting Sparkle's updater.
+objc2 = "0.6"

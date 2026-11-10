@@ -130,6 +130,12 @@ write_gn_args() {
   # interface; official builds use no PCHs.
   # ponytail: symbol_level=1 (and uploading the dSYMs) if C++ backtraces matter; for dev one
   # full rebuild.
+  # baa: release engines carry Sparkle (BaaCore.framework/Frameworks); crates/baa starts it
+  # against the GitHub Releases appcast. The public half of the release signing key, also in
+  # xtask (SPARKLE_PUBLIC_KEY); the private half is the SPARKLE_ED_PRIVATE_KEY secret.
+  if [ "$mode" = release ]; then
+    printf 'enable_sparkle = true\nsparkle_ed_key = "%s"\n' 'gW1tepVcmsDlemYLiwxqNJf0teQBBpPAYljw+bpefMI=' >> "$args"
+  fi
   if [ "$mode" != ci ]; then
     sed -i '' -e '/cc_wrapper/d' -e '/symbol_level/d' "$args"
     printf '%s\n' 'symbol_level = 0' 'blink_symbol_level = 0' 'v8_symbol_level = 0' >> "$args"

@@ -83,11 +83,26 @@ fn main() {
     });
     app.run(move |cx| {
         let host = core.start(cx);
+        start_updater();
         let agent = Rc::new(RefCell::new(agent));
         cx.set_global(baa_ui::AgentSwitch(Box::new(move |on| agent.borrow_mut().set(on))));
         launch(host, store, settings, dir, rx, agent_rx, cx);
     });
     std::process::exit(core.exit_code());
+}
+
+/// Sparkle, which release engines carry, checks the appcast in Info.plist (SUFeedURL, set by
+/// xtask) daily and offers each signed update in its own window: download, install, relaunch.
+/// Dev engines have no Sparkle.
+fn start_updater() {
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    let Some(class) = AnyClass::get(c"SPUStandardUpdaterController") else { return };
+    let none: *mut AnyObject = std::ptr::null_mut();
+    // ponytail: never released; the updater lives as long as the app.
+    unsafe {
+        let controller: *mut AnyObject = objc2::msg_send![class, alloc];
+        let _: *mut AnyObject = objc2::msg_send![controller, initWithStartingUpdater: Bool::YES, updaterDelegate: none, userDriverDelegate: none];
+    }
 }
 
 /// A running instance holds the lock; a second launch hands its URLs to it
