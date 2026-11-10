@@ -896,6 +896,7 @@ impl<H: WebHost> Browser<H> {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn act_approved(&mut self, tool: &'static str, id: TabId, origin: String, args: &Value, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
         match tool {
             "activate_tab" => {

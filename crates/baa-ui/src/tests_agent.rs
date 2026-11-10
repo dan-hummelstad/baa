@@ -114,7 +114,7 @@ fn acting_asks_per_origin_once_session_and_deny(cx: &mut TestAppContext) {
     b.update_in(cx, |b, window, cx| b.answer_agent_ask(Answer::Once, window, cx));
     assert_eq!(asks(&b, cx), 1);
     decide(&b, cx, Answer::Once);
-    assert_eq!(answer(&rx).unwrap().0, false);
+    assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, gh), ["click 1 2"]);
     assert!(b.read_with(cx, |b, _| b.agent.driven.contains(&gh)));
 
@@ -122,10 +122,10 @@ fn acting_asks_per_origin_once_session_and_deny(cx: &mut TestAppContext) {
     let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
     assert_eq!(asks(&b, cx), 1);
     decide(&b, cx, Answer::Session);
-    assert_eq!(answer(&rx).unwrap().0, false);
+    assert!(!answer(&rx).unwrap().0);
     let rx = call(&b, cx, "press_key", json!({"key": "Tab"}));
     assert_eq!(asks(&b, cx), 0, "for this session: no second sheet");
-    assert_eq!(answer(&rx).unwrap().0, false);
+    assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, gh), ["click 1 2", "press_key Enter", "press_key Tab"]);
 
     // Deny is remembered for the origin, so a page cannot nag until the user gives in.
@@ -135,10 +135,10 @@ fn acting_asks_per_origin_once_session_and_deny(cx: &mut TestAppContext) {
     });
     let rx = call(&b, cx, "click", json!({"tab": other.0, "x": 5, "y": 5}));
     decide(&b, cx, Answer::Deny);
-    assert_eq!(answer(&rx).unwrap().0, true);
+    assert!(answer(&rx).unwrap().0);
     let rx = call(&b, cx, "click", json!({"tab": other.0, "x": 5, "y": 5}));
     assert_eq!(asks(&b, cx), 0);
-    assert_eq!(answer(&rx).unwrap().0, true);
+    assert!(answer(&rx).unwrap().0);
     assert!(cdp(&b, cx, other).is_empty());
 
     // Turning Claude off forgets every approval; a pending sheet goes with it.
@@ -183,11 +183,11 @@ fn type_refuses_secret_fields(cx: &mut TestAppContext) {
     // A check that did not come back clean refuses too.
     let rx = call(&b, cx, "type", json!({"text": "x"}));
     answer_eval(&b, cx, Value::Null);
-    assert_eq!(answer(&rx).unwrap().0, true);
+    assert!(answer(&rx).unwrap().0);
 
     let rx = call(&b, cx, "type", json!({"text": "hello", "selector": "#q"}));
     answer_eval(&b, cx, json!({"secret": false}));
-    assert_eq!(answer(&rx).unwrap().0, false);
+    assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, tab), ["insert_text hello"]);
 }
 
@@ -204,7 +204,7 @@ fn navigating_to_a_new_origin_needs_its_own_approval(cx: &mut TestAppContext) {
     assert_eq!(asks(&b, cx), 1, "github.com's grant does not cover evil.example");
     assert!(loads(&b, cx).is_empty(), "an agent-supplied URL loads only after the sheet");
     decide(&b, cx, Answer::Once);
-    assert_eq!(answer(&rx).unwrap().0, false);
+    assert!(!answer(&rx).unwrap().0);
     assert_eq!(loads(&b, cx), ["https://evil.example/"]);
 
     // The tab is on evil.example now: the next act asks again.

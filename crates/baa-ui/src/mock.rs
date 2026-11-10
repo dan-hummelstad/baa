@@ -10,6 +10,8 @@ use gpui::{div, prelude::*, AnyElement, App, Entity, EventEmitter, FocusHandle, 
 
 pub type RuleSet = (ProfileId, Permission, String, Option<PermissionState>);
 
+type EvalDone = Callback<Result<serde_json::Value, String>>;
+
 pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
     /// The URL of each `create_page` a page or extension asked for (`user_initiated: false`).
@@ -76,7 +78,7 @@ pub struct MockPage {
     pub focus: FocusHandle,
     pub activations: Cell<u32>,
     /// Each `eval_value` with its `done`, for the test to answer.
-    pub evals: RefCell<Vec<(String, Callback<Result<serde_json::Value, String>>)>>,
+    pub evals: RefCell<Vec<(String, EvalDone)>>,
     pub screenshots: RefCell<Vec<Callback<Result<String, String>>>>,
     /// The other CDP-backed calls, in order: "click 1 2", "insert_text hi",
     /// "press_key Enter", "emulation Some(Phone)", "media Pause", "watch_console".

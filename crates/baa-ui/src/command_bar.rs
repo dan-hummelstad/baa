@@ -419,7 +419,7 @@ fn env_rows(query: &str, session: &Session, settings: &Settings) -> Vec<Row> {
     project
         .envs
         .iter()
-        .filter(|e| !std::ptr::eq(*e, here) && e.label.to_lowercase().starts_with(&want))
+        .filter(|e| !std::ptr::eq(*e, here) && e.label.to_lowercase().starts_with(want))
         .map(|e| row(Item::Env(e.label.clone()), format!("Switch to {}", e.label), format!("{} · {}", project.name, e.origin)))
         .collect()
 }
