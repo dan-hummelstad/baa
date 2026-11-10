@@ -36,9 +36,16 @@ jobs:
           fail() { echo "::error::$1. Take the release by hand: see 'Taking a Helium release' in PLAN-chromium.md (branch $B is not pushed)"; exit 1; }
           git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git "$HELIUM" --squash -m "chromium: vendor imputnet/helium $HELIUM (for $NEW)" \
             || fail "helium subtree pull conflicted"
-          git subtree pull --prefix chromium/helium-macos https://github.com/imputnet/helium-macos.git "$NEW" --squash -m "chromium: vendor imputnet/helium-macos $NEW" \
-            || fail "helium-macos subtree pull conflicted"
-          git rm -q --cached chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules 2>/dev/null || true
+          # helium-macos pins Helium as the helium-chromium submodule, which baa drops (Helium is the
+          # chromium/helium subtree). Each release moves that pin: a modify/delete conflict with
+          # nothing to decide. Any other conflict stops here.
+          SUB='chromium/helium-macos/(helium-chromium|\.gitmodules)'
+          if ! git subtree pull --prefix chromium/helium-macos https://github.com/imputnet/helium-macos.git "$NEW" --squash -m "chromium: vendor imputnet/helium-macos $NEW"; then
+            ! git diff --name-only --diff-filter=U | grep -qvxE "$SUB" || fail "helium-macos subtree pull conflicted"
+            git rm -q --cached --ignore-unmatch chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules
+            git commit -q --no-edit
+          fi
+          git rm -q --cached --ignore-unmatch chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules
           echo "$NEW" > chromium/HELIUM_RELEASE
           git add chromium/HELIUM_RELEASE
           git commit -q -m "chromium: Helium $NEW"
