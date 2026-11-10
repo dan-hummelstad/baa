@@ -25,6 +25,7 @@
 #include "base/values.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
@@ -110,6 +111,11 @@ class Session : public content::DevToolsAgentHostClient {
   // again by Chrome on every navigation.
   bool MayAttachToURL(const GURL& url, bool is_webui) override {
     return !is_webui && (url.is_empty() || url.SchemeIsHTTPOrHTTPS() || url.IsAboutBlank());
+  }
+  // Chrome asks this when the session attaches; MayAttachToURL only on later
+  // navigations, so a tab already on a Chrome page must be refused here.
+  bool MayAttachToRenderFrameHost(content::RenderFrameHost* frame) override {
+    return MayAttachToURL(frame->GetLastCommittedURL(), frame->GetWebUI() != nullptr);
   }
   // Not in Chrome's trust domain: no browser target, no other targets.
   bool IsTrusted() override { return false; }
