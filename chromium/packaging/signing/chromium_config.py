@@ -19,3 +19,10 @@ class ChromiumCodeSignConfig(BuildPropsCodeSignConfig):
         if os.environ.get('PROD_MACOS_SPECIAL_ENTITLEMENTS_PROFILE_PATH'):
             return 'Helium'
         return None
+
+    @property
+    def run_spctl_assess(self):
+        # security: Gatekeeper's assessment moves, it is not dropped. Here it runs
+        # before notarization and rejects every Developer ID app ("Unnotarized
+        # Developer ID"); release.yml runs spctl --assess on the stapled app instead.
+        return False

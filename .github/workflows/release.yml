@@ -124,6 +124,8 @@ jobs:
             # The signer adds the secure timestamp only with --notarize; it staples the app.
             # Path per Helium's sign_and_package_app.sh (out/Default/signed/stable/); check on the first run.
             APP=$(find target/bundle/signed -name baa.app -maxdepth 3 | head -1)
+            # The signer's own Gatekeeper check is off (it ran before notarization); this is it, on what ships.
+            spctl --assess -vv "$APP"
             SUFFIX=
           else
             # ponytail: ad-hoc signature, no hardened runtime, not notarised; users open it
