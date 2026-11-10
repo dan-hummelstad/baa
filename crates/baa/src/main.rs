@@ -92,16 +92,32 @@ fn main() {
 }
 
 /// Sparkle, which release engines carry, checks the appcast in Info.plist (SUFeedURL, set by
-/// xtask) daily and offers each signed update in its own window: download, install, relaunch.
-/// Dev engines have no Sparkle.
+/// xtask; hourly per SUScheduledCheckInterval), downloads a signed update in the background and
+/// installs it when baa quits, as Chrome does. Helium builds Sparkle without its UI, so the driver
+/// is the headless one. Dev engines have no Sparkle.
 fn start_updater() {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
-    let Some(class) = AnyClass::get(c"SPUStandardUpdaterController") else { return };
+    use objc2::{class, msg_send};
+    let (Some(updater), Some(driver)) = (AnyClass::get(c"SPUUpdater"), AnyClass::get(c"SPUHeadlessUserDriver")) else {
+        return;
+    };
     let none: *mut AnyObject = std::ptr::null_mut();
     // ponytail: never released; the updater lives as long as the app.
     unsafe {
-        let controller: *mut AnyObject = objc2::msg_send![class, alloc];
-        let _: *mut AnyObject = objc2::msg_send![controller, initWithStartingUpdater: Bool::YES, updaterDelegate: none, userDriverDelegate: none];
+        let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+        let driver: *mut AnyObject = msg_send![driver, alloc];
+        let driver: *mut AnyObject = msg_send![driver, init];
+        let updater: *mut AnyObject = msg_send![updater, alloc];
+        let updater: *mut AnyObject = msg_send![updater, initWithHostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: none];
+        let _: () = msg_send![updater, setAutomaticallyDownloadsUpdates: Bool::YES];
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let started: Bool = msg_send![updater, startUpdater: &mut error];
+        if !started.as_bool() {
+            let text: *mut AnyObject = if error.is_null() { none } else { msg_send![error, localizedDescription] };
+            let text: *const std::ffi::c_char = if text.is_null() { std::ptr::null() } else { msg_send![text, UTF8String] };
+            let text = if text.is_null() { "unknown error".into() } else { std::ffi::CStr::from_ptr(text).to_string_lossy() };
+            log::warn!("updates: Sparkle did not start: {text}");
+        }
     }
 }
 
