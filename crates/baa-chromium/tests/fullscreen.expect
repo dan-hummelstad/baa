@@ -1,6 +1,6 @@
 # fullscreen enters, exits through the app; find reports counts
 script: fullscreen.txt
-must: fullscreen tab=0 on=1
+must: fullscreen tab=0 on=true
 must: title="fs:true"
-must: fullscreen tab=0 on=0
+must: fullscreen tab=0 on=false
 must: find_result tab=0 active=1 count=1

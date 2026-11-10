@@ -5,8 +5,9 @@ sleep 3000
 answer last 1 u p
 sleep 3000
 state
-# the checkbox stays off, and never answer 1: it would launch Mail
-geval location.href='mailto:a@b.test'
+# the checkbox stays off, and never answer 1: it would launch FaceTime. Not mailto:
+# Chrome launches mailto without asking (ExternalProtocolHandler::GetBlockState).
+geval location.href='facetime:a@b.test'
 sleep 2000
 answer last 0
 sleep 1000

@@ -171,7 +171,8 @@ def run_test(spec, exe, keep):
         if spec.ext or spec.profile:
             env["BAA_SPIKE_PROFILE"] = spec.profile or "Default"
         # The mock keychain: no "baa Storage Key" prompt on a runner or after a rebuild.
-        args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain"]
+        args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
+                "--use-fake-device-for-media-stream"]  # runners have no camera; the prompt still shows
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
         if spec.cdp_after is not None:

@@ -1,4 +1,4 @@
 script: autocomplete.txt
 must: autocomplete id=1 .*example.com
-count: 0 autocomplete id=3
+# id=3 may answer before id=4 replaces it (history matches come back at once)
 count: 0 autocomplete id=4

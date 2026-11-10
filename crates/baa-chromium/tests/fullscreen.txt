@@ -10,3 +10,4 @@ fsexit
 sleep 1500
 find Example
 sleep 1500
+quit
