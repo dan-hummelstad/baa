@@ -85,6 +85,8 @@ impl<H: WebHost> Browser<H> {
             .child(
                 div()
                     .h(px(30.))
+                    // gpui clips children to the box, not to its rounded corners.
+                    .rounded_t(r(11.))
                     .flex()
                     .items_center()
                     .justify_center()
