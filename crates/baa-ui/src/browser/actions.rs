@@ -129,6 +129,8 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))
+        .on_action(cx.listener(|this, _: &ManageExtensions, window, cx| { this.open_own_page("baa://extensions", window, cx); }))
+        .on_action(cx.listener(|this, _: &KeyboardShortcuts, _, cx| this.open_settings_at(Some(crate::settings::Tab::Keyboard), None, cx)))
         .on_action(cx.listener(|this, _: &NewIncognitoSpace, window, cx| {
             this.new_incognito_space(window, cx)
         }))

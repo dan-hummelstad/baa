@@ -19,10 +19,11 @@ use baa_ui::{AgentPeer, Browser, LilBaa};
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    actions, point, px, size, Action, App, AppContext as _, Bounds, KeyBinding, Menu, MenuItem,
+    actions, point, px, size, Action, App, AppContext as _, Bounds, KeyBinding, MenuItem,
     TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
+mod menus;
 mod updater;
 
 actions!(baa_app, [Quit, DockNewTab, DockNewIncognito, DockShowLil, DockCloseLil]);
@@ -119,7 +120,7 @@ fn launch<H: WebHost>(
     baa_ui::load_user_keymap(dir.join("keymap.json"), cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-    cx.set_menus([Menu::new("baa").items([MenuItem::action("Quit baa", Quit)])]);
+    menus::set(cx);
     // ponytail: gpui does not read the OS reduce-motion flag and we do not
     // either yet; Settings.reduce_motion is the only switch.
 

@@ -52,6 +52,8 @@ gpui::actions!(
         CycleEnvironment,
         SplitView,
         ResponsiveView,
+        ManageExtensions,
+        KeyboardShortcuts,
     ]
 );
 
