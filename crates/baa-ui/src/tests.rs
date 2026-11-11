@@ -800,6 +800,21 @@ fn visits_are_remembered_and_searchable(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_window_frame_is_saved_once_a_resize_is_over(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    let (b, cx) = browser(cx);
+    let saved = |cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.store().unwrap().window_frame().unwrap());
+    cx.simulate_resize(size(px(900.), px(700.)));
+    cx.simulate_resize(size(px(1000.), px(640.)));
+    cx.run_until_parked();
+    assert_eq!(saved(cx), None, "not on every step of a drag");
+    cx.executor().advance_clock(crate::browser::FRAME_SETTLE);
+    cx.run_until_parked();
+    let frame = saved(cx).expect("saved once it stayed put");
+    assert_eq!(frame.frame[2..], [1000., 640.]);
+}
+
+#[gpui::test]
 fn downloads_show_in_the_header(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let list = b.read_with(cx, |b, _| b.host.downloads());

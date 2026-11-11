@@ -17,7 +17,7 @@ pub use settings::{
 };
 pub use live::{LiveItem, LiveSource};
 pub use settings::{Env, Project};
-pub use store::{ChatRecord, DownloadRecord, HistoryItem, Store};
+pub use store::{ChatRecord, DownloadRecord, HistoryItem, Store, WindowFrame};
 
 use serde::{Deserialize, Serialize};
 

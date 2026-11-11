@@ -178,6 +178,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) pipped: HashSet<TabId>,
     /// Copies of the URL so far, so only the latest one's check goes away.
     copies: u64,
+    /// Moves and resizes of the window so far, so only the last of a run is saved.
+    window_moves: u64,
     /// The command bar on its way out.
     pub(crate) closing_bar: Option<Bar>,
     /// Favicons by URL, fetched by the pages themselves.
@@ -324,6 +326,7 @@ impl<H: WebHost> Browser<H> {
             this.remember_downloads(&items);
             this.downloads_changed(items.len(), cx)
         });
+        cx.observe_window_bounds(window, Self::window_moved).detach();
         // Taken by whichever window sees them first.
         let chrome_tabs = cx.observe_in(&host.chrome_tabs(), window, |this: &mut Self, list, window, cx| {
             let urls = list.update(cx, |list, _| std::mem::take(&mut list.0));
@@ -376,6 +379,7 @@ impl<H: WebHost> Browser<H> {
             pipped: HashSet::new(),
             closing_bar: None,
             copies: 0,
+            window_moves: 0,
             favicons,
             extensions: Vec::new(),
             asks: HashMap::new(),
@@ -896,6 +900,31 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// The window moved or changed size: where it is now is saved for the next launch,
+    /// once, when a drag is over. Fullscreen saves the frame it will come back to.
+    fn window_moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::WindowBounds::{Fullscreen, Maximized, Windowed};
+        let (Windowed(b) | Maximized(b) | Fullscreen(b)) = window.window_bounds();
+        let frame = baa_model::WindowFrame {
+            display: window.display(cx).and_then(|d| d.uuid().ok()).map(|id| id.to_string()),
+            frame: [b.origin.x, b.origin.y, b.size.width, b.size.height].map(f32::from),
+        };
+        self.window_moves += 1;
+        let moves = self.window_moves;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FRAME_SETTLE).await;
+            let _ = this.update(cx, |this, _| {
+                if this.window_moves != moves {
+                    return;
+                }
+                if let Some(Err(e)) = this.store().map(|s| s.save_window_frame(&frame)) {
+                    log::error!("saving the window's frame: {e}");
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Copies the tab's URL; the header's link icon turns into a check for a moment.
     pub(crate) fn copy_url(&mut self, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab().and_then(|id| self.session.tab(id)) else {
@@ -1067,6 +1096,8 @@ pub(crate) fn drop_in<E: IntoElement + gpui::Styled + 'static>(el: E, id: &'stat
 
 /// How long the header shows the check after copying the URL.
 const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
+/// A moved or resized window is saved once it has stayed put this long.
+pub(crate) const FRAME_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The window's Space gradient, top to bottom.
 pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {

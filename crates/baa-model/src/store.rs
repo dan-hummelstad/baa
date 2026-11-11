@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use rusqlite::{types::Type, Connection, Error, OptionalExtension, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Session, Settings, SpaceId};
 
@@ -35,6 +35,15 @@ pub struct DownloadRecord {
 
 pub struct Store {
     conn: Connection,
+}
+
+/// The browser window as it was last left.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowFrame {
+    /// The display it was on (its UUID), if that could be read.
+    pub display: Option<String>,
+    /// x, y, width and height on that display, in points from its top left.
+    pub frame: [f32; 4],
 }
 
 impl Store {
@@ -98,6 +107,16 @@ impl Store {
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
         self.put("settings", settings)
+    }
+
+    /// Where the browser window was last left; nothing saved, or unreadable, is `None`.
+    pub fn window_frame(&self) -> Result<Option<WindowFrame>> {
+        Ok(self.get("window")?.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    /// The window's own state, not browsing: it is saved the same with an incognito Space open.
+    pub fn save_window_frame(&self, frame: &WindowFrame) -> Result<()> {
+        self.put("window", frame)
     }
 
     /// Favicons as PNG, by their URL, so restored tabs show theirs at launch.
@@ -282,6 +301,17 @@ pub struct ChatRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_frame_is_kept_and_a_broken_one_is_no_frame() {
+        let store = Store::open(":memory:").unwrap();
+        assert_eq!(store.window_frame().unwrap(), None);
+        let frame = WindowFrame { display: Some("d1".into()), frame: [40., 60., 1400., 900.] };
+        store.save_window_frame(&frame).unwrap();
+        assert_eq!(store.window_frame().unwrap(), Some(frame));
+        store.put("window", &"nonsense").unwrap();
+        assert_eq!(store.window_frame().unwrap(), None);
+    }
 
     #[test]
     fn downloads_are_kept_newest_first_and_one_per_file() {
