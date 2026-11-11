@@ -31,7 +31,7 @@ use self::{
     dispatch::{callbacks, Dispatch},
     ffi::{Core, Profile, TabId, TabState},
 };
-pub use self::{host::CoreWebHost, page::CorePage};
+pub use self::{host::CoreWebHost, native::{hide_window, window_shown}, page::CorePage};
 
 // objc2 looks classes up by name at run time; without this a test binary that
 // does not pull in gpui's backend has no NSView.

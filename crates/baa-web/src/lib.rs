@@ -9,8 +9,9 @@ use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 pub use baa_model::{Permission, PermissionState, ProfileId};
 #[cfg(target_os = "macos")]
 pub use core_host::{
-    chrome_argv,
+    chrome_argv, hide_window,
     profiles::{migrate_cef_profiles, purge_deleted_profiles, share_native_messaging_hosts},
+    window_shown,
     CorePage, CoreRuntime, CoreWebHost,
 };
 

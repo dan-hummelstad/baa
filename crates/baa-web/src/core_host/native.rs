@@ -69,6 +69,30 @@ pub fn gpui_view(window: &Window) -> *mut AnyObject {
     }
 }
 
+/// The window's NSWindow, or null.
+fn ns_window(window: &Window) -> *mut AnyObject {
+    let view = gpui_view(window);
+    if view.is_null() {
+        return view;
+    }
+    unsafe { msg_send![view, window] }
+}
+
+/// Takes the window off the screen without closing it: its pages and downloads go on.
+/// gpui's `activate_window` brings it back.
+pub fn hide_window(window: &Window) {
+    let ns_window = ns_window(window);
+    if !ns_window.is_null() {
+        let _: () = unsafe { msg_send![ns_window, orderOut: std::ptr::null_mut::<AnyObject>()] };
+    }
+}
+
+/// False once [`hide_window`] took it off the screen.
+pub fn window_shown(window: &Window) -> bool {
+    let ns_window = ns_window(window);
+    !ns_window.is_null() && unsafe { msg_send![ns_window, isVisible] }
+}
+
 /// gpui's `GPUIApplication` is NSApplication plus this ivar; BaaCore's NSApp
 /// class must carry it too (chromium/baa/app_mac.mm).
 pub fn nsapp_has_gpui_ivar() -> bool {

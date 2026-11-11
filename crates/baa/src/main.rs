@@ -14,13 +14,13 @@ use std::{
     sync::{atomic::{AtomicBool, Ordering}, Arc},
 };
 
-use baa_model::{Settings, Store};
+use baa_model::{Settings, Store, WindowFrame};
 use baa_ui::{AgentPeer, Browser, LilBaa};
-use baa_web::WebHost;
+use baa_web::{Download, DownloadState, Downloads, WebHost};
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    actions, point, px, size, Action, App, AppContext as _, Bounds, KeyBinding, MenuItem,
-    TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
+    actions, point, px, size, Action, AnyWindowHandle, App, AppContext as _, Bounds, DisplayId, Entity, KeyBinding,
+    MenuItem, Pixels, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
 mod menus;
@@ -84,6 +84,8 @@ fn main() {
             tx.unbounded_send(url).ok();
         }
     });
+    // A Dock click, or baa opened again, while no window shows.
+    app.on_reopen(show);
     app.run(move |cx| {
         let host = core.start(cx);
         let agent = Rc::new(RefCell::new(agent));
@@ -118,15 +120,17 @@ fn launch<H: WebHost>(
     baa_ui::init(cx);
     // Also tells the settings window where "Edit keymap.json…" goes.
     baa_ui::load_user_keymap(dir.join("keymap.json"), cx);
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| quit(cx));
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     menus::set(cx);
     // ponytail: gpui does not read the OS reduce-motion flag and we do not
     // either yet; Settings.reduce_motion is the only switch.
 
-    let bounds = Bounds::centered(None, size(px(1280.), px(860.)), cx);
+    let (display_id, bounds) = window_place(store.window_frame().ok().flatten(), cx);
+    let downloads = host.downloads();
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id,
         // The sidebar draws the toolbar; the traffic lights sit in it.
         titlebar: Some(TitlebarOptions {
             title: Some("baa".into()),
@@ -142,6 +146,28 @@ fn launch<H: WebHost>(
         .open_window(options, |window, cx| cx.new(|cx| Browser::new(host, store, window, cx)))
         .unwrap_or_else(|e| fail("opening the window", e));
     cx.activate(true);
+    cx.set_global(Background { window: window.into(), downloads: downloads.clone(), quitting: false });
+    window
+        .update(cx, |_, window, cx| {
+            // Closing the window is not quitting: baa stays in the Dock with its pages and
+            // downloads, and a click there brings the window back. A fullscreen window has
+            // its own desktop, which hiding the whole app leaves cleanly.
+            window.on_window_should_close(cx, |window, cx| {
+                if window.is_fullscreen() {
+                    cx.hide();
+                } else {
+                    baa_web::hide_window(window);
+                }
+                false
+            });
+        })
+        .ok();
+    cx.observe(&downloads, |_, cx| {
+        if cx.global::<Background>().quitting && !downloading(cx) && nothing_shows(cx) {
+            cx.quit();
+        }
+    })
+    .detach();
     // The settings window cannot outlive the browser window it belongs to.
     cx.on_window_closed(move |cx, _| {
         if window.update(cx, |_, _, _| ()).is_err() {
@@ -206,6 +232,7 @@ fn dock_menu<H: WebHost>(window: WindowHandle<Browser<H>>, cx: &mut App) {
     // A dock click usually comes while baa is inactive, so these arrive as
     // global actions and are re-sent into the browser window.
     fn to_browser<H: WebHost>(window: WindowHandle<Browser<H>>, action: impl Action, cx: &mut App) {
+        cx.global_mut::<Background>().quitting = false;
         cx.activate(true);
         window
             .update(cx, |_, window, cx| {
@@ -248,6 +275,96 @@ fn set_dock_menu<H: WebHost>(cx: &mut App) {
         MenuItem::action("Show lil-baa Windows", DockShowLil).disabled(none),
         MenuItem::action("Close lil-baa Windows", DockCloseLil).disabled(none),
     ]);
+}
+
+/// What goes on while no window shows. Closing the browser window only hides it, and a
+/// quit waits for the downloads under way: only a force quit cuts them off.
+struct Background {
+    window: AnyWindowHandle,
+    downloads: Entity<Downloads>,
+    /// ⌘Q came while files were coming in: baa quits when they are done, unless it is
+    /// opened again first.
+    quitting: bool,
+}
+
+impl gpui::Global for Background {}
+
+/// A file is coming in. One that Chrome holds back for Keep or Discard is not: it waits
+/// for the user, who has just left.
+fn downloading(cx: &App) -> bool {
+    coming_in(&cx.global::<Background>().downloads.read(cx).items)
+}
+
+fn coming_in(items: &[Download]) -> bool {
+    items.iter().any(|d| d.state == DownloadState::InProgress && d.danger.is_none())
+}
+
+fn nothing_shows(cx: &mut App) -> bool {
+    let main = cx.global::<Background>().window;
+    cx.windows().len() == 1 && !main.update(cx, |_, window, _| baa_web::window_shown(window)).unwrap_or(false)
+}
+
+/// ⌘Q and the menu's Quit. Downloads under way finish first: the windows go, baa stays in
+/// the Dock and quits when they are done.
+// ponytail: the Dock's own Quit, a logout and "Restart and Update" end baa at once; they
+// do not come through here. A download that stalls keeps baa running until it is opened
+// again and the download cancelled; give the wait a limit if that bites.
+fn quit(cx: &mut App) {
+    if !cx.has_global::<Background>() || !downloading(cx) {
+        return cx.quit();
+    }
+    cx.global_mut::<Background>().quitting = true;
+    let main = cx.global::<Background>().window;
+    for handle in cx.windows() {
+        handle
+            .update(cx, |_, window, _| {
+                if handle == main {
+                    baa_web::hide_window(window);
+                } else {
+                    window.remove_window();
+                }
+            })
+            .ok();
+    }
+}
+
+/// Brings the browser window back, and calls off a quit that was waiting.
+fn show(cx: &mut App) {
+    if !cx.has_global::<Background>() {
+        return;
+    }
+    cx.global_mut::<Background>().quitting = false;
+    let main = cx.global::<Background>().window;
+    cx.activate(true);
+    main.update(cx, |_, window, _| window.activate_window()).ok();
+}
+
+/// Where the window opens: as it was last left, on the display it was on (the main one
+/// if that is gone), or the usual size in the middle when nothing usable is saved.
+fn window_place(saved: Option<WindowFrame>, cx: &App) -> (Option<DisplayId>, Bounds<Pixels>) {
+    let usual = || (None, Bounds::centered(None, size(px(1280.), px(860.)), cx));
+    let Some(saved) = saved else { return usual() };
+    let named = |d: &Rc<dyn gpui::PlatformDisplay>| d.uuid().ok().map(|id| id.to_string()) == saved.display;
+    let display = cx.displays().into_iter().find(|d| saved.display.is_some() && named(d)).or_else(|| cx.primary_display());
+    let Some(display) = display else { return usual() };
+    let area = display.bounds().size;
+    if !frame_fits(saved.frame, (f32::from(area.width), f32::from(area.height))) {
+        return usual();
+    }
+    let [x, y, w, h] = saved.frame;
+    (Some(display.id()), Bounds::new(point(px(x), px(y)), size(px(w), px(h))))
+}
+
+/// The saved frame is a file's word: it is used only when it is a window that can be
+/// seen and taken hold of on a display of this size (its top edge on it, 100 points of
+/// its width).
+fn frame_fits([x, y, w, h]: [f32; 4], (display_w, display_h): (f32, f32)) -> bool {
+    [x, y, w, h].iter().all(|v| v.is_finite())
+        && (400. ..=20_000.).contains(&w)
+        && (300. ..=20_000.).contains(&h)
+        && x + w >= 100.
+        && x <= display_w - 100.
+        && (0. ..=display_h - 100.).contains(&y)
 }
 
 fn fail(what: &str, err: impl std::fmt::Display) -> ! {
@@ -444,5 +561,48 @@ impl AgentSocket {
             }
         });
         Some(stop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{coming_in, frame_fits};
+    use baa_web::{DangerKind, Download, DownloadState};
+
+    #[test]
+    fn a_quit_waits_only_for_files_that_are_coming_in() {
+        let download = |state, danger| Download {
+            id: 1,
+            url: "https://a.example/f.zip".into(),
+            path: "/tmp/f.zip".into(),
+            received_bytes: 5,
+            total_bytes: 10,
+            state,
+            ephemeral: false,
+            danger,
+        };
+        assert!(!coming_in(&[]));
+        assert!(coming_in(&[download(DownloadState::Complete, None), download(DownloadState::InProgress, None)]));
+        assert!(!coming_in(&[download(DownloadState::Complete, None), download(DownloadState::Canceled, None)]));
+        // Held back for Keep or Discard: nobody is there to answer, so it does not hold baa open.
+        assert!(!coming_in(&[download(DownloadState::InProgress, Some(DangerKind::Dangerous))]));
+    }
+
+    #[test]
+    fn a_saved_frame_is_used_only_where_it_can_be_seen() {
+        let display = (1512., 982.);
+        assert!(frame_fits([40., 60., 1400., 900.], display));
+        assert!(frame_fits([-300., 25., 800., 600.], display), "partly off the left edge is still in reach");
+        for bad in [
+            [f32::NAN, 0., 800., 600.],
+            [0., 0., 50., 600.],
+            [0., 0., 800., 1e9],
+            [3000., 60., 800., 600.],
+            [-900., 60., 800., 600.],
+            [40., -200., 800., 600.],
+            [40., 950., 800., 600.],
+        ] {
+            assert!(!frame_fits(bad, display), "{bad:?}");
+        }
     }
 }
