@@ -235,6 +235,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) input_focus: FocusHandle,
     pub(crate) sidebar_open: bool,
     pub(crate) sidebar_w: Spring,
+    /// An update is downloaded and waits for a restart (`update.rs`).
+    pub(crate) update_ready: bool,
     /// The hover card's width, so opening the Library in it grows rather than jumps.
     reveal_w: Spring,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
@@ -314,10 +316,12 @@ impl<H: WebHost> Browser<H> {
                 }
             }
         });
-        let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();        let mut this = Self {
+        let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
+        let sidebar_open = !session.sidebar_collapsed;        let mut this = Self {
             host,
             store,
-            shown_space: session.active_space(),
+            // None, so the first sync puts the dots' pill on the Space the session opens in.
+            shown_space: None,
             session,
             settings,
             pages: HashMap::new(),
@@ -388,8 +392,9 @@ impl<H: WebHost> Browser<H> {
             window: window.window_handle(),
             focus,
             input_focus: cx.focus_handle(),
-            sidebar_open: true,
-            sidebar_w: Spring::new(SIDEBAR_WIDTH),
+            sidebar_open,
+            sidebar_w: Spring::new(if sidebar_open { SIDEBAR_WIDTH } else { 0. }),
+            update_ready: false,
             reveal_w: Spring::new(SIDEBAR_WIDTH),
             reveal: Spring::quick(0.0),
             reveal_hover: false,
@@ -418,8 +423,10 @@ impl<H: WebHost> Browser<H> {
             this.update(cx, |this, cx| this.share_extensions(cx)).ok();
         })
         .detach();
-        // Launch shows the Space's colour, not a crossfade from the placeholder.
+        // Launch shows the Space's colour, not a crossfade from the placeholder, and its
+        // sidebar in place, not sliding in.
         this.fade.snap(1.0);
+        this.slide.snap(0.0);
         this
     }
 

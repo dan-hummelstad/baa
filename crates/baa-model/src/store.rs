@@ -390,6 +390,7 @@ mod tests {
         s.space_mut(work).unwrap().sidebar_side = Some(SidebarSide::Right);
         let incog = s.add_ephemeral_space("Incognito", ProfileId(u64::MAX));
         s.open_tab(incog, "https://secret", 14);
+        s.sidebar_collapsed = true;
 
         let store = Store::init(Connection::open_in_memory().unwrap()).unwrap();
         store.save_session(&s).unwrap();
@@ -404,6 +405,7 @@ mod tests {
         assert_eq!(back.archived(), s.archived());
         assert_eq!(back.active_space(), Some(sp), "incognito was active, so the first Space opens");
         assert!(back.tabs.iter().all(|t| t.space != incog));
+        assert!(back.sidebar_collapsed, "the window's own state is kept, incognito or not");
         assert_eq!(back.last_id, s.last_id);
     }
 

@@ -467,7 +467,25 @@ impl<H: WebHost> SettingsView<H> {
                 )
                 .into_any_element(),
         };
+        // None: a build with no updater (a dev engine).
+        let automatic = cx.try_global::<crate::Updater>().map(|u| (u.automatic)());
+        let version = env!("CARGO_PKG_VERSION");
+        let updates = match automatic {
+            Some(_) => format!("This is baa {version}. A new version downloads by itself and installs when you quit."),
+            None => format!("This is baa {version}. This build does not update itself."),
+        };
+        let update_switch = self
+            .switch("pref-auto-update", automatic == Some(true))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let (Some(on), Some(updater)) = (automatic, cx.try_global::<crate::Updater>()) else { return };
+                (updater.set_automatic)(!on);
+                this.motion.from(("pref-auto-update", 0), crate::motion::Feel::Glide, on as u8 as f32, !on as u8 as f32);
+                cx.notify();
+            }))
+            .into_any_element();
         vec![
+            self.section("Updates"),
+            self.row("auto_update", &updates, update_switch),
             self.section("Performance"),
             self.row("hw_accel", "Applies when baa restarts.", self.toggle("pref-hw", s.web.hardware_acceleration, |s, v| s.web.hardware_acceleration = v, cx)),
             self.row("memory_saver", "Frees memory from tabs you have not used for a while.", self.toggle("pref-memory", s.web.memory_saver, |s, v| s.web.memory_saver = v, cx)),

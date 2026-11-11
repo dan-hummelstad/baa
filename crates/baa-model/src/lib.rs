@@ -155,6 +155,9 @@ pub struct Session {
     #[serde(skip)]
     closed: Vec<(Tab, usize)>,
     active_space: Option<SpaceId>,
+    /// The sidebar is collapsed (it comes out on hover) rather than docked. The window's
+    /// own state, not browsing: it is saved whichever Space it was changed in.
+    pub sidebar_collapsed: bool,
     last_id: u64,
 }
 

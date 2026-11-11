@@ -15,6 +15,8 @@ impl<H: WebHost> Browser<H> {
         }))
         .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
             this.sidebar_open = !this.sidebar_open;
+            this.session.sidebar_collapsed = !this.sidebar_open;
+            this.save();
             this.sidebar_w.set_target(if this.docked() {
                 this.sidebar_width()
             } else {

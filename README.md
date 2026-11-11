@@ -158,6 +158,7 @@ Useful environment variables when running the bundle:
 | `BAA_DATA_DIR=<dir>` | use a separate data directory (a clean profile for tests) |
 | `BAA_ENGINE=<dir>` | engine directory for `cargo bundle` |
 | `BAA_SIGN_IDENTITY=<name>` | `cargo bundle` signing identity (`-` is ad hoc) |
+| `BAA_SHOW_UPDATE_CARD=1` | show the sidebar's "New baa Version Available" card with no update (its button does nothing without Sparkle) |
 | `RUST_LOG=info` | shell log on stderr |
 
 App data lives in `~/Library/Application Support/baa`: `baa.db` (session + settings),

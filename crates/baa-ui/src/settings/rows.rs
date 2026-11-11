@@ -167,6 +167,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Claude, "claude_evaluate", "Allow evaluate", "javascript run script"),
     row(Claude, "claude_path", "claude path", "binary cli install"),
     row(Claude, "claude_terminal", "Use from Claude Code in Terminal", "mcp add command copy"),
+    row(System, "auto_update", "Automatic updates", "update version new release about"),
     row(System, "hw_accel", "Graphics acceleration", "gpu hardware"),
     row(System, "memory_saver", "Memory saver", "discard tabs performance"),
     row(System, "reset", "Reset settings…", "defaults restore"),

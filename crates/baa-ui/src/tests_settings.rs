@@ -574,6 +574,32 @@ fn the_claude_switch_goes_through_the_browser(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_updates_row_switches_the_updater_and_does_nothing_without_one(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    h.update(&mut s, |v, _, cx| v.select_tab(Tab::System, cx)).unwrap();
+    click(&mut s, "pref-auto-update"); // a dev build: no updater to switch
+
+    let automatic = Rc::new(Cell::new(true));
+    let (get, set) = (automatic.clone(), automatic.clone());
+    h.update(&mut s, |_, _, cx| {
+        cx.set_global(crate::Updater {
+            automatic: Box::new(move || get.get()),
+            set_automatic: Box::new(move |on| set.set(on)),
+            install: Box::new(|| panic!("the row never installs")),
+        });
+        cx.notify();
+    })
+    .unwrap();
+    click(&mut s, "pref-auto-update");
+    assert!(!automatic.get());
+    click(&mut s, "pref-auto-update");
+    assert!(automatic.get());
+}
+
+#[gpui::test]
 fn baas_own_appearance_turns_auto_spaces_and_chrome_pages_dark_and_leaves_websites(cx: &mut TestAppContext) {
     let (b, vcx) = browser(cx);
     let h = open_settings(&b, vcx);

@@ -24,3 +24,5 @@ futures = "0.3"
 libc = "0.2"
 # Already in the graph via baa-web: starting Sparkle's updater.
 objc2 = "0.6"
+# Already in the graph via gpui: the block Sparkle hands over to install an update now.
+block2 = "0.6"

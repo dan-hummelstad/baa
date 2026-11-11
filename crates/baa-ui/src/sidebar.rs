@@ -245,6 +245,7 @@ impl<H: WebHost> Browser<H> {
             .child(lists)
             .children(self.render_mini_player(theme, cx))
             .children(self.render_agent_strip(theme, cx))
+            .children(self.render_update_card(theme, cx))
             .child(self.render_bottom_bar(space, theme, cx))
             .into_any_element()
     }

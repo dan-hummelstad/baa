@@ -21,6 +21,7 @@ mod sidebar;
 mod start;
 mod theme;
 mod tools;
+mod update;
 
 #[cfg(test)]
 mod mock;
@@ -42,6 +43,7 @@ pub use browser::Browser;
 pub use lil_baa::LilBaa;
 pub use icons::Assets;
 pub use settings::KeymapPath;
+pub use update::Updater;
 
 /// Registers the platform default keymap (§8). Call once at startup, then
 /// `actions::bind_keymap` with the user's `keymap.json` so it overrides.

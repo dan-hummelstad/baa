@@ -23,6 +23,8 @@ use gpui::{
     TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
+mod updater;
+
 actions!(baa_app, [Quit, DockNewTab, DockNewIncognito, DockShowLil, DockCloseLil]);
 
 /// BaaCore: Chromium's own main runs inside gpui's `[NSApp run]`, so the
@@ -83,42 +85,11 @@ fn main() {
     });
     app.run(move |cx| {
         let host = core.start(cx);
-        start_updater();
         let agent = Rc::new(RefCell::new(agent));
         cx.set_global(baa_ui::AgentSwitch(Box::new(move |on| agent.borrow_mut().set(on))));
         launch(host, store, settings, dir, rx, agent_rx, cx);
     });
     std::process::exit(core.exit_code());
-}
-
-/// Sparkle, which release engines carry, checks the appcast in Info.plist (SUFeedURL, set by
-/// xtask; hourly per SUScheduledCheckInterval), downloads a signed update in the background and
-/// installs it when baa quits, as Chrome does. Helium builds Sparkle without its UI, so the driver
-/// is the headless one. Dev engines have no Sparkle.
-fn start_updater() {
-    use objc2::runtime::{AnyClass, AnyObject, Bool};
-    use objc2::{class, msg_send};
-    let (Some(updater), Some(driver)) = (AnyClass::get(c"SPUUpdater"), AnyClass::get(c"SPUHeadlessUserDriver")) else {
-        return;
-    };
-    let none: *mut AnyObject = std::ptr::null_mut();
-    // ponytail: never released; the updater lives as long as the app.
-    unsafe {
-        let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
-        let driver: *mut AnyObject = msg_send![driver, alloc];
-        let driver: *mut AnyObject = msg_send![driver, init];
-        let updater: *mut AnyObject = msg_send![updater, alloc];
-        let updater: *mut AnyObject = msg_send![updater, initWithHostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: none];
-        let _: () = msg_send![updater, setAutomaticallyDownloadsUpdates: Bool::YES];
-        let mut error: *mut AnyObject = std::ptr::null_mut();
-        let started: Bool = msg_send![updater, startUpdater: &mut error];
-        if !started.as_bool() {
-            let text: *mut AnyObject = if error.is_null() { none } else { msg_send![error, localizedDescription] };
-            let text: *const std::ffi::c_char = if text.is_null() { std::ptr::null() } else { msg_send![text, UTF8String] };
-            let text = if text.is_null() { "unknown error".into() } else { std::ffi::CStr::from_ptr(text).to_string_lossy() };
-            log::warn!("updates: Sparkle did not start: {text}");
-        }
-    }
 }
 
 /// A running instance holds the lock; a second launch hands its URLs to it
@@ -179,6 +150,29 @@ fn launch<H: WebHost>(
     })
     .detach();
     dock_menu(window, cx);
+
+    // To look at the sidebar's update card: otherwise it shows only once an update is downloaded.
+    if std::env::var_os("BAA_SHOW_UPDATE_CARD").is_some() {
+        window.update(cx, |browser, _, cx| browser.update_ready(cx)).ok();
+    }
+    if let Some(updater::Started { ui, mut ready, mut install }) = updater::start() {
+        cx.set_global(ui);
+        cx.spawn(async move |cx| {
+            while ready.next().await.is_some() {
+                if window.update(cx, |browser, _, cx| browser.update_ready(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // Here, between gpui's updates: installing quits the app.
+        cx.spawn(async move |_| {
+            while install.next().await.is_some() {
+                updater::install();
+            }
+        })
+        .detach();
+    }
 
     cx.spawn(async move |cx| {
         while let Some(peer) = agent_rx.next().await {

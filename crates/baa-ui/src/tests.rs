@@ -283,6 +283,75 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_sidebar_comes_back_as_it_was_left(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("baa-ui-sidebar-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    cx.update(crate::init);
+    let open = |cx: &mut TestAppContext| {
+        let path = path.clone();
+        cx.add_window_view(move |window, cx| Browser::new(MockHost::new(cx), Store::open(path).unwrap(), window, cx)).0
+    };
+    let first = open(cx);
+    let vcx = &mut VisualTestContext::from_window(*cx.windows().last().unwrap(), cx);
+    vcx.dispatch_action(NewSpace);
+    vcx.simulate_keystrokes("enter");
+    vcx.dispatch_action(ToggleSidebar);
+    vcx.run_until_parked();
+    let left = first.read_with(vcx, |b, _| {
+        assert_eq!(b.session().spaces().len(), 2);
+        assert!(!b.sidebar_open);
+        b.session().active_space()
+    });
+    assert_eq!(left, first.read_with(vcx, |b, _| b.session().spaces().last().map(|s| s.id)), "the new Space is the one shown");
+    drop(first);
+
+    let second = open(cx);
+    second.read_with(cx, |b, _| {
+        assert_eq!(b.session().active_space(), left, "the Space that was shown");
+        use crate::motion::Feel;
+        let (pill, sel) = (("space-pill", 0), ("space-sel", left.unwrap().0));
+        assert_eq!(b.motion.target(pill, Feel::Glide), Some(crate::browser::SPACE_DOT), "the dots' pill sits on it, the second dot");
+        assert_eq!(b.motion.target(sel, Feel::Glide), Some(1.), "and its dot is the lit one");
+        assert_eq!(b.slide.value(), 0., "nothing slides in at launch");
+        assert!(!b.sidebar_open && !b.docked() && b.sidebar_w.target() == 0., "and the sidebar still collapsed");
+    });
+    let _ = std::fs::remove_file(&path);
+}
+
+#[gpui::test]
+fn an_update_card_shows_once_one_is_ready_and_drives_the_updater(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+    let (b, cx) = browser(cx);
+    let (automatic, installs) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(0)));
+    cx.update(|_, cx| {
+        let (get, set, count) = (automatic.clone(), automatic.clone(), installs.clone());
+        cx.set_global(crate::Updater {
+            automatic: Box::new(move || get.get()),
+            set_automatic: Box::new(move |on| set.set(on)),
+            install: Box::new(move || count.set(count.get() + 1)),
+        });
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("update-card").is_none(), "nothing to show until an update is downloaded");
+
+    b.update(cx, |b, cx| b.update_ready(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("update-card").is_some());
+    let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        let at = cx.debug_bounds(selector).unwrap_or_else(|| panic!("nothing is drawn as {selector}")).center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx, "update-automatic");
+    assert!(!automatic.get(), "the checkbox turns the updater's own checks off");
+    click(cx, "update-automatic");
+    assert!(automatic.get(), "and on again");
+    assert_eq!(installs.get(), 0);
+    click(cx, "update-install");
+    assert_eq!(installs.get(), 1);
+}
+
+#[gpui::test]
 fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
     use gpui::{point, px, Modifiers};
     let (b, cx) = browser(cx);
