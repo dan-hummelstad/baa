@@ -318,6 +318,8 @@ impl WebHost for CoreWebHost {
     }
 
     fn apply_settings(&self, settings: &baa_model::Settings) {
+        // Reduce motion: Chrome's own swipe, an arrow that fills, instead of baa's sliding sheet.
+        (self.core.set_swipe_sheet)(!settings.reduce_motion);
         let new = settings::writes(settings);
         let old = self.applied.replace(Some(new.clone())).unwrap_or_default();
         for write in new.local.iter().filter(|w| !old.local.contains(w)) {

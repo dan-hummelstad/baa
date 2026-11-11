@@ -170,6 +170,9 @@ extern "C" fn pref_clear(profile: *mut Profile, name: *const c_char) -> bool {
 extern "C" fn is_default_browser() -> bool {
     DEFAULT_BROWSER.with(Cell::get)
 }
+extern "C" fn set_swipe_sheet(on: bool) {
+    log(format!("set_swipe_sheet {on}"));
+}
 extern "C" fn set_default_browser() {
     log("set_default_browser".into());
 }
@@ -276,6 +279,7 @@ fn fake_core() -> &'static Core {
         pref_clear,
         is_default_browser,
         set_default_browser,
+        set_swipe_sheet,
         profile_set_color_schemes,
         profile_set_default_zoom,
         profile_set_search_engine,

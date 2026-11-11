@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 12
+#define BAA_ABI_VERSION 13
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -406,6 +406,10 @@ BAA_EXPORT bool baa_pref_clear(BaaProfile* profile, const char* name);
 // to make it so (the system confirms with its own dialog; there is no result).
 BAA_EXPORT bool baa_is_default_browser(void);
 BAA_EXPORT void baa_set_default_browser(void);
+
+// Whether baa draws two-finger history swipes (BaaCallbacks.swipe) or Chrome
+// shows its own arrow overlay. On until set; a swipe under way keeps its kind.
+BAA_EXPORT void baa_set_swipe_sheet(bool on);
 
 // The default zoom of the profile's pages; `factor` 1.0 is 100%. Pages that
 // have their own zoom (baa_tab_set_zoom) keep it. An ephemeral profile uses

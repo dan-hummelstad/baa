@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 12;
+pub const ABI_VERSION: c_int = 13;
 
 #[repr(C)]
 pub struct Profile {
@@ -273,6 +273,8 @@ pub struct Core {
     pub pref_clear: extern "C" fn(*mut Profile, *const c_char) -> bool,
     pub is_default_browser: extern "C" fn() -> bool,
     pub set_default_browser: extern "C" fn(),
+    /// baa draws history swipes (true) or Chrome its arrow overlay.
+    pub set_swipe_sheet: extern "C" fn(bool),
     /// prefers-color-scheme (0 system, 1 light, 2 dark) of the profile's websites and of its Chrome pages.
     pub profile_set_color_schemes: extern "C" fn(*mut Profile, c_int, c_int),
     pub profile_set_default_zoom: extern "C" fn(*mut Profile, f64),
@@ -374,6 +376,7 @@ pub fn load() -> &'static Core {
             pref_clear,
             is_default_browser,
             set_default_browser,
+            set_swipe_sheet,
             profile_set_color_schemes,
             profile_set_default_zoom,
             profile_set_search_engine,

@@ -219,3 +219,11 @@ fn default_browser_asks_and_sets_through_the_core(cx: &mut TestAppContext) {
     env.host.make_default_browser();
     assert_eq!(calls("set_default_browser"), ["set_default_browser"]);
 }
+
+#[gpui::test]
+fn reduce_motion_hands_history_swipes_back_to_chrome(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    env.host.apply_settings(&baa_model::Settings { reduce_motion: true, ..Default::default() });
+    env.host.apply_settings(&baa_model::Settings::default());
+    assert_eq!(calls("set_swipe_sheet"), ["set_swipe_sheet false", "set_swipe_sheet true"]);
+}

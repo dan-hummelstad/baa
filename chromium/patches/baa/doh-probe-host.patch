@@ -1,0 +1,13 @@
+--- a/net/dns/dns_transaction.h
++++ b/net/dns/dns_transaction.h
+@@ -29,7 +29,9 @@
+ class ResolveContext;
+ 
+ // The hostname probed by CreateDohProbeRunner().
+-inline constexpr std::string_view kDohProbeHostname = "www.gstatic.com";
++// baa: not Google's. Domain substitution turns www.gstatic.com into a name that
++// never resolves, so every probe failed (and DCHECKed in debug builds).
++inline constexpr std::string_view kDohProbeHostname = "example.com";
+ 
+ // DnsTransaction implements a stub DNS resolver as defined in RFC 1034.
+ // The DnsTransaction takes care of retransmissions, name server fallback (or

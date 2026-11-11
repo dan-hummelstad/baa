@@ -8,7 +8,7 @@
  #import "chrome/browser/ui/cocoa/history_overlay_controller.h"
  #include "third_party/blink/public/common/input/web_gesture_event.h"
  #include "ui/events/blink/did_overscroll_params.h"
-@@ -94,8 +95,13 @@
+@@ -94,7 +95,12 @@
  // the event was consumed or NO if it should be passed on to the renderer.
  - (BOOL)handleMagicMouseWheelEvent:(NSEvent*)theEvent;
  
@@ -16,12 +16,11 @@
 +- (void)baaTrackSwipe:(BOOL)forward event:(NSEvent*)event;
 +
  @end
- 
-+BaaHistorySwipeFn g_baa_history_swipe = nullptr;
 +
++BaaHistorySwipeFn g_baa_history_swipe = nullptr;
+ 
  @implementation HistorySwiper {
    // This controller will exist if and only if the UI is in history swipe mode.
-   HistoryOverlayController* __strong _historyOverlay;
 @@ -454,6 +460,10 @@
  
  - (void)initiateMagicMouseHistorySwipe:(BOOL)isRightScroll
@@ -33,7 +32,7 @@
    // Released by the tracking handler once the gesture is complete.
    __block HistoryOverlayController* historyOverlay =
        [[HistoryOverlayController alloc]
-@@ -523,6 +533,40 @@
+@@ -523,6 +533,42 @@
                          historyOverlay = nil;
                        }
                      }];
@@ -45,6 +44,8 @@
 +- (void)baaTrackSwipe:(BOOL)forward event:(NSEvent*)event {
 +  NSView* view = [self.delegate viewThatWantsHistoryOverlay];
 +  void* key = (__bridge void*)view;
++  // The hook as the swipe began: //baa may unset it meanwhile (reduce motion).
++  BaaHistorySwipeFn hook = g_baa_history_swipe;
 +  __block BOOL committed = NO;
 +  [event trackSwipeEventWithOptions:NSEventSwipeTrackingLockDirection
 +           dampenAmountThresholdMin:-1
@@ -56,12 +57,12 @@
 +                         }
 +                         double amount = std::abs(gestureAmount);
 +                         if (!isComplete) {
-+                           g_baa_history_swipe(
++                           hook(
 +                               key, phase == NSEventPhaseBegan ? 0 : 1,
 +                               forward, amount);
 +                           return;
 +                         }
-+                         g_baa_history_swipe(key, committed ? 2 : 3, forward,
++                         hook(key, committed ? 2 : 3, forward,
 +                                             committed ? 1.0 : 0.0);
 +                         if (committed) {
 +                           [self.delegate
@@ -74,7 +75,7 @@
  }
  
  - (BOOL)handleScrollWheelEvent:(NSEvent*)theEvent {
-@@ -578,7 +622,7 @@
+@@ -578,7 +624,7 @@
    // At this point, if there is a gesture phase but no touches, then this scroll
    // event is coming from a Magic Mouse, and usage of an alternative swipe
    // tracking API is required.

@@ -72,6 +72,9 @@ void OnSwipe(void* view, int phase, bool forward, double amount) {
   std::vector<uint8_t> pixels;
   int width = 0, height = 0;
   if (phase == BAA_SWIPE_BEGAN) {
+    // The page as the swipe leaves it, for a swipe back to it. The copy made when the
+    // navigation starts often fails: a back/forward cache restore swaps the page out first.
+    KeepPicture(contents);
     if (auto* entry = contents->GetController().GetEntryAtOffset(forward ? 1 : -1)) {
       for (const Picture& p : Pictures()) {
         if (p.contents != Key(contents) || p.entry != entry->GetUniqueID()) {
@@ -95,6 +98,8 @@ void OnSwipe(void* view, int phase, bool forward, double amount) {
                     pixels.empty() ? nullptr : pixels.data(), width, height);
 }
 
+bool g_sheet = true;
+
 }  // namespace
 
 void KeepPicture(content::WebContents* contents) {
@@ -114,7 +119,12 @@ void ForgetPictures(content::WebContents* contents) {
 }
 
 void InstallSwipeHook() {
-  g_baa_history_swipe = &OnSwipe;
+  g_baa_history_swipe = g_sheet ? &OnSwipe : nullptr;
 }
 
 }  // namespace baa
+
+void baa_set_swipe_sheet(bool on) {
+  baa::g_sheet = on;
+  baa::InstallSwipeHook();
+}
