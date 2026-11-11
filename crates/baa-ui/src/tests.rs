@@ -142,43 +142,6 @@ fn spaces_isolate_profiles_and_delete_cleanly(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn incognito_space_uses_ephemeral_profile(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    cx.dispatch_action(NewIncognitoSpace);
-    cx.simulate_input("x.example");
-    cx.simulate_keystrokes("enter");
-    b.read_with(cx, |b, _| {
-        let space = b.active_space().unwrap();
-        assert!(space.ephemeral);
-        assert_eq!(b.host.created.borrow()[0].0, b.host.ephemeral_profile());
-        assert!(!b.dark && crate::theme::to_oklch(b.gradient_to.2)[0] < 0.35, "Incognito keeps its dark in baa's light look");
-    });
-}
-
-#[gpui::test]
-fn incognito_favicons_stay_out_of_the_store(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    let saved = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| {
-        b.read_with(cx, |b, _| b.store().unwrap().load_favicons().unwrap().into_iter().map(|(u, _)| u).collect::<Vec<_>>())
-    };
-    let icon = |url: &str| PageEvent::FaviconImage { url: url.into(), png: vec![1, 2, 3].into() };
-    let page = open_page(&b, "a.example", cx);
-    page.update(cx, |_, cx| cx.emit(icon("https://a.example/favicon.ico")));
-    cx.run_until_parked();
-    assert_eq!(saved(&b, cx), ["https://a.example/favicon.ico"]);
-
-    cx.dispatch_action(NewIncognitoSpace);
-    cx.simulate_input("x.example");
-    cx.simulate_keystrokes("enter");
-    b.read_with(cx, |b, _| assert!(b.active_space().unwrap().ephemeral));
-    let page = b.read_with(cx, |b, _| b.pages.get(&b.active_tab().unwrap()).unwrap().0.clone());
-    page.update(cx, |_, cx| cx.emit(icon("https://x.example/favicon.ico")));
-    cx.run_until_parked();
-    assert_eq!(saved(&b, cx), ["https://a.example/favicon.ico"], "an incognito icon is never written");
-    b.read_with(cx, |b, _| assert!(b.favicons.contains_key("https://x.example/favicon.ico"), "but it still shows"));
-}
-
-#[gpui::test]
 fn zoom_steps_the_ladder_per_tab(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     for host in ["a.example", "b.example"] {
@@ -261,6 +224,8 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
         vcx.simulate_keystrokes("enter");
     }
     drop(first);
+    vcx.update(|window, _| window.remove_window());
+    vcx.run_until_parked();
 
     let second = open(cx);
     second.read_with(cx, |b, _| {

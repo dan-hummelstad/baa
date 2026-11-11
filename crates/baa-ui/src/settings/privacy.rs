@@ -430,7 +430,7 @@ impl<H: WebHost> SettingsView<H> {
                 },
                 cx,
             ))
-            .child(div().text_size(px(11.5)).text_color(surface::muted()).child("Incognito Spaces keep nothing, so they are left out."))
+            .child(div().text_size(px(11.5)).text_color(surface::muted()).child("Incognito windows keep nothing, so they are left out."))
             .child(
                 div()
                     .mt(px(6.))

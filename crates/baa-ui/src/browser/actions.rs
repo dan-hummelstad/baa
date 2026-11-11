@@ -128,8 +128,16 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))
         .on_action(cx.listener(|this, _: &ManageExtensions, window, cx| { this.open_own_page("baa://extensions", window, cx); }))
         .on_action(cx.listener(|this, _: &KeyboardShortcuts, _, cx| this.open_settings_at(Some(crate::settings::Tab::Keyboard), None, cx)))
-        .on_action(cx.listener(|this, _: &NewIncognitoSpace, window, cx| {
-            this.new_incognito_space(window, cx)
+        .on_action(cx.listener(|this, _: &NewWindow, window, cx| {
+            // In the chat, ⌘N is a new chat (bindings run before the panel sees the key).
+            if this.agent.panel.focused(window, cx) {
+                this.new_chat(cx)
+            } else {
+                this.open_window_later(false, cx)
+            }
+        }))
+        .on_action(cx.listener(|this, _: &NewIncognitoWindow, _, cx| {
+            this.open_window_later(true, cx)
         }))
     }
 }

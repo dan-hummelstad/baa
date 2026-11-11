@@ -372,8 +372,8 @@ impl<H: WebHost> SettingsView<H> {
                 .flex()
                 .gap(px(8.))
                 .child(self.button("space-new", "New Space", false, cx).on_click(cx.listener(|this, _, _, cx| this.in_browser(cx, true, |b, w, cx| b.new_space(w, cx)))))
-                .child(self.button("space-new-incognito", "New Incognito Space", false, cx).on_click(cx.listener(|this, _, _, cx| {
-                    this.in_browser(cx, true, |b, w, cx| b.new_incognito_space(w, cx))
+                .child(self.button("space-new-incognito", "New Incognito Window", false, cx).on_click(cx.listener(|this, _, _, cx| {
+                    this.in_browser(cx, true, |b, _, cx| b.open_window_later(true, cx))
                 })))
                 .into_any_element(),
         ));
@@ -542,7 +542,8 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Zoom in", Box::new(ZoomIn)),
         ("Zoom out", Box::new(ZoomOut)),
         ("Actual size", Box::new(ZoomReset)),
-        ("New incognito Space", Box::new(NewIncognitoSpace)),
+        ("New window", Box::new(NewWindow)),
+        ("New incognito window", Box::new(NewIncognitoWindow)),
         ("Open peek in a tab", Box::new(ExpandPeek)),
         ("Copy URL", Box::new(CopyUrl)),
         ("Print", Box::new(Print)),

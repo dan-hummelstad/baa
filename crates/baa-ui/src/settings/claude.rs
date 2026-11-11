@@ -22,7 +22,7 @@ impl<H: WebHost> SettingsView<H> {
             self.section("Claude"),
             self.row("claude_enabled", "Claude Code, in the panel (⌘J) or in a terminal, can read your tabs in the Spaces below. Acting on a site asks you first.", enabled),
             self.section("Access"),
-            self.row("claude_spaces", "Incognito Spaces are never visible.", div().into_any_element()),
+            self.row("claude_spaces", "Incognito windows are never visible.", div().into_any_element()),
         ];
         let spaces: Vec<_> = self.browser.read(cx).session.spaces().iter().filter(|s| !s.ephemeral).map(|s| (s.id, format!("{} {}", s.icon, s.name))).collect();
         for (id, name) in spaces {

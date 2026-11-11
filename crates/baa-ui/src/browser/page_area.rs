@@ -46,8 +46,11 @@ impl<H: WebHost> Browser<H> {
                 page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
             }
         }
+        // A tab with no page here because it is in another window.
+        let elsewhere = self.active_tab().filter(|id| page.is_none() && self.holder(*id, cx).is_some());
         let content = match page {
             Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
+            None if elsewhere.is_some() => self.render_elsewhere(elsewhere.unwrap(), theme, cx),
             None => {
                 let this = cx.entity().downgrade();
                 let open: crate::start::OpenTab = std::rc::Rc::new(move |id, window, cx| {
@@ -316,6 +319,7 @@ impl<H: WebHost> Browser<H> {
                         page.read(cx).set_square_corners(inner(i));
                         page.update(cx, |p, cx| p.render(window, cx))
                     }
+                    None if self.holder(*id, cx).is_some() => self.render_elsewhere(*id, theme, cx),
                     None => div().into_any_element(),
                 },
             };

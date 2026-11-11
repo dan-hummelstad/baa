@@ -86,7 +86,9 @@ fn the_dev_servers_folder_goes_in_a_saved_space_never_an_incognito_one(cx: &mut 
         })
     };
     b.update_in(cx, |b, window, cx| {
-        b.new_incognito_space(window, cx);
+        // An incognito Space beside saved ones, as a session from before incognito windows had.
+        let id = b.session.add_ephemeral_space("Incognito", baa_web::WebHost::ephemeral_profile(&*b.host));
+        b.activate_space(id, window, cx);
         b.set_dev_servers_folder(true, window, cx);
         b.set_dev_servers_folder(true, window, cx);
     });

@@ -208,7 +208,9 @@ fn clearing_data_asks_each_stored_space_and_forgets_recent_history(cx: &mut Test
     let (b, vcx) = browser(cx);
     b.update_in(vcx, |b, window, cx| {
         b.new_space(window, cx);
-        b.new_incognito_space(window, cx);
+        // An incognito Space beside saved ones, as a session from before incognito windows had.
+        let id = b.session.add_ephemeral_space("Incognito", baa_web::WebHost::ephemeral_profile(&*b.host));
+        b.activate_space(id, window, cx);
     });
     let now = baa_model::now() as i64;
     b.update(vcx, |b, _| {

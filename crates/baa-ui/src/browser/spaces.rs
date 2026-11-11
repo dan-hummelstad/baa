@@ -14,6 +14,10 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn new_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An incognito window holds its one Space; a saved one would have nowhere to be kept.
+        if self.private {
+            return;
+        }
         let n = self.session.spaces().len();
         let id = self
             .session
@@ -24,17 +28,6 @@ impl<H: WebHost> Browser<H> {
         }
         self.activate_space(id, window, cx);
         self.start_rename(window, cx);
-    }
-
-    pub(crate) fn new_incognito_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self
-            .session
-            .add_ephemeral_space("Incognito", self.host.ephemeral_profile());
-        if let Some(space) = self.session.space_mut(id) {
-            (space.accent, space.accent_to) = (INCOGNITO.0, Some(INCOGNITO.1));
-        }
-        self.activate_space(id, window, cx);
-        self.open_bar(Mode::NewTab, window, cx);
     }
 
     pub(crate) fn delete_space(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {

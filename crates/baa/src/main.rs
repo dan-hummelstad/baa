@@ -19,14 +19,14 @@ use baa_ui::{AgentPeer, Browser, LilBaa};
 use baa_web::{Download, DownloadState, Downloads, WebHost};
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
-    actions, point, px, size, Action, AnyWindowHandle, App, AppContext as _, Bounds, DisplayId, Entity, KeyBinding,
+    actions, point, px, size, AnyWindowHandle, App, AppContext as _, Bounds, DisplayId, Entity, KeyBinding,
     MenuItem, Pixels, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
 mod menus;
 mod updater;
 
-actions!(baa_app, [Quit, DockNewTab, DockNewIncognito, DockShowLil, DockCloseLil]);
+actions!(baa_app, [Quit, DockNewWindow, DockNewIncognito, DockShowLil, DockCloseLil]);
 
 /// BaaCore: Chromium's own main runs inside gpui's `[NSApp run]`, so the
 /// order here is load-bearing (PLAN-chromium-phase2.md "Results").
@@ -120,7 +120,7 @@ fn launch<H: WebHost>(
     baa_ui::init(cx);
     // Also tells the settings window where "Edit keymap.json…" goes.
     baa_ui::load_user_keymap(dir.join("keymap.json"), cx);
-    cx.on_action(|_: &Quit, cx| quit(cx));
+    cx.on_action(|_: &Quit, cx| quit::<H>(cx));
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     menus::set(cx);
     // ponytail: gpui does not read the OS reduce-motion flag and we do not
@@ -147,36 +147,30 @@ fn launch<H: WebHost>(
         .unwrap_or_else(|e| fail("opening the window", e));
     cx.activate(true);
     cx.set_global(Background { window: window.into(), downloads: downloads.clone(), quitting: false });
-    window
-        .update(cx, |_, window, cx| {
-            // Closing the window is not quitting: baa stays in the Dock with its pages and
-            // downloads, and a click there brings the window back. A fullscreen window has
-            // its own desktop, which hiding the whole app leaves cleanly.
-            window.on_window_should_close(cx, |window, cx| {
-                if window.is_fullscreen() {
-                    cx.hide();
-                } else {
-                    baa_web::hide_window(window);
-                }
-                false
-            });
-        })
-        .ok();
+    window.update(cx, |_, window, cx| hide_when_last::<H>(window, cx)).ok();
+    // Deferred: the new window is not in `cx.windows()` while its view is built.
+    cx.observe_new::<Browser<H>>(|_, window, cx| {
+        if let Some(window) = window {
+            hide_when_last::<H>(window, cx);
+        }
+        cx.global_mut::<Background>().quitting = false;
+    })
+    .detach();
     cx.observe(&downloads, |_, cx| {
         if cx.global::<Background>().quitting && !downloading(cx) && nothing_shows(cx) {
             cx.quit();
         }
     })
     .detach();
-    // The settings window cannot outlive the browser window it belongs to.
+    // The settings window cannot outlive the browser windows it belongs to.
     cx.on_window_closed(move |cx, _| {
-        if window.update(cx, |_, _, _| ()).is_err() {
+        if !cx.windows().iter().any(|w| w.downcast::<Browser<H>>().is_some()) {
             cx.quit();
         }
         set_dock_menu::<H>(cx);
     })
     .detach();
-    dock_menu(window, cx);
+    dock_menu::<H>(cx);
 
     // To look at the sidebar's update card: otherwise it shows only once an update is downloaded.
     if std::env::var_os("BAA_SHOW_UPDATE_CARD").is_some() {
@@ -186,9 +180,11 @@ fn launch<H: WebHost>(
         cx.set_global(ui);
         cx.spawn(async move |cx| {
             while ready.next().await.is_some() {
-                if window.update(cx, |browser, _, cx| browser.update_ready(cx)).is_err() {
-                    break;
-                }
+                cx.update(|cx| {
+                    for w in baa_ui::browser_windows::<H>(cx) {
+                        w.update(cx, |browser, _, cx| browser.update_ready(cx)).ok();
+                    }
+                });
             }
         })
         .detach();
@@ -203,9 +199,8 @@ fn launch<H: WebHost>(
 
     cx.spawn(async move |cx| {
         while let Some(peer) = agent_rx.next().await {
-            if window.update(cx, |browser, window, cx| browser.serve_agent(peer, window, cx)).is_err() {
-                break;
-            }
+            let Some(window) = cx.update(|cx| baa_ui::front_window::<H>(cx)) else { break };
+            window.update(cx, |browser, window, cx| browser.serve_agent(peer, window, cx)).ok();
         }
     })
     .detach();
@@ -216,34 +211,25 @@ fn launch<H: WebHost>(
             // ponytail: search engine as of launch; a later settings change
             // applies to forwarded URLs from the next launch.
             let url = settings.resolve_input(&input);
-            let opened = window.update(cx, |browser, _, cx| browser.open_external(&url, cx));
-            if opened.is_err() {
-                break;
-            }
+            let Some(window) = cx.update(|cx| baa_ui::front_window::<H>(cx)) else { break };
+            window.update(cx, |browser, _, cx| browser.open_external(&url, cx)).ok();
         }
     })
     .detach();
 }
 
-/// Arc's dock menu in baa's terms: one window, so "New Window" is a new tab
-/// in it; lil-baa is Little Arc. macOS adds the window list, Options, Show
-/// All Windows, Hide and Quit itself.
-fn dock_menu<H: WebHost>(window: WindowHandle<Browser<H>>, cx: &mut App) {
-    // A dock click usually comes while baa is inactive, so these arrive as
-    // global actions and are re-sent into the browser window.
-    fn to_browser<H: WebHost>(window: WindowHandle<Browser<H>>, action: impl Action, cx: &mut App) {
-        cx.global_mut::<Background>().quitting = false;
+/// Arc's dock menu in baa's terms; lil-baa is Little Arc. macOS adds the
+/// window list, Options, Show All Windows, Hide and Quit itself.
+fn dock_menu<H: WebHost>(cx: &mut App) {
+    // A dock click usually comes while baa is inactive, so these arrive as global actions.
+    // A new window calls off a quit that was waiting (see `observe_new` in `launch`).
+    cx.on_action(|_: &DockNewWindow, cx| {
         cx.activate(true);
-        window
-            .update(cx, |_, window, cx| {
-                window.activate_window();
-                window.dispatch_action(Box::new(action), cx);
-            })
-            .ok();
-    }
-    cx.on_action(move |_: &DockNewTab, cx| to_browser(window, baa_ui::actions::CommandBar, cx));
-    cx.on_action(move |_: &DockNewIncognito, cx| {
-        to_browser(window, baa_ui::actions::NewIncognitoSpace, cx)
+        baa_ui::open_window::<H>(false, cx);
+    });
+    cx.on_action(|_: &DockNewIncognito, cx| {
+        cx.activate(true);
+        baa_ui::open_window::<H>(true, cx);
     });
     cx.on_action(|_: &DockShowLil, cx| {
         cx.activate(true);
@@ -270,11 +256,34 @@ fn lil_windows<H: WebHost>(cx: &App) -> Vec<gpui::AnyWindowHandle> {
 fn set_dock_menu<H: WebHost>(cx: &mut App) {
     let none = lil_windows::<H>(cx).is_empty();
     cx.set_dock_menu(vec![
-        MenuItem::action("New Tab", DockNewTab),
-        MenuItem::action("New Incognito Space", DockNewIncognito),
+        MenuItem::action("New Window", DockNewWindow),
+        MenuItem::action("New Incognito Window", DockNewIncognito),
         MenuItem::action("Show lil-baa Windows", DockShowLil).disabled(none),
         MenuItem::action("Close lil-baa Windows", DockCloseLil).disabled(none),
     ]);
+}
+
+/// Closing the last regular window is not quitting: it hides, baa stays in the Dock with
+/// its pages and downloads, and a click there brings it back. With other windows open it
+/// closes. A fullscreen window has its own desktop, which hiding the whole app leaves cleanly.
+fn hide_when_last<H: WebHost>(window: &mut gpui::Window, cx: &mut App) {
+    window.on_window_should_close(cx, |window, cx| {
+        let this = window.window_handle().window_id();
+        let incognito = !baa_ui::browser_windows::<H>(cx).iter().any(|w| w.window_id() == this);
+        let others = baa_ui::browser_windows::<H>(cx).iter().any(|w| {
+            w.window_id() != this && w.update(cx, |_, w, _| baa_web::window_shown(w)).unwrap_or(false)
+        });
+        if incognito || others {
+            return true;
+        }
+        cx.global_mut::<Background>().window = window.window_handle();
+        if window.is_fullscreen() {
+            cx.hide();
+        } else {
+            baa_web::hide_window(window);
+        }
+        false
+    });
 }
 
 /// What goes on while no window shows. Closing the browser window only hides it, and a
@@ -309,11 +318,15 @@ fn nothing_shows(cx: &mut App) -> bool {
 // ponytail: the Dock's own Quit, a logout and "Restart and Update" end baa at once; they
 // do not come through here. A download that stalls keeps baa running until it is opened
 // again and the download cancelled; give the wait a limit if that bites.
-fn quit(cx: &mut App) {
+fn quit<H: WebHost>(cx: &mut App) {
     if !cx.has_global::<Background>() || !downloading(cx) {
         return cx.quit();
     }
     cx.global_mut::<Background>().quitting = true;
+    // The window that stays (hidden) is a regular one still open; the others close.
+    if let Some(front) = baa_ui::front_window::<H>(cx) {
+        cx.global_mut::<Background>().window = front.into();
+    }
     let main = cx.global::<Background>().window;
     for handle in cx.windows() {
         handle

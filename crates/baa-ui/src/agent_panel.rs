@@ -12,7 +12,7 @@ use std::{
 use baa_model::{ChatRecord, Store, TabId};
 use baa_web::WebHost;
 use futures::{channel::mpsc, StreamExt};
-use gpui::{div, prelude::*, px, AnyElement, Context, FocusHandle, Hsla, ScrollHandle, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, App, Context, FocusHandle, Hsla, ScrollHandle, SharedString, Window};
 use serde_json::{json, Value};
 
 use crate::{
@@ -93,6 +93,12 @@ fn restore(r: ChatRecord) -> Option<Chat> {
         at: r.at as u64,
         host: r.host,
     })
+}
+
+impl Panel {
+    pub(crate) fn focused(&self, window: &Window, cx: &App) -> bool {
+        self.focus.as_ref().is_some_and(|f| f.contains_focused(window, cx))
+    }
 }
 
 #[derive(Default)]
@@ -544,11 +550,6 @@ impl<H: WebHost> Browser<H> {
     }
 
     fn on_panel_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let k = &event.keystroke;
-        if k.key == "n" && k.modifiers.platform && !k.modifiers.shift && !k.modifiers.alt && !k.modifiers.control {
-            cx.stop_propagation();
-            return self.switch_chat(None, cx);
-        }
         let key = self.agent.panel.field.handle(&event.keystroke, cx);
         match key {
             Key::Submit if !event.is_held => self.send_agent_message(cx),
@@ -589,6 +590,11 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// Shelves the current chat and opens chat `i` of the switcher, or a new one.
+    /// ⌘N in the chat.
+    pub(crate) fn new_chat(&mut self, cx: &mut Context<Self>) {
+        self.switch_chat(None, cx);
+    }
+
     fn switch_chat(&mut self, i: Option<usize>, cx: &mut Context<Self>) {
         self.kill_agent_child();
         let p = &mut self.agent.panel;

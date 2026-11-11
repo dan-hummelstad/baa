@@ -55,8 +55,9 @@ fn menus() -> Vec<Menu> {
         ]),
         Menu::new("File").items([
             a("New Tab", CommandBar),
+            a("New Window", NewWindow),
             a("New Space", NewSpace),
-            a("New Incognito Space", NewIncognitoSpace),
+            a("New Incognito Window", NewIncognitoWindow),
             Sep,
             a("Open Location…", FocusAddress),
             a("Reopen Closed Tab", ReopenClosedTab),
@@ -98,7 +99,7 @@ fn menus() -> Vec<Menu> {
             a("Previous Space", PrevSpace),
             Sep,
             a("New Space", NewSpace),
-            a("New Incognito Space", NewIncognitoSpace),
+            a("New Incognito Window", NewIncognitoWindow),
         ]),
         Menu::new("Tabs").items([
             a("Next Tab", NextTab),

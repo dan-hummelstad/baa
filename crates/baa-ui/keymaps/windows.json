@@ -20,7 +20,8 @@
       "ctrl-+": "baa::ZoomIn",
       "ctrl--": "baa::ZoomOut",
       "ctrl-0": "baa::ZoomReset",
-      "ctrl-shift-n": "baa::NewIncognitoSpace",
+      "ctrl-n": "baa::NewWindow",
+      "ctrl-shift-n": "baa::NewIncognitoWindow",
       "ctrl-1": [
         "baa::GoToTab",
         0

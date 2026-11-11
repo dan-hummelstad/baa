@@ -20,7 +20,8 @@
       "cmd-+": "baa::ZoomIn",
       "cmd--": "baa::ZoomOut",
       "cmd-0": "baa::ZoomReset",
-      "cmd-shift-n": "baa::NewIncognitoSpace",
+      "cmd-n": "baa::NewWindow",
+      "cmd-shift-n": "baa::NewIncognitoWindow",
       "cmd-1": [
         "baa::GoToTab",
         0

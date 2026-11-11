@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod peek;
+pub(crate) mod windows;
 mod nav;
 mod swipe;
 mod toss;
@@ -113,9 +114,17 @@ pub(crate) enum MenuKind {
 }
 
 pub struct Browser<H: WebHost> {
-    pub(crate) host: H,
-    /// `None` after an unreadable session: run on a fresh one without overwriting the file.
-    store: Option<Store>,
+    /// One engine for every window.
+    pub(crate) host: std::rc::Rc<H>,
+    /// `None` after an unreadable session (run on a fresh one without overwriting the file)
+    /// and in an incognito window, which keeps nothing.
+    store: Option<std::rc::Rc<Store>>,
+    /// An incognito window: its own session of one ephemeral Space, never saved or shared.
+    pub(crate) private: bool,
+    /// The session changed here and the other windows have not been sent it (`windows.rs`).
+    pub(crate) unshared: bool,
+    /// Taking another window's session: nothing is saved or sent back, no page is taken.
+    pub(crate) adopting: bool,
     pub(crate) session: Session,
     pub(crate) settings: baa_model::Settings,
     pub(crate) pages: HashMap<TabId, (Entity<H::Page>, Subscription)>,
@@ -235,7 +244,7 @@ pub struct Browser<H: WebHost> {
     /// While the toast shows: the tabs Clear Today archived and the tab shown before, for Undo.
     pub(crate) undo_clear: Option<(Vec<TabId>, Option<TabId>)>,
     _downloads: Subscription,
-    _chrome_tabs: Subscription,
+    _chrome_tabs: Option<Subscription>,
     pub(crate) extensions_page: crate::settings::ExtensionsPage,
     /// The skin last sent to the engine: Space profile and the colours it was made from.
     pub(crate) skin_sent: Option<(baa_model::ProfileId, u64)>,
@@ -312,6 +321,31 @@ impl<H: WebHost> Browser<H> {
         if settings.reduce_motion {
             cx.set_reduce_motion(true);
         }
+        let store = store.map(std::rc::Rc::new);
+        let mut this = Self::build(std::rc::Rc::new(host), store, settings, session, false, window, cx);
+        this.start_live_refresh(window, cx);
+        // ponytail: a fixed wait for Chrome to load each profile's extensions before the
+        // launch pass looks for copies to make; later passes run when Spaces are added.
+        // Live folders and extension copies run in the launch window only.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
+            this.update(cx, |this, cx| this.share_extensions(cx)).ok();
+        })
+        .detach();
+        windows::init::<H>(&this, cx);
+        this
+    }
+
+    /// A window on `session`: the launch window's, a copy of it for another, or an incognito one.
+    pub(crate) fn build(
+        host: std::rc::Rc<H>,
+        store: Option<std::rc::Rc<Store>>,
+        settings: baa_model::Settings,
+        session: Session,
+        private: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let favicons = store
             .as_ref()
             .and_then(|s| s.load_favicons().ok())
@@ -327,19 +361,23 @@ impl<H: WebHost> Browser<H> {
             this.downloads_changed(items.len(), cx)
         });
         cx.observe_window_bounds(window, Self::window_moved).detach();
-        // Taken by whichever window sees them first.
-        let chrome_tabs = cx.observe_in(&host.chrome_tabs(), window, |this: &mut Self, list, window, cx| {
+        // Taken by whichever window sees them first; never an incognito one, as they come
+        // from regular profiles.
+        let chrome_tabs = (!private).then(|| cx.observe_in(&host.chrome_tabs(), window, |this: &mut Self, list, window, cx| {
             let urls = list.update(cx, |list, _| std::mem::take(&mut list.0));
             for url in urls {
                 if let Some(space) = this.session.active_space() {
                     this.open_supplied_in(space, &url, window, cx);
                 }
             }
-        });
+        }));
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let sidebar_open = !session.sidebar_collapsed;        let mut this = Self {
             host,
             store,
+            private,
+            unshared: false,
+            adopting: false,
             // None, so the first sync puts the dots' pill on the Space the session opens in.
             shown_space: None,
             session,
@@ -434,6 +472,17 @@ impl<H: WebHost> Browser<H> {
             agent: Default::default(),
         };
         this.restore_chats();
+        if private {
+            // Closing the window ends the incognito session: its pages, then its profile.
+            cx.on_release(|this, _| {
+                this.pages.clear();
+                this.devtools.clear();
+                for space in this.session.spaces() {
+                    this.host.delete_profile(space.profile);
+                }
+            })
+            .detach();
+        }
         // gpui tells a window its appearance changed and draws nothing by itself.
         cx.observe_window_appearance(window, |this, window, cx| {
             this.sync_dark(window);
@@ -442,14 +491,6 @@ impl<H: WebHost> Browser<H> {
         .detach();
         this.sync_dark(window);
         this.sync(window, cx);
-        this.start_live_refresh(window, cx);
-        // ponytail: a fixed wait for Chrome to load each profile's extensions before the
-        // launch pass looks for copies to make; later passes run when Spaces are added.
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_secs(5)).await;
-            this.update(cx, |this, cx| this.share_extensions(cx)).ok();
-        })
-        .detach();
         // Launch shows the Space's colour, not a crossfade from the placeholder, and its
         // sidebar in place, not sliding in.
         this.fade.snap(1.0);
@@ -486,19 +527,24 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn store(&self) -> Option<&Store> {
-        self.store.as_ref()
+        self.store.as_deref()
     }
 
     pub(crate) fn save_settings(&mut self, cx: &mut Context<Self>) {
         if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_settings(&self.settings)) {
             log::error!("saving settings: {e}");
         }
+        self.unshared = true;
         cx.set_reduce_motion(self.settings.reduce_motion);
         self.host.apply_settings(&self.settings);
         cx.notify();
     }
 
     pub(crate) fn save(&mut self) {
+        if self.adopting {
+            return;
+        }
+        self.unshared = true;
         if let Some(Err(e)) = self.store.as_ref().map(|s| s.save_session(&self.session)) {
             log::error!("saving session: {e}");
         }
@@ -553,8 +599,15 @@ impl<H: WebHost> Browser<H> {
         }
         self.track_rows();
         for id in self.shown_panes() {
-            if !self.pages.contains_key(&id) {
-                self.create_page(id, window, cx);
+            if self.pages.contains_key(&id) {
+                continue;
+            }
+            match self.holder(id, cx) {
+                None => self.create_page(id, window, cx),
+                // Picked here: its page comes over. Already showing, or another window's
+                // session arriving, it stays where it is ("open in another window").
+                Some(from) if !self.adopting && !self.on_screen.contains(&id) => self.take_page(from, id, window, cx),
+                Some(_) => {}
             }
         }
         let on_screen = self.shown_panes();
@@ -625,7 +678,7 @@ impl<H: WebHost> Browser<H> {
         window.focus(&target, cx);
     }
 
-    fn create_page(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn create_page(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.session.tab(id) else {
             return;
         };
@@ -781,21 +834,26 @@ impl<H: WebHost> Browser<H> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        page.update(cx, |page, cx| page.move_to_window(window, cx));
-        page.read(cx).set_corner_radius(PAGE_RADIUS);
-        page.read(cx).set_floating(false);
         self.session.set_active_space(space);
         let id = self.session.open_tab(space, url, now());
         let title = page.read(cx).title();
         if let Some(tab) = self.session.tab_mut(id) {
             tab.title = title;
         }
+        self.attach_page(id, page, window, cx);
+        self.watch_if_local(id, url, cx);
+        self.sync(window, cx);
+    }
+
+    /// A live page from another window becomes `id`'s here.
+    pub(crate) fn attach_page(&mut self, id: TabId, page: Entity<H::Page>, window: &mut Window, cx: &mut Context<Self>) {
+        page.update(cx, |page, cx| page.move_to_window(window, cx));
+        page.read(cx).set_corner_radius(PAGE_RADIUS);
+        page.read(cx).set_floating(false);
         let sub = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
             this.on_page_event(id, event, window, cx)
         });
         self.pages.insert(id, (page, sub));
-        self.watch_if_local(id, url, cx);
-        self.sync(window, cx);
     }
 
     pub(crate) fn window_handle(&self) -> AnyWindowHandle {
@@ -1198,6 +1256,7 @@ impl<H: WebHost> Render for Browser<H> {
             self.drop_at = None;
         }
         self.tick_motion(window, cx);
+        self.share_session(cx);
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         self.push_webui_skin();
         if let Some(view) = self.fullscreen_view(window, cx) {

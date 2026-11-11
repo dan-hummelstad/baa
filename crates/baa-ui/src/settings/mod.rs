@@ -130,6 +130,19 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn open_settings_at(&mut self, tab: Option<Tab>, row: Option<&'static str>, cx: &mut Context<Self>) {
+        // An incognito window keeps nothing, settings included: a regular window opens them.
+        if self.private {
+            if let Some(w) = crate::browser::windows::front_window::<H>(cx) {
+                cx.defer(move |cx| {
+                    w.update(cx, |b, window, cx| {
+                        window.activate_window();
+                        b.open_settings_at(tab, row, cx)
+                    })
+                    .ok();
+                });
+                return;
+            }
+        }
         let browser = cx.entity();
         // Later, outside this update: a new window draws once before it returns,
         // and that draw reads this entity.

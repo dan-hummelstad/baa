@@ -48,7 +48,8 @@ pub enum Command {
     NewSpace,
     NewFolder,
     NewLiveFolder,
-    NewIncognitoSpace,
+    NewWindow,
+    NewIncognitoWindow,
     ToggleSidebar,
     CopyUrl,
     Find,
@@ -80,13 +81,14 @@ pub enum Command {
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 32] = [
+const COMMANDS: [(Command, &str); 33] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
     (Command::Find, "Find in Page"),
     (Command::ReopenClosedTab, "Reopen Closed Tab"),
-    (Command::NewIncognitoSpace, "New Incognito Space"),
+    (Command::NewWindow, "New Window"),
+    (Command::NewIncognitoWindow, "New Incognito Window"),
     (Command::NewFolder, "New Folder"),
     (Command::NewLiveFolder, "New Live Folder from This Page"),
     (Command::RenameSpace, "Rename Space"),
@@ -122,7 +124,8 @@ impl Command {
     fn action(self) -> Option<Box<dyn gpui::Action>> {
         Some(match self {
             Command::NewSpace => Box::new(actions::NewSpace),
-            Command::NewIncognitoSpace => Box::new(actions::NewIncognitoSpace),
+            Command::NewWindow => Box::new(actions::NewWindow),
+            Command::NewIncognitoWindow => Box::new(actions::NewIncognitoWindow),
             Command::ToggleSidebar => Box::new(actions::ToggleSidebar),
             Command::CopyUrl => Box::new(actions::CopyUrl),
             Command::Find => Box::new(actions::Find),
@@ -146,7 +149,7 @@ impl Command {
 
     fn icon(self) -> &'static str {
         match self {
-            Command::NewSpace | Command::NewIncognitoSpace => "plus",
+            Command::NewSpace | Command::NewWindow | Command::NewIncognitoWindow => "plus",
             Command::ToggleSidebar | Command::SwapSidebarSide => "panel-left",
             Command::CopyUrl => "link",
             Command::Find => "search",
