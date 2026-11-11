@@ -910,8 +910,14 @@ impl<H: WebHost> Browser<H> {
                     .child(bracket("]").right(px(-4.)))
             });
         let plus_turn = self.motion.get(("add-space", 0), Feel::Hover) * std::f32::consts::FRAC_PI_2;
+        // A download's icon is thrown at this button; it hops when one sinks in.
+        let at = self.library_at.clone();
+        let hop = self.motion.get(("download-hop", 1), Feel::Glide);
         let library = self
             .icon_button("library", "archive", true, 0., 0., theme, cx)
+            .relative()
+            .top(px(-4. * hop))
+            .child(gpui::canvas(move |bounds, _, _| at.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .on_click(cx.listener(|this, _, _, cx| this.open_library(crate::library::Section::Downloads, cx)));
         let add = self
             .icon_button("add-space", "plus", true, 0., plus_turn, theme, cx)

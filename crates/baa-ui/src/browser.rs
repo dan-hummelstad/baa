@@ -28,6 +28,7 @@ use crate::{
 
 mod peek;
 mod nav;
+mod toss;
 mod menus;
 mod spaces;
 mod actions;
@@ -47,6 +48,8 @@ pub(crate) use shared_extensions::InstallTarget;
 mod tests_shared_extensions;
 #[cfg(test)]
 mod tests_live;
+#[cfg(test)]
+mod tests_toss;
 #[cfg(test)]
 mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
@@ -203,6 +206,12 @@ pub struct Browser<H: WebHost> {
     /// Downloads the user cleared from the list.
     pub(crate) cleared_downloads: HashSet<u64>,
     pub(crate) downloads_seen: usize,
+    /// Download icons in the air, and when each was thrown.
+    tosses: Vec<(toss::Toss, Instant)>,
+    /// Where they land while the sidebar is hidden: 0 out of the window, 1 in.
+    bin: Spring,
+    /// The sidebar's Library button as last drawn: where they land otherwise.
+    pub(crate) library_at: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     /// The settings window, once opened (it may since have been closed).
     pub(crate) settings_window: Option<WindowHandle<crate::settings::SettingsView<H>>>,
     /// The Library, shown in the sidebar instead of the Space.
@@ -373,6 +382,9 @@ impl<H: WebHost> Browser<H> {
             popover: None,
             cleared_downloads: HashSet::new(),
             downloads_seen: 0,
+            tosses: Vec::new(),
+            bin: Spring::new(0.0),
+            library_at: Default::default(),
             settings_window: None,
             library: None,
             library_last: crate::library::Section::Downloads,
@@ -719,6 +731,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::DownloadStarted => {
                 let blank = tab.title.is_empty()
                     && self.pages.get(&id).is_some_and(|(p, _)| !p.read(cx).can_go_back());
+                self.toss_download(window, cx);
                 if !blank {
                     return;
                 }
@@ -1219,7 +1232,8 @@ impl<H: WebHost> Render for Browser<H> {
             .children(popover)
             .children(history)
             .children(self.space_picker.as_ref().map(|p| p.render()))
-            .children(self.render_agent_ask(&theme, cx));
+            .children(self.render_agent_ask(&theme, cx))
+            .children(self.render_tosses(&theme, cx));
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {

@@ -629,6 +629,7 @@ impl<H: WebHost> Browser<H> {
             }
         }
         moving |= self.tick_split(dt, reduce);
+        moving |= self.tick_tosses(now, dt, reduce);
         moving |= self.motion.tick(dt, reduce);
         let motion = &self.motion;
         self.ghosts.retain(|g| motion.get(("ghost", g.id.0), Feel::Glide) > 0.0);
