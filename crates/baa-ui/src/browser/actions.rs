@@ -136,6 +136,7 @@ impl<H: WebHost> Browser<H> {
                 this.open_window_later(false, cx)
             }
         }))
+        .on_action(cx.listener(|_, _: &CloseWindow, window, _| window.remove_window()))
         .on_action(cx.listener(|this, _: &NewIncognitoWindow, _, cx| {
             this.open_window_later(true, cx)
         }))

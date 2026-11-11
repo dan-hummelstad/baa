@@ -34,6 +34,7 @@ gpui::actions!(
         ZoomReset,
         NewSpace,
         NewWindow,
+        CloseWindow,
         NewIncognitoWindow,
         ClosePeek,
         ExpandPeek,

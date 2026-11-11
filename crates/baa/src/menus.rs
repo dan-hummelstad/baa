@@ -62,6 +62,7 @@ fn menus() -> Vec<Menu> {
             a("Open Location…", FocusAddress),
             a("Reopen Closed Tab", ReopenClosedTab),
             a("Close Tab", CloseTab),
+            a("Close Window", CloseWindow),
             Sep,
             a("Print…", Print),
         ]),

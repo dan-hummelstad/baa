@@ -21,6 +21,7 @@
       "ctrl--": "baa::ZoomOut",
       "ctrl-0": "baa::ZoomReset",
       "ctrl-n": "baa::NewWindow",
+      "ctrl-shift-w": "baa::CloseWindow",
       "ctrl-shift-n": "baa::NewIncognitoWindow",
       "ctrl-1": [
         "baa::GoToTab",

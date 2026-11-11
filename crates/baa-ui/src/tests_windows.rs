@@ -153,4 +153,9 @@ fn cmd_n_opens_a_window_except_in_the_chat(cx: &mut TestAppContext) {
     cx.dispatch_action(NewIncognitoWindow);
     cx.run_until_parked();
     assert_eq!(windows(cx), 3);
+    // ⇧⌘W closes the window, ⌘W only a tab.
+    drop(a);
+    cx.dispatch_action(CloseWindow);
+    cx.cx.run_until_parked();
+    assert_eq!(cx.cx.windows().len(), 2);
 }

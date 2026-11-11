@@ -21,6 +21,7 @@
       "cmd--": "baa::ZoomOut",
       "cmd-0": "baa::ZoomReset",
       "cmd-n": "baa::NewWindow",
+      "cmd-shift-w": "baa::CloseWindow",
       "cmd-shift-n": "baa::NewIncognitoWindow",
       "cmd-1": [
         "baa::GoToTab",

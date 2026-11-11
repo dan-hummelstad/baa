@@ -543,6 +543,7 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Zoom out", Box::new(ZoomOut)),
         ("Actual size", Box::new(ZoomReset)),
         ("New window", Box::new(NewWindow)),
+        ("Close window", Box::new(CloseWindow)),
         ("New incognito window", Box::new(NewIncognitoWindow)),
         ("Open peek in a tab", Box::new(ExpandPeek)),
         ("Copy URL", Box::new(CopyUrl)),
