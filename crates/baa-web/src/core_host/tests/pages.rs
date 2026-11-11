@@ -286,3 +286,20 @@ fn a_swipe_copies_its_picture_and_keeps_amount_in_range() {
     let cancelled = super::super::dispatch::swipe_event(ffi::SWIPE_CANCELLED, false, -0.1, std::ptr::null(), 0, 0);
     assert_eq!(cancelled, PageEvent::Swipe { phase: SwipePhase::Cancelled, forward: false, amount: 0.0 });
 }
+
+#[gpui::test]
+/// The engine frees the picture when the call returns; the event is handled later.
+fn a_swipe_picture_is_copied_before_the_engine_frees_it(cx: &mut TestAppContext) {
+    use crate::{SwipePhase, SwipePicture};
+    let env = Env::new(cx);
+    let page = env.page(1, "https://a.test", cx);
+    let tab = env.tab_of(&page, cx);
+    let seen = events(&page, cx);
+    let mut pixels = vec![7u8; 8];
+    (env.callbacks.swipe)(env.ctx(), tab, ffi::SWIPE_BEGAN, false, 0.0, pixels.as_ptr(), 2, 1);
+    pixels.fill(0);
+    drop(pixels);
+    cx.run_until_parked();
+    let picture = SwipePicture { width: 2, height: 1, bgra: Arc::new(vec![7; 8]) };
+    assert_eq!(*seen.borrow(), [PageEvent::Swipe { phase: SwipePhase::Began(Some(picture)), forward: false, amount: 0.0 }]);
+}

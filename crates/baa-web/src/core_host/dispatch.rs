@@ -509,7 +509,9 @@ pub(super) fn callbacks() -> Callbacks {
         width: c_int,
         height: c_int,
     ) {
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(swipe_event(phase, forward, amount, bgra, width, height)));
+        // Built now: the picture is borrowed only for this call, and on_page runs later.
+        let event = swipe_event(phase, forward, amount, bgra, width, height);
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(event));
     }
     Callbacks {
         key,
