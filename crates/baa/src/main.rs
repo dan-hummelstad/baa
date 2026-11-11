@@ -386,14 +386,15 @@ fn fail(what: &str, err: impl std::fmt::Display) -> ! {
 }
 
 /// `<app data>/baa`: chromium/, session database, keymap.json and the instance lock.
-/// `BAA_DATA_DIR` replaces it, for tests.
+/// A debug build is "baa Dev" (xtask gives its bundle its own id) so it runs beside an
+/// installed baa instead of handing off to it. `BAA_DATA_DIR` replaces it, for tests.
 fn data_dir() -> PathBuf {
     let var = |name| std::env::var_os(name).map(PathBuf::from);
     if let Some(dir) = var("BAA_DATA_DIR") {
         return dir;
     }
     let base = var("HOME").map(|h| h.join("Library/Application Support"));
-    base.unwrap_or_else(std::env::temp_dir).join("baa")
+    base.unwrap_or_else(std::env::temp_dir).join(if cfg!(debug_assertions) { "baa Dev" } else { "baa" })
 }
 
 // Open-URL IPC: one URL per line over a socket next to the lock. On macOS,
@@ -406,6 +407,7 @@ fn forward(dir: &std::path::Path, urls: &[String]) {
             for url in urls {
                 let _ = writeln!(stream, "{url}");
             }
+            eprintln!("baa is already running on {}; handed over {} URL(s). Quit it to start this copy.", dir.display(), urls.len());
         }
         Err(e) => eprintln!("baa is already running but did not answer: {e}"),
     }

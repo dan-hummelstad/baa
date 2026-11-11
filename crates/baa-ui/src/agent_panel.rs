@@ -300,7 +300,7 @@ fn user_line(text: &str) -> String {
 fn agent_dir() -> PathBuf {
     let var = |name| std::env::var_os(name).map(PathBuf::from);
     let base = var("BAA_DATA_DIR").unwrap_or_else(|| {
-        var("HOME").map(|h| h.join("Library/Application Support")).unwrap_or_else(std::env::temp_dir).join("baa")
+        var("HOME").map(|h| h.join("Library/Application Support")).unwrap_or_else(std::env::temp_dir).join(if cfg!(debug_assertions) { "baa Dev" } else { "baa" })
     });
     base.join("agent")
 }

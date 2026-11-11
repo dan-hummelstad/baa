@@ -46,6 +46,8 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
+const BUNDLE_ID: &str = "me.baa.browser";
+const DEV_BUNDLE_ID: &str = "me.baa.browser.dev";
 const FRAMEWORK: &str = "Contents/Frameworks/BaaCore.framework";
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const SHARED_ROOT: &str = "/Users/Shared/hb";
@@ -166,6 +168,12 @@ fn bundle(b: Bundle) -> Result<()> {
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
         run(Command::new("plutil").args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")]).arg(&plist))?;
     }
+    // A debug baa is "baa Dev" with its own data dir (crates/baa data_dir), so it runs
+    // beside an installed baa; the id keeps macOS (Dock, TCC, Keychain) from mixing them.
+    let (id, name) = if b.release { (BUNDLE_ID, "baa") } else { (DEV_BUNDLE_ID, "baa Dev") };
+    for (key, value) in [("CFBundleIdentifier", id), ("CFBundleName", name), ("CFBundleDisplayName", name)] {
+        run(Command::new("plutil").args(["-replace", key, "-string", value]).arg(&plist))?;
+    }
     // Sparkle, in release engines only (crates/baa starts it): the feed release.yml publishes, and
     // the key its updates must be signed with. Checks run daily without asking first.
     if !component {
@@ -194,7 +202,7 @@ fn bundle(b: Bundle) -> Result<()> {
         }
     }
     if b.sign {
-        mac::dev_sign(&app)?;
+        mac::dev_sign(&app, id)?;
     }
     println!("{}", app.display());
     match b.run {
@@ -232,10 +240,10 @@ mod mac {
     /// Outer app only. A stable identity keeps the Keychain's "Always Allow" for
     /// "baa Storage Key" across rebuilds (an ad-hoc signature's requirement is the
     /// binary's hash). `BAA_SIGN_IDENTITY` overrides; "-" signs ad hoc.
-    pub fn dev_sign(app: &Path) -> Result<()> {
+    pub fn dev_sign(app: &Path, id: &str) -> Result<()> {
         let identity = env::var("BAA_SIGN_IDENTITY").unwrap_or_else(|_| apple_development().unwrap_or_else(|| "-".into()));
         run(Command::new("codesign")
-            .args(["--force", "--sign", &identity, "--identifier", "me.baa.browser"])
+            .args(["--force", "--sign", &identity, "--identifier", id])
             .arg(app))
     }
 
