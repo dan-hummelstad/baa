@@ -36,6 +36,12 @@ void EnsureStarted();
 void InstallContextMenuHook();  // menu.mm
 void InstallPipHook();          // media.mm
 void InstallAppModalFactory();  // dialogs: after Chrome installed its own
+void InstallSwipeHook();        // swipe.mm: patches/baa/history-swipe-hook.patch
+// swipe.mm: a picture of what `contents` shows now, for a later swipe back or
+// forward to it; and dropping a closing page's pictures.
+void KeepPicture(content::WebContents* contents);
+void ForgetPictures(content::WebContents* contents);
+BaaTab* TabForWidgetView(void* ns_view);  // tab.mm: null if not a baa page
 
 // ---- tab.mm and profile.mm: handles and lookups the other files share. A BaaTab is any page
 // the app shows: a tab in a Browser, a popup, a DevTools front-end.

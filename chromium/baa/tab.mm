@@ -38,7 +38,9 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -165,8 +167,15 @@ struct BaaTab : content::WebContentsObserver,
   void DidUpdateAudioMutingState(bool) override { SendState(); }
   void DidChangeVisibleSecurityState() override { SendState(); }
   void DidStartNavigation(content::NavigationHandle* handle) override {
-    if (!reported && handle->IsInPrimaryMainFrame()) {
+    if (!handle->IsInPrimaryMainFrame()) {
+      return;
+    }
+    if (!reported) {
       TryReport(handle->GetURL(), false);
+    }
+    // The page being left, for a swipe back to it.
+    if (handle->GetReloadType() == content::ReloadType::NONE) {
+      baa::KeepPicture(web_contents());
     }
   }
   void DidFinishNavigation(content::NavigationHandle* handle) override {
@@ -204,7 +213,10 @@ struct BaaTab : content::WebContentsObserver,
       baa::Callbacks().devtools_dock(baa::CallbackContext(), id, value);
     }
   }
-  void WebContentsDestroyed() override { Detach(); }
+  void WebContentsDestroyed() override {
+    baa::ForgetPictures(web_contents());
+    Detach();
+  }
 
   // find_in_page::FindResultObserver:
   void OnFindResultAvailable(content::WebContents* wc) override {
@@ -322,6 +334,17 @@ BaaTab* TabFor(content::WebContents* contents) {
   auto* ti = tabs::TabInterface::MaybeGetFromContents(contents);
   for (auto& value : Registry()) {
     if ((ti && value->tab == ti) || value->web_contents() == contents) {
+      return value.get();
+    }
+  }
+  return nullptr;
+}
+
+BaaTab* TabForWidgetView(void* ns_view) {
+  for (auto& value : Registry()) {
+    content::WebContents* wc = value->web_contents();
+    content::RenderWidgetHostView* rwhv = wc ? wc->GetRenderWidgetHostView() : nullptr;
+    if (rwhv && (__bridge void*)rwhv->GetNativeView().GetNativeNSView() == ns_view) {
       return value.get();
     }
   }

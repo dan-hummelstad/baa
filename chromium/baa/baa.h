@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 11
+#define BAA_ABI_VERSION 12
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -325,7 +325,26 @@ typedef struct {
   // The user clicked back to tab on the tab's picture-in-picture window: show
   // the tab (its Space, and the app). Chrome closes the window itself.
   void (*focus_requested)(void* ctx, BaaTabId tab);
+
+  // A two-finger history swipe over the tab's page, which baa draws (Chrome's
+  // arrow overlay is off). Chrome starts one only where the tab can go.
+  // `forward`: towards the next entry. `amount` 0..1 is how far across; AppKit
+  // keeps sending CHANGED while it settles after the fingers lift, then DONE
+  // (amount 1; the tab goes back or forward right after) or CANCELLED (0).
+  // BEGAN carries the picture of the page the swipe goes to as it was left:
+  // BGRA, premultiplied, top row first, `width * 4` bytes a row, borrowed for
+  // the call. NULL when there is none (not visited in this run, or evicted).
+  void (*swipe)(void* ctx, BaaTabId tab, int phase, bool forward, float amount,
+                const uint8_t* bgra, int width, int height);
 } BaaCallbacks;
+
+// BaaCallbacks.swipe phases.
+enum {
+  BAA_SWIPE_BEGAN = 0,
+  BAA_SWIPE_CHANGED = 1,
+  BAA_SWIPE_DONE = 2,
+  BAA_SWIPE_CANCELLED = 3,
+};
 
 // ---- App -------------------------------------------------------------------
 

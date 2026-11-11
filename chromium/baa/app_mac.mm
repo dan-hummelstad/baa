@@ -55,6 +55,7 @@ void EnsureStarted() {
   done = true;
   InstallColorSchemeHook();
   InstallDialogHooks();
+  InstallSwipeHook();
   // Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
   // close through BrowserCloseManager (our windows' Close), and later calls from
   // the UI on a gone handle do nothing.
@@ -152,6 +153,7 @@ void baa_install_app(int argc,
   REQUIRE(cdp);
   REQUIRE(media);
   REQUIRE(focus_requested);
+  REQUIRE(swipe);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;

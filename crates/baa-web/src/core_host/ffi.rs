@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 11;
+pub const ABI_VERSION: c_int = 12;
 
 #[repr(C)]
 pub struct Profile {
@@ -102,6 +102,10 @@ pub const CLOSED_BY_QUIT: c_int = 1;
 pub const CLOSED_BY_APP: c_int = 2;
 
 pub const DOCK_RIGHT: c_int = 0;
+pub const SWIPE_BEGAN: c_int = 0;
+pub const SWIPE_CHANGED: c_int = 1;
+pub const SWIPE_DONE: c_int = 2;
+pub const SWIPE_CANCELLED: c_int = 3;
 pub const DOCK_BOTTOM: c_int = 1;
 pub const DOCK_LEFT: c_int = 2;
 pub const DOCK_UNDOCKED: c_int = 3;
@@ -239,6 +243,16 @@ pub struct Callbacks {
     pub cdp: extern "C" fn(ctx: *mut c_void, tab: TabId, id: u64, json: *const c_char),
     pub media: extern "C" fn(ctx: *mut c_void, tab: TabId, media: *const Media),
     pub focus_requested: extern "C" fn(ctx: *mut c_void, tab: TabId),
+    pub swipe: extern "C" fn(
+        ctx: *mut c_void,
+        tab: TabId,
+        phase: c_int,
+        forward: bool,
+        amount: f32,
+        bgra: *const u8,
+        width: c_int,
+        height: c_int,
+    ),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -537,6 +551,10 @@ mod tests {
             ("BAA_MEDIA_PREVIOUS", MEDIA_PREVIOUS as i64),
             ("BAA_MEDIA_PICTURE_IN_PICTURE", MEDIA_PICTURE_IN_PICTURE as i64),
             ("BAA_MEDIA_EXIT_PICTURE_IN_PICTURE", MEDIA_EXIT_PICTURE_IN_PICTURE as i64),
+            ("BAA_SWIPE_BEGAN", SWIPE_BEGAN as i64),
+            ("BAA_SWIPE_CHANGED", SWIPE_CHANGED as i64),
+            ("BAA_SWIPE_DONE", SWIPE_DONE as i64),
+            ("BAA_SWIPE_CANCELLED", SWIPE_CANCELLED as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

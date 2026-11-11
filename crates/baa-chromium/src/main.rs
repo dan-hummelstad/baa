@@ -209,6 +209,7 @@ mod app {
         cdp: on_cdp,
         media: on_media,
         focus_requested: on_focus_requested,
+        swipe: on_swipe,
     };
 
     thread_local! {
@@ -440,6 +441,19 @@ mod app {
         eprintln!("baa: cdp tab={} id={id} {json}", tab_index(tab));
     }
 
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn on_swipe(
+        _: *mut c_void,
+        tab: ffi::TabId,
+        phase: c_int,
+        forward: bool,
+        amount: f32,
+        _: *const u8,
+        width: c_int,
+        height: c_int,
+    ) {
+        eprintln!("baa: swipe tab={} phase={phase} forward={forward} amount={amount:.2} picture={width}x{height}", tab_index(tab));
+    }
     extern "C" fn on_focus_requested(_: *mut c_void, tab: ffi::TabId) {
         eprintln!("baa: focus_requested tab={}", tab_index(tab));
     }

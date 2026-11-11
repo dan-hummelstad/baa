@@ -17,6 +17,8 @@ url.workspace = true
 # Already in the graph via gpui (and the app shell): channels from the agent socket's and the
 # chat child's reader threads into the foreground.
 futures = "0.3"
+# Already in the graph via gpui: its RenderImage frames, for history swipe pictures.
+image = { version = "0.25", default-features = false }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

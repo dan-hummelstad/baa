@@ -28,6 +28,7 @@ use crate::{
 
 mod peek;
 mod nav;
+mod swipe;
 mod toss;
 mod menus;
 mod spaces;
@@ -241,6 +242,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) history_menu: Option<HistoryMenu>,
     /// Two-finger swipe across the chrome, in sidebar widths, while one is on.
     swipe: Option<f32>,
+    /// A two-finger history swipe over the page (Safari's sheet).
+    history_swipe: Option<swipe::HistorySwipe>,
+    /// Swipe pictures to take out of gpui's atlas on the next frame.
+    stale_pictures: Vec<std::sync::Arc<gpui::RenderImage>>,
     pub(crate) window: AnyWindowHandle,
     focus: FocusHandle,
     /// Shared by the command bar and find bar; only one is open at a time.
@@ -405,6 +410,8 @@ impl<H: WebHost> Browser<H> {
             nav_press: None,
             history_menu: None,
             swipe: None,
+            history_swipe: None,
+            stale_pictures: Vec::new(),
             window: window.window_handle(),
             focus,
             input_focus: cx.focus_handle(),
@@ -642,6 +649,9 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         self.console_event(id, event, cx);
+        if matches!(event, PageEvent::UrlChanged(_)) {
+            self.swipe_landed(id, cx);
+        }
         let private = self.session.space(space).is_some_and(|s| s.ephemeral);
         let tab = self.session.tab_mut(id).expect("looked up above");
         match event {
@@ -708,6 +718,7 @@ impl<H: WebHost> Browser<H> {
                 window.activate_window();
                 return self.activate_tab(id, window, cx);
             }
+            PageEvent::Swipe { phase, forward, amount } => return self.on_swipe(id, phase, *forward, *amount, cx),
             PageEvent::Muted(on) => {
                 if *on {
                     self.muted.insert(id);

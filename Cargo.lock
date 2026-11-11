@@ -603,6 +603,7 @@ dependencies = [
  "baa-web",
  "futures",
  "gpui",
+ "image",
  "log",
  "serde",
  "serde_json",

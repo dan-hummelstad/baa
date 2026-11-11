@@ -164,6 +164,30 @@ pub enum PageEvent {
     FocusRequested,
     /// The tab's audio was muted or unmuted, by the app or by Chrome.
     Muted(bool),
+    /// A two-finger history swipe over the page, for the shell to draw.
+    /// `forward`: towards the next entry. `amount` 0..1 is how far across; it
+    /// keeps changing while the swipe settles after the fingers lift. The
+    /// engine checked the tab can go that way, and navigates itself after `Done`.
+    Swipe { phase: SwipePhase, forward: bool, amount: f32 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SwipePhase {
+    /// With the page the swipe goes to, as it looked when it was left; `None`
+    /// when the engine has no picture of it.
+    Began(Option<SwipePicture>),
+    Changed,
+    /// Gone through: the tab goes back or forward now.
+    Done,
+    Cancelled,
+}
+
+/// A page's picture: BGRA, premultiplied, top row first, in pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwipePicture {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: std::sync::Arc<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

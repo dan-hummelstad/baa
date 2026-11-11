@@ -12,3 +12,4 @@ baa/color-scheme-hook.patch
 baa/dialog-hooks.patch
 baa/pip-arc.patch
 baa/verify-order-baa-exports.patch
+baa/history-swipe-hook.patch

@@ -24,7 +24,7 @@ use super::{
     PageKind, Shared, Snapshot,
 };
 use crate::{
-    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate,
+    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate, SwipePhase,
     Suggestion,
 };
 
@@ -498,6 +498,19 @@ pub(super) fn callbacks() -> Callbacks {
     extern "C" fn focus_requested(ctx: *mut c_void, tab: TabId) {
         unsafe { dispatch(ctx) }.on_page(tab, |_, cx| cx.emit(PageEvent::FocusRequested));
     }
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn swipe(
+        ctx: *mut c_void,
+        tab: TabId,
+        phase: c_int,
+        forward: bool,
+        amount: f32,
+        bgra: *const u8,
+        width: c_int,
+        height: c_int,
+    ) {
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(swipe_event(phase, forward, amount, bgra, width, height)));
+    }
     Callbacks {
         key,
         tab_created,
@@ -521,7 +534,26 @@ pub(super) fn callbacks() -> Callbacks {
         cdp,
         media,
         focus_requested,
+        swipe,
     }
+}
+
+/// The swipe callback as an event. The picture is copied now: Chrome frees it when the call returns.
+pub(super) fn swipe_event(phase: c_int, forward: bool, amount: f32, bgra: *const u8, width: c_int, height: c_int) -> PageEvent {
+    let phase = match phase {
+        ffi::SWIPE_BEGAN => {
+            let picture = (!bgra.is_null() && width > 0 && height > 0).then(|| {
+                let len = width as usize * height as usize * 4;
+                let pixels = unsafe { std::slice::from_raw_parts(bgra, len) }.to_vec();
+                crate::SwipePicture { width: width as u32, height: height as u32, bgra: std::sync::Arc::new(pixels) }
+            });
+            SwipePhase::Began(picture)
+        }
+        ffi::SWIPE_DONE => SwipePhase::Done,
+        ffi::SWIPE_CANCELLED => SwipePhase::Cancelled,
+        _ => SwipePhase::Changed, // ffi::SWIPE_CHANGED
+    };
+    PageEvent::Swipe { phase, forward, amount: amount.clamp(0.0, 1.0) }
 }
 
 fn dialog_kind(raw: c_int) -> DialogKind {

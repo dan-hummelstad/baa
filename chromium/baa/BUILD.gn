@@ -20,6 +20,7 @@ source_set("baa") {
     "profile.mm",
     "requests.mm",
     "settings.mm",
+    "swipe.mm",
     "tab.mm",
     "window.h",
     "window.mm",
@@ -30,6 +31,7 @@ source_set("baa") {
     "//chrome/browser/lifetime:termination_notification",
     "//chrome/browser/autocomplete",
     "//chrome/browser/hang_monitor",
+    "//chrome/browser/renderer_host:history_swiper",
     "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame:browser_window_factory",
     "//chrome/browser/ui/views/overlay",
@@ -43,6 +45,7 @@ source_set("baa") {
     "//components/permissions",
     "//components/renderer_context_menu",
     "//components/web_modal",
+    "//components/viz/common",
     "//components/zoom",
     "//content/public/browser",
     "//extensions/browser",
@@ -53,6 +56,7 @@ source_set("baa") {
     "//services/network/public/cpp",
     "//ui/base",
     "//ui/events:events_base",
+    "//skia",
     "//url",
   ]
 }

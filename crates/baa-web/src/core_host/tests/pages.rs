@@ -271,3 +271,18 @@ fn a_tab_the_app_closed_is_released_without_a_closed_event(cx: &mut TestAppConte
     assert!(seen.borrow().is_empty());
     assert_eq!(env.tab_of(&page, cx), 0);
 }
+
+#[test]
+fn a_swipe_copies_its_picture_and_keeps_amount_in_range() {
+    use crate::{SwipePhase, SwipePicture};
+    let pixels = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    let began = super::super::dispatch::swipe_event(ffi::SWIPE_BEGAN, true, 1.7, pixels.as_ptr(), 2, 1);
+    let picture = SwipePicture { width: 2, height: 1, bgra: std::sync::Arc::new(pixels.to_vec()) };
+    assert_eq!(began, PageEvent::Swipe { phase: SwipePhase::Began(Some(picture)), forward: true, amount: 1.0 });
+    let none = super::super::dispatch::swipe_event(ffi::SWIPE_BEGAN, false, 0.0, std::ptr::null(), 0, 0);
+    assert_eq!(none, PageEvent::Swipe { phase: SwipePhase::Began(None), forward: false, amount: 0.0 });
+    let done = super::super::dispatch::swipe_event(ffi::SWIPE_DONE, false, 1.0, std::ptr::null(), 0, 0);
+    assert_eq!(done, PageEvent::Swipe { phase: SwipePhase::Done, forward: false, amount: 1.0 });
+    let cancelled = super::super::dispatch::swipe_event(ffi::SWIPE_CANCELLED, false, -0.1, std::ptr::null(), 0, 0);
+    assert_eq!(cancelled, PageEvent::Swipe { phase: SwipePhase::Cancelled, forward: false, amount: 0.0 });
+}

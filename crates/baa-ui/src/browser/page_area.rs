@@ -139,7 +139,7 @@ impl<H: WebHost> Browser<H> {
             .when(across, |d| d.flex_col())
             .when(dock == DevToolsDock::Left, |d| d.flex_row_reverse())
             .child(measure)
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(self.render_swipe(content, window))
             .children(seam)
             .children(tools);
         let body = if panes.len() < 2 {

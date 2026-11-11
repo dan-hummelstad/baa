@@ -1,0 +1,115 @@
+--- a/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiper.mm
++++ b/chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiper.mm
+@@ -9,6 +9,7 @@
+ 
+ #include <optional>
+ 
++#import "chrome/browser/renderer_host/baa_history_swipe_hook.h"
+ #import "chrome/browser/ui/cocoa/history_overlay_controller.h"
+ #include "third_party/blink/public/common/input/web_gesture_event.h"
+ #include "ui/events/blink/did_overscroll_params.h"
+@@ -94,8 +95,13 @@
+ // the event was consumed or NO if it should be passed on to the renderer.
+ - (BOOL)handleMagicMouseWheelEvent:(NSEvent*)theEvent;
+ 
++// baa: tracks a swipe for //baa's g_baa_history_swipe.
++- (void)baaTrackSwipe:(BOOL)forward event:(NSEvent*)event;
++
+ @end
+ 
++BaaHistorySwipeFn g_baa_history_swipe = nullptr;
++
+ @implementation HistorySwiper {
+   // This controller will exist if and only if the UI is in history swipe mode.
+   HistoryOverlayController* __strong _historyOverlay;
+@@ -454,6 +460,10 @@
+ 
+ - (void)initiateMagicMouseHistorySwipe:(BOOL)isRightScroll
+                                  event:(NSEvent*)event {
++  if (g_baa_history_swipe) {
++    [self baaTrackSwipe:isRightScroll event:event];
++    return;
++  }
+   // Released by the tracking handler once the gesture is complete.
+   __block HistoryOverlayController* historyOverlay =
+       [[HistoryOverlayController alloc]
+@@ -523,6 +533,40 @@
+                         historyOverlay = nil;
+                       }
+                     }];
++}
++
++// baa: like the Magic Mouse path, with //baa drawing the swipe. The navigation
++// waits for the settle animation, so the page //baa slides never shows the
++// destination mid-slide.
++- (void)baaTrackSwipe:(BOOL)forward event:(NSEvent*)event {
++  NSView* view = [self.delegate viewThatWantsHistoryOverlay];
++  void* key = (__bridge void*)view;
++  __block BOOL committed = NO;
++  [event trackSwipeEventWithOptions:NSEventSwipeTrackingLockDirection
++           dampenAmountThresholdMin:-1
++                                max:1
++                       usingHandler:^(CGFloat gestureAmount, NSEventPhase phase,
++                                      BOOL isComplete, BOOL* stop) {
++                         if (phase == NSEventPhaseEnded) {
++                           committed = YES;
++                         }
++                         double amount = std::abs(gestureAmount);
++                         if (!isComplete) {
++                           g_baa_history_swipe(
++                               key, phase == NSEventPhaseBegan ? 0 : 1,
++                               forward, amount);
++                           return;
++                         }
++                         g_baa_history_swipe(key, committed ? 2 : 3, forward,
++                                             committed ? 1.0 : 0.0);
++                         if (committed) {
++                           [self.delegate
++                               navigateInDirection:forward
++                                                       ? history_swiper::kForwards
++                                                       : history_swiper::kBackwards
++                                          onWindow:view.window];
++                         }
++                       }];
+ }
+ 
+ - (BOOL)handleScrollWheelEvent:(NSEvent*)theEvent {
+@@ -578,7 +622,7 @@
+   // At this point, if there is a gesture phase but no touches, then this scroll
+   // event is coming from a Magic Mouse, and usage of an alternative swipe
+   // tracking API is required.
+-  if (!_receivingTouchEvents) {
++  if (!_receivingTouchEvents || g_baa_history_swipe) {
+     return [self handleMagicMouseWheelEvent:theEvent];
+   }
+ 
+--- a/chrome/browser/renderer_host/BUILD.gn
++++ b/chrome/browser/renderer_host/BUILD.gn
+@@ -40,6 +40,7 @@
+   # Add a new target so that browser and PWA can have the same DEPS.
+   source_set("history_swiper") {
+     sources = [
++      "baa_history_swipe_hook.h",
+       "chrome_render_widget_host_view_mac_history_swiper.h",
+       "chrome_render_widget_host_view_mac_history_swiper.mm",
+     ]
+--- /dev/null
++++ b/chrome/browser/renderer_host/baa_history_swipe_hook.h
+@@ -0,0 +1,17 @@
++// baa: lets the embedding app (//baa) draw history swipes itself.
++// //chrome cannot depend on //baa, so //baa sets this pointer. Null keeps
++// Chrome's arrow overlay.
++#ifndef CHROME_BROWSER_RENDERER_HOST_BAA_HISTORY_SWIPE_HOOK_H_
++#define CHROME_BROWSER_RENDERER_HOST_BAA_HISTORY_SWIPE_HOOK_H_
++
++// A two-finger history swipe over the page whose RenderWidgetHostView NSView
++// is `view`. `phase` is one of //baa's BAA_SWIPE_* (0 began, 1 changed, 2 done
++// and the navigation follows, 3 cancelled); `amount` runs 0..1, how far across.
++// The swipe never goes where the tab cannot (Chrome checks first).
++using BaaHistorySwipeFn = void (*)(void* view,
++                                   int phase,
++                                   bool forward,
++                                   double amount);
++extern BaaHistorySwipeFn g_baa_history_swipe;
++
++#endif  // CHROME_BROWSER_RENDERER_HOST_BAA_HISTORY_SWIPE_HOOK_H_
