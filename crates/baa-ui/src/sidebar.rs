@@ -9,7 +9,7 @@ use baa_model::{Folder, FolderId, SpaceId, Tab, TabId, Zone};
 use baa_web::{PageHandle, WebHost};
 use gpui::{
     div, img, prelude::*, pulsating_between, px, Animation, AnimationExt, AnyElement, Context,
-    Hsla, MouseButton, SharedString, Stateful, StyledImage, Transformation, Window, Div,
+    DragMoveEvent, Hsla, MouseButton, SharedString, Stateful, StyledImage, Transformation, Window, Div,
 };
 
 use crate::{
@@ -73,11 +73,21 @@ impl<H: WebHost> Browser<H> {
             .map(|s| (s.icon.clone(), s.name.clone()))
             .unwrap_or_default();
 
+        let today: List = (space, Zone::Today, None);
+        let pinned: List = (space, Zone::Pinned, None);
         let lists = div()
             .id("zones")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            // One place takes the drop, wherever in the lists the pointer is: the tab lands
+            // where the line shows, also from the gap between two rows.
+            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                if !e.bounds.contains(&e.event.position) {
+                    this.aim_drop(None, cx);
+                }
+            }))
+            .on_drop(cx.listener(|this, d: &DraggedTab, window, cx| this.drop_tab(d.id, window, cx)))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| {
@@ -186,14 +196,11 @@ impl<H: WebHost> Browser<H> {
                     this.open_menu(MenuKind::Today, e.position, window, cx);
                 }),
             )
-            // The gap above the divider is the end of Pinned.
-            .drag_over::<DraggedTab>({
-                let hover = theme.glass;
-                move |s, _, _, _| s.bg(hover).rounded(r(10.))
-            })
-            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                this.session.move_tab(d.id, space, Zone::Pinned, usize::MAX);
-                this.sync(window, cx);
+            // The whole divider is the end of Pinned.
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                if e.bounds.contains(&e.event.position) {
+                    this.aim_drop(Some((pinned, this.list_len(pinned))), cx);
+                }
             })))
             .child(
                 {
@@ -202,6 +209,7 @@ impl<H: WebHost> Browser<H> {
                     feel(
                         div()
                             .id("new-tab")
+                            .debug_selector(|| "new-tab".into())
                             .flex()
                             .flex_none()
                             .items_center()
@@ -217,6 +225,12 @@ impl<H: WebHost> Browser<H> {
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.open_bar(Mode::NewTab, window, cx)),
                             )
+                            // New tabs open under this row, and a dropped one lands there too.
+                            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                                if e.bounds.contains(&e.event.position) {
+                                    this.aim_drop(Some((today, 0)), cx);
+                                }
+                            }))
                             // The plus turns a quarter as the pointer arrives.
                             .child(icon("plus", 16., mix(theme.ink_muted, theme.ink, h)).with_transformation(
                                 Transformation::rotate(gpui::radians(h * std::f32::consts::FRAC_PI_2)),
@@ -230,7 +244,15 @@ impl<H: WebHost> Browser<H> {
                     )
                 },
             )
-            .child(self.render_zone(space, Zone::Today, theme, cx));
+            .child(self.render_zone(space, Zone::Today, theme, cx))
+            // Under the last tab: the end of Today.
+            .child(div().flex_1().min_h(px(row_h())).on_drag_move(cx.listener(
+                move |this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                    if e.bounds.contains(&e.event.position) {
+                        this.aim_drop(Some((today, this.list_len(today))), cx);
+                    }
+                },
+            )));
 
         div()
             .w(px(SIDEBAR_WIDTH))
@@ -336,8 +358,11 @@ impl<H: WebHost> Browser<H> {
             .filter(|(_, t)| self.split_lead(t))
             .map(|(i, tab)| (self.row_shown(tab.id, 1.0), self.render_tab_entry(tab, i, 1.0, theme, cx)))
             .collect();
-        let rows = stack(self.with_ghosts(rows, (space, zone, None), theme), false);
-        let hover = theme.glass;
+        let list: List = (space, zone, None);
+        // An empty zone has no row to carry the line.
+        let empty = rows.is_empty();
+        let line = (empty && self.drop_slot(cx).is_some_and(|(l, _)| l == list)).then(|| drop_line(theme).top(px(3.)));
+        let rows = stack(self.with_ghosts(rows, list, theme), false);
         div()
             .id(match zone {
                 Zone::Pinned => "pinned",
@@ -350,13 +375,14 @@ impl<H: WebHost> Browser<H> {
             // No gap: `stack` spaces the rows.
             // An empty zone still needs somewhere to drop.
             .min_h(px(8.))
-            .rounded(r(10.))
-            .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hover))
-            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                this.session.move_tab(d.id, space, zone, usize::MAX);
-                this.sync(window, cx);
+            .relative()
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                if empty && e.bounds.contains(&e.event.position) {
+                    this.aim_drop(Some((list, 0)), cx);
+                }
             }))
             .children(rows)
+            .children(line)
     }
 
     /// `rows` with the rows that just left `list` collapsing at their old places.
@@ -446,14 +472,29 @@ impl<H: WebHost> Browser<H> {
     // ponytail: the group row takes the lead pane's drop index; dropping above it puts a
     // tab next to that pane only.
     fn render_tab_entry(&self, tab: &Tab, index: usize, shown: f32, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        // The line sits in the gap above the row the tab would land before, or under the
+        // last row of its list. ponytail: no line where the next place is a split's hidden
+        // pane; the drop still lands there.
+        let list: List = (tab.space, tab.zone, tab.folder);
+        let line = self.drop_slot(cx).filter(|(l, _)| *l == list).and_then(|(_, slot)| {
+            let at = px(-(ROW_GAP / 2.) - 1.);
+            if slot == index {
+                Some(drop_line(theme).top(at))
+            } else if slot == index + 1 && slot == self.list_len(list) {
+                Some(drop_line(theme).bottom(at))
+            } else {
+                None
+            }
+        });
         let Some(panes) = self.split_of(tab) else {
-            return self.render_tab_row(tab, index, shown, theme, cx).into_any_element();
+            let row = self.render_tab_row(tab, index, shown, theme, cx);
+            return div().relative().child(row).children(line).into_any_element();
         };
         let mut rows = Vec::new();
         for t in panes.iter().filter_map(|id| self.session.tab(*id)) {
             rows.push(div().flex_1().min_w_0().child(self.render_tab_row(t, index, shown, theme, cx)));
         }
-        div().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).into_any_element()
+        div().relative().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).children(line).into_any_element()
     }
 
     fn render_tab_row(
@@ -487,6 +528,7 @@ impl<H: WebHost> Browser<H> {
 
         let row = div()
             .id(("tab", id.0))
+            .debug_selector(move || format!("tab-row:{}", id.0))
             .flex()
             .flex_none()
             .items_center()
@@ -518,13 +560,13 @@ impl<H: WebHost> Browser<H> {
                 cx.listener(move |this, _, window, cx| this.close_tab_id(id, window, cx)),
             )
             .on_drag(drag, |d, _, _, cx| cx.new(|_| d.clone()))
-            .drag_over::<DraggedTab>(move |s, _, _, _| s.border_t_2().border_color(accent))
-            .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
-                match folder {
-                    Some(folder) => this.session.move_to_folder(d.id, folder, index),
-                    None => this.session.move_tab(d.id, space, zone, index),
+            // Its upper half is the place before it, its lower half the place after: the end
+            // of a list (Pinned, a folder, Today) is the lower half of its last row.
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                if e.bounds.contains(&e.event.position) {
+                    let after = e.event.position.y > e.bounds.center().y;
+                    this.aim_drop(Some(((space, zone, folder), index + after as usize)), cx);
                 }
-                this.sync(window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -823,6 +865,12 @@ impl<H: WebHost> Browser<H> {
                             this.open_menu(MenuKind::Folder(id), e.position, window, cx);
                         }),
                     )
+                    // Over the folder itself the tab goes into it (its end): no line elsewhere.
+                    .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                        if e.bounds.contains(&e.event.position) {
+                            this.aim_drop(None, cx);
+                        }
+                    }))
                     .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(glass))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
                         this.session.move_to_folder(d.id, id, usize::MAX);
@@ -849,6 +897,45 @@ impl<H: WebHost> Browser<H> {
                 )
             })
             .into_any_element()
+    }
+
+    /// Tabs in `list`, split panes and all: the place after its last one.
+    fn list_len(&self, (space, zone, folder): List) -> usize {
+        match folder {
+            Some(folder) => self.session.folder_tabs(folder).count(),
+            None => self.session.tabs(space, zone).count(),
+        }
+    }
+
+    /// The slot to draw a line at: only while something is being dragged.
+    fn drop_slot(&self, cx: &Context<Self>) -> Option<(List, usize)> {
+        self.drop_at.filter(|_| cx.has_active_drag())
+    }
+
+    pub(crate) fn aim_drop(&mut self, at: Option<(List, usize)>, cx: &mut Context<Self>) {
+        if self.drop_at != at {
+            self.drop_at = at;
+            cx.notify();
+        }
+    }
+
+    /// Lands the dragged tab where the line shows; nowhere when there is none.
+    pub(crate) fn drop_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((list, slot)) = self.drop_at.take() else { return };
+        let (space, zone, folder) = list;
+        let here = self.session.tab(id).filter(|t| (t.space, t.zone, t.folder) == list).is_some();
+        let from = here
+            .then(|| match folder {
+                Some(folder) => self.session.folder_tabs(folder).position(|t| t.id == id),
+                None => self.session.tabs(space, zone).position(|t| t.id == id),
+            })
+            .flatten();
+        let index = landing(slot, from);
+        match folder {
+            Some(folder) => self.session.move_to_folder(id, folder, index),
+            None => self.session.move_tab(id, space, zone, index),
+        }
+        self.sync(window, cx);
     }
 
     /// Library, the Space dots, and New Space.
@@ -945,6 +1032,17 @@ impl<H: WebHost> Browser<H> {
 /// everything below at its own pace. `lead`: a gap above the first row too.
 /// (Margins only ever grow: gpui's layout keeps a list's height stale when its
 /// rows pull a gap back with a negative margin, and what is below then lags.)
+/// Where a tab dropped on `slot` goes once it is lifted out of the list: slots count the
+/// list as drawn, the dragged tab (at `from`, if it is in this list) included.
+pub(crate) fn landing(slot: usize, from: Option<usize>) -> usize {
+    slot - from.is_some_and(|from| from < slot) as usize
+}
+
+/// The insertion line, for the gap between two rows; the caller places it.
+fn drop_line(theme: &Theme) -> Div {
+    div().debug_selector(|| "drop-line".into()).absolute().left(px(6.)).right(px(6.)).h(px(2.)).rounded_full().bg(theme.accent)
+}
+
 fn stack(rows: Vec<(f32, AnyElement)>, lead: bool) -> Vec<AnyElement> {
     let mut before: f32 = if lead { 1. } else { 0. };
     rows.into_iter()

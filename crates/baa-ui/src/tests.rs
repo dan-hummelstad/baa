@@ -1369,3 +1369,137 @@ fn a_tab_dropped_on_the_page_joins_the_split(cx: &mut TestAppContext) {
     });
     assert_eq!(shown(&b, cx).len(), 2);
 }
+
+/// Presses on `tab`'s row and drags it to `to`, without letting go.
+fn drag_tab_to(cx: &mut VisualTestContext, tab: baa_model::TabId, to: gpui::Point<gpui::Pixels>) {
+    use gpui::{point, px, Modifiers, MouseButton};
+    let start = row_of(cx, tab).center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    // Far enough to become a drag, then to the target; each move draws, as a real pointer's does.
+    for at in [start + point(px(0.), px(8.)), to, to] {
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    }
+}
+
+/// Lets go, then draws frames until the rows have finished moving, so their bounds are final.
+fn let_go(cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>) {
+    cx.simulate_mouse_up(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    settle(cx);
+}
+
+fn settle(cx: &mut VisualTestContext) {
+    for _ in 0..60 {
+        cx.executor().advance_clock(std::time::Duration::from_millis(33));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+}
+
+fn row_of(cx: &mut VisualTestContext, tab: baa_model::TabId) -> gpui::Bounds<gpui::Pixels> {
+    let selector: &'static str = Box::leak(format!("tab-row:{}", tab.0).into_boxed_str());
+    cx.debug_bounds(selector).unwrap_or_else(|| panic!("no row for {tab:?}"))
+}
+
+/// A quarter of the way into a row from its top (`false`) or its bottom (`true`).
+fn half(bounds: gpui::Bounds<gpui::Pixels>, lower: bool) -> gpui::Point<gpui::Pixels> {
+    let quarter = gpui::point(gpui::px(0.), bounds.size.height / 4.);
+    if lower { bounds.center() + quarter } else { bounds.center() - quarter }
+}
+
+#[gpui::test]
+fn a_dragged_tab_lands_where_the_line_between_rows_shows(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example", "c.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let ids = |b: &Entity<Browser<MockHost>>, zone: Zone, cx: &mut VisualTestContext| -> Vec<baa_model::TabId> {
+        b.read_with(cx, |b, _| b.session().tabs(b.session().active_space().unwrap(), zone).map(|t| t.id).collect())
+    };
+    let today = ids(&b, Zone::Today, cx);
+    let (c, bb, a) = (today[0], today[1], today[2]);
+    settle(cx);
+
+    // The lower half of the last row is the end of the list, and the line is under that row,
+    // in the open, not on a row's edge.
+    let last = row_of(cx, a);
+    drag_tab_to(cx, c, half(last, true));
+    let line = cx.debug_bounds("drop-line").expect("a line shows where it would land");
+    assert!(line.top() >= last.bottom() && line.bottom() <= last.bottom() + gpui::px(6.), "under the last row: {line:?} {last:?}");
+    let_go(cx, half(last, true));
+    assert_eq!(ids(&b, Zone::Today, cx), [bb, a, c]);
+    assert!(cx.debug_bounds("drop-line").is_none(), "the line goes with the drag");
+
+    // The upper half of a row is the place before it: the line is in the gap above.
+    let (first, second) = (row_of(cx, bb), row_of(cx, a));
+    drag_tab_to(cx, c, half(second, false));
+    let line = cx.debug_bounds("drop-line").unwrap();
+    assert!(line.top() >= first.bottom() && line.bottom() <= second.top(), "between the two rows: {line:?}");
+    let_go(cx, half(second, false));
+    assert_eq!(ids(&b, Zone::Today, cx), [bb, c, a]);
+
+    // The divider is the end of Pinned; the lower half of the last pinned row is too.
+    let rule = cx.debug_bounds("today-rule").unwrap().center();
+    drag_tab_to(cx, a, rule);
+    let_go(cx, rule);
+    assert_eq!((ids(&b, Zone::Pinned, cx), ids(&b, Zone::Today, cx)), (vec![a], vec![bb, c]));
+    let at = half(row_of(cx, a), true);
+    drag_tab_to(cx, c, at);
+    let_go(cx, at);
+    assert_eq!((ids(&b, Zone::Pinned, cx), ids(&b, Zone::Today, cx)), (vec![a, c], vec![bb]));
+
+    // The New Tab row is the start of Today.
+    let new_tab = cx.debug_bounds("new-tab").unwrap().center();
+    drag_tab_to(cx, a, new_tab);
+    let_go(cx, new_tab);
+    assert_eq!((ids(&b, Zone::Pinned, cx), ids(&b, Zone::Today, cx)), (vec![c], vec![a, bb]));
+
+    // The lower half of a folder's last row is the end of that folder.
+    let folder = b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        let folder = b.session.add_folder(space, "Work");
+        b.session.move_to_folder(c, folder, 0);
+        b.sync(window, cx);
+        folder
+    });
+    settle(cx);
+    let at = half(row_of(cx, c), true);
+    drag_tab_to(cx, bb, at);
+    let_go(cx, at);
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.session().folder_tabs(folder).map(|t| t.id).collect::<Vec<_>>(), [c, bb]);
+    });
+    assert_eq!(ids(&b, Zone::Today, cx), [a]);
+
+    // On the folder itself the tab goes into it, and no line shows elsewhere.
+    let header = cx.debug_bounds("folder-row").unwrap().center();
+    drag_tab_to(cx, a, header);
+    assert!(cx.debug_bounds("drop-line").is_none());
+    let_go(cx, header);
+    let in_folder = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| -> Vec<baa_model::TabId> {
+        b.read_with(cx, |b, _| b.session().folder_tabs(folder).map(|t| t.id).collect())
+    };
+    assert_eq!((in_folder(&b, cx), ids(&b, Zone::Today, cx)), (vec![c, bb, a], vec![]));
+
+    // An empty list still shows where the tab would land.
+    drag_tab_to(cx, a, new_tab);
+    assert!(cx.debug_bounds("drop-line").is_some());
+    // Let go off the lists (the toolbar; the page would take it into a split): nothing moves.
+    let off = gpui::point(gpui::px(200.), gpui::px(14.));
+    cx.simulate_mouse_move(off, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("drop-line").is_none());
+    let_go(cx, off);
+    assert_eq!((in_folder(&b, cx), ids(&b, Zone::Today, cx)), (vec![c, bb, a], vec![]));
+}
+
+#[test]
+fn a_slot_counts_the_dragged_tab_until_it_is_lifted_out() {
+    use crate::sidebar::landing;
+    assert_eq!(landing(3, None), 3, "from another list: the slot is the place");
+    assert_eq!(landing(3, Some(0)), 2, "from above the slot: one place fewer once it is out");
+    assert_eq!(landing(1, Some(2)), 1, "from below: unchanged");
+    assert_eq!((landing(2, Some(2)), landing(3, Some(2))), (2, 2), "either side of itself: it stays");
+}

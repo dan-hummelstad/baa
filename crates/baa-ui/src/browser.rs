@@ -167,6 +167,9 @@ pub struct Browser<H: WebHost> {
     placements: Option<HashMap<TabId, Placement>>,
     /// Rows that just left a list, collapsing where they were.
     pub(crate) ghosts: Vec<Ghost>,
+    /// Where the dragged tab would land: a list and the place in it, counted with the
+    /// list as it is drawn (`sidebar.rs`).
+    pub(crate) drop_at: Option<(List, usize)>,
     shown_tab: Option<TabId>,
     /// The panes on screen at the last sync; a playing one that leaves goes to PiP.
     on_screen: Vec<TabId>,
@@ -362,6 +365,7 @@ impl<H: WebHost> Browser<H> {
             motion: Motion::default(),
             placements: None,
             ghosts: Vec::new(),
+            drop_at: None,
             shown_tab: None,
             on_screen: Vec::new(),
             pipped: HashSet::new(),
@@ -1147,6 +1151,10 @@ impl<H: WebHost> Render for Browser<H> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Before the tick, so a changed look starts its fade in this frame.
         self.sync_dark(window);
+        // A drag that ended anywhere but on the lists leaves its slot behind.
+        if !cx.has_active_drag() {
+            self.drop_at = None;
+        }
         self.tick_motion(window, cx);
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         self.push_webui_skin();
