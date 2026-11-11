@@ -119,6 +119,8 @@ pub(crate) fn check_hello(line: &str, token: &str, nonce: Option<&(String, Insta
     }
 }
 
+// ponytail: recorded and tested, but the panel does not show it yet (PLAN-m4 "activity log in the panel"); drop the allow when it does.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct Activity {
     /// The tool's name, "list_tabs".
     pub tool: &'static str,
