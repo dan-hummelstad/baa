@@ -103,7 +103,10 @@ impl Element for PageSlot {
                 return;
             }
             if let Some(view) = shared.drag.take().filter(|_| event.pressed_button.is_some()) {
-                shared.drag.set(native::forward_current_event(shared.container.page(), Some(&view)));
+                // gpui repeats a held drag from a timer, with no NSEvent to hand on: the
+                // target stays, or the release would never reach the page.
+                let sent = native::forward_current_event(shared.container.page(), Some(&view));
+                shared.drag.set(sent.or(Some(view)));
                 return;
             }
             // Moves over the page, and the first one off it so hover ends.

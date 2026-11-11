@@ -142,6 +142,43 @@ fn a_replaced_view_is_swapped_in_inside_the_callback(cx: &mut TestAppContext) {
     page.read_with(cx, |page, _| assert_eq!(page.shared.container.page(), new));
 }
 
+/// gpui re-sends a held drag every 16 ms from a timer, with no NSEvent behind it (as every
+/// simulated event here). The drag's target must outlive those, or the page never hears the
+/// release: a dragged map stays held, and a click that moved a pixel never clicks.
+#[gpui::test]
+fn a_held_drag_keeps_its_target_until_the_release(cx: &mut TestAppContext) {
+    struct Shows(Entity<CorePage>);
+    impl Render for Shows {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            use gpui::{ParentElement, Styled};
+            div().size_full().child(self.0.clone())
+        }
+    }
+    let env = Env::new(cx);
+    let (view, widget) = (new_view(), new_view());
+    unsafe {
+        let _: () = msg_send![view, addSubview: widget];
+    }
+    let page = env.page_with_view(view, cx);
+    let shared = page.read_with(cx, |page, _| page.shared.clone());
+    let (_, vcx) = cx.add_window_view(|_, _| Shows(page.clone()));
+    vcx.run_until_parked();
+    let at = gpui::point(gpui::px(20.), gpui::px(20.));
+    shared.drag.set(unsafe { objc2::rc::Retained::retain(widget) });
+
+    vcx.simulate_mouse_move(at, Some(gpui::MouseButton::Left), gpui::Modifiers::none());
+    let held = shared.drag.take();
+    assert!(held.is_some(), "a drag tick with nothing to forward keeps the target");
+    shared.drag.set(held);
+    vcx.simulate_mouse_up(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+    assert!(shared.drag.take().is_none(), "the release ends the drag");
+
+    // No button down: the release was missed, and the next move ends it.
+    shared.drag.set(unsafe { objc2::rc::Retained::retain(widget) });
+    vcx.simulate_mouse_move(at, None, gpui::Modifiers::none());
+    assert!(shared.drag.take().is_none());
+}
+
 #[gpui::test]
 fn a_drag_target_is_dropped_with_its_view(cx: &mut TestAppContext) {
     let env = Env::new(cx);
