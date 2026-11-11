@@ -40,7 +40,7 @@ pub(crate) fn init<H: WebHost>(b: &Browser<H>, cx: &mut App) {
 
 /// Each new window steps down and right from the centre, so none hides another exactly.
 pub fn window_options(cx: &App) -> WindowOptions {
-    let step = px(24. * cx.windows().len().saturating_sub(1) as f32);
+    let step = px(24. * cx.windows().len() as f32);
     let mut bounds = Bounds::centered(None, size(px(1280.), px(860.)), cx);
     bounds.origin += point(step, step);
     WindowOptions {
@@ -134,6 +134,21 @@ impl<H: WebHost> Browser<H> {
         cx.defer(move |cx| {
             open_window::<H>(private, cx);
         });
+    }
+
+    /// The shown tab's title, else the Space's name, as Arc names its windows.
+    pub(crate) fn window_title(&self) -> String {
+        let shown = self
+            .active_tab()
+            .and_then(|id| self.session.tab(id))
+            .map(|t| if t.title.is_empty() { t.url.clone() } else { t.title.clone() })
+            .or_else(|| self.active_space().map(|s| s.name.clone()))
+            .unwrap_or_else(|| "baa".into());
+        if self.private {
+            format!("Incognito — {shown}")
+        } else {
+            shown
+        }
     }
 
     /// The other regular windows.

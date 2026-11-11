@@ -159,3 +159,13 @@ fn cmd_n_opens_a_window_except_in_the_chat(cx: &mut TestAppContext) {
     cx.cx.run_until_parked();
     assert_eq!(cx.cx.windows().len(), 2);
 }
+
+#[gpui::test]
+fn windows_are_named_by_what_they_show(cx: &mut TestAppContext) {
+    let (a, cx) = browser(cx);
+    a.read_with(cx, |a, _| assert_eq!(a.window_title(), "Personal"));
+    go(cx, "a.example");
+    a.read_with(cx, |a, _| assert_eq!(a.window_title(), "https://a.example/"));
+    let (p, pcx) = open(cx, true);
+    p.read_with(pcx, |p, _| assert_eq!(p.window_title(), "Incognito — Incognito"));
+}

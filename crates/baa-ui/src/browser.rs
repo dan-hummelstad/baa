@@ -125,6 +125,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) unshared: bool,
     /// Taking another window's session: nothing is saved or sent back, no page is taken.
     pub(crate) adopting: bool,
+    /// What macOS lists this window as (dock menu, Window menu); the titlebar hides it.
+    window_title: String,
     pub(crate) session: Session,
     pub(crate) settings: baa_model::Settings,
     pub(crate) pages: HashMap<TabId, (Entity<H::Page>, Subscription)>,
@@ -378,6 +380,7 @@ impl<H: WebHost> Browser<H> {
             private,
             unshared: false,
             adopting: false,
+            window_title: String::new(),
             // None, so the first sync puts the dots' pill on the Space the session opens in.
             shown_space: None,
             session,
@@ -1257,6 +1260,11 @@ impl<H: WebHost> Render for Browser<H> {
         }
         self.tick_motion(window, cx);
         self.share_session(cx);
+        let title = self.window_title();
+        if title != self.window_title {
+            window.set_window_title(&title);
+            self.window_title = title;
+        }
         crate::theme::set_ascii(self.settings.chrome == baa_model::ChromeStyle::Ascii);
         self.push_webui_skin();
         if let Some(view) = self.fullscreen_view(window, cx) {
