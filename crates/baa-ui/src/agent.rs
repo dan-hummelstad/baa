@@ -15,7 +15,7 @@ use std::{
     io::{BufRead as _, Write as _},
     os::unix::net::UnixStream,
     sync::mpsc as std_mpsc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use baa_model::{FolderId, SpaceId, TabId};
@@ -124,7 +124,6 @@ pub(crate) struct Activity {
     pub tool: &'static str,
     /// The host or Space it touched, "" for none.
     pub target: String,
-    pub at: SystemTime,
     /// Refused (out of scope, denied, failed).
     pub refused: bool,
 }
@@ -630,7 +629,7 @@ impl<H: WebHost> Browser<H> {
         if self.agent.activity.len() == ACTIVITY_CAP {
             self.agent.activity.remove(0);
         }
-        self.agent.activity.push(Activity { tool, target: target.into(), at: SystemTime::now(), refused });
+        self.agent.activity.push(Activity { tool, target: target.into(), refused });
     }
 
     fn log(&mut self, tool: &'static str, kind: Kind, target: &str, refused: bool) {

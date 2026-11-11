@@ -103,6 +103,7 @@ pub const CLOSED_BY_APP: c_int = 2;
 
 pub const DOCK_RIGHT: c_int = 0;
 pub const SWIPE_BEGAN: c_int = 0;
+#[cfg_attr(not(test), allow(dead_code))] // the header test mirrors it; dispatch reads any other phase as changed
 pub const SWIPE_CHANGED: c_int = 1;
 pub const SWIPE_DONE: c_int = 2;
 pub const SWIPE_CANCELLED: c_int = 3;

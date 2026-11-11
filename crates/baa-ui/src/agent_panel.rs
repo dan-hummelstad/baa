@@ -104,7 +104,9 @@ pub(crate) struct Panel {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     /// A message is out and its turn has not ended.
-    busy: bool,
+    pub(crate) busy: bool,
+    /// What the thinking row says for this turn.
+    quip: &'static str,
     not_found: bool,
     not_logged_in: bool,
     /// Bumped by every kill, so a reader task of an older child stops.
@@ -116,6 +118,45 @@ pub(crate) struct Panel {
     /// Tabs added with "Add context"; the active tab counts unless `hide_active`.
     context: Vec<TabId>,
     hide_active: bool,
+}
+
+/// Claude Code's way of saying "working on it": one playful verb per turn.
+const QUIPS: &[&str] = &[
+    "Thinking", "Pondering", "Musing", "Noodling", "Percolating", "Mulling", "Ruminating", "Cogitating",
+    "Brewing", "Tinkering", "Wrangling", "Untangling", "Simmering", "Conjuring", "Sleuthing", "Grazing",
+];
+/// A star that twinkles through these while the turn runs.
+const TWINKLE: &[&str] = &["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+
+fn quip() -> &'static str {
+    // ponytail: the clock's nanoseconds as the dice; nothing here needs real randomness.
+    let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    QUIPS[n as usize % QUIPS.len()]
+}
+
+/// "✻ Pondering…", the star twinkling and the words breathing, until the turn ends.
+fn thinking(quip: &'static str, theme: &Theme) -> impl IntoElement {
+    use gpui::{pulsating_between, Animation, AnimationExt};
+    let star = div().w(px(12.)).flex_none().text_color(theme.accent).with_animation(
+        "chat-twinkle",
+        Animation::new(std::time::Duration::from_millis(1200)).repeat(),
+        |d, t| d.child(TWINKLE[((t * TWINKLE.len() as f32) as usize).min(TWINKLE.len() - 1)]),
+    );
+    div()
+        .id("chat-thinking")
+        .debug_selector(|| "chat-thinking".into())
+        .flex_none()
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .text_size(px(12.5))
+        .child(star)
+        .child(div().text_color(theme.ink_muted).child(format!("{quip}…")).with_animation(
+            "chat-breathe",
+            Animation::new(std::time::Duration::from_millis(1600)).repeat().with_easing(pulsating_between(0.45, 1.0)),
+            |d, t| d.opacity(t),
+        ))
 }
 
 /// One stream-json line from the child as transcript entries; anything unknown is nothing.
@@ -324,6 +365,7 @@ impl<H: WebHost> Browser<H> {
         }
         p.field.text.clear();
         p.busy = true;
+        p.quip = quip();
         p.not_logged_in = false;
         p.switcher = false;
         p.chat.transcript.push(Entry::User(text.clone()));
@@ -767,27 +809,8 @@ impl<H: WebHost> Browser<H> {
                     Entry::Notice(t) => row.px(px(4.)).text_color(theme.accent).child(SharedString::from(t.clone())),
                     Entry::Done => return None,
                 })
-            }));
-
-        let log = (!self.agent.activity.is_empty()).then(|| {
-            div()
-                .id("agent-activity")
-                .flex_none()
-                .max_h(px(110.))
-                .overflow_y_scroll()
-                .py(px(6.))
-                .border_t_1()
-                .border_color(theme.divider)
-                .text_size(px(11.))
-                .text_color(soft)
-                .children(self.agent.activity.iter().rev().take(30).enumerate().map(|(i, a)| {
-                    let at = a.at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-                    // UTC: no timezone database here.
-                    let (h, m, s) = (at / 3600 % 24, at / 60 % 60, at % 60);
-                    let mark = if a.refused { " · refused" } else { "" };
-                    div().id(("agent-act", i)).truncate().child(SharedString::from(format!("{} · {} · {h:02}:{m:02}:{s:02}{mark}", a.tool, a.target)))
-                }))
-        });
+            }))
+            .when(p.busy, |d| d.child(thinking(p.quip, theme)));
 
         let note = |text: &'static str| div().text_size(px(12.5)).text_color(theme.ink).child(text);
         let foot = div()
@@ -929,7 +952,6 @@ impl<H: WebHost> Browser<H> {
                 .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| this.on_panel_key(e, window, cx)))
                 .child(header)
                 .child(transcript)
-                .children(log)
                 .child(foot)
                 .children(switcher)
                 .into_any_element(),
