@@ -51,7 +51,7 @@ pub(crate) struct Chat {
     id: i64,
     /// An incognito tab was in its context or Space; never stored.
     private: bool,
-    transcript: Vec<Entry>,
+    pub(crate) transcript: Vec<Entry>,
     /// `claude`'s id for this chat, so a switch or a restart resumes it.
     session: Option<String>,
     /// When the chat last had a message, and the site it began on.
@@ -98,9 +98,9 @@ fn restore(r: ChatRecord) -> Option<Chat> {
 #[derive(Default)]
 pub(crate) struct Panel {
     focus: Option<FocusHandle>,
-    field: TextField,
+    pub(crate) field: TextField,
     /// The open chat.
-    chat: Chat,
+    pub(crate) chat: Chat,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     /// A message is out and its turn has not ended.
@@ -731,6 +731,7 @@ impl<H: WebHost> Browser<H> {
                 Some(match e {
                     Entry::User(t) => row.flex().justify_end().child(
                         div()
+                            .debug_selector(|| "chat-user".into())
                             .max_w(gpui::relative(0.8))
                             .px(px(13.))
                             .py(px(10.))
@@ -742,7 +743,7 @@ impl<H: WebHost> Browser<H> {
                             .text_color(theme.ink)
                             .child(SharedString::from(t.clone())),
                     ),
-                    Entry::Assistant(t) => row.px(px(4.)).text_color(theme.ink).child(markdown::render(&markdown::parse(t), theme)),
+                    Entry::Assistant(t) => row.debug_selector(|| "chat-reply".into()).px(px(4.)).text_color(theme.ink).child(markdown::render(&markdown::parse(t), theme)),
                     // Claude.ai and ChatGPT show reasoning as a quiet, indented aside, not as the answer.
                     Entry::Thinking(t) => row
                         .px(px(4.))
@@ -875,7 +876,8 @@ impl<H: WebHost> Browser<H> {
                 .child(div().flex().flex_wrap().gap(px(6.)).children(chips).child(add))
                 .child(
                     div()
-                        .h(px(38.))
+                        .min_h(px(38.))
+                        .py(px(9.))
                         .px(px(11.))
                         .flex()
                         .items_center()
@@ -885,7 +887,7 @@ impl<H: WebHost> Browser<H> {
                         .border_color(if ascii() { theme.accent } else { Hsla { a: 0.77, ..gpui::white() } })
                         .bg(milk(0.68))
                         .text_size(px(12.5))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(p.field.render(
+                        .child(div().debug_selector(|| "chat-field".into()).flex_1().min_w_0().child(p.field.render_wrapped(
                             "Ask baa…",
                             theme.ink,
                             soft,
@@ -916,6 +918,7 @@ impl<H: WebHost> Browser<H> {
         Some(
             div()
                 .id("agent-panel")
+                .debug_selector(|| "agent-panel-body".into())
                 .relative()
                 .flex_1()
                 .min_w_0()

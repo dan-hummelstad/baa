@@ -152,6 +152,15 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// The section it was last on (⌘⇧L and the sidebar's Library button).
+    pub(crate) fn open_library_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.library_last {
+            // Chat also takes focus for its field.
+            Section::Chat => self.open_chat(window, cx),
+            last => self.open_library(last, cx),
+        }
+    }
+
     /// The Library always shows docked; closing it brings back the user's `sidebar_open`, which it never changes.
     pub(crate) fn docked(&self) -> bool {
         self.sidebar_open || self.library.is_some()

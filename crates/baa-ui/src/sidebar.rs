@@ -1005,7 +1005,7 @@ impl<H: WebHost> Browser<H> {
             .relative()
             .top(px(-4. * hop))
             .child(gpui::canvas(move |bounds, _, _| at.set(bounds), |_, _, _, _| {}).absolute().size_full())
-            .on_click(cx.listener(|this, _, _, cx| this.open_library(crate::library::Section::Downloads, cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.open_library_last(window, cx)));
         let add = self
             .icon_button("add-space", "plus", true, 0., plus_turn, theme, cx)
             .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx)));

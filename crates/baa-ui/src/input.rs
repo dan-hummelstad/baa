@@ -92,7 +92,31 @@ impl TextField {
         dim: Hsla,
         selection: Hsla,
     ) -> impl IntoElement {
+        self.render_with(false, placeholder, text, dim, selection)
+    }
+
+    /// Long text flows onto more lines instead of being cut at the edge.
+    pub fn render_wrapped(
+        &self,
+        placeholder: &'static str,
+        text: Hsla,
+        dim: Hsla,
+        selection: Hsla,
+    ) -> impl IntoElement {
+        self.render_with(true, placeholder, text, dim, selection)
+    }
+
+    fn render_with(
+        &self,
+        wrap: bool,
+        placeholder: &'static str,
+        text: Hsla,
+        dim: Hsla,
+        selection: Hsla,
+    ) -> impl IntoElement {
         let empty = self.text.is_empty();
+        // Wrapped, a caret beside the block would sit at its right edge, not after the last word.
+        let inline_caret = wrap && !empty;
         let caret = || div().flex_shrink_0().w(px(1.5)).h(px(16.)).bg(text);
         div()
             .flex()
@@ -103,7 +127,8 @@ impl TextField {
             .when(empty, |d| d.child(caret()))
             .child(
                 div()
-                    .truncate()
+                    .when(!wrap, |d| d.truncate())
+                    .when(wrap, |d| d.flex_1().min_w_0())
                     // Tight to the glyphs, so the selection hugs the text.
                     .line_height(gpui::relative(1.25))
                     .when(self.all_selected && !empty, |d| {
@@ -114,11 +139,13 @@ impl TextField {
                         placeholder.to_string()
                     } else if self.masked {
                         "\u{2022}".repeat(self.text.chars().count())
+                    } else if inline_caret {
+                        format!("{}\u{258f}", self.text)
                     } else {
                         self.text.clone()
                     })),
             )
-            .when(!empty, |d| d.child(caret()))
+            .when(!empty && !inline_caret, |d| d.child(caret()))
     }
 }
 

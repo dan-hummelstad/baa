@@ -284,6 +284,10 @@ fn chat_is_a_library_section_toggled_by_cmd_j(cx: &mut TestAppContext) {
     assert_eq!(section(&b, cx), None);
     cx.dispatch_action(crate::actions::ToggleLibrary);
     assert_eq!(section(&b, cx), Some(Section::Chat));
+    // The sidebar's Library button does the same.
+    cx.dispatch_action(crate::actions::ToggleLibrary);
+    b.update_in(cx, |b, window, cx| b.open_library_last(window, cx));
+    assert_eq!(section(&b, cx), Some(Section::Chat));
 }
 
 // The handshake (pairing token, connect sheet, the panel's nonce).
@@ -523,4 +527,28 @@ fn bad_hellos_and_deny_shut_the_socket(cx: &mut TestAppContext) {
     b.update(cx, |b, cx| b.stop_agent(cx));
     assert_eq!(asks(&b, cx), 0);
     assert!(eof(client));
+}
+
+#[gpui::test]
+/// The transcript and the field being typed in both wrap; the field once cut long text off.
+fn long_chat_messages_wrap_inside_the_panel(cx: &mut TestAppContext) {
+    use crate::agent_panel::Entry;
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, cx| b.set_claude_enabled(true, cx));
+    b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
+    let long = "word ".repeat(80);
+    b.update(cx, |b, cx| {
+        let t = &mut b.agent.panel.chat.transcript;
+        t.push(Entry::User(long.clone()));
+        t.push(Entry::Assistant(long.clone()));
+        b.agent.panel.field.text = long.clone();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let panel = cx.debug_bounds("agent-panel-body").expect("the panel is drawn");
+    for id in ["chat-user", "chat-reply", "chat-field"] {
+        let r = cx.debug_bounds(id).unwrap_or_else(|| panic!("{id} is drawn"));
+        assert!(r.size.height > gpui::px(40.), "{id} is one line: {r:?}");
+        assert!(r.right() <= panel.right() + gpui::px(1.), "{id} runs past the panel: {r:?} in {panel:?}");
+    }
 }
