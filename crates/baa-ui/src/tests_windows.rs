@@ -169,3 +169,27 @@ fn windows_are_named_by_what_they_show(cx: &mut TestAppContext) {
     let (p, pcx) = open(cx, true);
     p.read_with(pcx, |p, _| assert_eq!(p.window_title(), "Incognito — Incognito"));
 }
+
+#[gpui::test]
+fn a_swipe_with_one_space_springs_back(cx: &mut TestAppContext) {
+    use gpui::{point, px, ScrollDelta, ScrollWheelEvent, TouchPhase};
+    let (a, cx) = browser(cx);
+    go(cx, "a.example");
+    let (p, pcx) = open(cx, true);
+    for (b, cx) in [(a, cx), (p, pcx)] {
+        let space = b.read_with(cx, |b, _| b.session().active_space());
+        cx.dispatch_action(NextSpace);
+        cx.dispatch_action(PrevSpace);
+        cx.dispatch_action(GoToSpace(3));
+        // Fingers left: towards a next Space there is not (right, from the first, is the Library).
+        for phase in [TouchPhase::Started, TouchPhase::Moved, TouchPhase::Moved, TouchPhase::Ended] {
+            let delta = ScrollDelta::Pixels(point(px(-200.), px(0.)));
+            let e = ScrollWheelEvent { position: point(px(100.), px(100.)), delta, touch_phase: phase, ..Default::default() };
+            b.update_in(cx, |b, window, cx| b.on_chrome_scroll(&e, window, cx));
+        }
+        b.read_with(cx, |b, _| {
+            assert_eq!(b.session().active_space(), space);
+            assert_eq!(b.slide.target(), 0.0, "the sidebar springs back, not left part-way");
+        });
+    }
+}

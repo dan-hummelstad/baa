@@ -229,6 +229,11 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         let next = (i as isize + delta).rem_euclid(spaces.len() as isize) as usize;
+        if next == i {
+            // One Space: a swipe has nowhere to go, so the sidebar springs back.
+            self.slide.set_target(0.0);
+            return cx.notify();
+        }
         self.activate_space(spaces[next], window, cx);
     }
 }
