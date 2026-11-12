@@ -1,6 +1,7 @@
 # Weekly: if imputnet/helium-macos has a newer release than chromium/HELIUM_RELEASE,
-# subtree-pull Helium and helium-macos onto a bot branch, open a PR and start the
-# chromium (release) and ci runs on it. No auto-merge: an engine bump gets a human look.
+# subtree-pull Helium and helium-macos onto a bot branch and start the chromium (release)
+# and ci runs on it. No PR (trunk-based, and Actions may not open one): when both are green,
+# someone rebases the branch onto main, pushes it fast-forward and deletes it.
 name: helium-bump
 
 on:
@@ -10,7 +11,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   actions: write
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
           NEW=$(gh api repos/imputnet/helium-macos/releases/latest -q .tag_name)
           if [ "$NEW" = "$(cat chromium/HELIUM_RELEASE)" ]; then echo "Helium $NEW is already vendored"; exit 0; fi
           B=bot/helium-$NEW
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "$B exists; a PR is open already"; exit 0; fi
+          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "$B exists: land it on main when its runs are green, or delete it to bump again"; exit 0; fi
           HELIUM=$(gh api "repos/imputnet/helium-macos/contents/helium-chromium?ref=$NEW" -q .sha)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -50,8 +50,7 @@ jobs:
           git add chromium/HELIUM_RELEASE
           git commit -q -m "chromium: Helium $NEW"
           git push origin "$B"
-          gh pr create --base "$GITHUB_REF_NAME" --head "$B" --title "chromium: Helium $NEW" \
-            --body "https://github.com/imputnet/helium-macos/releases/tag/$NEW. Merge when chromium.yml (release) and ci.yml are green on this branch."
-          # PRs opened by GITHUB_TOKEN start no workflows, so start both here.
+          # A push by GITHUB_TOKEN starts no workflows, so start both here.
           gh workflow run chromium.yml --ref "$B" -f mode=release
           gh workflow run ci.yml --ref "$B"
+          echo "Helium $NEW is on $B (https://github.com/imputnet/helium-macos/releases/tag/$NEW). When chromium.yml and ci.yml are green there: git rebase origin/main, push to main, delete $B." >> "$GITHUB_STEP_SUMMARY"

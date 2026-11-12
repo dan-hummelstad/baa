@@ -160,9 +160,10 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
   backend or a self-hosted runner if chained phases are too slow.
-- **Engine bumps:** `helium-bump.yml` (weekly) subtree-pulls Helium's next release onto a bot branch,
-  opens a PR and starts `chromium.yml` (release) and `ci.yml` on it; a failing baa patch stops for a
-  human. The privacy test gates it. No auto-merge.
+- **Engine bumps:** `helium-bump.yml` (weekly) subtree-pulls Helium's next release onto a bot branch
+  and starts `chromium.yml` (release) and `ci.yml` on it; a failing baa patch stops for a human. The
+  privacy test gates it. No PR and no auto-merge: when both are green, the branch is rebased onto
+  `main`, pushed fast-forward, and deleted.
 - **Release:** `release.yml` on a `vX.Y.Z` tag uses exactly the `baa-engine-<T>` of the tagged
   commit's `chromium/` tree (equal tree hashes mean the same `baa.h` ABI and patches), adds the Rust
   binary, signs, notarises and publishes. No such artifact: the run fails and names the command.
