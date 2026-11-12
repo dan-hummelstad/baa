@@ -18,6 +18,8 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # chromium.yml's land job starts it on the tag it pushed (GITHUB_TOKEN tags start nothing).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,6 +40,7 @@ jobs:
           persist-credentials: false
       - id: v
         run: |
+          case $GITHUB_REF in refs/tags/v*) ;; *) echo "::error::release runs on a v* tag, not $GITHUB_REF"; exit 1 ;; esac
           version=${GITHUB_REF_NAME#v}
           crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="baa").version')
           [ "$version" = "$crate" ] || { echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"; exit 1; }

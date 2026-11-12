@@ -1,7 +1,10 @@
 # Weekly: if imputnet/helium-macos has a newer release than chromium/HELIUM_RELEASE,
-# subtree-pull Helium and helium-macos onto a bot branch and start the chromium (release)
-# and ci runs on it. No PR (trunk-based, and Actions may not open one): when both are green,
-# someone rebases the branch onto main, pushes it fast-forward and deletes it.
+# take it onto a bot branch (helium-take.sh) and start the chromium (release) and ci
+# runs on it. From there it runs itself: when that release build passes its privacy
+# and harness tests and ci is green, chromium.yml's land job puts the branch on main,
+# bumps the version and starts release.yml. No PR (trunk-based; Actions may not open one).
+# A step that fails (a conflict here, a baa patch that no longer applies there) stops
+# for a fix: commit it to the bot branch and run chromium.yml release on it again.
 name: helium-bump
 
 on:
@@ -28,29 +31,16 @@ jobs:
           NEW=$(gh api repos/imputnet/helium-macos/releases/latest -q .tag_name)
           if [ "$NEW" = "$(cat chromium/HELIUM_RELEASE)" ]; then echo "Helium $NEW is already vendored"; exit 0; fi
           B=bot/helium-$NEW
-          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "$B exists: land it on main when its runs are green, or delete it to bump again"; exit 0; fi
-          HELIUM=$(gh api "repos/imputnet/helium-macos/contents/helium-chromium?ref=$NEW" -q .sha)
+          if git ls-remote --exit-code --heads origin "$B" >/dev/null; then echo "$B exists: its chromium.yml release run lands it, or delete it to bump again"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$B"
-          fail() { echo "::error::$1. Take the release by hand: see 'Taking a Helium release' in PLAN-chromium.md (branch $B is not pushed)"; exit 1; }
-          git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git "$HELIUM" --squash -m "chromium: vendor imputnet/helium $HELIUM (for $NEW)" \
-            || fail "helium subtree pull conflicted"
-          # helium-macos pins Helium as the helium-chromium submodule, which baa drops (Helium is the
-          # chromium/helium subtree). Each release moves that pin: a modify/delete conflict with
-          # nothing to decide. Any other conflict stops here.
-          SUB='chromium/helium-macos/(helium-chromium|\.gitmodules)'
-          if ! git subtree pull --prefix chromium/helium-macos https://github.com/imputnet/helium-macos.git "$NEW" --squash -m "chromium: vendor imputnet/helium-macos $NEW"; then
-            ! git diff --name-only --diff-filter=U | grep -qvxE "$SUB" || fail "helium-macos subtree pull conflicted"
-            git rm -q --cached --ignore-unmatch chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules
-            git commit -q --no-edit
-          fi
-          git rm -q --cached --ignore-unmatch chromium/helium-macos/helium-chromium chromium/helium-macos/.gitmodules
-          echo "$NEW" > chromium/HELIUM_RELEASE
-          git add chromium/HELIUM_RELEASE
-          git commit -q -m "chromium: Helium $NEW"
+          .github/helium-take.sh "$NEW" || {
+            git diff --name-only --diff-filter=U
+            echo "::error::Helium $NEW conflicts with baa's edits in chromium/helium*: run .github/helium-take.sh $NEW on a branch $B from main, resolve, push it, then run chromium.yml release on it"
+            exit 1
+          }
           git push origin "$B"
           # A push by GITHUB_TOKEN starts no workflows, so start both here.
           gh workflow run chromium.yml --ref "$B" -f mode=release
           gh workflow run ci.yml --ref "$B"
-          echo "Helium $NEW is on $B (https://github.com/imputnet/helium-macos/releases/tag/$NEW). When chromium.yml and ci.yml are green there: git rebase origin/main, push to main, delete $B." >> "$GITHUB_STEP_SUMMARY"

@@ -130,9 +130,10 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
   - `baa/no-crash-uploads.patch`: no upload URL and uploads forced off; crashpad keeps reports in
     `<user data>/Crashpad/`. The crash-reporting toggle in settings now does nothing (still to remove).
 
-Taking a Helium release: `git subtree pull --prefix chromium/helium https://github.com/imputnet/helium.git
-<commit> --squash`, same for `helium-macos` (then `git rm` its `helium-chromium` gitlink and `.gitmodules`
-again), resolve conflicts with the edits above, and validate: `helium/devutils/validate_patches.py -l
+Taking a Helium release: `.github/helium-take.sh <helium-macos tag>` applies upstream's change since
+`chromium/HELIUM_RELEASE` 3-way under both prefixes as one plain commit (no subtree merge, so it rebases
+onto a newer main; the `helium-chromium` gitlink and `.gitmodules` stay out). Resolve conflicts with the
+edits above, and validate: `helium/devutils/validate_patches.py -l
 <unmodified tree>` over both series (remote mode `-r` is broken for sub-DEPS).
 
 - **Patch base: Helium (GPL-3.0, fine for baa).** Take its de-Googling, privacy and extension patches.
@@ -160,10 +161,12 @@ again), resolve conflicts with the edits above, and validate: `helium/devutils/v
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
   backend or a self-hosted runner if chained phases are too slow.
-- **Engine bumps:** `helium-bump.yml` (weekly) subtree-pulls Helium's next release onto a bot branch
-  and starts `chromium.yml` (release) and `ci.yml` on it; a failing baa patch stops for a human. The
-  privacy test gates it. No PR and no auto-merge: when both are green, the branch is rebased onto
-  `main`, pushed fast-forward, and deleted.
+- **Engine bumps run themselves to a release** (user, 2026-11-12): `helium-bump.yml` (weekly) takes
+  Helium's next release onto `bot/helium-<tag>` and starts `chromium.yml` (release) and `ci.yml` on it.
+  When that build passes its privacy and harness tests and `ci.yml` is green, `chromium.yml`'s `land` job
+  rebases the branch onto `main`, pushes it fast-forward, bumps the patch version, tags `v<version>` and
+  starts `release.yml`. No PR. A conflict or a baa patch that no longer applies stops it: commit the fix
+  to the bot branch and run `chromium.yml` release on it again.
 - **Release:** `release.yml` on a `vX.Y.Z` tag uses exactly the `baa-engine-<T>` of the tagged
   commit's `chromium/` tree (equal tree hashes mean the same `baa.h` ABI and patches), adds the Rust
   binary, signs, notarises and publishes. No such artifact: the run fails and names the command.

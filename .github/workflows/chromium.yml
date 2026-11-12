@@ -206,3 +206,46 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           artifact: ${{ steps.engine.outputs.name }}
+
+  # A Helium bump (helium-bump.yml) runs itself to a release: once this engine passed both
+  # tests and ci.yml is green on the bot branch, put the branch on main (fast-forward), bump
+  # the patch version, tag it and start release.yml, which takes this run's engine (same
+  # chromium/ tree). A tag pushed with GITHUB_TOKEN starts nothing, hence the dispatch.
+  # Earlier phases are often skipped, which would skip this job without always().
+  land:
+    needs: [privacy, harness]
+    if: >-
+      always() && inputs.mode == 'release' && startsWith(github.ref_name, 'bot/helium-')
+      && needs.privacy.result == 'success' && needs.harness.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Land and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          B=$GITHUB_REF_NAME
+          ci=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" -L 1 --json conclusion -q '.[0].conclusion')
+          [ "$ci" = success ] || { echo "::error::ci.yml is not green on $GITHUB_SHA ('$ci'): gh workflow run ci.yml --ref $B, then re-run this job"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          T=$(git rev-parse HEAD:chromium)
+          git rebase -q origin/main
+          [ "$(git rev-parse HEAD:chromium)" = "$T" ] || { echo "::error::main changed chromium/ while this engine built, so it no longer matches: run chromium.yml release on $B again"; exit 1; }
+          OLD=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          NEW=${OLD%.*}.$((${OLD##*.} + 1))
+          perl -0pi -e 's/^version = "\Q'"$OLD"'\E"$/version = "'"$NEW"'"/m' Cargo.toml
+          perl -0pi -e 's/(name = "(?:baa[\w-]*|xtask)"\nversion = )"\Q'"$OLD"'\E"/$1"'"$NEW"'"/g' Cargo.lock
+          git commit -qam "baa $NEW: Helium $(cat chromium/HELIUM_RELEASE)"
+          git tag "v$NEW"
+          git push --atomic origin HEAD:main "v$NEW"
+          # Only the commit that was built: a fix pushed since stays on the branch.
+          if [ "$(git ls-remote origin "refs/heads/$B" | cut -f1)" = "$GITHUB_SHA" ]; then git push -q origin --delete "$B"; fi
+          gh workflow run release.yml --ref "v$NEW"
+          echo "Landed $B on main as baa $NEW and started release.yml on v$NEW" >> "$GITHUB_STEP_SUMMARY"
