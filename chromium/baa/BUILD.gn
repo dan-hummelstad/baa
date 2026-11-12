@@ -33,7 +33,6 @@ source_set("baa") {
     "//chrome/browser/autocomplete",
     "//chrome/browser/hang_monitor",
     "//chrome/browser/renderer_host:history_swiper",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/views/frame:browser_window_factory",
     "//chrome/browser/ui/views/overlay",
     "//components/content_settings/core/browser",
