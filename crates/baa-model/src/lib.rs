@@ -401,14 +401,14 @@ impl Session {
     /// A live folder takes no tabs; its source decides them.
     pub fn move_to_folder(&mut self, id: TabId, folder: FolderId, index: usize) {
         let Some(space) = self.folder(folder).filter(|f| f.live.is_none()).map(|f| f.space) else { return };
-        let Some((mut tab, old_index)) = self.take(id) else { return };
-        let (from, old_zone) = (tab.space, tab.zone);
+        let Some((mut tab, _)) = self.take(id) else { return };
+        let from = tab.space;
         tab.space = space;
         tab.zone = Zone::Pinned;
         tab.folder = Some(folder);
         self.insert(tab, index);
         if from != space {
-            self.pick_neighbour(from, id, old_zone, old_index);
+            self.pick_neighbour(from, id);
         }
     }
 
@@ -499,15 +499,15 @@ impl Session {
     /// Drag: reorder, change zone (pin/unpin/favourite), move to another Space,
     /// or out of a folder. A favourite keeps its own Space.
     pub fn move_tab(&mut self, id: TabId, space: SpaceId, zone: Zone, index: usize) {
-        let Some((mut tab, old_index)) = self.take(id) else { return };
-        let (from, old_zone) = (tab.space, tab.zone);
+        let Some((mut tab, _)) = self.take(id) else { return };
+        let from = tab.space;
         let space = if zone == Zone::Favorite { from } else { space };
         tab.space = space;
         tab.zone = zone;
         tab.folder = None;
         self.insert(tab, index);
         if from != space {
-            self.pick_neighbour(from, id, old_zone, old_index);
+            self.pick_neighbour(from, id);
         } else if zone == Zone::Favorite {
             self.leave_split(from, id);
         }
@@ -534,6 +534,8 @@ impl Session {
             _ => tab.space,
         };
         let prev = self.space(space).and_then(|s| s.active_tab);
+        // Stamps only grow, so two switches in the same second still order: closing goes back by them.
+        let now = now.max(self.tabs.iter().map(|t| t.last_active).max().unwrap_or(0) + 1);
         for t in self.tabs.iter_mut().filter(|t| t.id == id || Some(t.id) == prev) {
             t.last_active = now;
         }
@@ -543,24 +545,26 @@ impl Session {
         self.active_space = Some(space);
     }
 
-    /// If `id` (already gone from `space`) was its active tab, hand that to the tab now at
-    /// `index` in `zone` (the one below it), else the one above, else any tab left in the Space.
-    /// A split pane hands it to the pane beside it.
-    fn pick_neighbour(&mut self, space: SpaceId, id: TabId, zone: Zone, index: usize) {
+    /// If `id` (already gone from `space`) was its active tab, hand that to the tab shown
+    /// before it, favourites included. A split pane hands it to the pane beside it.
+    fn pick_neighbour(&mut self, space: SpaceId, id: TabId) {
         let pane = self.leave_split(space, id);
         if self.space(space).and_then(|s| s.active_tab) != Some(id) {
             return;
         }
-        let next = pane.or_else(|| {
-            self.tabs(space, zone)
-                .nth(index)
-                .or_else(|| self.tabs(space, zone).nth(index.checked_sub(1)?))
-                .or_else(|| self.space_tabs(space).next())
-                .map(|t| t.id)
-        });
+        let next = pane.or_else(|| self.recent(space, id));
         if let Some(s) = self.space_mut(space) {
             s.active_tab = next;
         }
+    }
+
+    /// The tab of `space` (or favourite) shown most recently, other than `except`.
+    fn recent(&self, space: SpaceId, except: TabId) -> Option<TabId> {
+        self.space_tabs(space)
+            .chain(self.tabs(space, Zone::Favorite))
+            .filter(|t| t.id != except)
+            .max_by_key(|t| t.last_active)
+            .map(|t| t.id)
     }
 
     /// Every Space's active tab and split panes: what auto-archive and live folders leave alone.
@@ -683,14 +687,14 @@ impl Session {
         if self.tab(id).is_some_and(|t| t.zone == Zone::Favorite) {
             for i in 0..self.spaces.len() {
                 if self.spaces[i].active_tab == Some(id) {
-                    let next = self.space_tabs(self.spaces[i].id).next().map(|t| t.id);
+                    let next = self.recent(self.spaces[i].id, id);
                     self.spaces[i].active_tab = next;
                 }
             }
             return;
         }
         let Some((tab, index)) = self.take(id) else { return };
-        self.pick_neighbour(tab.space, id, tab.zone, index);
+        self.pick_neighbour(tab.space, id);
         if !self.space(tab.space).is_some_and(|s| s.ephemeral) {
             self.push_archive(Tab { archived_at: Some(now), ..tab.clone() });
         }
@@ -800,8 +804,8 @@ impl Session {
     pub fn drop_tabs(&mut self, gone: impl Fn(&Tab) -> bool) {
         let ids: Vec<TabId> = self.tabs.iter().filter(|t| gone(t)).map(|t| t.id).collect();
         for id in ids {
-            if let Some((tab, index)) = self.take(id) {
-                self.pick_neighbour(tab.space, id, tab.zone, index);
+            if let Some((tab, _)) = self.take(id) {
+                self.pick_neighbour(tab.space, id);
             }
         }
     }
@@ -901,12 +905,36 @@ mod tests {
         s.activate_tab(b, 1);
         s.close_tab(b, 2);
         assert_eq!(urls(&s, sp, Zone::Today), ["c", "a"]);
-        assert_eq!(s.tab(s.space(sp).unwrap().active_tab.unwrap()).unwrap().url, "a");
+        assert_eq!(s.tab(s.space(sp).unwrap().active_tab.unwrap()).unwrap().url, "c", "back to the tab shown before");
         assert_eq!(s.archived()[0].id, b);
         assert_eq!(s.reopen_closed(3), Some(b));
         assert_eq!(urls(&s, sp, Zone::Today), ["c", "b", "a"]);
         assert!(s.archived().is_empty());
         assert_eq!(s.space(sp).unwrap().active_tab, Some(b));
+    }
+
+    #[test]
+    fn close_goes_back_to_previous_tab_across_zones() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let fav = s.open_tab(sp, "fav", 0);
+        s.move_tab(fav, sp, Zone::Favorite, 0);
+        let pin = s.open_tab(sp, "pin", 0);
+        s.toggle_pin(pin);
+        let a = s.open_tab(sp, "a", 0);
+        let b = s.open_tab(sp, "b", 0);
+        // Same second throughout: order still comes from the switches.
+        s.activate_tab(fav, 0);
+        s.activate_tab(b, 0);
+        s.close_tab(b, 0);
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(fav));
+        s.activate_tab(pin, 0);
+        s.activate_tab(a, 0);
+        s.close_tab(a, 0);
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(pin));
+        s.activate_tab(fav, 0);
+        s.close_tab(fav, 0);
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(pin), "a favourite put away goes back too");
     }
 
     #[test]
