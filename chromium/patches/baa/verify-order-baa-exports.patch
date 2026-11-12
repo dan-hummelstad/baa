@@ -1,12 +1,12 @@
 --- a/chrome/tools/build/mac/verify_order.py
 +++ b/chrome/tools/build/mac/verify_order.py
-@@ -37,6 +37,9 @@
+@@ -38,6 +38,9 @@
  def check_symbol_table(binary, allowed_symbols, nm, symbol_file):
    actual_symbols = subprocess.check_output([nm, '-jUng', binary]).decode('utf8')
    actual_symbols = [s.rstrip() for s in actual_symbols.splitlines()]
 +  # baa: the //baa C ABI (baa.h) is exported from BaaCore by design; the order
 +  # file only governs Chrome's own entry points.
 +  actual_symbols = [s for s in actual_symbols if not s.startswith('_baa_')]
+
    def print_syms(syms):
      print('\n'.join(['  ' + s for s in syms]), file=sys.stderr)
-   try:
