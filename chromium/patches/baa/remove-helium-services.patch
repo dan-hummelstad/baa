@@ -61,17 +61,17 @@
  GURL GetSpellcheckURL(const PrefService& prefs) {
 --- a/chrome/browser/resources/settings/privacy_page/privacy_page.html
 +++ b/chrome/browser/resources/settings/privacy_page/privacy_page.html
-@@ -46,11 +46,6 @@
+@@ -33,11 +33,6 @@
          sub-label="$i18n{siteSettingsSublabel}"
-         on-click="onSiteSettingsLinkRowClick_"
+         @click="${this.onSiteSettingsLinkRowClick_}"
          role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
 -    <cr-link-row id="heliumServicesLinkRow" start-icon="cr:chrome-product"
 -        class="hr" label="$i18n{heliumServicesTitle}"
 -        sub-label="$i18n{heliumServicesDescription}"
--        on-click="onHeliumServicesPageClick_"
+-        @click="${this.onHeliumServicesPageClick_}"
 -        role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
      <cr-toast id="deleteBrowsingDataToast" duration="5000">
-       <div>[[dbdDeletionConfirmationToastLabel_]]</div>
+       <div>${this.dbdDeletionConfirmationToastLabel_}</div>
      </cr-toast>
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
