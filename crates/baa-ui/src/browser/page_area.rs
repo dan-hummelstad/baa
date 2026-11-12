@@ -215,6 +215,7 @@ impl<H: WebHost> Browser<H> {
                 .track_focus(&self.input_focus)
                 .on_key_down(cx.listener(Self::on_input_key))
                 .child(field.render(
+                    self.input_focus.is_focused(window),
                     "Find in page",
                     surface::ink().into(),
                     surface::muted().into(),

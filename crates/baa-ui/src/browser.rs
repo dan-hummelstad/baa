@@ -1271,7 +1271,7 @@ impl<H: WebHost> Render for Browser<H> {
             return self.register_actions(view, cx);
         }
         let theme = self.theme();
-        let sidebar = self.render_sidebar(&theme, cx);
+        let sidebar = self.render_sidebar(&theme, window, cx);
         let page = self.render_page(&theme, window, cx);
         // One sidebar element: docked, or in the reveal card while that is out.
         let (docked, reveal) = if self.docked() {

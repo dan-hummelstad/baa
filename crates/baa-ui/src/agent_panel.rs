@@ -612,7 +612,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The Library's Chat section body (pen.dev "baa · Side Panel — Chat").
-    pub(crate) fn render_agent_panel(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_agent_panel(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = &self.agent.panel;
         let focus = p.focus.clone()?;
         let (mid, soft) = (ink_mid(theme), ink_soft(theme));
@@ -917,6 +917,7 @@ impl<H: WebHost> Browser<H> {
                         .bg(milk(0.68))
                         .text_size(px(12.5))
                         .child(div().debug_selector(|| "chat-field".into()).flex_1().min_w_0().child(p.field.render_wrapped(
+                            p.focused(window, cx),
                             "Ask baa…",
                             theme.ink,
                             soft,

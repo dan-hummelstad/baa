@@ -208,7 +208,7 @@ impl<H: WebHost> Browser<H> {
                 .border_color(if focused { theme.accent } else { surface::border().into() })
                 .bg(surface::raised())
                 .text_size(px(13.))
-                .child(f.render(placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..theme.accent }))
+                .child(f.render(focused, placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..theme.accent }))
         };
         let fields = match d.kind {
             DialogKind::Prompt => vec![field_box(&ask.field, true, "")],

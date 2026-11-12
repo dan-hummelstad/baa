@@ -10,8 +10,8 @@ const SNAPPY: SpringConfig = SpringConfig::new(400.0, 32.0, 1.0);
 /// Quicker, for things the pointer summons (the collapsed sidebar): ~180 ms.
 const QUICK: SpringConfig = SpringConfig::new(900.0, 50.0, 1.0);
 
-/// Hover fades: critically damped, ~120 ms, never overshoots a colour.
-const HOVER: SpringConfig = SpringConfig::new(1400.0, 75.0, 1.0);
+/// Hover fades: critically damped, ~80 ms, never overshoots a colour. Slower reads as a laggy UI.
+const HOVER: SpringConfig = SpringConfig::new(4000.0, 126.0, 1.0);
 /// Presses: dips fast, springs back with a little bounce.
 const PRESS: SpringConfig = SpringConfig::new(1800.0, 50.0, 1.0);
 /// Things that travel (selection pills, rows growing in): quick, slight settle.

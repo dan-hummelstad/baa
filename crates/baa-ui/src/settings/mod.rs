@@ -645,9 +645,9 @@ impl<H: WebHost> SettingsView<H> {
         let empty = self.text(field).is_empty();
         let accent = self.theme.accent;
         let shown: AnyElement = match self.fields.get(&field) {
-            Some(f) if active => f.render(placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..accent }).into_any_element(),
+            Some(f) if active => f.render(true, placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..accent }).into_any_element(),
             Some(f) if !empty => div().truncate().child(SharedString::from(f.text.clone())).into_any_element(),
-            _ if active => TextField::default().render(placeholder, surface::ink().into(), surface::muted().into(), accent).into_any_element(),
+            _ if active => TextField::default().render(true, placeholder, surface::ink().into(), surface::muted().into(), accent).into_any_element(),
             _ => div().truncate().text_color(surface::muted()).child(placeholder).into_any_element(),
         };
         div()
@@ -799,7 +799,7 @@ impl<H: WebHost> SettingsView<H> {
                 self.fields
                     .get(&Field::Search)
                     .unwrap_or(&empty)
-                    .render("Search settings", surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..self.theme.accent }),
+                    .render(self.active == Field::Search, "Search settings", surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..self.theme.accent }),
             );
         let mut out: Vec<Item> = vec![(None, field.into_any_element())];
         let hits = self.results();

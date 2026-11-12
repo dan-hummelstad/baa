@@ -736,7 +736,7 @@ impl<H: WebHost> Render for EmojiPicker<H> {
             .items_center()
             .rounded(r(8.))
             .bg(surface::key())
-            .child(self.query.render("Search emoji", surface::ink().into(), surface::muted().into(), gpui::rgba(0x6C9CFF55).into()));
+            .child(self.query.render(true, "Search emoji", surface::ink().into(), surface::muted().into(), gpui::rgba(0x6C9CFF55).into()));
         let grid: gpui::AnyElement = if self.rows.is_empty() {
             div()
                 .h(px(CELL * 9.))

@@ -447,7 +447,7 @@ pub(crate) fn on_key<H: WebHost>(
             // The autofill: the selected page's address replaces what was typed.
             let rows = bar.rows(&this.session, &this.settings);
             if let Some(Item::Page(page)) = rows.get(bar.selected).map(|r| &r.item) {
-                bar.field = TextField { text: page.url.into(), all_selected: false, masked: false };
+                bar.field = TextField { text: page.url.into(), ..Default::default() };
                 bar.selected = 0;
             }
         }
@@ -819,6 +819,7 @@ impl<H: WebHost> Browser<H> {
                                 .border_color(surface::line())
                                 .when(ascii, |d| d.text_size(px(14.)).child(div().mr(px(8.)).text_color(accent).child("▸")))
                                 .child(bar.field.render(
+                                    live && self.input_focus.is_focused(window),
                                     placeholder,
                                     surface::ink().into(),
                                     surface::muted().into(),

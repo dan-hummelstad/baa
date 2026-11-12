@@ -217,7 +217,7 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    pub(crate) fn render_library(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_library(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(library) = &self.library else { return div().into_any_element() };
         let t = self.motion.get(("library", 0), Feel::Glide);
         let nav_item = |section: Section, name: &'static str, label: &'static str, cx: &mut Context<Self>| {
@@ -314,7 +314,7 @@ impl<H: WebHost> Browser<H> {
             Section::Downloads => "Search Downloads…",
             Section::Archive => "Search Archived Tabs…",
             Section::Chat => {
-                let chat = self.render_agent_panel(theme, cx).unwrap_or_else(|| div().into_any_element());
+                let chat = self.render_agent_panel(theme, window, cx).unwrap_or_else(|| div().into_any_element());
                 // Vertical scrolls stay with the transcript: the swipe takes only mostly-horizontal ones.
                 return library_box(chat)
                     .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
@@ -337,7 +337,7 @@ impl<H: WebHost> Browser<H> {
             .on_key_down(cx.listener(Self::on_library_key))
             .on_click(cx.listener(|this, _, window, cx| window.focus(&this.library_focus, cx)))
             .child(icon("search", 14., ink_soft(theme)))
-            .child(library.search.render(placeholder, theme.ink, ink_soft(theme), Hsla { a: 0.3, ..theme.accent }));
+            .child(library.search.render(self.library_focus.is_focused(window), placeholder, theme.ink, ink_soft(theme), Hsla { a: 0.3, ..theme.accent }));
         let filter = (library.section == Section::Downloads).then(|| {
             let key = ("library-filter", 0);
             let h = self.motion.get(key, Feel::Hover);

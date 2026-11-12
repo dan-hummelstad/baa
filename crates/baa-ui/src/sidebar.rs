@@ -61,9 +61,9 @@ impl Render for DraggedTab {
 }
 
 impl<H: WebHost> Browser<H> {
-    pub(crate) fn render_sidebar(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_sidebar(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if self.library.is_some() {
-            return self.render_library(theme, cx);
+            return self.render_library(theme, window, cx);
         }
         let Some(space) = self.active_space().map(|s| s.id) else {
             return div().into_any_element();
@@ -143,6 +143,7 @@ impl<H: WebHost> Browser<H> {
                             .on_key_down(cx.listener(Self::on_input_key))
                             .on_mouse_down_out(cx.listener(|this, _, window, cx| this.commit_rename(window, cx)))
                             .child(field.render(
+                                true,
                                 "Space name",
                                 theme.ink,
                                 theme.ink_muted,
@@ -810,7 +811,7 @@ impl<H: WebHost> Browser<H> {
                 .track_focus(&self.input_focus)
                 .on_key_down(cx.listener(Self::on_input_key))
                             .on_mouse_down_out(cx.listener(|this, _, window, cx| this.commit_rename(window, cx)))
-                .child(field.render("Folder name", theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }))
+                .child(field.render(true, "Folder name", theme.ink, theme.ink_muted, Hsla { a: 0.3, ..theme.accent }))
                 .with_animation("rename-in", rename_in(), |d, t| d.opacity(0.6 + 0.4 * t))
                 .into_any_element(),
             None => div()
