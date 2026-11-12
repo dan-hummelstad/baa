@@ -1,14 +1,13 @@
 //! Single-line text field for every text box in the UI. gpui ships no text
 //! input, so keys are applied by hand.
-// ponytail: no shift-selections, click-to-place or IME here; the caret moves by key only.
-// Upgrade to an `EntityInputHandler` when CJK input matters.
+// ponytail: no IME or undo here. Upgrade to an `EntityInputHandler` when CJK input matters.
 
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 
-use crate::theme::r;
 use gpui::{
-    div, prelude::*, pulsating_between, px, Animation, AnimationExt, App, HighlightStyle, Hsla, Keystroke, MouseButton,
-    SharedString, StyledText,
+    canvas, div, fill, prelude::*, pulsating_between, px, size, Animation, AnimationExt, App, Bounds,
+    DispatchPhase, HighlightStyle, Hsla, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, SharedString, StyledText, TextLayout, Window,
 };
 
 #[derive(Debug, PartialEq)]
@@ -23,125 +22,134 @@ pub enum Key {
     Ignored,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Sel {
+    /// The caret and the selection's other end, in bytes from the end of `len` bytes of text.
+    caret: usize,
+    anchor: usize,
+    len: usize,
+    /// How far a long single line is shifted left to keep the caret in view.
+    scroll: Pixels,
+    dragging: bool,
+}
+
+/// (caret, anchor) as byte indices. Text its owner replaced puts the caret at the end.
+fn ends(text: &str, s: Sel) -> (usize, usize) {
+    let len = text.len();
+    let at = |back: usize| {
+        let i = len.saturating_sub(back);
+        if text.is_char_boundary(i) { i } else { len }
+    };
+    if s.len == len { (at(s.caret), at(s.anchor)) } else { (len, len) }
+}
+
+fn put(state: &Cell<Sel>, len: usize, caret: usize, anchor: usize) {
+    state.set(Sel { caret: len - caret, anchor: len - anchor, len, ..state.get() });
+}
+
 #[derive(Default)]
 pub struct TextField {
     pub text: String,
-    /// Prefilled text is selected so the first keystroke replaces it, like an omnibox.
-    /// Shared with the drawn field, so a click on it can drop the selection whoever owns it.
-    pub(crate) all_selected: Rc<Cell<bool>>,
-    /// The caret, in bytes from the end: code that sets `text` leaves it at the end.
-    pub(crate) back: usize,
+    /// Shared with the drawn field, so a click or drag moves it whoever owns the field.
+    pub(crate) sel: Rc<Cell<Sel>>,
     /// Draws bullets for the text (passwords).
     pub masked: bool,
 }
 
 impl TextField {
+    /// Prefilled text starts selected, so the first keystroke replaces it, like an omnibox.
     pub fn selected(text: String) -> Self {
-        Self {
-            text,
-            all_selected: Rc::new(Cell::new(true)),
-            ..Default::default()
-        }
+        let f = Self { text, ..Default::default() };
+        f.set(f.text.len(), 0);
+        f
     }
 
-    /// Byte index of the caret.
-    fn caret(&self) -> usize {
-        let at = self.text.len().saturating_sub(self.back);
-        if self.text.is_char_boundary(at) { at } else { self.text.len() }
+    fn ends(&self) -> (usize, usize) {
+        ends(&self.text, self.sel.get())
     }
 
-    fn move_to(&mut self, at: usize) {
-        self.back = self.text.len() - at;
+    fn set(&self, caret: usize, anchor: usize) {
+        put(&self.sel, self.text.len(), caret, anchor);
+    }
+
+    fn replace(&mut self, r: Range<usize>, with: &str) {
+        self.text.replace_range(r.clone(), with);
+        let at = r.start + with.len();
+        self.set(at, at);
     }
 
     pub fn handle(&mut self, ks: &Keystroke, cx: &App) -> Key {
         let m = &ks.modifiers;
-        let (s, at, sel) = (self.text.as_str(), self.caret(), self.all_selected.get());
-        let len = s.len();
-        let key = match ks.key.as_str() {
-            "enter" => return Key::Submit,
-            "escape" => return Key::Cancel,
-            "up" => return Key::Up,
-            "down" => return Key::Down,
-            "tab" if !m.control && !m.platform && !m.alt => return Key::Complete,
+        let (caret, anchor) = self.ends();
+        let sel = caret.min(anchor)..caret.max(anchor);
+        let (s, len, k) = (self.text.as_str(), self.text.len(), ks.key.as_str());
+        match k {
+            "enter" => Key::Submit,
+            "escape" => Key::Cancel,
+            "up" => Key::Up,
+            "down" => Key::Down,
+            "tab" if !m.control && !m.platform && !m.alt => Key::Complete,
             // → at the end takes the suggestion, like an omnibox.
-            "right" if !m.control && !m.platform && !m.alt && !m.shift && !sel && at == len => {
-                return Key::Complete
+            "right" if !m.control && !m.platform && !m.alt && !m.shift && sel.is_empty() && caret == len => {
+                Key::Complete
             }
-            // ponytail: no shift-extended selections; the only selection is select-all.
-            "left" | "right" | "home" | "end" if !m.shift => {
-                let left = matches!(ks.key.as_str(), "left" | "home");
-                // A selection collapses to its edge; ⌘ jumps to the ends, ⌥ by word.
-                let to = if sel || m.platform || !matches!(ks.key.as_str(), "left" | "right") {
+            "left" | "right" | "home" | "end" => {
+                let left = matches!(k, "left" | "home");
+                let arrow = matches!(k, "left" | "right");
+                // A plain arrow collapses a selection to its edge; ⌘ jumps to the ends, ⌥ by word.
+                let to = if arrow && !m.shift && !m.platform && !m.alt && !sel.is_empty() {
+                    if left { sel.start } else { sel.end }
+                } else if m.platform || !arrow {
                     if left { 0 } else { len }
                 } else if m.alt {
-                    if left { word_left(s, at) } else { word_right(s, at) }
+                    if left { word_left(s, caret) } else { word_right(s, caret) }
                 } else if left {
-                    prev(s, at)
+                    prev(s, caret)
                 } else {
-                    next(s, at)
+                    next(s, caret)
                 };
-                self.move_to(to);
+                self.set(to, if m.shift { anchor } else { to });
                 Key::Edited
             }
-            "backspace" | "delete" if sel => {
-                self.text.clear();
-                self.back = 0;
-                Key::Edited
-            }
-            "backspace" => {
-                let from = if m.secondary() { 0 } else if m.alt { word_left(s, at) } else { prev(s, at) };
-                self.text.replace_range(from..at, "");
-                Key::Edited
-            }
-            "delete" => {
-                let to = if m.alt { word_right(s, at) } else { next(s, at) };
-                self.text.replace_range(at..to, "");
-                self.move_to(at);
+            "backspace" | "delete" => {
+                let r = if !sel.is_empty() {
+                    sel
+                } else if k == "backspace" {
+                    (if m.secondary() { 0 } else if m.alt { word_left(s, caret) } else { prev(s, caret) })..caret
+                } else {
+                    caret..if m.alt { word_right(s, caret) } else { next(s, caret) }
+                };
+                self.replace(r, "");
                 Key::Edited
             }
             "a" if m.secondary() => {
-                self.all_selected.set(true);
-                self.back = 0;
-                return Key::Edited;
+                self.set(len, 0);
+                Key::Edited
             }
-            "c" | "x" if m.secondary() && sel && !self.masked => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(self.text.clone()));
-                if ks.key == "c" {
+            "c" | "x" if m.secondary() && !sel.is_empty() && !self.masked => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(s[sel.clone()].to_string()));
+                if k == "c" {
                     return Key::Ignored;
                 }
-                self.text.clear();
-                self.back = 0;
+                self.replace(sel, "");
                 Key::Edited
             }
             "v" if m.secondary() => {
                 let Some(paste) = cx.read_from_clipboard().and_then(|c| c.text()) else {
                     return Key::Ignored;
                 };
-                self.insert(paste.lines().next().unwrap_or_default());
+                self.replace(sel, paste.lines().next().unwrap_or_default());
                 Key::Edited
             }
-            _ if m.platform || m.control => return Key::Ignored,
+            _ if m.platform || m.control => Key::Ignored,
             _ => match ks.key_char.clone() {
                 Some(c) => {
-                    self.insert(&c);
+                    self.replace(sel, &c);
                     Key::Edited
                 }
-                None => return Key::Ignored,
+                None => Key::Ignored,
             },
-        };
-        self.all_selected.set(false);
-        key
-    }
-
-    /// Types at the caret, replacing a selection.
-    fn insert(&mut self, s: &str) {
-        if self.all_selected.get() {
-            self.text.clear();
-            self.back = 0;
         }
-        let at = self.caret();
-        self.text.insert_str(at, s);
     }
 
     /// `focused`: only the field that gets the keys shows its (pulsing) caret.
@@ -178,69 +186,144 @@ impl TextField {
         selection: Hsla,
     ) -> impl IntoElement {
         let empty = self.text.is_empty();
-        let sel = self.all_selected.get() && !empty;
-        let at = if sel { self.text.len() } else { self.caret() };
-        let show = |s: &str| if self.masked { "\u{2022}".repeat(s.chars().count()) } else { s.to_string() };
-        // Empty, the caret sits where typing starts, before the hint.
-        let (before, after) =
-            if empty { (String::new(), placeholder.to_string()) } else { (show(&self.text[..at]), show(&self.text[at..])) };
-        let all_selected = self.all_selected.clone();
-        let root = div()
+        let (caret, anchor) = self.ends();
+        // A bullet is 3 bytes in the drawn string.
+        let shown_ix = |i: usize| if self.masked { self.text[..i].chars().count() * 3 } else { i };
+        let shown: SharedString = if empty {
+            placeholder.into()
+        } else if self.masked {
+            "\u{2022}".repeat(self.text.chars().count()).into()
+        } else {
+            self.text.clone().into()
+        };
+        let (c, a) = (shown_ix(caret), shown_ix(anchor));
+        let pick = HighlightStyle { background_color: Some(selection), ..Default::default() };
+        let styled = StyledText::new(shown).with_highlights((c != a).then(|| (c.min(a)..c.max(a), pick)));
+        let hit = Hit {
+            layout: styled.layout().clone(),
+            state: self.sel.clone(),
+            src: self.text.clone().into(),
+            masked: self.masked,
+        };
+        let on_down = hit.clone();
+        let layer = div().absolute().inset_0();
+        let layer = if focused {
+            layer.with_animation("caret", pulse(), move |d, t| d.child(hit.overlay(c, wrap, Some((text, t))))).into_any_element()
+        } else {
+            layer.child(hit.overlay(c, wrap, None)).into_any_element()
+        };
+        div()
+            .relative()
             .flex()
             .items_center()
             // The whole box, not just the glyphs, takes the click.
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            // Tight to the glyphs, so the selection hugs the text.
             .line_height(gpui::relative(1.25))
             .text_color(if empty { dim } else { text })
-            // ponytail: a click drops the select-all but does not place the caret (needs the
-            // shaped line; `closest_index_for_x` when that matters).
-            .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                if all_selected.replace(false) {
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, window, cx| {
+                on_down.click(e, window);
+                // Focused, the press is the field's: a row around it must not toggle or start a drag.
+                // Unfocused, it goes on up so the owner can focus the field.
+                if focused {
+                    cx.stop_propagation();
+                }
+            })
+            .child(if wrap {
+                div().flex_1().min_w_0().child(styled)
+            } else {
+                div().flex_shrink_0().whitespace_nowrap().ml(-self.sel.get().scroll).child(styled)
+            })
+            .child(layer)
+    }
+}
+
+/// What a click, a drag and the caret need from the drawn text.
+#[derive(Clone)]
+struct Hit {
+    layout: TextLayout,
+    state: Rc<Cell<Sel>>,
+    src: SharedString,
+    masked: bool,
+}
+
+impl Hit {
+    /// The text's byte index nearest a window position.
+    fn index(&self, pos: Point<Pixels>) -> usize {
+        let Some(line) = self.layout.line_layouts().into_iter().next() else { return 0 };
+        let lh = self.layout.line_height();
+        let mut p = pos - self.layout.bounds().origin;
+        p.y = p.y.max(px(0.)).min(line.size(lh).height - px(1.));
+        let i = line.closest_index_for_position(p, lh).unwrap_or_else(|i| i);
+        if self.masked {
+            self.src.char_indices().nth(i / 3).map_or(self.src.len(), |(b, _)| b)
+        } else {
+            i.min(self.src.len())
+        }
+    }
+
+    /// Click places the caret, shift-click extends, double picks a word, triple all.
+    fn click(&self, e: &MouseDownEvent, window: &mut Window) {
+        let (len, i) = (self.src.len(), self.index(e.position));
+        let (_, anchor) = ends(&self.src, self.state.get());
+        let (caret, anchor) = match e.click_count {
+            0 | 1 if e.modifiers.shift => (i, anchor),
+            0 | 1 => (i, i),
+            2 => word_at(&self.src, i),
+            _ => (len, 0),
+        };
+        put(&self.state, len, caret, anchor);
+        self.state.set(Sel { dragging: e.click_count <= 1, ..self.state.get() });
+        window.refresh();
+    }
+
+    /// Paints the caret (`color`: base colour and pulse), keeps it in view, and tracks drags.
+    fn overlay(&self, caret: usize, wrap: bool, color: Option<(Hsla, f32)>) -> impl IntoElement {
+        let hit = self.clone();
+        canvas(|_, _, _| {}, move |bounds: Bounds<Pixels>, _, window, cx| {
+            let layout = &hit.layout;
+            let mut p = layout.position_for_index(caret);
+            if let (false, Some(p)) = (wrap, p.as_mut()) {
+                // ponytail: the text follows the caret a frame late; the caret itself is on time.
+                let s = hit.state.get();
+                let right = bounds.right() - px(2.);
+                let shift = if p.x > right { p.x - right } else { (p.x - bounds.left()).min(px(0.)) };
+                let mut scroll = s.scroll + shift;
+                // Once the text fits again, give back the room at its end.
+                let room = right - (layout.bounds().right() - shift);
+                if room > px(0.) {
+                    scroll -= room.min(scroll);
+                }
+                let scroll = scroll.max(px(0.));
+                if scroll != s.scroll {
+                    p.x -= scroll - s.scroll;
+                    hit.state.set(Sel { scroll, ..s });
                     window.refresh();
                 }
-            });
-        if wrap && !empty {
-            // Wrapped, the caret is a glyph in the text, so it sits after the right word
-            // rather than at the block's edge; only its colour pulses.
-            let body = div().flex_1().min_w_0().when(sel, |d| d.bg(selection).rounded(r(3.)));
-            if !focused {
-                return root.child(body.child(before + &after)).into_any_element();
             }
-            let caret_at = before.len();
-            let shown = SharedString::from(format!("{before}\u{258f}{after}"));
-            return root
-                .child(body.with_animation("caret", pulse(), move |d, t| {
-                    let caret = HighlightStyle { color: Some(Hsla { a: text.a * t, ..text }), ..Default::default() };
-                    d.child(StyledText::new(shown.clone()).with_highlights([(caret_at..caret_at + 3, caret)]))
-                }))
-                .into_any_element();
-        }
-        root
-            // Long text is cut away from the caret: on the left before it, on the right after it.
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis_start()
-                    .when(sel, |d| d.bg(selection).rounded(r(3.)))
-                    .child(before),
-            )
-            .when(focused, |d| {
-                d.child(
-                    div()
-                        .flex_shrink_0()
-                        .w(px(1.5))
-                        .h(px(16.))
-                        .bg(text)
-                        .with_animation("caret", pulse(), |d, t| d.opacity(t)),
-                )
-            })
-            .child(div().min_w_0().truncate().child(after))
-            .into_any_element()
+            if let (Some((base, t)), Some(p)) = (color, p) {
+                let a = if cx.reduce_motion() { 1. } else { t };
+                let lh = layout.line_height();
+                window.paint_quad(fill(Bounds::new(p, size(px(1.5), lh)), Hsla { a: base.a * a, ..base }));
+            }
+            let drag = hit.clone();
+            window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, _| {
+                let s = drag.state.get();
+                if phase != DispatchPhase::Bubble || !s.dragging {
+                    return;
+                }
+                if e.pressed_button != Some(MouseButton::Left) {
+                    return drag.state.set(Sel { dragging: false, ..s });
+                }
+                let (_, anchor) = ends(&drag.src, s);
+                put(&drag.state, drag.src.len(), drag.index(e.position), anchor);
+                window.refresh();
+            });
+            let up = hit.state.clone();
+            window.on_mouse_event(move |_: &MouseUpEvent, _, _, _| up.set(Sel { dragging: false, ..up.get() }));
+        })
+        .size_full()
     }
 }
 
@@ -262,6 +345,12 @@ fn word_right(s: &str, i: usize) -> usize {
     s.len() - rest.len()
 }
 
+/// The word around `i`, as (end, start): a double-click leaves the caret at its end.
+fn word_at(s: &str, i: usize) -> (usize, usize) {
+    let start = s[..i].trim_end_matches(char::is_alphanumeric).len();
+    (s.len() - s[i..].trim_start_matches(char::is_alphanumeric).len(), start)
+}
+
 /// A slow breath, so a focused field reads as focused; under reduce motion it holds steady.
 fn pulse() -> Animation {
     Animation::new(Duration::from_millis(1000)).repeat().with_easing(pulsating_between(0.15, 1.0))
@@ -275,14 +364,18 @@ mod tests {
         field.handle(&Keystroke::parse(s).unwrap(), cx)
     }
 
+    fn typed(field: &mut TextField, c: &str, cx: &App) {
+        let mut ks = Keystroke::parse("b").unwrap();
+        ks.key_char = Some(c.into());
+        field.handle(&ks, cx);
+    }
+
     #[gpui::test]
     fn typing_replaces_selection_then_appends(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut f = TextField::selected("https://old".into());
-            let mut ks = Keystroke::parse("a").unwrap();
-            ks.key_char = Some("a".into());
-            assert_eq!(f.handle(&ks, cx), Key::Edited);
-            f.handle(&ks, cx);
+            typed(&mut f, "a", cx);
+            typed(&mut f, "a", cx);
             assert_eq!(f.text, "aa");
             assert_eq!(key(&mut f, "backspace", cx), Key::Edited);
             assert_eq!(f.text, "a");
@@ -296,12 +389,11 @@ mod tests {
         cx.update(|cx| {
             let mut f = TextField::selected("https://old".into());
             assert_eq!(key(&mut f, "right", cx), Key::Edited);
-            assert!(!f.all_selected.get());
-            assert_eq!(f.text, "https://old");
+            assert_eq!(f.ends(), (11, 11));
             assert_eq!(key(&mut f, "right", cx), Key::Complete);
             assert_eq!(key(&mut f, "cmd-a", cx), Key::Edited);
             assert_eq!(key(&mut f, "left", cx), Key::Edited);
-            assert_eq!(f.caret(), 0, "← collapses a selection to its start");
+            assert_eq!(f.ends(), (0, 0), "← collapses a selection to its start");
             assert_eq!(f.text, "https://old");
         });
     }
@@ -310,13 +402,11 @@ mod tests {
     fn the_caret_moves_and_edits_in_the_middle(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut f = TextField { text: "https://a.com/x".into(), ..Default::default() };
-            assert_eq!(f.caret(), f.text.len(), "set text leaves the caret at the end");
+            assert_eq!(f.ends().0, f.text.len(), "set text leaves the caret at the end");
             key(&mut f, "alt-left", cx);
             key(&mut f, "alt-left", cx);
-            assert_eq!(f.caret(), "https://a.".len());
-            let mut ks = Keystroke::parse("b").unwrap();
-            ks.key_char = Some("é".into());
-            f.handle(&ks, cx);
+            assert_eq!(f.ends().0, "https://a.".len());
+            typed(&mut f, "é", cx);
             assert_eq!(f.text, "https://a.écom/x");
             key(&mut f, "left", cx);
             key(&mut f, "delete", cx);
@@ -332,5 +422,32 @@ mod tests {
             key(&mut f, "alt-delete", cx);
             assert_eq!(f.text, "/x");
         });
+    }
+
+    #[gpui::test]
+    fn shift_extends_and_edits_replace_the_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut f = TextField { text: "https://a.com/path".into(), ..Default::default() };
+            key(&mut f, "shift-alt-left", cx);
+            key(&mut f, "shift-left", cx);
+            assert_eq!(f.ends(), ("https://a.com".len(), f.text.len()), "anchor stays put");
+            key(&mut f, "shift-right", cx);
+            typed(&mut f, "x", cx);
+            assert_eq!(f.text, "https://a.com/x");
+            key(&mut f, "shift-cmd-left", cx);
+            assert_eq!(key(&mut f, "right", cx), Key::Edited, "→ collapses a selection, never completes");
+            assert_eq!(f.ends(), (f.text.len(), f.text.len()));
+            key(&mut f, "shift-home", cx);
+            key(&mut f, "backspace", cx);
+            assert_eq!(f.text, "");
+        });
+    }
+
+    #[test]
+    fn a_double_click_picks_the_word_around_it() {
+        let s = "https://example.com/a";
+        assert_eq!(word_at(s, 10), (15, 8));
+        assert_eq!(word_at(s, 8), (15, 8));
+        assert_eq!(word_at(s, 7), (7, 7), "between separators: nothing to pick");
     }
 }
