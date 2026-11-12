@@ -1483,3 +1483,49 @@ fn a_slot_counts_the_dragged_tab_until_it_is_lifted_out() {
     assert_eq!(landing(1, Some(2)), 1, "from below: unchanged");
     assert_eq!((landing(2, Some(2)), landing(3, Some(2))), (2, 2), "either side of itself: it stays");
 }
+
+#[gpui::test]
+fn move_to_space_moves_the_tab_and_never_offers_incognito(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let at = gpui::point(gpui::px(10.), gpui::px(10.));
+    let (tab, home, work, incog) = b.update(cx, |b, _| {
+        let tab = b.active_tab().unwrap();
+        let home = b.session.active_space().unwrap();
+        let profile = b.session.space(home).unwrap().profile;
+        let work = b.session.add_space("Work", "💼", Some(profile));
+        let incog = b.session.add_ephemeral_space("Incognito", baa_web::WebHost::ephemeral_profile(&*b.host));
+        b.session.set_active_space(home);
+        (tab, home, work, incog)
+    });
+    let targets = |b: &Browser<MockHost>| -> Vec<(String, usize)> {
+        b.host.menus.borrow().last().unwrap().iter().find_map(|i| match i {
+            baa_web::MenuItem::Submenu { label, items } if label == "Move to Space" => Some(items.iter().filter_map(|i| match i {
+                baa_web::MenuItem::Action { label, id, .. } => Some((label.clone(), *id)),
+                _ => None,
+            }).collect()),
+            _ => None,
+        }).unwrap_or_default()
+    };
+    b.update_in(cx, |b, window, cx| b.open_menu(crate::browser::MenuKind::Tab(tab), at, window, cx));
+    cx.run_until_parked();
+    let offered = b.read_with(cx, |b, _| targets(b));
+    assert_eq!(offered.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["💼 Work"], "not its own Space, not incognito");
+    b.update_in(cx, |b, window, cx| {
+        b.host.menu_pick.set(Some(offered[0].1));
+        b.open_menu(crate::browser::MenuKind::Tab(tab), at, window, cx)
+    });
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.session.tab(tab).unwrap().space, work);
+        assert_eq!(b.session.active_space(), Some(home), "you stay where you were");
+    });
+
+    // An incognito tab gets no Move to Space: it would land in baa.db.
+    let private = b.update(cx, |b, _| b.session.open_tab(incog, "https://p.example/", 0));
+    b.update_in(cx, |b, window, cx| b.open_menu(crate::browser::MenuKind::Tab(private), at, window, cx));
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| targets(b).is_empty()));
+}

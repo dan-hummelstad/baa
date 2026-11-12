@@ -109,6 +109,28 @@ impl<H: WebHost> Browser<H> {
                         "Move to New Folder",
                         Box::new(move |this, window, cx| this.new_folder(Some(id), None, window, cx)),
                     ));
+                    // Incognito Spaces are neither source nor target: a move would write the tab to baa.db.
+                    let from = tab.space;
+                    let incognito = |s: SpaceId| self.session.space(s).is_none_or(|s| s.ephemeral);
+                    let targets: Vec<MenuEntry<H>> = self
+                        .session
+                        .spaces()
+                        .iter()
+                        .filter(|s| s.id != from && !s.ephemeral)
+                        .map(|s| {
+                            let to = s.id;
+                            MenuEntry::item(
+                                format!("{} {}", s.icon, s.name),
+                                Box::new(move |this, window, cx| {
+                                    this.session.move_tab(id, to, zone, 0);
+                                    this.sync(window, cx);
+                                }),
+                            )
+                        })
+                        .collect();
+                    if !incognito(from) && !targets.is_empty() {
+                        items.push(MenuEntry::Submenu("Move to Space".into(), targets));
+                    }
                 }
                 let in_split = self.session.spaces().iter().any(|s| s.split.as_ref().is_some_and(|p| p.tabs.contains(&id)));
                 if in_split {
