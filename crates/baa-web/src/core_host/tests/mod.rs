@@ -131,6 +131,9 @@ extern "C" fn profile_clear_data(_: *mut Profile, id: u64, since_ms: i64, types:
 extern "C" fn profile_copy_extension(_: *mut Profile, id: u64, _: *mut Profile, ext: *const c_char) {
     log(format!("profile_copy_extension {id} {}", arg(ext)));
 }
+extern "C" fn accounts_share(accounts: u32, from: *mut Profile) {
+    log(format!("accounts_share {accounts} {from:?}"));
+}
 extern "C" fn profile_load_unpacked(_: *mut Profile, id: u64, path: *const c_char) {
     log(format!("profile_load_unpacked {id} {}", arg(path)));
 }
@@ -293,6 +296,7 @@ fn fake_core() -> &'static Core {
         profile_extension_change,
         profile_load_unpacked,
         profile_copy_extension,
+        accounts_share,
         extension_popup,
         tab_create,
         tab_close,
@@ -492,6 +496,7 @@ fn container_of(page: &Entity<CorePage>, cx: &mut TestAppContext) -> *mut AnyObj
     page.read_with(cx, |page, _| page.shared.container.as_ptr())
 }
 
+mod account_tests;
 mod adoption;
 mod cdp_tests;
 mod devtools_tests;

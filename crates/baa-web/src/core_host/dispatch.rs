@@ -24,9 +24,16 @@ use super::{
     PageKind, Shared, Snapshot,
 };
 use crate::{
-    Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate, SwipePhase,
-    Suggestion,
+    Account, Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate, SwipePhase,
+    SignIns, Suggestion, ProfileId,
 };
+
+/// `BAA_ACCOUNT_*` bits.
+pub(super) const ACCOUNTS: [(u32, Account); 3] = [
+    (ffi::ACCOUNT_GOOGLE, Account::Google),
+    (ffi::ACCOUNT_MICROSOFT, Account::Microsoft),
+    (ffi::ACCOUNT_GITHUB, Account::GitHub),
+];
 
 /// `BAA_MEDIA_*` bits.
 pub(super) const MEDIA_ACTIONS: [(u32, MediaAction); 6] = [
@@ -92,6 +99,9 @@ pub(super) struct Dispatch {
     pending: RefCell<Vec<Pending>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
+    pub(super) sign_ins: RefCell<Option<WeakEntity<SignIns>>>,
+    /// The open profiles, for callbacks that name one by handle.
+    pub(super) profile_ids: RefCell<HashMap<*mut Profile, ProfileId>>,
     pub(super) clears: Waiting<Callback<()>>,
     pub(super) unpacked: Waiting<Callback<Result<String, String>>>,
     /// The one query whose results still count: its id and whom to tell.
@@ -110,6 +120,8 @@ impl Dispatch {
             pending: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
+            sign_ins: RefCell::default(),
+            profile_ids: RefCell::default(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
             autocomplete: RefCell::default(),
@@ -274,6 +286,27 @@ impl Dispatch {
             });
             if let (Some(true), Some(page)) = (new, page) {
                 page.update(cx, |_, cx| cx.emit(PageEvent::DownloadStarted)).ok();
+            }
+        });
+    }
+
+    /// A Space's profile signed in to `bit`'s account. An incognito one never counts, even
+    /// if the engine sent it: nothing about it may reach the settings.
+    pub(super) fn signed_in(&'static self, profile: *mut Profile, bit: u32) {
+        let id = self.profile_ids.borrow().get(&profile).copied();
+        let account = ACCOUNTS.iter().find(|(b, _)| *b == bit).map(|(_, a)| *a);
+        let (Some(id), Some(account)) = (id, account) else { return };
+        if super::profiles::is_ephemeral(id) {
+            return;
+        }
+        self.queue(move |cx| {
+            let list = self.sign_ins.borrow().clone();
+            if let Some(list) = list {
+                list.update(cx, |list, cx| {
+                    list.0.push((id, account));
+                    cx.notify();
+                })
+                .ok();
             }
         });
     }
@@ -513,6 +546,9 @@ pub(super) fn callbacks() -> Callbacks {
         let event = swipe_event(phase, forward, amount, bgra, width, height);
         unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(event));
     }
+    extern "C" fn signed_in(ctx: *mut c_void, profile: *mut Profile, account: u32) {
+        unsafe { dispatch(ctx) }.signed_in(profile, account);
+    }
     Callbacks {
         key,
         tab_created,
@@ -537,6 +573,7 @@ pub(super) fn callbacks() -> Callbacks {
         media,
         focus_requested,
         swipe,
+        signed_in,
     }
 }
 

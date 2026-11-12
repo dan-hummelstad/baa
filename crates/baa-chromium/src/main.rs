@@ -210,6 +210,7 @@ mod app {
         media: on_media,
         focus_requested: on_focus_requested,
         swipe: on_swipe,
+        signed_in: on_signed_in,
     };
 
     thread_local! {
@@ -456,6 +457,9 @@ mod app {
     }
     extern "C" fn on_focus_requested(_: *mut c_void, tab: ffi::TabId) {
         eprintln!("baa: focus_requested tab={}", tab_index(tab));
+    }
+    extern "C" fn on_signed_in(_: *mut c_void, _: *mut ffi::Profile, account: u32) {
+        eprintln!("baa: signed_in account={account}");
     }
 
     extern "C" fn on_media(_: *mut c_void, tab: ffi::TabId, m: *const ffi::Media) {

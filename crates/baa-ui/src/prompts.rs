@@ -487,11 +487,15 @@ impl<H: WebHost> Browser<H> {
     /// Over the page: the first permission request as a banner under the top
     /// edge, and the page's dialog as a sheet with the page dimmed behind it.
     pub(crate) fn render_asks(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let tab = self.active_tab()?;
-        let asks = self.asks.get(&tab)?;
+        let layer = div().absolute().inset_0().flex().flex_col().items_center();
+        let account = self.render_account_ask(theme, cx);
+        let tab_asks = self.active_tab().and_then(|tab| Some((tab, self.asks.get(&tab)?)));
+        let Some((tab, asks)) = tab_asks else {
+            return account.map(|banner| layer.child(banner).into_any_element());
+        };
         let url = self.session.tab(tab).map(|t| t.url.clone()).unwrap_or_default();
-        let mut layer = div().absolute().inset_0().flex().flex_col().items_center();
-        let mut any = false;
+        let mut any = account.is_some();
+        let mut layer = layer.children(account);
         if let Some(dialog) = &asks.dialog {
             any = true;
             layer = layer.children(self.render_dialog(dialog, &url, theme, cx));

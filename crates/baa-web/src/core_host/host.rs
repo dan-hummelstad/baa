@@ -11,7 +11,7 @@ use gpui::{App, AppContext as _, Entity, Pixels, Window};
 use super::{
     c_string, extensions, ffi,
     ffi::Profile,
-    dispatch::Dispatch,
+    dispatch::{Dispatch, ACCOUNTS},
     menu,
     page::CorePage,
     profiles::{is_ephemeral, queue_delete},
@@ -19,8 +19,8 @@ use super::{
     skin, Core, PageKind,
 };
 use crate::{
-    Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
-    PageHandle, Permission, PermissionState, ProfileId, WebHost,
+    Account, Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
+    PageHandle, Permission, PermissionState, ProfileId, SignIns, WebHost,
 };
 
 /// `BAA_PERMISSION_*` bits, in bit order.
@@ -78,6 +78,7 @@ pub struct CoreWebHost {
     next_ephemeral: Cell<u64>,
     downloads: Entity<Downloads>,
     chrome_tabs: Entity<ChromeTabs>,
+    sign_ins: Entity<SignIns>,
     /// What `apply_settings` last sent; none before the first call.
     applied: RefCell<Option<Writes>>,
     /// Kept as the user chose it until it is sent to the engine.
@@ -92,6 +93,8 @@ impl CoreWebHost {
         *dispatch.chrome_tabs.borrow_mut() = Some(chrome_tabs.downgrade());
         let downloads = cx.new(|_| Downloads::default());
         *dispatch.downloads.borrow_mut() = Some(downloads.downgrade());
+        let sign_ins = cx.new(|_| SignIns::default());
+        *dispatch.sign_ins.borrow_mut() = Some(sign_ins.downgrade());
         *dispatch.app.borrow_mut() = Some(cx.to_async());
         Self {
             core,
@@ -101,6 +104,7 @@ impl CoreWebHost {
             next_ephemeral: Cell::new(u64::MAX),
             downloads,
             chrome_tabs,
+            sign_ins,
             applied: RefCell::default(),
             page_scheme: Cell::default(),
             skins: RefCell::default(),
@@ -139,6 +143,7 @@ impl CoreWebHost {
             log::error!("profile {id:?}: Chrome refused it");
         } else {
             self.profiles.borrow_mut().insert(id, handle);
+            self.dispatch.profile_ids.borrow_mut().insert(handle, id);
             // Before the pins below, so the privacy ones always win.
             if let Some(writes) = self.applied.borrow().as_ref() {
                 for write in &writes.profile {
@@ -247,6 +252,7 @@ impl WebHost for CoreWebHost {
     fn delete_profile(&self, profile: ProfileId) {
         self.skins.borrow_mut().remove(&profile);
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
+            self.dispatch.profile_ids.borrow_mut().remove(&handle);
             (self.core.profile_close)(handle);
         }
         if !is_ephemeral(profile) {
@@ -291,6 +297,17 @@ impl WebHost for CoreWebHost {
 
     fn chrome_tabs(&self) -> Entity<ChromeTabs> {
         self.chrome_tabs.clone()
+    }
+
+    fn sign_ins(&self) -> Entity<SignIns> {
+        self.sign_ins.clone()
+    }
+
+    fn share_accounts(&self, accounts: &[Account], from: Option<ProfileId>) {
+        let bits = ACCOUNTS.iter().filter(|(_, a)| accounts.contains(a)).fold(0, |bits, (bit, _)| bits | bit);
+        // Only a profile already open can win: opening one here would hand it the others' sign-in instead.
+        let from = from.filter(|p| !is_ephemeral(*p)).and_then(|p| self.profiles.borrow().get(&p).copied());
+        (self.core.accounts_share)(bits, from.unwrap_or(std::ptr::null_mut()));
     }
 
     fn cancel_download(&self, id: u64) {

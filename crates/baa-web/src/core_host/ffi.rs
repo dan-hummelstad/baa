@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 13;
+pub const ABI_VERSION: c_int = 14;
 
 #[repr(C)]
 pub struct Profile {
@@ -152,6 +152,10 @@ pub const MEDIA_PREVIOUS: u32 = 1 << 3;
 pub const MEDIA_PICTURE_IN_PICTURE: u32 = 1 << 4;
 pub const MEDIA_EXIT_PICTURE_IN_PICTURE: u32 = 1 << 5;
 
+pub const ACCOUNT_GOOGLE: u32 = 1 << 0;
+pub const ACCOUNT_MICROSOFT: u32 = 1 << 1;
+pub const ACCOUNT_GITHUB: u32 = 1 << 2;
+
 /// `BaaDialog`: a question the page or Chrome waits on.
 #[repr(C)]
 pub struct Dialog {
@@ -254,6 +258,7 @@ pub struct Callbacks {
         width: c_int,
         height: c_int,
     ),
+    pub signed_in: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, account: u32),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -290,6 +295,8 @@ pub struct Core {
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
     pub profile_load_unpacked: extern "C" fn(*mut Profile, u64, *const c_char),
     pub profile_copy_extension: extern "C" fn(*mut Profile, u64, *mut Profile, *const c_char),
+    /// `ACCOUNT_*` bits shared from now on; where profiles differ the given one wins.
+    pub accounts_share: extern "C" fn(u32, *mut Profile),
     pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> TabId,
     pub tab_create: extern "C" fn(*mut Profile, *const c_char) -> TabId,
     pub tab_close: extern "C" fn(TabId),
@@ -390,6 +397,7 @@ pub fn load() -> &'static Core {
             profile_extension_change,
             profile_load_unpacked,
             profile_copy_extension,
+            accounts_share,
             extension_popup,
             tab_create,
             tab_close,
@@ -559,6 +567,9 @@ mod tests {
             ("BAA_SWIPE_CHANGED", SWIPE_CHANGED as i64),
             ("BAA_SWIPE_DONE", SWIPE_DONE as i64),
             ("BAA_SWIPE_CANCELLED", SWIPE_CANCELLED as i64),
+            ("BAA_ACCOUNT_GOOGLE", ACCOUNT_GOOGLE as i64),
+            ("BAA_ACCOUNT_MICROSOFT", ACCOUNT_MICROSOFT as i64),
+            ("BAA_ACCOUNT_GITHUB", ACCOUNT_GITHUB as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

@@ -40,6 +40,9 @@ mod groups;
 mod live;
 mod page_state;
 mod shared_extensions;
+mod shared_accounts;
+#[cfg(test)]
+mod tests_shared_accounts;
 mod media;
 #[cfg(test)]
 mod tests_media;
@@ -247,6 +250,9 @@ pub struct Browser<H: WebHost> {
     pub(crate) undo_clear: Option<(Vec<TabId>, Option<TabId>)>,
     _downloads: Subscription,
     _chrome_tabs: Option<Subscription>,
+    _sign_ins: Option<Subscription>,
+    /// Sign-ins waiting on "use this account in all Spaces?", oldest first; the first shows.
+    pub(crate) account_asks: Vec<shared_accounts::AccountAsk>,
     pub(crate) extensions_page: crate::settings::ExtensionsPage,
     /// The skin last sent to the engine: Space profile and the colours it was made from.
     pub(crate) skin_sent: Option<(baa_model::ProfileId, u64)>,
@@ -311,6 +317,10 @@ impl<H: WebHost> Browser<H> {
         // ponytail: auto-archive runs at launch and on Space switch only; a timer comes with milestone 4.
         session.on_launch(&settings, now(), |t| crate::pages::route(&t.url) == Some(crate::pages::Route::Extensions));
         host.apply_settings(&settings);
+        // The engine keeps them alike as each Space opens; nothing wins over the newest now.
+        if !settings.shared_accounts.is_empty() {
+            host.share_accounts(&settings.shared_accounts, None);
+        }
         // Spaces from before gradient themes get the palette, in order.
         let ids: Vec<SpaceId> = session.spaces().iter().map(|s| s.id).collect();
         for (i, id) in ids.into_iter().enumerate() {
@@ -371,6 +381,13 @@ impl<H: WebHost> Browser<H> {
                 if let Some(space) = this.session.active_space() {
                     this.open_supplied_in(space, &url, window, cx);
                 }
+            }
+        }));
+        // Like Chrome's tabs: one window takes them, never an incognito one.
+        let sign_ins = (!private).then(|| cx.observe(&host.sign_ins(), |this: &mut Self, list, cx| {
+            let sign_ins = list.update(cx, |list, _| std::mem::take(&mut list.0));
+            if !sign_ins.is_empty() {
+                this.signed_in(sign_ins, cx);
             }
         }));
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
@@ -450,6 +467,8 @@ impl<H: WebHost> Browser<H> {
             undo_clear: None,
             _downloads: downloads,
             _chrome_tabs: chrome_tabs,
+            _sign_ins: sign_ins,
+            account_asks: Vec::new(),
             extensions_page: Default::default(),
             skin_sent: None,
             nav_press: None,

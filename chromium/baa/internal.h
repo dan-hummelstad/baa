@@ -125,6 +125,11 @@ class DownloadWatch : public content::DownloadManager::Observer {
   raw_ptr<content::DownloadManager> manager_;
 };
 
+// accounts.mm: a regular profile's cookies, for shared accounts, from open
+// until close (an incognito one is never watched).
+void WatchAccounts(BaaProfile* owner, Profile* profile);
+void UnwatchAccounts(BaaProfile* owner);
+
 // window.mm -> tab.mm: what the window's tab strip observer found.
 void OnTabInserted(TabStripModel* model,
                    tabs::TabInterface* tab,

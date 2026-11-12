@@ -6,7 +6,7 @@ mod core_host;
 
 use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 
-pub use baa_model::{Permission, PermissionState, ProfileId};
+pub use baa_model::{Account, Permission, PermissionState, ProfileId};
 #[cfg(target_os = "macos")]
 pub use core_host::{
     chrome_argv, hide_window,
@@ -245,6 +245,11 @@ pub enum ExclusiveKind {
 #[derive(Default)]
 pub struct ChromeTabs(pub Vec<String>);
 
+/// A Space's profile just signed in to an account (a site set its sign-in cookie), oldest
+/// first. Never an incognito profile, never a sign-in [`WebHost::share_accounts`] copied.
+#[derive(Default)]
+pub struct SignIns(pub Vec<(ProfileId, Account)>);
+
 /// Every download any page started this session, oldest first.
 #[derive(Default)]
 pub struct Downloads {
@@ -379,6 +384,12 @@ pub trait WebHost: 'static {
     /// Pages Chrome itself wanted open (an extension's `chrome.tabs.create`);
     /// observe it and take them as tabs.
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
+    /// Observe it and take them.
+    fn sign_ins(&self) -> Entity<SignIns>;
+    /// From now on each of `accounts` is signed in (or out) alike in every Space but
+    /// incognito ones, including Spaces opened later; the rest go their own way. Where
+    /// Spaces differ now, `from`'s sign-in wins, else the newest.
+    fn share_accounts(&self, accounts: &[Account], from: Option<ProfileId>);
     fn cancel_download(&self, id: u64);
     /// The user chose Keep for a download with `danger`: Chrome finishes it.
     fn download_validate(&self, id: u64);

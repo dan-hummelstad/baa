@@ -73,6 +73,25 @@ impl Default for SearchEngine {
     }
 }
 
+/// An account whose sign-in baa can share between Spaces (the engine's
+/// `BAA_ACCOUNT_*`): its cookies on the provider's own domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Account {
+    Google,
+    Microsoft,
+    GitHub,
+}
+
+impl Account {
+    pub fn name(self) -> &'static str {
+        match self {
+            Account::Google => "Google",
+            Account::Microsoft => "Microsoft",
+            Account::GitHub => "GitHub",
+        }
+    }
+}
+
 /// Where a link another app opens goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ExternalLinks {
@@ -219,6 +238,11 @@ pub struct Settings {
     pub unpinned_extensions: Vec<String>,
     /// Extension ids every Space has: baa installs them into each Space's profile.
     pub shared_extensions: Vec<String>,
+    /// Accounts signed in to in every Space (not incognito): a sign-in or sign-out in one
+    /// is made in all.
+    pub shared_accounts: Vec<Account>,
+    /// Sign-ins the user chose to keep to their Space, so it is not asked again.
+    pub kept_accounts: Vec<(crate::ProfileId, Account)>,
     pub devtools_dock: DevToolsDock,
     /// false archives Today tabs at startup instead of restoring them.
     pub restore_today: bool,
@@ -311,6 +335,8 @@ impl Default for Settings {
             chrome: ChromeStyle::Arc,
             unpinned_extensions: Vec::new(),
             shared_extensions: Vec::new(),
+            shared_accounts: Vec::new(),
+            kept_accounts: Vec::new(),
             devtools_dock: DevToolsDock::default(),
             restore_today: true,
             external_links: ExternalLinks::default(),

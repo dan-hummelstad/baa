@@ -166,6 +166,7 @@ risk is a code path we didn't list. The CI network test is the control.
 - One Chrome `Profile` per Space under `--user-data-dir=<app data>/baa/chromium` (`space-<id>`; Chrome rejects deeper paths). Ephemeral (incognito) Space = off-the-record profile `baa::<id>`.
 - A Space references exactly one storage profile; many Spaces may share one. Default: new Space gets a new profile (true Arc behaviour is "same profile unless you choose"; make it a toggle in the Space creator).
 - Downloads, permissions, zoom per profile.
+- Shared accounts (Google, Microsoft, GitHub): never by default. A fresh sign-in in a Space shows "Use this account in all Spaces?" (Just This Space / Use in All Spaces; buttons only, Share ignored for 500 ms). Shared, the account's HTTP cookies on its own domains are kept alike in every non-incognito profile by `chromium/baa/accounts.mm` (`baa_accounts_share`, ABI 14): sign-ins, refreshes and sign-outs in one are made in all, and a Space opened later catches up (newest wins). Settings → Spaces lists them with Stop Sharing; the answers live in `Settings::shared_accounts` / `kept_accounts`. Incognito profiles are never watched, asked about or stored.
 - Peek and Little baa inherit the profile of the originating Space.
 - Deleting a profile: close its pages, then `rm -rf` the directory (queued for the next launch, before Chromium opens anything).
 - Single-instance lock + IPC "open URL" to the running process (mac: `application:openURLs:` via GPUI's `on_open_urls`).

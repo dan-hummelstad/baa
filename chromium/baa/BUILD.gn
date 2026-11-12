@@ -3,6 +3,7 @@
 # linked into BaaCore.framework (libchrome_dll.dylib in component builds).
 source_set("baa") {
   sources = [
+    "accounts.mm",
     "asks.mm",
     "autocomplete.mm",
     "app_mac.mm",
@@ -54,6 +55,7 @@ source_set("baa") {
     "//services/media_session/public/cpp",
     "//services/media_session/public/mojom",
     "//services/network/public/cpp",
+    "//services/network/public/mojom",
     "//ui/base",
     "//ui/events:events_base",
     "//skia",

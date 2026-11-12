@@ -377,6 +377,24 @@ impl<H: WebHost> SettingsView<H> {
                 })))
                 .into_any_element(),
         ));
+        let shared = self.browser.read(cx).settings.shared_accounts.clone();
+        out.push(self.row(
+            "shared_accounts",
+            "Signed in or out alike in every Space but incognito ones. Signing in to one in a Space asks first.",
+            div().into_any_element(),
+        ));
+        if shared.is_empty() {
+            out.push(self.note("None yet."));
+        }
+        for account in shared {
+            out.push(self.sub_row(
+                format!("account:{}", account.name()),
+                SharedString::from(account.name()).into_any_element(),
+                self.button("account-unshare", "Stop Sharing", false, cx)
+                    .on_click(cx.listener(move |this, _, _, cx| this.browser.update(cx, |b, cx| b.unshare_account(account, cx))))
+                    .into_any_element(),
+            ));
+        }
         out
     }
 

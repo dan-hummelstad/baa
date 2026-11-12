@@ -155,6 +155,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Extensions, "load_unpacked", "Load unpacked…", "extension folder developer"),
     row(Extensions, "ext_list", "Installed extensions", "add-ons plugins"),
     row(Spaces, "spaces", "Spaces", "rename colour color delete incognito"),
+    row(Spaces, "shared_accounts", "Accounts in every Space", "share sign in login google microsoft github"),
     row(Keyboard, "shortcuts", "Keyboard shortcuts", "keys bindings"),
     row(Keyboard, "keymap", "Edit keymap.json…", "rebind customise"),
     row(Developer, "devtools", "Developer tools", "inspect dock devtools"),

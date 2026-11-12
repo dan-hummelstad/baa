@@ -52,9 +52,13 @@ struct BaaProfile : ProfileObserver {
                              "credentials_enable_autosignin"}) {
       baa::SetPrefBool(profile, name, false);
     }
+    baa::WatchAccounts(this, profile);
   }
 
+  ~BaaProfile() { baa::UnwatchAccounts(this); }
+
   void OnProfileWillBeDestroyed(Profile*) override {
+    baa::UnwatchAccounts(this);
     observation.Reset();
     autocomplete.reset();  // its providers hold the profile
     profile = nullptr;

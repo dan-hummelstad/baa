@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 13
+#define BAA_ABI_VERSION 14
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -336,6 +336,12 @@ typedef struct {
   // the call. NULL when there is none (not visited in this run, or evicted).
   void (*swipe)(void* ctx, BaaTabId tab, int phase, bool forward, float amount,
                 const uint8_t* bgra, int width, int height);
+
+  // The profile (never an ephemeral one) just signed in to `account`
+  // (one BAA_ACCOUNT_* bit): a site set the account's sign-in cookie where
+  // there was none (not baa_accounts_share, not a refresh of one already
+  // there). At most once per profile and account per run.
+  void (*signed_in)(void* ctx, BaaProfile* profile, uint32_t account);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
@@ -548,6 +554,26 @@ BAA_EXPORT void baa_profile_copy_extension(BaaProfile* to, uint64_t id,
 // itself), else 0.
 BAA_EXPORT BaaTabId baa_extension_popup(BaaProfile* profile,
                                        const char* extension_id);
+
+// ---- Shared accounts -------------------------------------------------------
+// An account's sign-in is the cookies a site sets on the account's own domains
+// (Google: google.com; Microsoft: microsoftonline.com, live.com; GitHub:
+// github.com). Only cookies set over HTTP, never partitioned ones.
+
+enum {
+  BAA_ACCOUNT_GOOGLE = 1 << 0,
+  BAA_ACCOUNT_MICROSOFT = 1 << 1,
+  BAA_ACCOUNT_GITHUB = 1 << 2,
+};
+
+// `accounts` (BAA_ACCOUNT_* bits) is the set shared from now on, replacing the
+// last one. A shared account's cookies are the same in every open profile
+// that is not ephemeral: now (where they differ, `from`'s copy wins, else the
+// newest), as each such profile opens (the newest wins), and after any change
+// a site makes in one (set, or deleted by the site or the user), which is made
+// in all the others. An account taken out of the set keeps its cookies in
+// each profile, which then go their own way. `from` NULL: none wins.
+BAA_EXPORT void baa_accounts_share(uint32_t accounts, BaaProfile* from);
 
 // ---- Tabs ------------------------------------------------------------------
 

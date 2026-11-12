@@ -12,7 +12,7 @@ mod store;
 
 pub use permission::{Permission, PermissionState};
 pub use settings::{
-    ChromeStyle, Claude, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
+    Account, ChromeStyle, Claude, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
     SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
 };
 pub use live::{LiveItem, LiveSource};

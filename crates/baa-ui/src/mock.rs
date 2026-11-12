@@ -31,6 +31,9 @@ pub struct MockHost {
     /// (to, from, id) of each `copy_extension`.
     pub copies: RefCell<Vec<(ProfileId, ProfileId, String)>>,
     pub chrome_tabs: Entity<baa_web::ChromeTabs>,
+    pub sign_ins: Entity<baa_web::SignIns>,
+    /// Each `share_accounts`, in order.
+    pub shares: RefCell<Vec<(Vec<baa_web::Account>, Option<ProfileId>)>>,
     pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
     pub extension_changes: RefCell<Vec<(String, baa_web::ExtensionChange)>>,
     /// (popup url, the tab it was opened for).
@@ -234,6 +237,8 @@ impl MockHost {
             profile_extensions: RefCell::default(),
             copies: RefCell::default(),
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
+            sign_ins: cx.new(|_| baa_web::SignIns::default()),
+            shares: RefCell::default(),
             extension_details: RefCell::default(),
             extension_changes: RefCell::default(),
             popups: RefCell::default(),
@@ -361,6 +366,12 @@ impl WebHost for MockHost {
     }
     fn chrome_tabs(&self) -> Entity<baa_web::ChromeTabs> {
         self.chrome_tabs.clone()
+    }
+    fn sign_ins(&self) -> Entity<baa_web::SignIns> {
+        self.sign_ins.clone()
+    }
+    fn share_accounts(&self, accounts: &[baa_web::Account], from: Option<ProfileId>) {
+        self.shares.borrow_mut().push((accounts.to_vec(), from));
     }
     fn cancel_download(&self, _: u64) {}
     fn download_validate(&self, id: u64) {
