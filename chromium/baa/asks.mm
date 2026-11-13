@@ -31,6 +31,7 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/result_codes.h"
 #include "extensions/browser/install_prompt_data.h"
 #include "net/base/auth.h"
@@ -204,7 +205,7 @@ bool TakeExternal(const GURL& url,
 
 // ---- Hung page -------------------------------------------------------------------
 
-// Held by the tab's TabDialogs, which also drops it with the tab.
+// Held by the tab's BaaHung, which also drops it with the tab.
 class Hung : public Request {
  public:
   Hung(BaaTab* tab, content::RenderWidgetHost* host, base::RepeatingClosure restart)
@@ -246,46 +247,51 @@ class Hung : public Request {
   bool answered_ = false;
 };
 
-class BaaTabDialogs : public TabDialogsViews, public content::WebContentsObserver {
+// The hung-page prompt for a tab in baa's windows. Chrome 157 keeps TabDialogs on the
+// tab, so baa no longer swaps it: TabDialogsViews asks g_baa_hung_renderer_hook first,
+// and a tab without this (attached in AttachTabDialogs) keeps Chrome's views dialog.
+class BaaHung : public content::WebContentsUserData<BaaHung>, public content::WebContentsObserver {
  public:
-  explicit BaaTabDialogs(content::WebContents* wc)
-      : TabDialogsViews(wc), content::WebContentsObserver(wc), wc_(wc) {}
-
-  // Chrome's own views dialogs again (the tab left our windows).
-  static void Restore(content::WebContents* wc) {
-    wc->SetUserData(TabDialogs::UserDataKey(), std::make_unique<TabDialogsViews>(wc));
-  }
-  static void Install(content::WebContents* wc) {
-    wc->SetUserData(TabDialogs::UserDataKey(), std::make_unique<BaaTabDialogs>(wc));
-  }
-
-  void ShowHungRendererDialog(content::RenderWidgetHost* host,
-                              base::RepeatingClosure restart) override {
-    BaaTab* tab = ShownTab(wc_);
-    if (!tab) {
-      TabDialogsViews::ShowHungRendererDialog(host, std::move(restart));
-      return;
+  static bool Show(content::WebContents* wc, content::RenderWidgetHost* host,
+                   base::RepeatingClosure& restart) {
+    BaaHung* self = FromWebContents(wc);
+    BaaTab* tab = ShownTab(wc);
+    if (!self || !tab) {
+      return false;
     }
-    Withdraw();
-    hung_ = std::make_unique<Hung>(tab, host, std::move(restart));
-    std::u16string page = wc_->GetTitle();
-    hung_->Show(page.empty() ? base::UTF8ToUTF16(wc_->GetVisibleURL().spec()) : page);
+    self->Withdraw();
+    self->hung_ = std::make_unique<Hung>(tab, host, std::move(restart));
+    std::u16string page = wc->GetTitle();
+    self->hung_->Show(page.empty() ? base::UTF8ToUTF16(wc->GetVisibleURL().spec()) : page);
+    return true;
   }
-  void HideHungRendererDialog(content::RenderWidgetHost* host) override {
-    if (!hung_) {
-      TabDialogsViews::HideHungRendererDialog(host);
-    } else if (hung_->host() == host) {
-      Withdraw();
+  static bool Hide(content::WebContents* wc, content::RenderWidgetHost* host) {
+    BaaHung* self = FromWebContents(wc);
+    if (!self || !self->hung_) {
+      return false;
     }
+    if (self->hung_->host() == host) {
+      self->Withdraw();
+    }
+    return true;
   }
-  bool IsShowingHungRendererDialog() override {
-    return hung_ ? !hung_->answered() : TabDialogsViews::IsShowingHungRendererDialog();
+  static bool IsShowing(content::WebContents* wc, bool* showing) {
+    BaaHung* self = FromWebContents(wc);
+    if (!self || !self->hung_) {
+      return false;
+    }
+    *showing = !self->hung_->answered();
+    return true;
   }
 
   // The renderer died: nothing to wait for or end any more.
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override { Withdraw(); }
 
  private:
+  friend class content::WebContentsUserData<BaaHung>;
+  explicit BaaHung(content::WebContents* wc)
+      : content::WebContentsUserData<BaaHung>(*wc), content::WebContentsObserver(wc) {}
+
   void Withdraw() {
     if (hung_) {
       WithdrawRequest(hung_->id());
@@ -293,9 +299,12 @@ class BaaTabDialogs : public TabDialogsViews, public content::WebContentsObserve
     }
   }
 
-  raw_ptr<content::WebContents> wc_;
   std::unique_ptr<Hung> hung_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(BaaHung);
 
 // ---- Extension install, re-enable, permissions.request ---------------------------
 
@@ -314,12 +323,14 @@ class InstallAsk : public Request {
         message += u"\n" + prompt_->GetPermission(i);
       }
     }
-    // Chrome offers the checkbox (default off) when permissions can be withheld on accept.
+    // Chrome offers site access (default "on click", which withholds) when permissions can
+    // be withheld on accept; its "Always on all sites" radio is this checkbox, default off.
     // ExtensionInstallPrompt already told prompt_'s observers OnDialogOpened.
     withhold_ = !prompt_->has_webstore_data() && prompt_->ShouldWithheldPermissionsOnDialogAccept();
     Send(tab(), id(), BAA_DIALOG_EXTENSION_INSTALL, prompt_->GetDialogTitle(), message,
          prompt_->GetAcceptButtonLabel(), prompt_->GetAbortButtonLabel(),
-         withhold_ ? l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_GRANT_PERMISSIONS_CHECKBOX)
+         withhold_ ? l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_ALLOW_SITE_ACCESS_TITLE) + u": " +
+                         l10n_util::GetStringUTF16(IDS_EXTENSIONS_CONTEXT_MENU_PAGE_ACCESS_RUN_ON_ALL_SITES_V2)
                    : std::u16string());
   }
 
@@ -382,14 +393,15 @@ void InstallDialogHooks() {
   g_baa_login_handler = &TakeLogin;
   g_baa_external_protocol = &TakeExternal;
   g_baa_install_dialog = &TakeInstall;
+  g_baa_hung_renderer_hook = {&BaaHung::Show, &BaaHung::Hide, &BaaHung::IsShowing};
 }
 
 void AttachTabDialogs(content::WebContents* wc) {
-  BaaTabDialogs::Install(wc);
+  BaaHung::CreateForWebContents(wc);
 }
 
 void RestoreTabDialogs(content::WebContents* wc) {
-  BaaTabDialogs::Restore(wc);
+  wc->RemoveUserData(BaaHung::UserDataKey());
 }
 
 }  // namespace baa

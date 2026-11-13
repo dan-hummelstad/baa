@@ -14,3 +14,4 @@ baa/pip-arc.patch
 baa/verify-order-baa-exports.patch
 baa/history-swipe-hook.patch
 baa/doh-probe-host.patch
+baa/tab-dialogs-hook.patch
