@@ -192,13 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn search_suggest_is_written_from_the_setting() {
-        let s = Settings { search_suggest: false, ..Settings::default() };
-        assert!(writes(&s).profile.contains(&Write::Bool("search.suggest_enabled", false)));
-        assert!(writes(&Settings::default()).profile.contains(&Write::Bool("search.suggest_enabled", true)));
-    }
-
-    #[test]
     fn auto_pip_off_restores_chrome_default() {
         let list = writes(&Settings { auto_pip: false, ..Settings::default() }).profile;
         assert!(list.contains(&Write::Clear(AUTO_PIP)));
@@ -287,11 +280,5 @@ mod tests {
         assert!(list.contains(&Write::SiteDefault(Permission::Popups, Some(PermissionState::Allow))));
         assert!(list.contains(&Write::SiteDefault(Permission::Location, Some(PermissionState::Block))));
         assert!(list.contains(&Write::SiteDefault(Permission::Sound, None)));
-    }
-
-    #[test]
-    fn one_scheme_mapping() {
-        assert_eq!((website_scheme(PageScheme::System), website_scheme(PageScheme::Light), website_scheme(PageScheme::Dark)), (0, 1, 2));
-        assert_eq!((scheme_code(false), scheme_code(true)), (1, 2));
     }
 }

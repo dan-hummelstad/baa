@@ -112,6 +112,12 @@ fn site_permissions_go_through_the_profile(cx: &mut TestAppContext) {
     env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Other, PermissionState::Block);
     assert_eq!(calls("profile_set_site_permission"), ["profile_set_site_permission https://a.test 8 0"]);
     assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Other), PermissionState::Ask);
+
+    // A site-settings kind and Chrome's session-only state.
+    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Cookies, PermissionState::SessionOnly);
+    assert_eq!(calls("profile_set_site_permission")[1], "profile_set_site_permission https://a.test 1024 3");
+    SITE_STATE.with(|s| s.set(3));
+    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Cookies), PermissionState::SessionOnly);
 }
 
 #[gpui::test]
@@ -124,15 +130,6 @@ fn pages_without_a_ui_page_are_refused_not_left_waiting(cx: &mut TestAppContext)
     assert_eq!(calls("answer").len(), 0, "queued, not inline");
     cx.run_until_parked();
     assert_eq!(calls("answer"), ["answer 11 0   0", "answer 12 0   0", "answer 13 0   0"]);
-}
-
-#[gpui::test]
-fn site_settings_kinds_reach_the_core_as_bits(cx: &mut TestAppContext) {
-    let env = Env::new(cx);
-    env.host.set_site_permission(ProfileId(1), "https://a.test", Permission::Cookies, PermissionState::SessionOnly);
-    assert_eq!(calls("profile_set_site_permission"), ["profile_set_site_permission https://a.test 1024 3"]);
-    SITE_STATE.with(|s| s.set(3));
-    assert_eq!(env.host.site_permission(ProfileId(1), "https://a.test", Permission::Cookies), PermissionState::SessionOnly);
 }
 
 #[gpui::test]

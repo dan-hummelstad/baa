@@ -43,25 +43,6 @@ fn page_callbacks_become_events(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn crashed_flips_report_once_each(cx: &mut TestAppContext) {
-    let env = Env::new(cx);
-    let page = env.page(1, "https://a.test", cx);
-    let tab = env.tab_of(&page, cx);
-    let seen = events(&page, cx);
-    cx.run_until_parked();
-    seen.borrow_mut().clear();
-
-    let crashed = State { crashed: true, ..Default::default() };
-    env.state(tab, &crashed);
-    env.state(tab, &crashed);
-    cx.run_until_parked();
-    assert_eq!(*seen.borrow(), [PageEvent::Crashed(true)]);
-    env.state(tab, &State::default());
-    cx.run_until_parked();
-    assert_eq!(*seen.borrow(), [PageEvent::Crashed(true), PageEvent::Crashed(false)]);
-}
-
-#[gpui::test]
 fn set_group_goes_to_chrome_with_none_as_key_zero(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let page = env.page(1, "https://a.test", cx);

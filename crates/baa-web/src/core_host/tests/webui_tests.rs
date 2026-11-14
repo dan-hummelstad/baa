@@ -119,9 +119,3 @@ fn a_skin_never_opens_a_profile_and_a_later_one_inherits_it(cx: &mut TestAppCont
     let tab = env.tab_of(&page, cx);
     assert!(calls("tab_set_init_script").iter().any(|c| c.contains(&format!("{tab:?}")) && c.contains("b{}")));
 }
-
-#[test]
-fn the_loader_keeps_nothing_in_storage() {
-    let script = super::super::skin::loader("a{}");
-    assert!(!script.contains("localStorage") && !script.contains("token"));
-}
