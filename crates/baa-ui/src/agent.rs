@@ -154,7 +154,8 @@ pub(crate) struct AgentAsk<H: WebHost> {
     origin: String,
     /// What the sheet says Claude wants to do: "click", "run JavaScript".
     pub what: &'static str,
-    /// `evaluate` and connect: no "For this session", and the answer covers this call only.
+    /// `evaluate` and connect: Once and Deny cover this call only. `evaluate`'s "For this
+    /// session" is its own grant for the site; connect has none.
     pub every_time: bool,
     /// A connect sheet: the client's process path and pid, instead of an origin.
     pub connect: Option<(String, Option<i32>)>,
@@ -216,6 +217,8 @@ pub(crate) struct Agent<H: WebHost> {
     /// Clients counted when the socket is not ours (tests).
     next_conn: u64,
     grants: HashMap<String, Grant>,
+    /// Origins where `evaluate` runs without asking, for this session: an act grant never covers it.
+    eval_grants: HashSet<String>,
     /// Oldest first; the first is shown.
     pub asks: VecDeque<AgentAsk<H>>,
     next_ask: u64,
@@ -241,6 +244,7 @@ impl<H: WebHost> Default for Agent<H> {
             ask_next: HashSet::new(),
             next_conn: 0,
             grants: HashMap::new(),
+            eval_grants: HashSet::new(),
             asks: VecDeque::new(),
             next_ask: 0,
             driven: HashSet::new(),
@@ -638,6 +642,7 @@ impl<H: WebHost> Browser<H> {
         self.agent.ask_next.clear();
         self.agent.asks.clear();
         self.agent.grants.clear();
+        self.agent.eval_grants.clear();
         self.agent.driven.clear();
         self.agent.console.clear();
         self.agent.status = None;
@@ -1072,6 +1077,10 @@ impl<H: WebHost> Browser<H> {
         let host = host_of(&origin);
         // Taken by this act whatever it is, so it never carries over to a later one.
         let auto = !self.agent.ask_next.remove(&conn) && self.auto_conn(conn);
+        if kind == Kind::Gated && self.agent.eval_grants.contains(&origin) {
+            self.log(tool, kind, &host, false);
+            return then(self, reply, window, cx);
+        }
         if !every_time {
             match self.agent.grants.get(&origin) {
                 Some(Grant::Session) => {
@@ -1129,6 +1138,15 @@ impl<H: WebHost> Browser<H> {
         }
         let ask = self.agent.asks.pop_front().expect("checked above");
         let mut run = Vec::new();
+        if ask.every_time && ask.connect.is_none() && answer == Answer::Session {
+            // evaluate on this site, this session; the others waiting for it here go too.
+            self.agent.eval_grants.insert(ask.origin.clone());
+            let (same, rest): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.agent.asks)
+                .into_iter()
+                .partition(|a| a.every_time && a.connect.is_none() && a.origin == ask.origin);
+            self.agent.asks = rest;
+            run.extend(same);
+        }
         if !ask.every_time && answer != Answer::Once {
             let grant = if answer == Answer::Session { Grant::Session } else { Grant::Denied };
             self.agent.grants.insert(ask.origin.clone(), grant);
@@ -1211,7 +1229,7 @@ impl<H: WebHost> Browser<H> {
                         .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(host)),
                 )
                 .child(div().text_size(px(12.5)).text_color(surface::muted()).child(if ask.every_time {
-                    "It runs with the page's access to everything on this site. You are asked every time."
+                    "It runs with the page's access to everything on this site. For this session lets it run here again without asking until you quit or turn Claude off."
                 } else {
                     "Text on pages can try to steer Claude. Allow only sites you are happy for it to use."
                 }))
@@ -1222,7 +1240,7 @@ impl<H: WebHost> Browser<H> {
                     .justify_end()
                     .gap(px(8.))
                     .child(button(("agent-deny", id), "Deny", false, theme, self, cx).on_click(deny))
-                    .when(!ask.every_time, |d| {
+                    .when(ask.connect.is_none(), |d| {
                         d.child(button(("agent-session", id), "For this session", false, theme, self, cx).on_click(session))
                     })
                     .child(button(("agent-once", id), if ask.connect.is_some() { "Allow" } else { "Allow once" }, true, theme, self, cx).on_click(once)),

@@ -230,13 +230,37 @@ fn evaluate_is_off_by_default_and_asks_every_call(cx: &mut TestAppContext) {
     let rx = call(&b, cx, "press_key", json!({"key": "a"}));
     decide(&b, cx, Answer::Session);
     answer(&rx).unwrap();
+    let evals = |cx: &mut VisualTestContext| b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).evals.borrow().len());
+    let before = evals(cx);
+    // Once is once.
     for _ in 0..2 {
         let _rx = call(&b, cx, "evaluate", json!({"script": "1+1"}));
-        assert_eq!(asks(&b, cx), 1, "a session grant does not cover evaluate");
-        decide(&b, cx, Answer::Session);
-        let evals = b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).evals.borrow().len());
-        assert!(evals >= 1);
+        assert_eq!(asks(&b, cx), 1, "an act's session grant does not cover evaluate");
+        decide(&b, cx, Answer::Once);
     }
+    assert_eq!(evals(cx), before + 2);
+    // For this session: evaluate on this site, until off or quit.
+    let _rx = call(&b, cx, "evaluate", json!({"script": "1+1"}));
+    decide(&b, cx, Answer::Session);
+    let _rx = call(&b, cx, "evaluate", json!({"script": "2"}));
+    assert_eq!(asks(&b, cx), 0, "allowed on this site");
+    assert_eq!(evals(cx), before + 4);
+    // Another site still asks.
+    let other = b.update_in(cx, |b, window, cx| {
+        b.open_url("https://example.com/", window, cx);
+        b.active_tab().unwrap()
+    });
+    let _rx = call(&b, cx, "evaluate", json!({"tab": other.0, "script": "1"}));
+    assert_eq!(asks(&b, cx), 1);
+    decide(&b, cx, Answer::Deny);
+    // Off and on forgets it.
+    b.update(cx, |b, cx| {
+        b.set_claude_enabled(false, cx);
+        b.set_claude_enabled(true, cx);
+        b.settings.claude.evaluate_allowed = true;
+    });
+    let _rx = call(&b, cx, "evaluate", json!({"tab": tab.0, "script": "1"}));
+    assert_eq!(asks(&b, cx), 1);
 }
 
 #[gpui::test]
