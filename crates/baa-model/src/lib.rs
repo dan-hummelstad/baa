@@ -127,12 +127,31 @@ pub struct Tab {
     #[serde(default)]
     pub folder: Option<FolderId>,
     pub url: String,
+    /// Where a pinned tab or favourite goes back to: its URL when it was pinned. None in Today.
+    #[serde(default)]
+    pub pinned_url: Option<String>,
     pub title: String,
     /// Favicon URL as reported by the page.
     pub favicon: Option<String>,
     /// Last time the tab was shown or left; drives auto-archive.
     pub last_active: u64,
     pub archived_at: Option<u64>,
+}
+
+impl Tab {
+    /// Pinning (or favouriting) remembers where the tab is; going back to Today forgets it.
+    fn set_zone(&mut self, zone: Zone) {
+        self.zone = zone;
+        self.pinned_url = match zone {
+            Zone::Today => None,
+            Zone::Pinned | Zone::Favorite => self.pinned_url.take().or_else(|| Some(self.url.clone())),
+        };
+    }
+
+    /// The pinned URL of a pinned tab or favourite that has left it.
+    pub fn away_from_pin(&self) -> Option<&str> {
+        self.pinned_url.as_deref().filter(|home| *home != self.url)
+    }
 }
 
 // ponytail: closed-tab stack is in memory only (lost at quit; the archive still has them); 25 deep.
@@ -386,6 +405,7 @@ impl Session {
                     zone: Zone::Pinned,
                     folder: Some(folder),
                     url: item.url.clone(),
+                    pinned_url: Some(item.url.clone()),
                     title: item.title.clone(),
                     favicon: None,
                     last_active: now(),
@@ -404,7 +424,7 @@ impl Session {
         let Some((mut tab, _)) = self.take(id) else { return };
         let from = tab.space;
         tab.space = space;
-        tab.zone = Zone::Pinned;
+        tab.set_zone(Zone::Pinned);
         tab.folder = Some(folder);
         self.insert(tab, index);
         if from != space {
@@ -421,6 +441,7 @@ impl Session {
             zone: Zone::Today,
             folder: None,
             url: url.into(),
+            pinned_url: None,
             title: String::new(),
             favicon: None,
             last_active: now,
@@ -473,6 +494,7 @@ impl Session {
             zone,
             folder,
             url: t.url.clone(),
+            pinned_url: (zone != Zone::Today).then(|| t.url.clone()),
             title: t.title.clone(),
             favicon: None,
             last_active: now(),
@@ -503,7 +525,7 @@ impl Session {
         let from = tab.space;
         let space = if zone == Zone::Favorite { from } else { space };
         tab.space = space;
-        tab.zone = zone;
+        tab.set_zone(zone);
         tab.folder = None;
         self.insert(tab, index);
         if from != space {
@@ -511,6 +533,15 @@ impl Session {
         } else if zone == Zone::Favorite {
             self.leave_split(from, id);
         }
+    }
+
+    /// Points a pinned tab or favourite back at its pinned URL and returns it to load;
+    /// None when it is already there.
+    pub fn return_to_pin(&mut self, id: TabId) -> Option<String> {
+        let tab = self.tab_mut(id)?;
+        let home = tab.away_from_pin()?.to_owned();
+        tab.url = home.clone();
+        Some(home)
     }
 
     /// ⌘D: Today → bottom of Pinned, Pinned → top of Today.
@@ -628,6 +659,7 @@ impl Session {
             space,
             zone: Zone::Today,
             folder: None,
+            pinned_url: None,
             last_active: now,
             archived_at: None,
             ..tab
@@ -832,6 +864,36 @@ mod tests {
 
     fn urls(s: &Session, space: SpaceId, zone: Zone) -> Vec<String> {
         s.tabs(space, zone).map(|t| t.url.clone()).collect()
+    }
+
+    #[test]
+    fn a_pinned_tab_remembers_where_it_was_pinned_and_goes_back_there() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "https://a/", 0);
+        assert_eq!(s.tab(a).unwrap().pinned_url, None, "Today remembers nothing");
+        s.toggle_pin(a);
+        s.tab_mut(a).unwrap().url = "https://a/page".into(); // the page navigates
+        assert_eq!(s.tab(a).unwrap().away_from_pin(), Some("https://a/"));
+        assert_eq!(s.return_to_pin(a).as_deref(), Some("https://a/"));
+        assert_eq!(s.tab(a).unwrap().url, "https://a/");
+        assert_eq!(s.return_to_pin(a), None, "already home: nothing to load");
+
+        s.tab_mut(a).unwrap().url = "https://a/elsewhere".into();
+        s.move_tab(a, sp, Zone::Favorite, 0);
+        assert_eq!(s.tab(a).unwrap().pinned_url.as_deref(), Some("https://a/"), "pinned to favourite keeps it");
+        s.toggle_pin(a); // a favourite: no-op
+        s.move_tab(a, sp, Zone::Today, 0);
+        assert_eq!(s.tab(a).unwrap().pinned_url, None, "unpinned forgets it");
+        s.toggle_pin(a);
+        assert_eq!(s.tab(a).unwrap().pinned_url.as_deref(), Some("https://a/elsewhere"), "pinned again where it is now");
+
+        let b = s.open_tab(sp, "https://b/", 1);
+        let f = s.add_folder(sp, "F");
+        s.move_to_folder(b, f, 0);
+        assert_eq!(s.tab(b).unwrap().pinned_url.as_deref(), Some("https://b/"), "a folder pins");
+        let copy = s.pane_of(sp, b, 2).unwrap();
+        assert_eq!(s.tab(copy).unwrap().pinned_url, None, "a split's Today copy is not pinned");
     }
 
     #[test]

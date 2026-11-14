@@ -1389,6 +1389,52 @@ fn half(bounds: gpui::Bounds<gpui::Pixels>, lower: bool) -> gpui::Point<gpui::Pi
 }
 
 #[gpui::test]
+fn a_pinned_tabs_favicon_takes_it_back_to_where_it_was_pinned(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    for url in ["a.example", "b.example"] {
+        cx.simulate_keystrokes("secondary-t");
+        cx.simulate_input(url);
+        cx.simulate_keystrokes("enter");
+    }
+    let today = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| -> Vec<baa_model::TabId> {
+        b.read_with(cx, |b, _| b.session().tabs(b.session().active_space().unwrap(), Zone::Today).map(|t| t.id).collect())
+    };
+    let (other, a) = (today(&b, cx)[0], today(&b, cx)[1]);
+    b.update_in(cx, |b, window, cx| {
+        b.activate_tab(a, window, cx);
+        b.session.toggle_pin(a);
+        b.sync(window, cx);
+    });
+    let home = b.read_with(cx, |b, _| b.session().tab(a).unwrap().url.clone());
+    b.update(cx, |b, _| b.session.tab_mut(a).unwrap().url = format!("{home}deeper")); // the page navigated
+    b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
+    settle(cx);
+
+    let icon: &'static str = Box::leak(format!("pin-home-{}", a.0).into_boxed_str());
+    let click = |cx: &mut VisualTestContext| {
+        let at = cx.debug_bounds(icon).expect("a pinned row draws its favicon").center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx);
+    b.read_with(cx, |b, cx| {
+        assert_eq!(b.session().tab(a).unwrap().url, home, "back at the pinned URL");
+        assert_eq!(b.pages[&a].0.read(cx).loads.borrow().last(), Some(&home), "and its page loads it");
+        assert_eq!(b.active_tab(), Some(a), "and it is shown");
+    });
+
+    // At its pinned URL the favicon is just part of the row: it shows the tab, loads nothing.
+    let loads = b.read_with(cx, |b, cx| b.pages[&a].0.read(cx).loads.borrow().len());
+    b.update_in(cx, |b, window, cx| b.activate_tab(other, window, cx));
+    settle(cx);
+    click(cx);
+    b.read_with(cx, |b, cx| {
+        assert_eq!(b.active_tab(), Some(a));
+        assert_eq!(b.pages[&a].0.read(cx).loads.borrow().len(), loads);
+    });
+}
+
+#[gpui::test]
 fn a_dragged_tab_lands_where_the_line_between_rows_shows(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     for url in ["a.example", "b.example", "c.example"] {

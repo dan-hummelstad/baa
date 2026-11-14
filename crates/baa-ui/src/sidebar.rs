@@ -576,13 +576,22 @@ impl<H: WebHost> Browser<H> {
                     this.open_menu(MenuKind::Tab(id), e.position, window, cx);
                 }),
             )
-            .child(favicon(
-                tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(),
-                &title,
-                loading,
-                16.,
-                theme,
-            ))
+            .child({
+                let icon = favicon(tab.favicon.as_ref().and_then(|url| self.favicons.get(url)).cloned(), &title, loading, 16., theme);
+                // A pinned tab that has left its pinned URL goes back there from its favicon.
+                let away = zone == Zone::Pinned && tab.away_from_pin().is_some();
+                div()
+                    .id(("pin-home", id.0))
+                    .debug_selector(move || format!("pin-home-{}", id.0))
+                    .flex_none()
+                    .when(away, |d| {
+                        d.cursor_pointer().on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.return_to_pin(id, window, cx);
+                        }))
+                    })
+                    .child(icon)
+            })
             .child(div().flex_1().min_w_0().truncate().child(title))
             .children(self.render_speaker(id, theme, cx))
             .children(self.console_badge(("console-badge", id.0), &[id], cx))

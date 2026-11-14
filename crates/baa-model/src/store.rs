@@ -82,6 +82,10 @@ impl Store {
             .transpose()
             .map_err(|e| Error::FromSqlConversionFailure(0, Type::Text, e.into()))?;
         let mut s = stored.filter(|s| !s.spaces.is_empty()).unwrap_or_else(Session::first_run);
+        // Pinned before tabs remembered a pinned URL: where they are now is it.
+        for t in s.tabs.iter_mut().filter(|t| t.zone != crate::Zone::Today && t.pinned_url.is_none()) {
+            t.pinned_url = Some(t.url.clone());
+        }
         // An incognito Space that was active is not stored; open the first one instead.
         if s.active_space.is_none_or(|id| s.space(id).is_none()) {
             s.active_space = s.spaces.first().map(|sp| sp.id);
@@ -403,6 +407,25 @@ mod tests {
         assert_eq!(store.recent_history(10).unwrap().len(), 3);
         store.clear_history().unwrap();
         assert!(store.recent_history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tabs_pinned_before_pinned_urls_existed_take_their_current_url() {
+        let store = Store::open(":memory:").unwrap();
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "https://a/now", 0);
+        s.toggle_pin(a);
+        s.open_tab(sp, "https://today", 1);
+        // As an older baa wrote it: no pinned_url at all.
+        let mut json = serde_json::to_value(&s).unwrap();
+        for t in json["tabs"].as_array_mut().unwrap() {
+            t.as_object_mut().unwrap().remove("pinned_url");
+        }
+        store.put("session", &json).unwrap();
+        let s = store.load_session().unwrap();
+        assert_eq!(s.tab(a).unwrap().pinned_url.as_deref(), Some("https://a/now"));
+        assert!(s.tabs(sp, Zone::Today).all(|t| t.pinned_url.is_none()));
     }
 
     #[test]

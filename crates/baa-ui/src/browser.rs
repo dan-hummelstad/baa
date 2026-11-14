@@ -887,6 +887,17 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
+    /// A pinned tab's favicon: back to the URL it was pinned at (Arc), and shown.
+    pub(crate) fn return_to_pin(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        // The URL the user pinned; restoring the session loads it the same way.
+        if let Some(url) = self.session.return_to_pin(id) {
+            if let Some((page, _)) = self.pages.get(&id) {
+                page.read(cx).load_url(&url);
+            }
+        }
+        self.activate_tab(id, window, cx);
+    }
+
     pub(crate) fn close_tab_id(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         self.session.close_tab(id, now());
         self.sync(window, cx);
