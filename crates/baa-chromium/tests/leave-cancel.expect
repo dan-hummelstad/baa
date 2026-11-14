@@ -2,7 +2,8 @@
 script: leave.txt
 env: BAA_HARNESS_DIALOG=cancel
 exit: any
-kill-after: 28
+# ~21 s of steps plus up to 20 s for the first load (waitload)
+kill-after: 45
 must: baa: dialog tab=0 id=\d+ kind=3
 must: baa: dialog tab=0 id=\d+ kind=4
 count: 2 get_state ok=true url=https://example.com/#
