@@ -38,12 +38,12 @@ fn settings_go_to_every_open_profile_and_local_state_once(cx: &mut TestAppContex
     env.host.apply_settings(&Settings::default());
     let logged = writes_logged();
     let local: Vec<_> = logged.iter().filter(|c| c.contains(" 0x0 ")).collect();
-    assert_eq!(local.len(), 4, "{local:?}");
+    assert_eq!(local.len(), 5, "{local:?}");
     assert!(local.iter().any(|c| c.ends_with("dns_over_https.mode automatic")));
     let at = |name: &str| logged.iter().position(|c| c.contains(name)).unwrap();
     assert!(at("dns_over_https.templates") < at("dns_over_https.mode"), "templates before mode");
     let per_profile = super::super::settings::writes(&Settings::default()).profile.len();
-    assert_eq!(logged.len(), 4 + 2 * per_profile, "every other write goes to both profiles");
+    assert_eq!(logged.len(), 5 + 2 * per_profile, "every other write goes to both profiles");
     assert!(logged.iter().any(|c| c.starts_with("profile_set_search_engine Google  https://www.google.com")));
     assert_eq!(logged.iter().filter(|c| c.starts_with("profile_set_default_zoom 1")).count(), 2);
 

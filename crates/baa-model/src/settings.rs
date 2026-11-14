@@ -184,6 +184,9 @@ pub struct WebPrefs {
     pub global_privacy_control: bool,
     /// Applies when baa restarts.
     pub hardware_acceleration: bool,
+    /// Widevine, for DRM video. Off by default: on, the engine fetches Google's CDM from
+    /// Google's update server. Applies when baa restarts.
+    pub widevine: bool,
     /// Off: it discards hidden tabs, which baa's page views do not expect yet.
     pub memory_saver: bool,
     /// Extension developer mode (load unpacked, reload).
@@ -212,6 +215,7 @@ impl Default for WebPrefs {
             do_not_track: false,
             global_privacy_control: false,
             hardware_acceleration: true,
+            widevine: false,
             memory_saver: false,
             developer_mode: false,
             site_defaults: Vec::new(),

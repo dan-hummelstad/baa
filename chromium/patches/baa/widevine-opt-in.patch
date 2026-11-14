@@ -1,0 +1,82 @@
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -723,6 +723,11 @@
+ inline constexpr char kHeliumCrashReportingMode[] =
+     "helium.crash_reporting.mode";
+ 
++// baa: Settings > Privacy "Play DRM-protected content". On, the Widevine CDM
++// component is registered and fetched from Google's update server; off, it is
++// neither fetched nor loaded. Local State; read once at startup.
++inline constexpr char kBaaWidevineEnabled[] = "baa.widevine_enabled";
++
+ // A boolean pref set to true if the Back button should be visible on the
+ // toolbar.
+ inline constexpr char kShowBackButton[] = "helium.browser.show_back_button";
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -1672,6 +1672,7 @@
+   registry->RegisterIntegerPref(
+       prefs::kHeliumCrashReportingMode,
+       static_cast<int>(helium::CrashReportingMode::kAsk));
++  registry->RegisterBooleanPref(prefs::kBaaWidevineEnabled, false);
+   ChromeContentBrowserClient::RegisterLocalStatePrefs(registry);
+ #if BUILDFLAG(CHROME_FOR_TESTING)
+   chrome_for_testing::RegisterPrefs(registry);
+--- a/chrome/browser/component_updater/registration.cc
++++ b/chrome/browser/component_updater/registration.cc
+@@ -147,7 +147,12 @@
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
+-  RegisterWidevineCdmComponent(cus);
++  // baa: on macOS the component is the only way a CDM loads, so off means no
++  // DRM at all, even with a copy downloaded earlier on disk.
++  if (g_browser_process->local_state()->GetBoolean(
++          prefs::kBaaWidevineEnabled)) {
++    RegisterWidevineCdmComponent(cus);
++  }
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
+ 
+   RegisterSubresourceFilterComponent(cus);
+--- a/chrome/browser/component_updater/chrome_component_updater_configurator.cc
++++ b/chrome/browser/component_updater/chrome_component_updater_configurator.cc
+@@ -31,6 +31,7 @@
+ #include "chrome/browser/update_client/chrome_update_query_params_delegate.h"
+ #include "chrome/common/channel_info.h"
+ #include "chrome/common/chrome_paths.h"
++#include "chrome/common/pref_names.h"
+ #include "components/component_updater/component_updater_command_line_config_policy.h"
+ #include "components/component_updater/configurator_impl.h"
+ #include "components/helium_services/helium_services_helpers.h"
+@@ -185,12 +186,17 @@
+ 
+ std::vector<GURL> ChromeConfigurator::UpdateUrl() const {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  // baa: WidevineCdm is the only component left (component_installer.cc), and
++  // it is registered only with this pref on (registration.cc). It comes from
++  // Google's server, as in Chrome: there is no Helium proxy in baa.
++  if (pref_service_->GetBoolean(prefs::kBaaWidevineEnabled)) {
++    return {GURL("https://update.googleapis.com/service/update2/json")};
++  }
+   return {helium::GetComponentUpdateURL(GetProfilePrefs())};
+ }
+ 
+ std::vector<GURL> ChromeConfigurator::PingUrl() const {
+-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  return {helium::GetComponentUpdateURL(GetProfilePrefs())};
++  return UpdateUrl();
+ }
+ 
+ std::string ChromeConfigurator::GetProdId() const {
+--- a/components/component_updater/component_installer.cc
++++ b/components/component_updater/component_installer.cc
+@@ -112,7 +112,8 @@
+       base::MakeFixedFlatSet<std::string_view>(
+           base::sorted_unique,
+           {
+-              "hfnkpimlhhgieaddgfemjhofmfblmnib",  // CRLSet
++              // baa: not CRLSet. The DRM setting (kBaaWidevineEnabled) sends
++              // component requests to Google, and promises only Widevine.
+               "oimompecagnajdejgnnjijobebaeigek",  // WidevineCdm
+           });
+   auto registration_info = base::MakeRefCounted<RegistrationInfo>();

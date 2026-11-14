@@ -144,7 +144,7 @@ Mapping each item to what a *binary* CEF Alloy build lets us do:
 | Translate, spellcheck dictionary download | Yes | translate off; spellcheck uses OS (mac) / Hunspell local (win) or off |
 | Media router / Cast | Yes | `--disable-features=MediaRouter` + host block |
 | Google Fonts / Google domains in web content | web content, not browser | not our business (that is the page) |
-| Widevine CDM | downloaded via component updater | not shipped in v1; Netflix won't work. Documented. |
+| Widevine CDM | downloaded via component updater | opt-in, off by default: Settings › Privacy "Play DRM-protected content" fetches only WidevineCdm from `update.googleapis.com` at the next launch (`chromium/patches/baa/widevine-opt-in.patch`). No VMP signature, so Netflix-class sites may still refuse. |
 
 Implementation = three mechanisms, all in `baa-privacy`:
 1. **Switches** appended in `OnBeforeCommandLineProcessing`.
@@ -298,7 +298,7 @@ Details: `PLAN-chromium-phase5.md` §6.
 3. **Residual Google traffic** after an engine bump. Control: the privacy test gates every release engine and every release.
 4. (removed with the CEF bindings)
 5. **IME / dead keys** unverified on real hardware. Control: manual checklist (JP, DE, US-intl layouts).
-6. **No Widevine** → no DRM video. Control: documented; v2 could fetch the CDM via a user-initiated download.
+6. **No VMP signature** → Widevine (opt-in) plays on Spotify-class sites, but Netflix-class sites may refuse. Control: documented; VMP needs Google's Widevine licence.
 7. **Binary size**: the app is about 350 MB (an official build; Helium is 342 MB, Arc 871 MB). Accepted.
 8. **Licensing**: GPL-3.0-only (Helium is GPL-3.0). Chromium and Helium notices ship as `chrome://credits`, Rust crates' as `rust-credits.html` (`cargo about`); GPUI is Apache-2.0.
 9. **Release chain length**: an official build on the free runners takes days across chained phases; it is not measured yet. Control: record it per run; paid runners if it matters.

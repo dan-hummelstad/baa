@@ -131,6 +131,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Privacy, "https", "HTTPS", "secure upgrade tls"),
     row(Privacy, "preload", "Preload pages", "prefetch prediction network"),
     row(Privacy, "dns", "Secure DNS", "doh cloudflare quad9 resolver"),
+    row(Privacy, "widevine", "Play DRM-protected content", "drm widevine netflix spotify video streaming"),
     row(Privacy, "dnt", "Send Do Not Track", "tracking"),
     row(Privacy, "gpc", "Global Privacy Control", "tracking"),
     row(Privacy, "clear_data", "Clear browsing data…", "history cache cookies delete"),

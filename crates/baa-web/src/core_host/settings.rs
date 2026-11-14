@@ -98,6 +98,8 @@ pub fn writes(settings: &Settings) -> Writes {
         Write::Str("dns_over_https.mode", mode.into()),
         Write::Bool("hardware_acceleration_mode.enabled", web.hardware_acceleration),
         Write::Int("performance_tuning.high_efficiency_mode.state", if web.memory_saver { 2 } else { 0 }),
+        // Registered by chromium/patches/baa/widevine-opt-in.patch; read once at startup.
+        Write::Bool("baa.widevine_enabled", web.widevine),
     ];
     Writes { profile, local }
 }
@@ -187,8 +189,19 @@ mod tests {
                 Write::Str("dns_over_https.mode", "automatic".into()),
                 Write::Bool("hardware_acceleration_mode.enabled", true),
                 Write::Int("performance_tuning.high_efficiency_mode.state", 0),
+                Write::Bool("baa.widevine_enabled", false),
             ]
         );
+    }
+
+    #[test]
+    fn widevine_is_one_local_state_pref_and_off_by_default() {
+        let on = |s: &Settings| writes(s).local.contains(&Write::Bool("baa.widevine_enabled", true));
+        assert!(!on(&Settings::default()), "no request to Google unless the user asks");
+        let mut s = Settings::default();
+        s.web.widevine = true;
+        assert!(on(&s));
+        assert!(!writes(&s).profile.iter().any(|w| matches!(w, Write::Bool("baa.widevine_enabled", _))));
     }
 
     #[test]
@@ -261,6 +274,7 @@ mod tests {
                 Write::Str("dns_over_https.mode", "secure".into()),
                 Write::Bool("hardware_acceleration_mode.enabled", false),
                 Write::Int("performance_tuning.high_efficiency_mode.state", 0),
+                Write::Bool("baa.widevine_enabled", false),
             ]
         );
         assert!(w.profile.contains(&Write::Int("net.network_prediction_options", 3)));

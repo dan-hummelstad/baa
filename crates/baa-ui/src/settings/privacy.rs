@@ -167,6 +167,11 @@ impl<H: WebHost> SettingsView<H> {
             let hint = if text.is_empty() || SecureDns::valid_template(text) { "Server address" } else { "Needs an https:// address with a host" };
             out.push(self.sub_row("dns-template".into(), hint.into_any_element(), self.field(Field::DnsTemplate, "dns-field", "https://…/dns-query", 260., cx)));
         }
+        out.push(self.row(
+            "widevine",
+            "Downloads Google's Widevine module from Google, so sites like Spotify can play. Netflix may still refuse. Applies when baa restarts.",
+            self.toggle("pref-widevine", s.web.widevine, |s, v| s.web.widevine = v, cx),
+        ));
         out.push(self.section("Data"));
         out.push(self.row(
             "clear_data",
