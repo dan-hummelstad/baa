@@ -398,9 +398,11 @@ void BaaTab::DockDevtools() {
   if (url.find("can_dock=true") == std::string::npos) {
     script = R"((() => {
   InspectorFrontendHost.setPreference('currentDockState', JSON.stringify(')" + dock_side + R"('));
+  // Added as text. `searchParams` would write the whole query again and escape remoteBase;
+  // Chrome gives a DevTools URL its own sanitizer would not write no front-end, so the
+  // reload never took and the dock picker, the close button and device mode stayed off.
   const url = new URL(location.href);
-  url.searchParams.delete('dockSide');
-  url.searchParams.set('can_dock', 'true');
+  url.search += (url.search ? '&' : '?') + 'can_dock=true';
   location.replace(url.href);
 })())";
   } else {

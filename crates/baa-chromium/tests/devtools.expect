@@ -3,6 +3,8 @@ script: devtools.txt
 mustnot: baa: tab_created
 must: baa: devtools 0 -> 1
 must: baa: get_state ok=true url=devtools://devtools/bundled/devtools_app.html
+# the front-end came back with docking on: without it there is no close button or dock picker
+must: baa: get_state ok=true url=devtools://\S*[?&]can_dock=true
 must: baa: devtools_dock tab=1 side=2
 must: baa: devtools 0 -> 2
 must: panel=elements
