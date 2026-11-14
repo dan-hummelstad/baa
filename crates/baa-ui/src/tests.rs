@@ -325,7 +325,7 @@ fn a_left_sidebar_runs_the_full_height_with_the_traffic_lights(cx: &mut TestAppC
     let header = cx.debug_bounds("header").expect("the URL row stays, above the page");
     assert_eq!(f32::from(toolbar.top()), 0., "the sidebar starts at the window's top");
     assert!(header.left() >= toolbar.right(), "the URL row is over the page, not the sidebar");
-    assert_eq!(b.read_with(cx, |b, _| b.lights), Some((13., 12.)), "in the sidebar's top row");
+    assert_eq!(b.read_with(cx, |b, _| b.lights), Some((16., 12.)), "in the sidebar's top row, where launch put them");
 
     cx.dispatch_action(ToggleSidebar);
     // Frames only draw when asked under test: skip the fold.
@@ -344,7 +344,7 @@ fn a_left_sidebar_runs_the_full_height_with_the_traffic_lights(cx: &mut TestAppC
     });
     cx.run_until_parked();
     let at = b.read_with(cx, |b, _| b.lights).unwrap();
-    assert_eq!(at, (crate::browser::INSET + 14., crate::browser::INSET + 17.), "inside the card's top-left");
+    assert_eq!(at, (crate::browser::INSET + 17., crate::browser::INSET + 17.), "inside the card's top-left");
 }
 
 #[gpui::test]

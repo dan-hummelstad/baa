@@ -603,15 +603,16 @@ impl<H: WebHost> Browser<H> {
         if self.side() == baa_model::SidebarSide::Right {
             return (16., 12.);
         }
+        // Docked: where the window put them at launch (main.rs, windows.rs).
         if self.docked() {
-            return (13., 12.);
+            return (16., 12.);
         }
-        // The card's left edge as `render_reveal` places it; the lights sit 13 inside its
-        // border and 4 lower than docked, as in Arc's card.
+        // The card's left edge as `render_reveal` places it; the lights sit as far inside its
+        // border as docked, and 4 lower, as in Arc's card.
         // ponytail: gpui moves them but cannot hide them; off the left edge stands in.
         let width = self.reveal_w.value();
         let card = INSET + (self.reveal.value() - 1.0) * (width + INSET * 2.0);
-        (card + 1. + 13., INSET + 1. + 4. + 12.)
+        (card + 1. + 16., INSET + 1. + 4. + 12.)
     }
 
     pub(crate) fn reveal_hovered(&self) -> bool {

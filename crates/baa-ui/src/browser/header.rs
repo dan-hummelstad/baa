@@ -49,9 +49,9 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .items_center()
                     .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
-                    // Arc: the toggle's icon 12 past the lights (13 in, 59 wide on this macOS);
-                    // with the 8 padding and gap, its button starts 80 in.
-                    .child(self.render_window_controls(theme, true, 64., cx)),
+                    // Arc: the toggle's icon 12 past the lights (16 in, 59 wide on this macOS);
+                    // with the 8 padding and gap, its button starts 83 in.
+                    .child(self.render_window_controls(theme, true, 67., cx)),
             )
             .mb(px(4.))
     }

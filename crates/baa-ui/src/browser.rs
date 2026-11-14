@@ -1195,6 +1195,41 @@ const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
 pub(crate) const FRAME_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The window's Space gradient, top to bottom.
+/// gpui moves the traffic lights and refreshes the tracking areas of the buttons and the
+/// titlebar container, but not of the view that holds the buttons (or the theme frame), and
+/// those drive the hover glyphs: after a move they stayed where the lights were at launch.
+/// ponytail: rebuilds every area up the chain; a hover view of our own (as Electron has) if
+/// AppKit ever stops rebuilding them from the buttons' frames.
+#[cfg(target_os = "macos")]
+fn refresh_lights_hover(window: &Window) {
+    use objc2::{msg_send, runtime::AnyObject};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(RawWindowHandle::AppKit(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) else {
+        return;
+    };
+    // Raw pointers only within this call (no run-loop turn), each checked before use.
+    let view: *mut AnyObject = handle.ns_view.as_ptr().cast();
+    unsafe {
+        let ns_window: *mut AnyObject = msg_send![view, window];
+        if ns_window.is_null() {
+            return;
+        }
+        // NSWindowCloseButton.
+        let close: *mut AnyObject = msg_send![ns_window, standardWindowButton: 0usize];
+        if close.is_null() {
+            return;
+        }
+        let mut at: *mut AnyObject = msg_send![close, superview];
+        while !at.is_null() {
+            let _: () = msg_send![at, updateTrackingAreas];
+            at = msg_send![at, superview];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_lights_hover(_: &Window) {}
+
 pub(crate) fn gradient_fill(theme: &Theme) -> gpui::Background {
     linear_gradient(
         180.,
@@ -1310,6 +1345,7 @@ impl<H: WebHost> Render for Browser<H> {
         if self.lights != Some(lights) {
             self.lights = Some(lights);
             window.set_traffic_light_position(gpui::point(px(lights.0), px(lights.1)));
+            refresh_lights_hover(window);
         }
         let card = !self.docked() && (self.reveal.value() > 0.001 || self.reveal_hovered());
         let sidebar = self.render_sidebar(&theme, window, cx);
