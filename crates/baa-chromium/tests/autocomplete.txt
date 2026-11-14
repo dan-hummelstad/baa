@@ -1,6 +1,6 @@
 # WP-C5: Chrome's omnibox through baa_profile_autocomplete (history, stop on ""; the calculator needs the search engine's network answer, so it is not tested)
 load https://example.com/
-sleep 3000
+waitload 20000
 ac 1 example
 sleep 2500
 # no sleep between: id 3 is replaced by id 4 before any result is sent

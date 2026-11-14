@@ -1,7 +1,7 @@
 # Chrome's own dialogs in the app: HTTP auth, external protocol, extension permissions, hung page.
 # {SERVER} is tests/download-server.py (/auth wants Basic u:p). Hung page goes last: it crashes tab 0.
 load {SERVER}/auth
-sleep 3000
+waitload 20000
 answer last 1 u p
 sleep 3000
 state

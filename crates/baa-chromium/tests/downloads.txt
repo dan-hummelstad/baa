@@ -1,6 +1,6 @@
 # downloads: {SERVER} is tests/download-server.py (/small and /slow attachments); downloads.expect cancels the slow one
 load {SERVER}/
-sleep 2500
+waitload 20000
 activate
 eval document.body.innerHTML='<a id=s href="/small" download style="position:fixed;left:0;top:0;width:400px;height:100px;background:#ccf;display:block">small</a><a id=b href="/slow" download style="position:fixed;left:0;top:200px;width:400px;height:100px;background:#fcc;display:block">slow</a>'
 sleep 500

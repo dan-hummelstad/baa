@@ -523,6 +523,7 @@ mod app {
     ///   prefb|prefi|prefs <1|local> <name> <value> | zoomdefault <f> | engine <name> <kw> <url>
     ///   rules <kind> | rule <kind> <pattern> <state> | clear <what> <since_ms> | unpacked <path> | reload-ext <id> | initscript <js> | schemes <website> <webui> | profile <1|2|e> | prefclear <1|local> <name> | defaultbrowser
     ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id|last> <0|1> [text] [password] [checked 0|1]
+    ///   waitload <max_ms> (until the tab stops loading)
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         cx.spawn(async move |cx| {
@@ -806,6 +807,19 @@ mod app {
                         (core.answer)(id, &ffi::Answer { ok, text: user.as_ptr(), password: password.as_ptr(), checked });
                     }
                     "sleep" => executor.timer(std::time::Duration::from_millis(arg.parse().unwrap())).await,
+                    // A first load on a fresh profile can take 3-13 s on a CI runner; a fixed sleep
+                    // then acts on the previous page.
+                    "waitload" => {
+                        let mut left: u64 = arg.parse().unwrap();
+                        loop {
+                            let mut s = empty_state();
+                            if !(core.tab_get_state)(tab, &mut s) || !s.loading || left == 0 {
+                                break;
+                            }
+                            executor.timer(std::time::Duration::from_millis(100)).await;
+                            left = left.saturating_sub(100);
+                        }
+                    }
                     "quit" => {
                         eprintln!("spike: quitting");
                         cx.update(|cx| cx.quit());
