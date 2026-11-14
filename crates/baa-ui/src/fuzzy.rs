@@ -34,12 +34,8 @@ mod tests {
     fn subsequence_required() {
         assert!(score("abc", "a_b_c").is_some());
         assert!(score("abd", "abc").is_none());
+        assert!(score("GIT", "github").is_some(), "any case");
         assert_eq!(score("", "anything"), Some(0));
-    }
-
-    #[test]
-    fn case_insensitive() {
-        assert!(score("GIT", "github").is_some());
     }
 
     #[test]

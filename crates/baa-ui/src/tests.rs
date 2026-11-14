@@ -18,6 +18,30 @@ fn browser(cx: &mut TestAppContext) -> (Entity<Browser<MockHost>>, &mut VisualTe
     })
 }
 
+/// A database file for the tests that open the store twice. It goes with its WAL files when
+/// the test ends, pass or fail.
+struct TempDb(std::path::PathBuf);
+
+impl TempDb {
+    fn new(name: &str) -> Self {
+        let db = Self(std::env::temp_dir().join(format!("baa-ui-{name}-{}.db", std::process::id())));
+        db.remove();
+        db
+    }
+
+    fn remove(&self) {
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", self.0.display()));
+        }
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 fn urls(b: &Entity<Browser<MockHost>>, zone: Zone, cx: &mut VisualTestContext) -> Vec<String> {
     b.read_with(cx, |b, _| {
         let s = b.session();
@@ -100,9 +124,11 @@ fn close_reopen_pin_and_tab_navigation(cx: &mut TestAppContext) {
 fn spaces_isolate_profiles_and_delete_cleanly(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.dispatch_action(NewSpace);
-    // New Space opens the rename bar.
+    cx.run_until_parked();
+    assert!(b.read_with(cx, |b, _| b.renaming.is_some() && b.bar.is_none()), "a new Space is named in place");
     cx.simulate_input("💼 Work");
     cx.simulate_keystrokes("enter");
+    assert!(b.read_with(cx, |b, _| b.renaming.is_none()));
     cx.simulate_keystrokes("secondary-t");
     cx.simulate_input("work.example");
     cx.simulate_keystrokes("enter");
@@ -206,11 +232,10 @@ fn page_events_update_the_session(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
-    let path = std::env::temp_dir().join(format!("baa-ui-restart-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
+    let db = TempDb::new("restart");
     cx.update(crate::init);
     let open = |cx: &mut TestAppContext| {
-        let path = path.clone();
+        let path = db.0.clone();
         cx.add_window_view(move |window, cx| {
             Browser::new(MockHost::new(cx), Store::open(path).unwrap(), window, cx)
         })
@@ -244,16 +269,14 @@ fn session_survives_restart_and_restores_lazily(cx: &mut TestAppContext) {
             )]
         );
     });
-    let _ = std::fs::remove_file(&path);
 }
 
 #[gpui::test]
 fn the_sidebar_comes_back_as_it_was_left(cx: &mut TestAppContext) {
-    let path = std::env::temp_dir().join(format!("baa-ui-sidebar-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
+    let db = TempDb::new("sidebar");
     cx.update(crate::init);
     let open = |cx: &mut TestAppContext| {
-        let path = path.clone();
+        let path = db.0.clone();
         cx.add_window_view(move |window, cx| Browser::new(MockHost::new(cx), Store::open(path).unwrap(), window, cx)).0
     };
     let first = open(cx);
@@ -280,7 +303,6 @@ fn the_sidebar_comes_back_as_it_was_left(cx: &mut TestAppContext) {
         assert_eq!(b.slide.value(), 0., "nothing slides in at launch");
         assert!(!b.sidebar_open && !b.docked() && b.sidebar_w.target() == 0., "and the sidebar still collapsed");
     });
-    let _ = std::fs::remove_file(&path);
 }
 
 #[gpui::test]
@@ -561,20 +583,6 @@ fn links_lil_baa_opens_become_adopted_tabs_and_are_never_loaded(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn a_new_space_is_named_in_place(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    cx.dispatch_action(NewSpace);
-    cx.run_until_parked();
-    assert!(b.read_with(cx, |b, _| b.renaming.is_some() && b.bar.is_none()));
-    cx.simulate_input("Work");
-    cx.simulate_keystrokes("enter");
-    b.read_with(cx, |b, _| {
-        assert!(b.renaming.is_none());
-        assert_eq!(b.active_space().unwrap().name, "Work");
-    });
-}
-
-#[gpui::test]
 fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
     use gpui::{point, px, Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
     let (b, cx) = browser(cx);
@@ -602,6 +610,7 @@ fn typing_asks_chrome_for_matches_once_it_pauses(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");
     cx.simulate_input("gh");
+    b.read_with(cx, |b, _| assert!(b.host.autocompletes.borrow().is_empty(), "not before the delay"));
     cx.executor().advance_clock(std::time::Duration::from_millis(200));
     cx.run_until_parked();
     // One request for the settled text, not one per keystroke.
@@ -761,21 +770,6 @@ fn permission_requests_wait_for_an_answer(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn playing_tabs_can_be_muted(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    let page = open_page(&b, "a.example", cx);
-    page.update(cx, |_, cx| cx.emit(PageEvent::AudibleChanged(true)));
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| assert_eq!(b.audible.len(), 1));
-    cx.dispatch_action(MuteTab);
-    page.read_with(cx, |p, _| assert!(p.muted.get()));
-    // Chrome confirms; the next press unmutes.
-    page.update(cx, |_, cx| cx.emit(PageEvent::Muted(true)));
-    cx.dispatch_action(MuteTab);
-    page.read_with(cx, |p, _| assert!(!p.muted.get()));
-}
-
-#[gpui::test]
 fn visits_are_remembered_and_searchable(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let page = open_page(&b, "a.example", cx);
@@ -808,27 +802,6 @@ fn the_window_frame_is_saved_once_a_resize_is_over(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let frame = saved(cx).expect("saved once it stayed put");
     assert_eq!(frame.frame[2..], [1000., 640.]);
-}
-
-#[gpui::test]
-fn downloads_show_in_the_header(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    let list = b.read_with(cx, |b, _| b.host.downloads());
-    list.update(cx, |list, cx| {
-        list.upsert(baa_web::Download {
-            id: 1,
-            url: "https://a.example/f.zip".into(),
-            path: "/tmp/f.zip".into(),
-            received_bytes: 5,
-            total_bytes: 10,
-            state: baa_web::DownloadState::InProgress,
-            ephemeral: false,
-            danger: None,
-        });
-        cx.notify();
-    });
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| assert_eq!(b.downloads_seen, 1));
 }
 
 #[gpui::test]

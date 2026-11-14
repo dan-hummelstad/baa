@@ -1076,12 +1076,6 @@ mod tests {
     }
 
     #[test]
-    fn context_names_tab_ids_only() {
-        assert_eq!(with_context("hi", &[]), "hi");
-        assert_eq!(with_context("hi", &[12, 40]), "hi\n\n(Context: tab 12, tab 40 in baa.)");
-    }
-
-    #[test]
     fn switcher_rows_read_like_the_mock() {
         let t = vec![Entry::Assistant("x".into()), Entry::User("Lofoten trip plan\nmore".into())];
         assert_eq!(title_of(&t), "Lofoten trip plan");

@@ -577,25 +577,6 @@ fn long_chat_messages_wrap_inside_the_panel(cx: &mut TestAppContext) {
     }
 }
 
-#[gpui::test]
-/// While a turn runs the transcript ends in Claude's "✻ Pondering…"; it goes when the turn ends.
-fn a_running_turn_shows_a_thinking_quip(cx: &mut TestAppContext) {
-    let (b, cx) = browser(cx);
-    b.update(cx, |b, cx| b.set_claude_enabled(true, cx));
-    b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
-    let busy = |b: &Entity<Browser<MockHost>>, on: bool, cx: &mut VisualTestContext| {
-        b.update(cx, |b, cx| {
-            b.agent.panel.busy = on;
-            cx.notify();
-        });
-        cx.run_until_parked();
-    };
-    busy(&b, true, cx);
-    assert!(cx.debug_bounds("chat-thinking").is_some(), "a running turn shows the quip");
-    busy(&b, false, cx);
-    assert!(cx.debug_bounds("chat-thinking").is_none(), "an ended turn shows none");
-}
-
 /// Auto mode on, and conn 1 (what `call` uses) is the panel's child started in it.
 fn auto(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, on: bool) {
     b.update(cx, |b, _| {

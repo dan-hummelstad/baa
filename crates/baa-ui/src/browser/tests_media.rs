@@ -67,6 +67,9 @@ fn mini(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Option<baa
 fn muted_is_what_chrome_says(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let (id, page) = open_page(&b, "a.example", cx);
+    cx.dispatch_action(MuteTab);
+    page.read_with(cx, |p, _| assert!(p.muted.get(), "the first press asks Chrome to mute"));
+    assert!(!b.read_with(cx, |b, _| b.muted.contains(&id)), "not muted until Chrome says so");
     page.update(cx, |_, cx| cx.emit(PageEvent::Muted(true)));
     assert!(b.read_with(cx, |b, _| b.muted.contains(&id)));
     // The toggle asks Chrome to unmute; the tab stays muted until Chrome says otherwise.

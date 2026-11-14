@@ -234,7 +234,10 @@ thread_local! {
 /// Records a click on `target`; true when it completes a double-click. A
 /// third quick click starts over rather than counting again.
 pub(crate) fn double_click(target: (&'static str, u64)) -> bool {
-    let now = std::time::Instant::now();
+    double_click_at(target, std::time::Instant::now())
+}
+
+fn double_click_at(target: (&'static str, u64), now: std::time::Instant) -> bool {
     LAST_CLICK.with(|last| {
         let double = last
             .get()
@@ -250,11 +253,11 @@ mod double_click_tests {
 
     #[test]
     fn two_quick_clicks_on_one_target() {
-        assert!(!double_click(("a", 1)));
-        assert!(double_click(("a", 1)));
-        assert!(!double_click(("a", 1)), "a third click starts a new pair");
-        assert!(!double_click(("b", 1)), "another target");
-        std::thread::sleep(DOUBLE_CLICK + std::time::Duration::from_millis(20));
-        assert!(!double_click(("b", 1)), "too slow");
+        let t = std::time::Instant::now();
+        assert!(!double_click_at(("a", 1), t));
+        assert!(double_click_at(("a", 1), t + DOUBLE_CLICK), "the limit still counts");
+        assert!(!double_click_at(("a", 1), t + DOUBLE_CLICK), "a third click starts a new pair");
+        assert!(!double_click_at(("b", 1), t + DOUBLE_CLICK), "another target");
+        assert!(!double_click_at(("b", 1), t + 2 * DOUBLE_CLICK + std::time::Duration::from_millis(1)), "too slow");
     }
 }

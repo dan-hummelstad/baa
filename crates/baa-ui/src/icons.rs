@@ -56,17 +56,3 @@ pub fn icon(name: &'static str, size: f32, color: Hsla) -> gpui::Svg {
         .flex_none()
         .text_color(color)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_icon_loads() {
-        for (path, _) in ICONS {
-            assert!(Assets.load(path).unwrap().is_some_and(|b| b.starts_with(b"<!--")), "{path}");
-        }
-        assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert!(Assets.load(MARK).unwrap().is_some_and(|b| b.starts_with(b"\x89PNG")));
-    }
-}

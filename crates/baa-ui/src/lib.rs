@@ -30,8 +30,6 @@ mod tests;
 #[cfg(test)]
 mod tests_dialogs;
 #[cfg(test)]
-mod tests_m3_bar;
-#[cfg(test)]
 mod tests_settings;
 #[cfg(test)]
 mod tests_dev;

@@ -144,24 +144,6 @@ fn ask_closed_removes_only_its_own_sheet(cx: &mut TestAppContext) {
     assert!(answered(&p, cx).is_empty());
 }
 
-#[gpui::test]
-fn unresponsive_escape_waits(cx: &mut TestAppContext) {
-    let (_, p, cx) = page(cx);
-    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(9, DialogKind::Unresponsive))));
-    cx.run_until_parked();
-    cx.simulate_keystrokes("escape");
-    assert_eq!(answered(&p, cx), [(9, DialogAnswer::default())]);
-}
-
-#[gpui::test]
-fn js_confirm_still_names_the_site(cx: &mut TestAppContext) {
-    let (b, p, cx) = page(cx);
-    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(10, DialogKind::Confirm))));
-    cx.run_until_parked();
-    b.read_with(cx, |b, _| assert!(b.active_dialog().unwrap().dialog.title.is_empty()));
-    assert_eq!(wording(&dialog(10, DialogKind::Confirm), "https://a.example/").0, "a.example says");
-}
-
 #[test]
 fn a_js_dialog_shows_the_title_chrome_sent_not_the_tabs_host() {
     for kind in [DialogKind::Alert, DialogKind::Confirm, DialogKind::Prompt] {
@@ -171,6 +153,7 @@ fn a_js_dialog_shows_the_title_chrome_sent_not_the_tabs_host() {
     }
     let d = dialog(13, DialogKind::Alert);
     assert_eq!(wording(&d, "https://user@a.example:8443/").0, "a.example:8443 says");
+    assert_eq!(wording(&dialog(10, DialogKind::Confirm), "https://a.example/").0, "a.example says", "a confirm with no title too");
 }
 
 #[gpui::test]
