@@ -1,5 +1,6 @@
 # JS dialogs: alert, confirm answered false, request_closed on navigation, then close with stale handle
 load https://example.com/
+waitload 20000
 activate
 sleep 3000
 eval setTimeout(()=>{alert('x'); document.title='after-alert'},100)

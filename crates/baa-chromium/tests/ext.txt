@@ -1,7 +1,7 @@
 # extensions (ext.expect loads test-ext into the Default profile):
 # list, popup acting on the real active tab (no shim), alert in the popup, access, disable, remove
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 extensions
 popup {EXT_ID}

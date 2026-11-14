@@ -1,6 +1,6 @@
 # DevTools: docked front-end is a BaaTab (no tab_created), loads devtools://, closes silently; inspect; reopen at once; Chrome's own window
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 devtools 0
 sleep 4000

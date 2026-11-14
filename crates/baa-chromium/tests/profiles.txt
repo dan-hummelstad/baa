@@ -1,6 +1,6 @@
 # two disk profiles + one ephemeral; cookies must not leak between them; close all tabs of a profile and reopen
 load https://example.com/
-sleep 3000
+waitload 20000
 tab 2 https://example.com/
 sleep 3000
 tab e https://example.com/

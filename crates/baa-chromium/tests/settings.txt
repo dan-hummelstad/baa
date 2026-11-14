@@ -73,7 +73,7 @@ rule popups [*.]example.com block
 rules popups
 # clear data: a cookie and localStorage set before are gone after
 load https://example.com/
-sleep 3000
+waitload 20000
 eval document.cookie='a=1;path=/;max-age=999';localStorage.setItem('k','v')
 sleep 500
 eval document.title='before:'+document.cookie+':'+localStorage.getItem('k')

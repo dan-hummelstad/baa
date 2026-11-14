@@ -1,6 +1,8 @@
 # page fullscreen and find counts
 load https://example.com/
 waitload 20000
+# Chromium 157 (SuppressFullscreenFromUnfocusedView) refuses fullscreen to an unfocused page
+focus
 geval document.body.requestFullscreen()
 sleep 1500
 eval document.title='fs:'+!!document.fullscreenElement

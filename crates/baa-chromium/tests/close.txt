@@ -1,6 +1,6 @@
 # review fixes: closing an ephemeral profile with live tabs, close-last-tab + new tab at once, quit gating
 load https://example.com/
-sleep 3000
+waitload 20000
 tab e https://example.com/
 tab e https://example.org/
 sleep 3500

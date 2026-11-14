@@ -1,6 +1,6 @@
 # window.open / popup / cmd-click / window.close; windows.expect probes the extension over CDP
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 # a real click gives window.open a user gesture
 eval document.body.innerHTML='<a id=o href="#" style="position:fixed;inset:0;display:block;background:#fcc">open</a>';document.getElementById('o').onclick=(e)=>{e.preventDefault();window.open('https://example.org/')}

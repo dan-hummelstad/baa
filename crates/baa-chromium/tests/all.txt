@@ -1,7 +1,7 @@
 # combined smoke (all.expect):
 # permissions, leave site, menu, downloads, DevTools, extension popup, settings tab, in one run, then quit
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 geval navigator.geolocation.getCurrentPosition(p=>{document.title='geo-ok'},e=>{document.title='geo-err:'+e.code})
 sleep 2500

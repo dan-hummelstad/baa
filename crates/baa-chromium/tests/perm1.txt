@@ -1,6 +1,6 @@
 # permissions (perm1.expect answers allow): ask once, remembered, site settings, block
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 geval navigator.geolocation.getCurrentPosition(p=>{document.title='geo-ok'},e=>{document.title='geo-err:'+e.code})
 sleep 3000

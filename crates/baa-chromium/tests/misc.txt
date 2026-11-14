@@ -1,6 +1,6 @@
 # renderer crash, download, file chooser, right-click menu, then onbeforeunload + close (no prompt) and quit
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 tab 1 chrome://crash
 sleep 4000

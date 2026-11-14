@@ -1,7 +1,7 @@
 # Helium's uBO (a component): listed, its popup opens, pause and resume, not removable; an ad
 # request is blocked in a disk Space and in an ephemeral one (example.org is the network control)
 load https://example.com/
-sleep 3000
+waitload 20000
 activate
 extensions
 popup blockjmkbacgjkknlgpkjjiijinjdanf
