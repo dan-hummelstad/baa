@@ -1392,6 +1392,31 @@ fn half(bounds: gpui::Bounds<gpui::Pixels>, lower: bool) -> gpui::Point<gpui::Pi
 }
 
 #[gpui::test]
+fn a_pinned_tab_keeps_its_icon_until_its_page_reports_another(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = open_page(&b, "a.example", cx);
+    let id = b.read_with(cx, |b, _| b.active_tab().unwrap());
+    let icon = |cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.session().tab(id).unwrap().favicon.clone());
+    let report = |favicon: Option<&str>, cx: &mut VisualTestContext| {
+        page.update(cx, |_, cx| cx.emit(PageEvent::FaviconChanged(favicon.map(Into::into))));
+        cx.run_until_parked();
+    };
+    report(Some("https://a.example/1.ico"), cx);
+    report(None, cx);
+    assert_eq!(icon(cx), None, "a Today tab shows what its page has");
+
+    report(Some("https://a.example/1.ico"), cx);
+    b.update_in(cx, |b, window, cx| {
+        b.session.toggle_pin(id);
+        b.sync(window, cx);
+    });
+    report(None, cx); // a navigation starts, or the page it lands on has no icon
+    assert_eq!(icon(cx).as_deref(), Some("https://a.example/1.ico"));
+    report(Some("https://a.example/2.ico"), cx);
+    assert_eq!(icon(cx).as_deref(), Some("https://a.example/2.ico"), "a loaded page's icon replaces it");
+}
+
+#[gpui::test]
 fn a_pinned_tabs_favicon_takes_it_back_to_where_it_was_pinned(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     for url in ["a.example", "b.example"] {

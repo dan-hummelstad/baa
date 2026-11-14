@@ -757,6 +757,9 @@ impl<H: WebHost> Browser<H> {
                     }
                 }
             }
+            // The engine reports no icon whenever a navigation starts. A pinned tab keeps the
+            // one it has, also when the page never brings another (offline, an error page).
+            PageEvent::FaviconChanged(None) if tab.zone != Zone::Today => return,
             PageEvent::FaviconChanged(favicon) => tab.favicon = favicon.clone(),
             PageEvent::FaviconImage { url, png } => {
                 // An incognito page's icon is kept in memory only, like its history.
