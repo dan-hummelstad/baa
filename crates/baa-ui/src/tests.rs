@@ -294,6 +294,7 @@ fn an_update_card_shows_once_one_is_ready_and_drives_the_updater(cx: &mut TestAp
             automatic: Box::new(move || get.get()),
             set_automatic: Box::new(move |on| set.set(on)),
             install: Box::new(move || count.set(count.get() + 1)),
+            check: Box::new(|| {}),
         });
     });
     cx.run_until_parked();

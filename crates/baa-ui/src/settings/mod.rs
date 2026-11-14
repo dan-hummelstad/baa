@@ -203,6 +203,7 @@ impl<H: WebHost> SettingsView<H> {
         window.focus(&focus, cx);
         window.activate_window();
         cx.observe_window_appearance(window, |_, _, cx| cx.notify()).detach();
+        cx.observe_global::<crate::UpdateCheck>(|_, cx| cx.notify()).detach();
         let mut motion = Motion::default();
         let i = tab.index() as f32;
         motion.from(("settings-pill", 0), Feel::Glide, i, i);

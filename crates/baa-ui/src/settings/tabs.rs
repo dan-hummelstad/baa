@@ -501,9 +501,30 @@ impl<H: WebHost> SettingsView<H> {
                 cx.notify();
             }))
             .into_any_element();
+        let status = cx.try_global::<crate::UpdateCheck>().cloned().unwrap_or_default();
+        let checked = match (&status, automatic) {
+            (_, None) => "This build does not update itself.".to_string(),
+            (crate::UpdateCheck::Idle, _) => String::new(),
+            (crate::UpdateCheck::Checking, _) => "Checking…".into(),
+            (crate::UpdateCheck::UpToDate, _) => format!("baa {version} is the newest version."),
+            (crate::UpdateCheck::Found, _) => "A new version is downloading. It installs when you quit, or from the card in the sidebar.".into(),
+            (crate::UpdateCheck::Failed(why), _) => format!("Could not check for updates: {why}"),
+        };
+        let check = self
+            .button("check-updates", "Check for Updates", false, cx)
+            .on_click(cx.listener(|_, _, _, cx| {
+                if cx.try_global::<crate::UpdateCheck>() == Some(&crate::UpdateCheck::Checking) {
+                    return;
+                }
+                let Some(updater) = cx.try_global::<crate::Updater>() else { return };
+                (updater.check)();
+                cx.set_global(crate::UpdateCheck::Checking);
+            }))
+            .into_any_element();
         vec![
             self.section("Updates"),
             self.row("auto_update", &updates, update_switch),
+            self.row("check_update", &checked, check),
             self.section("Performance"),
             self.row("hw_accel", "Applies when baa restarts.", self.toggle("pref-hw", s.web.hardware_acceleration, |s, v| s.web.hardware_acceleration = v, cx)),
             self.row("memory_saver", "Frees memory from tabs you have not used for a while.", self.toggle("pref-memory", s.web.memory_saver, |s, v| s.web.memory_saver = v, cx)),

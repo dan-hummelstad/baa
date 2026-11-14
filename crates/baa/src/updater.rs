@@ -19,6 +19,32 @@ thread_local! {
     /// Sparkle's "install it now and start again" for the update it holds ready.
     static INSTALL: RefCell<Option<RcBlock<dyn Fn()>>> = const { RefCell::new(None) };
     static READY: RefCell<Option<mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
+    static CHECKED: RefCell<Option<mpsc::UnboundedSender<baa_ui::UpdateCheck>>> = const { RefCell::new(None) };
+}
+
+/// Sparkle's SUNoUpdateError: it may end a check that found nothing with this "error".
+const NO_UPDATE: isize = 1001;
+
+fn checked(outcome: baa_ui::UpdateCheck) {
+    CHECKED.with(|c| {
+        if let Some(c) = c.borrow().as_ref() {
+            c.unbounded_send(outcome).ok();
+        }
+    });
+}
+
+/// An NSError's localizedDescription.
+unsafe fn describe(error: *mut AnyObject) -> String {
+    if error.is_null() {
+        return "unknown error".into();
+    }
+    let text: *mut AnyObject = msg_send![error, localizedDescription];
+    let text: *const std::ffi::c_char = if text.is_null() { std::ptr::null() } else { msg_send![text, UTF8String] };
+    if text.is_null() {
+        "unknown error".into()
+    } else {
+        std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned()
+    }
 }
 
 define_class!(
@@ -40,6 +66,27 @@ define_class!(
             });
             Bool::YES
         }
+
+        // The answers to a check, the hourly one included. A found update then downloads.
+        #[unsafe(method(updater:didFindValidUpdate:))]
+        fn found(&self, _updater: *mut AnyObject, _item: *mut AnyObject) {
+            checked(baa_ui::UpdateCheck::Found);
+        }
+
+        #[unsafe(method(updaterDidNotFindUpdate:))]
+        fn not_found(&self, _updater: *mut AnyObject) {
+            checked(baa_ui::UpdateCheck::UpToDate);
+        }
+
+        #[unsafe(method(updater:didAbortWithError:))]
+        fn aborted(&self, _updater: *mut AnyObject, error: *mut AnyObject) {
+            let code: isize = if error.is_null() { 0 } else { unsafe { msg_send![error, code] } };
+            checked(if code == NO_UPDATE {
+                baa_ui::UpdateCheck::UpToDate
+            } else {
+                baa_ui::UpdateCheck::Failed(unsafe { describe(error) })
+            });
+        }
     }
 );
 
@@ -50,6 +97,8 @@ pub struct Started {
     pub ready: mpsc::UnboundedReceiver<()>,
     /// One message for each "Restart and Update"; answer with [`install`] outside any gpui update.
     pub install: mpsc::UnboundedReceiver<()>,
+    /// What each check found, for Settings' "Check for Updates".
+    pub checked: mpsc::UnboundedReceiver<baa_ui::UpdateCheck>,
 }
 
 /// Starts the updater. `None` where the engine has no Sparkle, or Sparkle would not start.
@@ -57,8 +106,9 @@ pub fn start() -> Option<Started> {
     let (updater, driver) = (AnyClass::get(c"SPUUpdater")?, AnyClass::get(c"SPUHeadlessUserDriver")?);
     let (ready_tx, ready) = mpsc::unbounded();
     let (install_tx, install) = mpsc::unbounded();
+    let (checked_tx, checked) = mpsc::unbounded();
     READY.with(|r| *r.borrow_mut() = Some(ready_tx));
-    let none: *mut AnyObject = std::ptr::null_mut();
+    CHECKED.with(|c| *c.borrow_mut() = Some(checked_tx));
     let updater = unsafe {
         let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
         let driver: *mut AnyObject = msg_send![driver, alloc];
@@ -75,15 +125,12 @@ pub fn start() -> Option<Started> {
         let mut error: *mut AnyObject = std::ptr::null_mut();
         let started: Bool = msg_send![&*updater, startUpdater: &mut error];
         if !started.as_bool() {
-            let text: *mut AnyObject = if error.is_null() { none } else { msg_send![error, localizedDescription] };
-            let text: *const std::ffi::c_char = if text.is_null() { std::ptr::null() } else { msg_send![text, UTF8String] };
-            let text = if text.is_null() { "unknown error".into() } else { std::ffi::CStr::from_ptr(text).to_string_lossy() };
-            log::warn!("updates: Sparkle did not start: {text}");
+            log::warn!("updates: Sparkle did not start: {}", describe(error));
             return None;
         }
         updater
     };
-    let (get, set) = (updater.clone(), updater);
+    let (get, set, check) = (updater.clone(), updater.clone(), updater);
     Some(Started {
         ui: baa_ui::Updater {
             // Sparkle keeps this choice in the app's user defaults.
@@ -97,9 +144,14 @@ pub fn start() -> Option<Started> {
             install: Box::new(move || {
                 install_tx.unbounded_send(()).ok();
             }),
+            // Headless: no Sparkle window; the delegate's answers go to Settings.
+            check: Box::new(move || unsafe {
+                let _: () = msg_send![&*check, checkForUpdatesInBackground];
+            }),
         },
         ready,
         install,
+        checked,
     })
 }
 
@@ -140,5 +192,32 @@ mod tests {
         assert_eq!(ran.get(), 0, "and nothing installs until asked");
         install();
         assert_eq!(ran.get(), 1);
+    }
+
+    /// Sparkle's answers to a check, played by hand.
+    #[test]
+    fn a_checks_answer_reaches_settings_and_no_update_is_not_an_error() {
+        use baa_ui::UpdateCheck;
+        let (tx, mut checked) = mpsc::unbounded();
+        CHECKED.with(|c| *c.borrow_mut() = Some(tx));
+        let none: *mut AnyObject = std::ptr::null_mut();
+        let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::class(), new] };
+        let error = |code: isize| -> Retained<AnyObject> {
+            unsafe {
+                let domain: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: c"SUSparkleErrorDomain".as_ptr()];
+                let error: *mut AnyObject = msg_send![class!(NSError), errorWithDomain: domain, code: code, userInfo: none];
+                Retained::retain(error).unwrap()
+            }
+        };
+        unsafe {
+            let _: () = msg_send![&*delegate, updater: none, didFindValidUpdate: none];
+            let _: () = msg_send![&*delegate, updaterDidNotFindUpdate: none];
+            let _: () = msg_send![&*delegate, updater: none, didAbortWithError: &*error(NO_UPDATE)];
+            let _: () = msg_send![&*delegate, updater: none, didAbortWithError: &*error(2001)];
+        }
+        assert_eq!(checked.try_recv().ok(), Some(UpdateCheck::Found));
+        assert_eq!(checked.try_recv().ok(), Some(UpdateCheck::UpToDate));
+        assert_eq!(checked.try_recv().ok(), Some(UpdateCheck::UpToDate), "Sparkle's no-update error is the newest version");
+        assert!(matches!(checked.try_recv().ok(), Some(UpdateCheck::Failed(why)) if !why.is_empty()));
     }
 }

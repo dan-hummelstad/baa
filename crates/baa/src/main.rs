@@ -176,8 +176,14 @@ fn launch<H: WebHost>(
     if std::env::var_os("BAA_SHOW_UPDATE_CARD").is_some() {
         window.update(cx, |browser, _, cx| browser.update_ready(cx)).ok();
     }
-    if let Some(updater::Started { ui, mut ready, mut install }) = updater::start() {
+    if let Some(updater::Started { ui, mut ready, mut install, mut checked }) = updater::start() {
         cx.set_global(ui);
+        cx.spawn(async move |cx| {
+            while let Some(outcome) = checked.next().await {
+                cx.update(|cx| cx.set_global(outcome));
+            }
+        })
+        .detach();
         cx.spawn(async move |cx| {
             while ready.next().await.is_some() {
                 cx.update(|cx| {

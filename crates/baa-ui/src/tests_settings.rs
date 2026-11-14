@@ -591,6 +591,7 @@ fn the_updates_row_switches_the_updater_and_does_nothing_without_one(cx: &mut Te
             automatic: Box::new(move || get.get()),
             set_automatic: Box::new(move |on| set.set(on)),
             install: Box::new(|| panic!("the row never installs")),
+            check: Box::new(|| panic!("the switch never checks")),
         });
         cx.notify();
     })
@@ -599,6 +600,39 @@ fn the_updates_row_switches_the_updater_and_does_nothing_without_one(cx: &mut Te
     assert!(!automatic.get());
     click(&mut s, "pref-auto-update");
     assert!(automatic.get());
+}
+
+#[gpui::test]
+fn check_for_updates_asks_the_updater_once_per_check_and_does_nothing_without_one(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    h.update(&mut s, |v, _, cx| v.select_tab(Tab::System, cx)).unwrap();
+    let status = |s: &mut VisualTestContext| s.update(|_, cx| cx.try_global::<crate::UpdateCheck>().cloned().unwrap_or_default());
+    click(&mut s, "check-updates"); // a dev build: nothing to ask
+    assert_eq!(status(&mut s), crate::UpdateCheck::Idle);
+
+    let checks = Rc::new(Cell::new(0));
+    let count = checks.clone();
+    h.update(&mut s, |_, _, cx| {
+        cx.set_global(crate::Updater {
+            automatic: Box::new(|| true),
+            set_automatic: Box::new(|_| {}),
+            install: Box::new(|| panic!("checking never installs")),
+            check: Box::new(move || count.set(count.get() + 1)),
+        });
+        cx.notify();
+    })
+    .unwrap();
+    click(&mut s, "check-updates");
+    assert_eq!((checks.get(), status(&mut s)), (1, crate::UpdateCheck::Checking));
+    click(&mut s, "check-updates");
+    assert_eq!(checks.get(), 1, "a check under way is not started again");
+
+    s.update(|_, cx| cx.set_global(crate::UpdateCheck::UpToDate)); // the shell's answer
+    click(&mut s, "check-updates");
+    assert_eq!((checks.get(), status(&mut s)), (2, crate::UpdateCheck::Checking), "an answered check can run again");
 }
 
 #[gpui::test]

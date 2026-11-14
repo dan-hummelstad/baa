@@ -17,9 +17,25 @@ pub struct Updater {
     pub set_automatic: Box<dyn Fn(bool)>,
     /// Installs the update that is ready and starts baa again.
     pub install: Box<dyn Fn()>,
+    /// Looks for an update now. The answer comes back as [`UpdateCheck`].
+    pub check: Box<dyn Fn()>,
 }
 
 impl gpui::Global for Updater {}
+
+/// What the last check found; the shell sets it from the updater's answers. A found update
+/// downloads by itself and then shows the sidebar card.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum UpdateCheck {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Found,
+    Failed(String),
+}
+
+impl gpui::Global for UpdateCheck {}
 
 impl<H: WebHost> Browser<H> {
     /// An update is downloaded. It installs when baa quits, or now from the card.

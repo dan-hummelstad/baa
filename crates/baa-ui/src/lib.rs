@@ -46,7 +46,7 @@ pub use browser::windows::{front_window, open_window, regular as browser_windows
 pub use lil_baa::LilBaa;
 pub use icons::Assets;
 pub use settings::KeymapPath;
-pub use update::Updater;
+pub use update::{UpdateCheck, Updater};
 
 /// Registers the platform default keymap (§8). Call once at startup, then
 /// `actions::bind_keymap` with the user's `keymap.json` so it overrides.
