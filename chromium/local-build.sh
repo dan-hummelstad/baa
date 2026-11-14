@@ -47,7 +47,7 @@ for d in helium helium-macos patches; do
 done
 if [ -n "$stale" ]; then
   echo "== chromium/ patch inputs changed: preparing a fresh tree in $PREP"
-  python3 -c 'import PIL, requests' || { echo "prep needs: pip3 install --user pillow requests" >&2; exit 1; }
+  python3 -c 'import PIL, requests' || { echo "prep needs: python3 -m pip install --user --break-system-packages pillow requests (Homebrew Python refuses a plain --user install)" >&2; exit 1; }
   rm -rf "$PREP"; mkdir -p "$PREP" "$CACHE"
   cp -R "$CR/helium" "$CR/helium-macos" "$CR/patches" "$CR/baa" "$PREP/"
   rm -rf "$PREP/helium-macos/build"; mkdir -p "$PREP/helium-macos/build"
