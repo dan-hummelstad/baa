@@ -209,6 +209,8 @@ pub(crate) struct Agent<H: WebHost> {
     pub(crate) nonce_auto: bool,
     /// Clients that are a panel child started in auto mode.
     pub(crate) auto: HashSet<u64>,
+    /// Token clients the user allowed on the connect sheet (Terminal's Claude Code).
+    pub(crate) terminal: HashSet<u64>,
     /// Auto clients whose next act shows baa's sheet: Claude Code asked `approve` about it.
     ask_next: HashSet<u64>,
     /// Clients counted when the socket is not ours (tests).
@@ -235,6 +237,7 @@ impl<H: WebHost> Default for Agent<H> {
             nonce: None,
             nonce_auto: false,
             auto: HashSet::new(),
+            terminal: HashSet::new(),
             ask_next: HashSet::new(),
             next_conn: 0,
             grants: HashMap::new(),
@@ -527,6 +530,7 @@ impl<H: WebHost> Browser<H> {
                     shown_at: now,
                     then: Box::new(move |b, allowed, window, cx| {
                         if allowed {
+                            b.agent.terminal.insert(conn);
                             b.agent_open(conn, &name, window, cx)
                         } else {
                             b.agent_refuse(conn, "denied", false, window, cx)
@@ -577,6 +581,7 @@ impl<H: WebHost> Browser<H> {
         self.agent.conns.remove(&conn);
         self.agent.state.remove(&conn);
         self.agent.auto.remove(&conn);
+        self.agent.terminal.remove(&conn);
         self.agent.ask_next.remove(&conn);
         let had = self.agent.asks.len();
         self.agent.asks.retain(|a| a.conn != conn);
@@ -629,6 +634,7 @@ impl<H: WebHost> Browser<H> {
         }
         self.agent.state.clear();
         self.agent.auto.clear();
+        self.agent.terminal.clear();
         self.agent.ask_next.clear();
         self.agent.asks.clear();
         self.agent.grants.clear();
@@ -693,10 +699,11 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// `conn` is the panel's child started in auto mode, and auto mode is still on (turning it
-    /// off brings the sheet back at once, for a running child too).
+    /// `conn` approves its own actions: the panel's child started in auto mode, or a Terminal
+    /// client, each while its setting is on (turning it off brings the sheet back at once).
     fn auto_conn(&self, conn: u64) -> bool {
-        self.settings.claude.auto_mode && self.agent.auto.contains(&conn)
+        let c = &self.settings.claude;
+        (c.auto_mode && self.agent.auto.contains(&conn)) || (c.terminal_auto && self.agent.terminal.contains(&conn))
     }
 
     fn space_visible(&self, space: SpaceId) -> bool {
@@ -1076,9 +1083,10 @@ impl<H: WebHost> Browser<H> {
                     return reply.refuse(format!("The user denied Claude on {host} for this session."));
                 }
                 // security: removes baa's per-origin approval sheet (PLAN-m4 D4 "Approvals for
-                // actions") for the panel's own child in auto mode; Claude Code's classifier approved
-                // the call instead. Opt-in (Settings → Claude → Auto mode), never for token clients,
-                // and a URL it supplies is loaded on the classifier's approval, not the user's.
+                // actions") for the panel's own child in auto mode (Claude Code's classifier approved
+                // the call), and, under its own opt-in, for Terminal clients the user allowed on the
+                // connect sheet (their Claude Code's permissions, whatever its mode, decided; baa
+                // cannot see which). A URL it supplies is loaded on that approval, not the user's.
                 None if auto => {
                     self.log(tool, kind, &host, false);
                     return then(self, reply, window, cx);

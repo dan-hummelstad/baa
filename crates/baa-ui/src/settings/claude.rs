@@ -53,6 +53,11 @@ impl<H: WebHost> SettingsView<H> {
             "Claude Code's auto mode classifier approves the chat's actions instead of baa asking per site. Starts with the next chat; evaluate still asks, and Terminal clients are not affected.",
             self.toggle("pref-claude-auto", s.claude.auto_mode, |s, v| s.claude.auto_mode = v, cx),
         ));
+        out.push(self.row(
+            "claude_terminal_auto",
+            "Claude Code in Terminal decides on its own actions: run it in auto mode and do not allow mcp__baa__* there, so its classifier sees each one. baa cannot see the mode, so a session that allows everything acts without asking. The connect sheet still asks; evaluate still asks.",
+            self.toggle("pref-claude-terminal-auto", s.claude.terminal_auto, |s, v| s.claude.terminal_auto = v, cx),
+        ));
         let found = match (&s.claude.claude_path, &s.claude.found_path) {
             (None, Some(p)) => format!("Found at {p}. Leave empty to find it automatically."),
             _ => "Leave empty to find it automatically.".into(),

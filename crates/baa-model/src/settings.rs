@@ -283,6 +283,10 @@ pub struct Claude {
     /// The chat panel's `claude` runs in Claude Code's auto mode: its classifier, not baa's
     /// per-site sheet, approves the panel's actions. Off by default; external clients still ask.
     pub auto_mode: bool,
+    /// Terminal (token) clients: their own Claude Code permissions (auto mode's classifier, or
+    /// its prompts) approve their actions, not baa's per-site sheet. baa cannot see that
+    /// session's mode. Off by default; the connect sheet still asks.
+    pub terminal_auto: bool,
     /// Hex of 32 random bytes that `baa mcp` must present (as `BAA_AGENT_TOKEN`) before the
     /// connect sheet; baa-ui makes a new one on every off→on and clears it on off. Empty matches nothing.
     pub token: String,
@@ -446,7 +450,7 @@ mod tests {
         assert_eq!(s.archive_after_hours, 12);
         assert!(s.console_badge, "the console badge is on for settings saved before it");
         assert_eq!(s.claude, Claude::default());
-        assert!(!s.claude.enabled && !s.claude.evaluate_allowed && !s.claude.auto_mode && s.claude.allowed_spaces.is_empty());
+        assert!(!s.claude.enabled && !s.claude.evaluate_allowed && !s.claude.auto_mode && !s.claude.terminal_auto && s.claude.allowed_spaces.is_empty());
         assert!(s.claude.token.is_empty(), "settings saved before pairing have no token, so nothing pairs");
     }
 
@@ -465,7 +469,7 @@ mod tests {
         s.web.download_dir = Some("/tmp/dl".into());
         s.search_engines = vec![SearchEngine { name: "X".into(), url: "https://x/?q=%s".into() }];
         s.environments = vec![Project { name: "baa".into(), envs: vec![Env { label: "Local".into(), origin: "http://localhost:3000".into() }] }];
-        s.claude = Claude { enabled: true, allowed_spaces: vec![crate::SpaceId(3)], claude_path: Some("/x/claude".into()), found_path: None, evaluate_allowed: true, auto_mode: true, token: "ab".repeat(32) };
+        s.claude = Claude { enabled: true, allowed_spaces: vec![crate::SpaceId(3)], claude_path: Some("/x/claude".into()), found_path: None, evaluate_allowed: true, auto_mode: true, terminal_auto: true, token: "ab".repeat(32) };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }

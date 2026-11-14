@@ -680,3 +680,58 @@ fn a_paused_auto_mode_asks_on_baas_sheet(cx: &mut TestAppContext) {
     let (_, text) = answer(&call(&b, cx, "approve", json!({"tool_name": "mcp__baa__click", "input": {}}))).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["behavior"], "deny");
 }
+
+/// A tools/call on `conn`, as its client would send it.
+fn call_on(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64, tool: &str, args: Value) -> Receiver<String> {
+    let msg = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": tool, "arguments": args}});
+    send(b, cx, conn, &msg.to_string())
+}
+
+#[gpui::test]
+fn terminal_auto_lets_an_allowed_terminal_client_approve_its_own_acts(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let gh = enabled_with(&b, cx, "https://github.com/");
+    let t = token(&b, cx);
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("token", &t));
+    assert_eq!(asks(&b, cx), 1, "the connect sheet still asks");
+    decide(&b, cx, Answer::Once);
+    assert!(served(&b, cx, conn));
+
+    // Off (the default): baa asks per site, as before.
+    let _rx = call_on(&b, cx, conn, "click", json!({"x": 1, "y": 1}));
+    assert_eq!(asks(&b, cx), 1);
+    decide(&b, cx, Answer::Deny);
+
+    // The chat's switch is not this one.
+    b.update(cx, |b, _| b.settings.claude.auto_mode = true);
+    let _rx = call_on(&b, cx, conn, "press_key", json!({"key": "a"}));
+    assert_eq!(asks(&b, cx), 0, "github.com was denied this session: refused, no sheet");
+    assert!(cdp(&b, cx, gh).is_empty());
+
+    // On: its own Claude Code decided; a fresh origin runs without a sheet.
+    b.update(cx, |b, _| b.settings.claude.terminal_auto = true);
+    let other = b.update_in(cx, |b, window, cx| {
+        b.open_url("https://example.com/", window, cx);
+        b.active_tab().unwrap()
+    });
+    let rx = call_on(&b, cx, conn, "click", json!({"tab": other.0, "x": 2, "y": 3}));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(rx.try_recv().is_ok(), "answered at once");
+    assert_eq!(cdp(&b, cx, other), ["click 2 3"]);
+
+    // evaluate still asks every call.
+    b.update(cx, |b, _| b.settings.claude.evaluate_allowed = true);
+    let _rx = call_on(&b, cx, conn, "evaluate", json!({"tab": other.0, "script": "1"}));
+    assert_eq!(asks(&b, cx), 1);
+    decide(&b, cx, Answer::Deny);
+
+    // Off again: the sheet is back at once.
+    b.update(cx, |b, _| b.settings.claude.terminal_auto = false);
+    let _rx = call_on(&b, cx, conn, "click", json!({"tab": other.0, "x": 4, "y": 4}));
+    assert_eq!(asks(&b, cx), 1);
+
+    // Stop forgets the client.
+    b.update(cx, |b, cx| b.stop_agent(cx));
+    assert!(b.read_with(cx, |b, _| b.agent.terminal.is_empty()));
+}

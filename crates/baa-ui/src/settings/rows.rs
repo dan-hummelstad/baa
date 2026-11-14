@@ -167,6 +167,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Claude, "claude_spaces", "Spaces Claude can see", "allowed incognito"),
     row(Claude, "claude_evaluate", "Allow evaluate", "javascript run script"),
     row(Claude, "claude_auto", "Auto mode for the chat", "classifier permission approve ask automatic"),
+    row(Claude, "claude_terminal_auto", "Auto mode for Terminal", "mcp classifier permission approve ask automatic claude code"),
     row(Claude, "claude_path", "claude path", "binary cli install"),
     row(Claude, "claude_terminal", "Use from Claude Code in Terminal", "mcp add command copy"),
     row(System, "auto_update", "Automatic updates", "update version new release about"),
