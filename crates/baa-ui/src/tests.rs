@@ -318,12 +318,15 @@ fn an_update_card_shows_once_one_is_ready_and_drives_the_updater(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn a_left_sidebar_runs_the_full_height_with_the_toolbar(cx: &mut TestAppContext) {
+fn a_left_sidebar_runs_the_full_height_with_the_traffic_lights(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.run_until_parked();
     let toolbar = cx.debug_bounds("toolbar").expect("the sidebar brings the toolbar");
-    assert_eq!(f32::from(toolbar.top()), 0., "level with the traffic lights");
-    assert!(cx.debug_bounds("header").is_none(), "no window-wide header while docked");
+    let header = cx.debug_bounds("header").expect("the URL row stays, above the page");
+    assert_eq!(f32::from(toolbar.top()), 0., "the sidebar starts at the window's top");
+    assert!(header.left() >= toolbar.right(), "the URL row is over the page, not the sidebar");
+    assert_eq!(b.read_with(cx, |b, _| b.lights), Some((13., 12.)), "in the sidebar's top row");
+
     cx.dispatch_action(ToggleSidebar);
     // Frames only draw when asked under test: skip the fold.
     b.update(cx, |b, cx| {
@@ -331,7 +334,17 @@ fn a_left_sidebar_runs_the_full_height_with_the_toolbar(cx: &mut TestAppContext)
         cx.notify();
     });
     cx.run_until_parked();
-    assert!(cx.debug_bounds("header").is_some(), "collapsed, the header holds the controls");
+    let (x, _) = b.read_with(cx, |b, _| b.lights).unwrap();
+    assert!(x < -100., "collapsed, the lights are off the window: {x}");
+
+    // They ride the revealed card in.
+    b.update(cx, |b, cx| {
+        b.reveal.snap(1.);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let at = b.read_with(cx, |b, _| b.lights).unwrap();
+    assert_eq!(at, (crate::browser::INSET + 14., crate::browser::INSET + 17.), "inside the card's top-left");
 }
 
 #[gpui::test]

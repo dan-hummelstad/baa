@@ -596,6 +596,24 @@ impl<H: WebHost> Browser<H> {
         ]
     }
 
+    /// Where the traffic lights go (Arc): in the docked sidebar's top row, riding the revealed
+    /// card, off the window's left edge while the sidebar is collapsed; with the sidebar on the
+    /// right, at the header's left end.
+    pub(super) fn lights_at(&self) -> (f32, f32) {
+        if self.side() == baa_model::SidebarSide::Right {
+            return (16., 12.);
+        }
+        if self.docked() {
+            return (13., 12.);
+        }
+        // The card's left edge as `render_reveal` places it; the lights sit 13 inside its
+        // border and 4 lower than docked, as in Arc's card.
+        // ponytail: gpui moves them but cannot hide them; off the left edge stands in.
+        let width = self.reveal_w.value();
+        let card = INSET + (self.reveal.value() - 1.0) * (width + INSET * 2.0);
+        (card + 1. + 13., INSET + 1. + 4. + 12.)
+    }
+
     pub(crate) fn reveal_hovered(&self) -> bool {
         self.reveal_hover
     }

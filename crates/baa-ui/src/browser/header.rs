@@ -1,18 +1,18 @@
-//! The window-wide row with the traffic lights, navigation, URL and extensions, and
-//! the same controls at the top of a left-hand sidebar.
+//! The row above the page (URL and extensions; navigation when the sidebar does not show
+//! it), and the traffic lights' row at the top of a left-hand sidebar.
 
 use super::*;
 
 impl<H: WebHost> Browser<H> {
-    /// The window's top row (Arc's top-bar layout): traffic lights, sidebar
-    /// toggle and navigation at the left, the short URL centred on the window,
-    /// extensions at the right. Empty space drags the window.
-    pub(super) fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The row above the page: `controls` (with that much room for the traffic lights) at the
+    /// left, the short URL centred, extensions at the right. Empty space drags the window.
+    pub(super) fn render_header(&self, theme: &Theme, controls: Option<f32>, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("header").debug_selector(|| "header".into())
             .flex_none()
             .h(px(HEADER_H))
-            .pl(px(16.))
+            // The page column starts INSET in: the controls start 16 from the window edge.
+            .pl(px(16. - INSET))
             .pr(px(INSET + 2.))
             .flex()
             .items_center()
@@ -23,16 +23,15 @@ impl<H: WebHost> Browser<H> {
                     .flex_1()
                     .flex()
                     .items_center()
-                    .child(self.render_window_controls(theme, false, cx)),
+                    .children(controls.map(|room| self.render_window_controls(theme, false, room, cx))),
             )
-            .child(self.render_address(theme, false, cx))
+            .child(self.render_address(theme, cx))
             .child(self.render_header_tools(theme, cx).flex_1().justify_end())
     }
 
-    /// Arc's sidebar layout (sidebar on the left): the sidebar runs the window's full
-    /// height and starts with the traffic lights' row (toggle, navigation), then the URL
-    /// field with the header's tools. `card`: in the revealed card, whose top is `INSET`
-    /// down; the row is pulled up so it stays level with the traffic lights.
+    /// Arc's sidebar layout (sidebar on the left): the sidebar runs the window's full height
+    /// and starts with the traffic lights' row: toggle beside them, navigation at the end.
+    /// `card`: in the revealed card, 4 lower, where `lights_at` puts the lights in it.
     pub(super) fn render_sidebar_top(&self, theme: &Theme, card: bool, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-top")
@@ -46,23 +45,15 @@ impl<H: WebHost> Browser<H> {
                 div()
                     .id("toolbar").debug_selector(|| "toolbar".into())
                     .h(px(HEADER_H))
-                    .when(card, |d| d.mt(px(-INSET - 1.)))
-                    .pl(px(8.))
+                    .when(card, |d| d.mt(px(4.)))
                     .flex()
                     .items_center()
                     .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
-                    .child(self.render_window_controls(theme, true, cx)),
+                    // Arc: the toggle's icon 12 past the lights (13 in, 59 wide on this macOS);
+                    // with the 8 padding and gap, its button starts 80 in.
+                    .child(self.render_window_controls(theme, true, 64., cx)),
             )
-            // ponytail: many pinned extensions squeeze the field; an overflow menu if that bites.
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .mb(px(4.))
-                    .child(self.render_address(theme, true, cx))
-                    .child(self.render_header_tools(theme, cx).flex_none()),
-            )
+            .mb(px(4.))
     }
 
     /// Downloads, pinned extensions, split and the extensions menu.
@@ -106,8 +97,8 @@ impl<H: WebHost> Browser<H> {
             .child(self.render_extensions_button(theme, cx))
     }
 
-    /// The short URL (click to edit): centred in the header, or the sidebar's field.
-    fn render_address(&self, theme: &Theme, field: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// The short URL (click to edit), centred in the header.
+    fn render_address(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let url = self
             .active_tab()
             .and_then(|id| self.session.tab(id))
@@ -226,9 +217,6 @@ impl<H: WebHost> Browser<H> {
             .bg(fade(theme.hover, h))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
-            .when(field, |d| {
-                d.flex_1().min_w_0().h(px(32.)).px(px(12.)).rounded(r(10.)).bg(mix(theme.glass, theme.glass_strong, h))
-            })
             // ASCII Chrome: "│ ▸ host  ⌘L │".
             .when(crate::theme::ascii(), |d| {
                 d.gap(px(8.))

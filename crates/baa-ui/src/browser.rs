@@ -62,7 +62,7 @@ pub(crate) use peek::PeekPage;
 
 /// Arc's sidebar width.
 pub(crate) const SIDEBAR_WIDTH: f32 = 228.0;
-/// The window-wide row with the traffic lights, navigation, URL and extensions.
+/// The row above the page (URL, extensions), and the sidebar's traffic lights row.
 pub(crate) const HEADER_H: f32 = 38.0;
 /// Gap between the window edge and the page card (and the floating sidebar).
 pub(crate) const INSET: f32 = 9.0;
@@ -276,8 +276,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) update_ready: bool,
     /// The hover card's width, so opening the Library in it grows rather than jumps.
     reveal_w: Spring,
+    /// Where the traffic lights were last put (`lights_at`), so AppKit is told only on a change.
+    pub(crate) lights: Option<(f32, f32)>,
     /// Collapsed sidebar shown over the page: 0 hidden, 1 shown.
-    reveal: Spring,
+    pub(crate) reveal: Spring,
     /// Pointer over the edge zone / over the card.
     /// The pointer is where the collapsed sidebar should stay out.
     reveal_hover: bool,
@@ -484,6 +486,7 @@ impl<H: WebHost> Browser<H> {
             sidebar_w: Spring::new(if sidebar_open { SIDEBAR_WIDTH } else { 0. }),
             update_ready: false,
             reveal_w: Spring::new(SIDEBAR_WIDTH),
+            lights: None,
             reveal: Spring::quick(0.0),
             reveal_hover: false,
             slide: Spring::new(0.0),
@@ -1303,20 +1306,27 @@ impl<H: WebHost> Render for Browser<H> {
         }
         let theme = self.theme();
         let left = self.side() == SidebarSide::Left;
+        let lights = self.lights_at();
+        if self.lights != Some(lights) {
+            self.lights = Some(lights);
+            window.set_traffic_light_position(gpui::point(px(lights.0), px(lights.1)));
+        }
         let card = !self.docked() && (self.reveal.value() > 0.001 || self.reveal_hovered());
         let sidebar = self.render_sidebar(&theme, window, cx);
-        // A left sidebar runs the window's full height and brings the header's controls.
-        let sidebar = if left {
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(self.render_sidebar_top(&theme, card, cx))
-                .child(div().flex_1().min_h_0().child(sidebar))
-                .into_any_element()
+        // The sidebar runs the window's full height: on the left it starts with the traffic
+        // lights' row, on the right with the header's height left empty.
+        let top = if left {
+            self.render_sidebar_top(&theme, card, cx).into_any_element()
         } else {
-            sidebar
+            div().flex_none().h(px(HEADER_H)).into_any_element()
         };
+        let sidebar = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(top)
+            .child(div().flex_1().min_h_0().child(sidebar))
+            .into_any_element();
         let page = self.render_page(&theme, window, cx);
         // One sidebar element: docked, or in the reveal card while that is out.
         let (docked, reveal) = if self.docked() {
@@ -1338,12 +1348,14 @@ impl<H: WebHost> Render for Browser<H> {
         let docked_w = self.sidebar_w.value().max(0.0);
         let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
         let right = !left;
-        // The window-wide header: always with the sidebar on the right; with it on the left,
-        // only while it is collapsed, growing in as it folds away.
-        let header_t = if right { 1.0 } else { edge / INSET };
-        let header = (header_t > 0.0).then(|| {
-            div().flex_none().h(px(HEADER_H * header_t)).overflow_hidden().child(self.render_header(&theme, cx))
-        });
+        // Above the page: the window controls only where the sidebar does not show them (room
+        // for the traffic lights only on the right; on the left they are hidden while collapsed).
+        let controls = match (right, self.docked()) {
+            (true, _) => Some(58.),
+            (false, false) => Some(0.),
+            (false, true) => None,
+        };
+        let header = self.render_header(&theme, controls, cx);
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
@@ -1371,7 +1383,6 @@ impl<H: WebHost> Render for Browser<H> {
             .text_size(px(13.))
             .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))
             .children(mid_stop(&theme, 0.))
-            .children(header)
             .child(
                 div()
                     .flex_1()
@@ -1389,8 +1400,7 @@ impl<H: WebHost> Render for Browser<H> {
                             .overflow_hidden()
                             .children(docked),
                     )
-                    // With no header above it, the page keeps the inset from the top edge.
-                    .child(div().flex_1().min_w_0().h_full().flex().flex_col().pt(px(INSET * (1.0 - header_t))).child(page)),
+                    .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(header).child(page)),
             )
             .children(reveal.into_iter().flatten())
             .children(peek)

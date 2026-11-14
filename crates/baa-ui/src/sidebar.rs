@@ -278,9 +278,9 @@ impl<H: WebHost> Browser<H> {
             .into_any_element()
     }
 
-    /// Room for the traffic lights, then the sidebar toggle and back/forward/reload;
+    /// `room` for the traffic lights, then the sidebar toggle and back/forward/reload;
     /// `spread`: navigation at the far end, as in Arc's sidebar.
-    pub(crate) fn render_window_controls(&self, theme: &Theme, spread: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_window_controls(&self, theme: &Theme, spread: bool, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self
             .active_tab()
             .and_then(|id| self.pages.get(&id))
@@ -339,8 +339,7 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .items_center()
             .gap(px(8.))
-            // Traffic lights: 52 wide, then a 14 gap.
-            .child(div().w(px(58.)))
+            .when(room > 0., |d| d.child(div().w(px(room))))
             .child(toggle)
             .children(spread.then(|| div().flex_1()))
             .child(
