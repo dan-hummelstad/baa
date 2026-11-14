@@ -571,3 +571,112 @@ fn a_running_turn_shows_a_thinking_quip(cx: &mut TestAppContext) {
     busy(&b, false, cx);
     assert!(cx.debug_bounds("chat-thinking").is_none(), "an ended turn shows none");
 }
+
+/// Auto mode on, and conn 1 (what `call` uses) is the panel's child started in it.
+fn auto(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, on: bool) {
+    b.update(cx, |b, _| {
+        b.settings.claude.auto_mode = on;
+        b.agent.auto.insert(1);
+    });
+}
+
+#[gpui::test]
+fn auto_mode_skips_the_sheet_only_for_the_panels_auto_child(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let gh = enabled_with(&b, cx, "https://github.com/");
+    auto(&b, cx, true);
+    let rx = call(&b, cx, "click", json!({"x": 1, "y": 2}));
+    assert_eq!(asks(&b, cx), 0, "Claude Code's classifier approved it");
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(cdp(&b, cx, gh), ["click 1 2"]);
+    assert_eq!(last_activity(&b, cx).0, "click", "still in the activity log");
+
+    // evaluate asks every call, auto mode or not.
+    b.update(cx, |b, _| b.settings.claude.evaluate_allowed = true);
+    let _rx = call(&b, cx, "evaluate", json!({"script": "1+1"}));
+    assert_eq!(asks(&b, cx), 1);
+    decide(&b, cx, Answer::Deny);
+
+    // A site the user denied this session stays denied.
+    auto(&b, cx, false);
+    let other = b.update_in(cx, |b, window, cx| {
+        b.open_url("https://example.com/", window, cx);
+        b.active_tab().unwrap()
+    });
+    let rx = call(&b, cx, "click", json!({"tab": other.0, "x": 5, "y": 5}));
+    assert_eq!(asks(&b, cx), 1, "auto mode off: the sheet is back for a running child at once");
+    decide(&b, cx, Answer::Deny);
+    assert!(answer(&rx).unwrap().0);
+    auto(&b, cx, true);
+    let rx = call(&b, cx, "click", json!({"tab": other.0, "x": 5, "y": 5}));
+    assert_eq!(asks(&b, cx), 0);
+    assert!(answer(&rx).unwrap().0, "denied stays denied");
+    assert!(cdp(&b, cx, other).is_empty());
+
+    // A client that is not the auto child (a Terminal one, or a panel started before) asks.
+    b.update(cx, |b, _| {
+        b.agent.auto.clear();
+    });
+    let _rx = call(&b, cx, "press_key", json!({"tab": gh.0, "key": "a"}));
+    assert_eq!(asks(&b, cx), 1);
+}
+
+#[gpui::test]
+fn only_a_nonce_child_started_in_auto_mode_is_auto(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    b.update(cx, |b, _| b.settings.claude.auto_mode = true);
+    for started_auto in [false, true] {
+        let nonce = crate::agent::secret();
+        b.update(cx, |b, cx| {
+            b.agent.nonce = Some((nonce.clone(), cx.background_executor().now()));
+            b.agent.nonce_auto = started_auto;
+        });
+        let conn = connect(&b, cx);
+        send(&b, cx, conn, &hello("nonce", &nonce));
+        assert!(served(&b, cx, conn));
+        assert_eq!(b.read_with(cx, |b, _| b.agent.auto.contains(&conn)), started_auto);
+    }
+
+    // A token client is never auto, even with the setting on.
+    let t = token(&b, cx);
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("token", &t));
+    decide(&b, cx, Answer::Once);
+    assert!(served(&b, cx, conn));
+    assert!(!b.read_with(cx, |b, _| b.agent.auto.contains(&conn)));
+
+    // Stop forgets them all.
+    b.update(cx, |b, cx| b.stop_agent(cx));
+    assert!(b.read_with(cx, |b, _| b.agent.auto.is_empty()));
+}
+
+#[gpui::test]
+fn a_paused_auto_mode_asks_on_baas_sheet(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let gh = enabled_with(&b, cx, "https://github.com/");
+    auto(&b, cx, true);
+    // Claude Code asks `approve` about an act: it goes through, and baa's sheet asks for it.
+    let input = json!({"x": 3, "y": 4});
+    let (_, text) = answer(&call(&b, cx, "approve", json!({"tool_name": "mcp__baa__click", "input": input}))).unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!((&v["behavior"], &v["updatedInput"]), (&json!("allow"), &input));
+    let rx = call(&b, cx, "click", input);
+    assert_eq!(asks(&b, cx), 1, "that act shows the sheet");
+    assert!(answer(&rx).is_none() && cdp(&b, cx, gh).is_empty());
+    decide(&b, cx, Answer::Once);
+    assert_eq!(cdp(&b, cx, gh), ["click 3 4"]);
+    // Only that one.
+    let _rx = call(&b, cx, "click", json!({"x": 5, "y": 6}));
+    assert_eq!(asks(&b, cx), 0);
+
+    // Anything else asking is still denied, auto mode or not.
+    for name in ["Bash", "mcp__baa__read_page", "mcp__other__click"] {
+        let (_, text) = answer(&call(&b, cx, "approve", json!({"tool_name": name, "input": {}}))).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["behavior"], "deny", "{name}");
+    }
+    // And without auto mode, an act asked about is denied as before.
+    auto(&b, cx, false);
+    let (_, text) = answer(&call(&b, cx, "approve", json!({"tool_name": "mcp__baa__click", "input": {}}))).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["behavior"], "deny");
+}

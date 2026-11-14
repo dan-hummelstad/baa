@@ -225,8 +225,11 @@ fn needs_login(text: &str) -> bool {
 /// Arguments after the binary. `--mcp-config`, `--allowedTools` and `--tools` are variadic, so each is
 /// followed by another flag, never by a positional; the prompt comes over stdin. `nonce` goes in the
 /// MCP server's own environment, so only `baa mcp` gets it, not `claude`'s other children.
-fn argv(exe: &Path, nonce: &str, resume: Option<&str>) -> Vec<String> {
+/// `auto`: Claude Code's auto mode, with only the read tools pre-allowed so its classifier
+/// judges every act (baa then skips its own sheet for this child).
+fn argv(exe: &Path, nonce: &str, resume: Option<&str>, auto: bool) -> Vec<String> {
     let config = json!({"mcpServers": {"baa": {"type": "stdio", "command": exe.to_string_lossy(), "args": ["mcp"], "env": {"BAA_AGENT_NONCE": nonce}}}});
+    let allowed = if auto { crate::agent::read_tools() } else { "mcp__baa__*".into() };
     [
         "-p",
         "--input-format",
@@ -238,7 +241,7 @@ fn argv(exe: &Path, nonce: &str, resume: Option<&str>) -> Vec<String> {
         &config.to_string(),
         "--strict-mcp-config",
         "--allowedTools",
-        "mcp__baa__*",
+        &allowed,
         "--tools",
         "",
         "--permission-prompt-tool",
@@ -247,6 +250,7 @@ fn argv(exe: &Path, nonce: &str, resume: Option<&str>) -> Vec<String> {
         "user",
     ]
     .into_iter()
+    .chain(auto.then_some(["--permission-mode", "auto"]).into_iter().flatten())
     .chain(resume.into_iter().flat_map(|id| ["--resume", id]))
     .map(String::from)
     .collect()
@@ -453,8 +457,9 @@ impl<H: WebHost> Browser<H> {
         std::fs::create_dir_all(&dir)?;
         // The hello of the `baa mcp` this child starts: lets it in without the connect sheet, once.
         let nonce = crate::agent::secret();
+        let auto = self.settings.claude.auto_mode;
         let mut child = Command::new(claude)
-            .args(argv(&exe, &nonce, self.agent.panel.chat.session.as_deref()))
+            .args(argv(&exe, &nonce, self.agent.panel.chat.session.as_deref(), auto))
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -480,6 +485,7 @@ impl<H: WebHost> Browser<H> {
             });
         }
         self.agent.nonce = Some((nonce, cx.background_executor().now()));
+        self.agent.nonce_auto = auto;
         let p = &mut self.agent.panel;
         p.stdin = child.stdin.take();
         p.child = Some(child);
@@ -1028,8 +1034,9 @@ mod tests {
 
     #[test]
     fn argv_keeps_variadic_flags_apart_and_has_no_positional_prompt() {
-        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"), "n0nce", Some("5f1c-aa"));
+        let a = argv(Path::new("/Applications/baa.app/Contents/MacOS/baa"), "n0nce", Some("5f1c-aa"), false);
         assert_eq!(a[a.len() - 2..], ["--resume", "5f1c-aa"]);
+        assert!(!a.iter().any(|x| x == "--permission-mode"), "Claude Code's default mode unless asked");
         let at = |f: &str| a.iter().position(|x| x == f).unwrap_or_else(|| panic!("{f} missing"));
         assert_eq!(a[at("--tools") + 1], "");
         assert_eq!(a[at("--permission-prompt-tool") + 1], "mcp__baa__approve");
@@ -1041,6 +1048,22 @@ mod tests {
         let cfg: Value = serde_json::from_str(&a[at("--mcp-config") + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["baa"]["args"][0], "mcp");
         assert_eq!(cfg["mcpServers"]["baa"]["env"]["BAA_AGENT_NONCE"], "n0nce", "only the MCP server gets the nonce");
+    }
+
+    #[test]
+    fn auto_mode_pre_allows_only_reading() {
+        let a = argv(Path::new("/x/baa"), "n0nce", None, true);
+        let at = |f: &str| a.iter().position(|x| x == f).unwrap_or_else(|| panic!("{f} missing"));
+        assert_eq!(a[at("--permission-mode") + 1], "auto");
+        let allowed: Vec<&str> = a[at("--allowedTools") + 1].split(',').collect();
+        assert!(allowed.contains(&"mcp__baa__read_page") && allowed.contains(&"mcp__baa__list_tabs"));
+        for act in ["*", "open_tab", "navigate", "click", "type", "evaluate", "approve"] {
+            assert!(!allowed.contains(&format!("mcp__baa__{act}").as_str()), "{act} goes to the classifier");
+        }
+        assert_eq!(a[at("--permission-prompt-tool") + 1], "mcp__baa__approve", "a paused auto mode asks baa");
+        for (i, x) in a.iter().enumerate() {
+            assert!(x.starts_with('-') || a[i - 1].starts_with("--"), "positional {x:?}");
+        }
     }
 
     #[test]

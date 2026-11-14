@@ -205,6 +205,12 @@ pub(crate) struct Agent<H: WebHost> {
     /// The panel child's one-time nonce and when it was made: used up by its first hello,
     /// gone when the child exits or on Stop.
     pub(crate) nonce: Option<(String, Instant)>,
+    /// That child was started in auto mode (`--permission-mode auto`).
+    pub(crate) nonce_auto: bool,
+    /// Clients that are a panel child started in auto mode.
+    pub(crate) auto: HashSet<u64>,
+    /// Auto clients whose next act shows baa's sheet: Claude Code asked `approve` about it.
+    ask_next: HashSet<u64>,
     /// Clients counted when the socket is not ours (tests).
     next_conn: u64,
     grants: HashMap<String, Grant>,
@@ -227,6 +233,9 @@ impl<H: WebHost> Default for Agent<H> {
             conns: HashMap::new(),
             state: HashMap::new(),
             nonce: None,
+            nonce_auto: false,
+            auto: HashSet::new(),
+            ask_next: HashSet::new(),
             next_conn: 0,
             grants: HashMap::new(),
             asks: VecDeque::new(),
@@ -286,6 +295,12 @@ const TOOLS: [(&str, Kind); 19] = [
     ("cookies", Kind::Approve),
     ("downloads", Kind::Approve),
 ];
+
+/// Claude Code's names for the tools that only read: auto mode pre-allows these, so the
+/// classifier sees every act.
+pub(crate) fn read_tools() -> String {
+    TOOLS.iter().filter(|(_, k)| *k == Kind::Read).map(|(n, _)| format!("mcp__baa__{n}")).collect::<Vec<_>>().join(",")
+}
 
 fn tool(name: &str, description: &str, props: Value, required: &[&str]) -> Value {
     json!({"name": name, "description": description, "inputSchema": {"type": "object", "properties": props, "required": required}})
@@ -489,6 +504,9 @@ impl<H: WebHost> Browser<H> {
             Err(why) => self.agent_refuse(conn, why, true, window, cx),
             // baa started this process itself: no sheet. Used up.
             Ok(Hello::Nonce) => {
+                if self.agent.nonce_auto {
+                    self.agent.auto.insert(conn);
+                }
                 self.agent.nonce = None;
                 self.agent.state.insert(conn, Conn::Open);
                 self.agent_open(conn, "claude", window, cx);
@@ -558,6 +576,8 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn agent_disconnected(&mut self, conn: u64, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.conns.remove(&conn);
         self.agent.state.remove(&conn);
+        self.agent.auto.remove(&conn);
+        self.agent.ask_next.remove(&conn);
         let had = self.agent.asks.len();
         self.agent.asks.retain(|a| a.conn != conn);
         if self.agent.asks.len() != had {
@@ -608,6 +628,8 @@ impl<H: WebHost> Browser<H> {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         self.agent.state.clear();
+        self.agent.auto.clear();
+        self.agent.ask_next.clear();
         self.agent.asks.clear();
         self.agent.grants.clear();
         self.agent.driven.clear();
@@ -671,6 +693,12 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
+    /// `conn` is the panel's child started in auto mode, and auto mode is still on (turning it
+    /// off brings the sheet back at once, for a running child too).
+    fn auto_conn(&self, conn: u64) -> bool {
+        self.settings.claude.auto_mode && self.agent.auto.contains(&conn)
+    }
+
     fn space_visible(&self, space: SpaceId) -> bool {
         self.settings.claude.allowed_spaces.contains(&space) && self.session.space(space).is_some_and(|s| !s.ephemeral)
     }
@@ -699,7 +727,20 @@ impl<H: WebHost> Browser<H> {
         };
         match kind {
             Kind::Approve if tool == "approve" => {
-                // With `--tools ""` baa's tools are the only ones, and those are pre-allowed; anything
+                // Auto mode pre-allows only reading, so Claude Code asks here about an act it would not
+                // pass on its own (auto mode paused, or not available). It goes through, and baa's own
+                // sheet asks the user for it.
+                let name = args["tool_name"].as_str().unwrap_or_default();
+                let act = name
+                    .strip_prefix("mcp__baa__")
+                    .and_then(|n| TOOLS.iter().find(|(t, _)| *t == n))
+                    .is_some_and(|(_, k)| matches!(k, Kind::Act | Kind::Gated));
+                if act && self.auto_conn(conn) {
+                    self.agent.ask_next.insert(conn);
+                    self.log(tool, kind, "", false);
+                    return reply.text(json!({"behavior": "allow", "updatedInput": args["input"]}).to_string());
+                }
+                // Otherwise baa's tools are pre-allowed and `--tools ""` leaves no others: anything
                 // asking here is not baa's.
                 self.log(tool, kind, "", true);
                 return reply.text(json!({"behavior": "deny", "message": "baa only runs its own tools."}).to_string());
@@ -1022,6 +1063,8 @@ impl<H: WebHost> Browser<H> {
         let kind = TOOLS.iter().find(|(n, _)| *n == tool).map_or(Kind::Act, |t| t.1);
         let every_time = every_time || kind == Kind::Gated;
         let host = host_of(&origin);
+        // Taken by this act whatever it is, so it never carries over to a later one.
+        let auto = !self.agent.ask_next.remove(&conn) && self.auto_conn(conn);
         if !every_time {
             match self.agent.grants.get(&origin) {
                 Some(Grant::Session) => {
@@ -1031,6 +1074,14 @@ impl<H: WebHost> Browser<H> {
                 Some(Grant::Denied) => {
                     self.log(tool, kind, &host, true);
                     return reply.refuse(format!("The user denied Claude on {host} for this session."));
+                }
+                // security: removes baa's per-origin approval sheet (PLAN-m4 D4 "Approvals for
+                // actions") for the panel's own child in auto mode; Claude Code's classifier approved
+                // the call instead. Opt-in (Settings → Claude → Auto mode), never for token clients,
+                // and a URL it supplies is loaded on the classifier's approval, not the user's.
+                None if auto => {
+                    self.log(tool, kind, &host, false);
+                    return then(self, reply, window, cx);
                 }
                 None => {}
             }

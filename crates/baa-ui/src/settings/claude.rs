@@ -48,6 +48,11 @@ impl<H: WebHost> SettingsView<H> {
             "Run any JavaScript in a page. Asks every time.",
             self.toggle("pref-claude-evaluate", s.claude.evaluate_allowed, |s, v| s.claude.evaluate_allowed = v, cx),
         ));
+        out.push(self.row(
+            "claude_auto",
+            "Claude Code's auto mode classifier approves the chat's actions instead of baa asking per site. Starts with the next chat; evaluate still asks, and Terminal clients are not affected.",
+            self.toggle("pref-claude-auto", s.claude.auto_mode, |s, v| s.claude.auto_mode = v, cx),
+        ));
         let found = match (&s.claude.claude_path, &s.claude.found_path) {
             (None, Some(p)) => format!("Found at {p}. Leave empty to find it automatically."),
             _ => "Leave empty to find it automatically.".into(),
