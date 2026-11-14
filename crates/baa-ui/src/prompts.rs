@@ -562,7 +562,10 @@ impl<H: WebHost> Browser<H> {
             Popover::Site => self.render_site_panel(cx)?,
             Popover::Extensions => self.render_extensions_panel(theme, cx),
         };
+        // Under the header's buttons, or under the URL field of a docked left sidebar.
+        let in_sidebar = self.side() == baa_model::SidebarSide::Left && self.docked();
         let placed = match which {
+            _ if in_sidebar => div().absolute().top(px(HEADER_H + 36.)).left(px(INSET)).child(card),
             Popover::Downloads | Popover::Extensions => div().absolute().top(px(HEADER_H)).right(px(INSET)).child(card),
             Popover::Site => div()
                 .absolute()

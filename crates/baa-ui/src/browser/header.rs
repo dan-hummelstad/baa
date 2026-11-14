@@ -1,4 +1,5 @@
-//! The window-wide row with the traffic lights, navigation, URL and extensions.
+//! The window-wide row with the traffic lights, navigation, URL and extensions, and
+//! the same controls at the top of a left-hand sidebar.
 
 use super::*;
 
@@ -7,13 +8,65 @@ impl<H: WebHost> Browser<H> {
     /// toggle and navigation at the left, the short URL centred on the window,
     /// extensions at the right. Empty space drags the window.
     pub(super) fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let url = self
-            .active_tab()
-            .and_then(|id| self.session.tab(id))
-            .map(|t| t.url.clone())
-            .unwrap_or_default();
-        let host = host_of(&url);
-        let loading = self.active_page().is_some_and(|p| p.read(cx).is_loading());
+        div()
+            .id("header").debug_selector(|| "header".into())
+            .flex_none()
+            .h(px(HEADER_H))
+            .pl(px(16.))
+            .pr(px(INSET + 2.))
+            .flex()
+            .items_center()
+            .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .child(self.render_window_controls(theme, false, cx)),
+            )
+            .child(self.render_address(theme, false, cx))
+            .child(self.render_header_tools(theme, cx).flex_1().justify_end())
+    }
+
+    /// Arc's sidebar layout (sidebar on the left): the sidebar runs the window's full
+    /// height and starts with the traffic lights' row (toggle, navigation), then the URL
+    /// field with the header's tools. `card`: in the revealed card, whose top is `INSET`
+    /// down; the row is pulled up so it stays level with the traffic lights.
+    pub(super) fn render_sidebar_top(&self, theme: &Theme, card: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("sidebar-top")
+            .flex_none()
+            .w(px(self.sidebar_width()))
+            .px(px(8.))
+            .flex()
+            .flex_col()
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+            .child(
+                div()
+                    .id("toolbar").debug_selector(|| "toolbar".into())
+                    .h(px(HEADER_H))
+                    .when(card, |d| d.mt(px(-INSET - 1.)))
+                    .pl(px(8.))
+                    .flex()
+                    .items_center()
+                    .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
+                    .child(self.render_window_controls(theme, true, cx)),
+            )
+            // ponytail: many pinned extensions squeeze the field; an overflow menu if that bites.
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .mb(px(4.))
+                    .child(self.render_address(theme, true, cx))
+                    .child(self.render_header_tools(theme, cx).flex_none()),
+            )
+    }
+
+    /// Downloads, pinned extensions, split and the extensions menu.
+    fn render_header_tools(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let unpinned = &self.settings.unpinned_extensions;
         let pinned = self
             .extensions
@@ -43,6 +96,25 @@ impl<H: WebHost> Browser<H> {
                 });
             feel(el, key, cx)
         }).collect();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .children(self.render_download_button(theme, cx))
+            .children(extensions)
+            .child(self.render_split_button(theme, cx))
+            .child(self.render_extensions_button(theme, cx))
+    }
+
+    /// The short URL (click to edit): centred in the header, or the sidebar's field.
+    fn render_address(&self, theme: &Theme, field: bool, cx: &mut Context<Self>) -> AnyElement {
+        let url = self
+            .active_tab()
+            .and_then(|id| self.session.tab(id))
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
+        let host = host_of(&url);
+        let loading = self.active_page().is_some_and(|p| p.read(cx).is_loading());
         let key = ("address", 0);
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
         // The link icon copies the URL; on a copy it flips to a check that pops in.
@@ -154,6 +226,9 @@ impl<H: WebHost> Browser<H> {
             .bg(fade(theme.hover, h))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.open_bar(Mode::Address, window, cx)))
+            .when(field, |d| {
+                d.flex_1().min_w_0().h(px(32.)).px(px(12.)).rounded(r(10.)).bg(mix(theme.glass, theme.glass_strong, h))
+            })
             // ASCII Chrome: "│ ▸ host  ⌘L │".
             .when(crate::theme::ascii(), |d| {
                 d.gap(px(8.))
@@ -165,37 +240,7 @@ impl<H: WebHost> Browser<H> {
             .child(label)
             .when(crate::theme::ascii(), |d| d.child(div().text_color(theme.ink_faint).child("⌘L")))
             .children(progress);
-        let address = feel(address, key, cx);
-        div()
-            .id("header")
-            .flex_none()
-            .h(px(HEADER_H))
-            .pl(px(16.))
-            .pr(px(INSET + 2.))
-            .flex()
-            .items_center()
-            .on_mouse_down(gpui::MouseButton::Left, crate::sidebar::drag_or_zoom)
-            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .child(self.render_window_controls(theme, cx)),
-            )
-            .child(address)
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(4.))
-                    .children(self.render_download_button(theme, cx))
-                    .children(extensions)
-                    .child(self.render_split_button(theme, cx))
-                    .child(self.render_extensions_button(theme, cx)),
-            )
+        feel(address, key, cx).into_any_element()
     }
 
     /// Same as ⌃⇧=: splits with the Space's most recent other tab. Lit while a split is shown.

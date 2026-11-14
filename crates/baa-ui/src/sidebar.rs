@@ -22,11 +22,11 @@ use crate::{
 
 /// Arc's rows, or ASCII Chrome's one-line rows.
 fn row_h() -> f32 {
-    if ascii() { 24. } else { 38. }
+    if ascii() { 24. } else { 36. }
 }
 /// Favourite tiles share their row's width, at most this many to a row.
 const FAV_PER_ROW: usize = 4;
-const FAV_H: f32 = 44.;
+const FAV_H: f32 = 46.;
 
 #[derive(Clone)]
 pub(crate) struct DraggedTab {
@@ -38,7 +38,7 @@ pub(crate) struct DraggedTab {
 impl Render for DraggedTab {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(SIDEBAR_WIDTH - 22.))
+            .w(px(SIDEBAR_WIDTH - 16.))
             .h(px(row_h()))
             .px(px(10.))
             .flex()
@@ -46,7 +46,7 @@ impl Render for DraggedTab {
             .rounded(r(10.))
             .bg(self.theme.glass_strong)
             .text_color(self.theme.ink)
-            .text_size(px(13.))
+            .text_size(px(14.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .child(div().truncate().child(self.title.clone()))
             // Lifts off the list: the shadow deepens as it lands under the pointer.
@@ -97,19 +97,19 @@ impl<H: WebHost> Browser<H> {
             .relative()
             .left(px(self.slide.value() * SIDEBAR_WIDTH))
             .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
-            .pt(px(4.))
+            .pt(px(1.))
             .flex()
             .flex_col()
-            .gap(px(6.))
+            .gap(px(ROW_GAP))
             .child(
                 div()
                     .flex_none()
-                    .h(px(20.))
+                    .h(px(row_h()))
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .text_size(px(11.5))
+                    .gap(px(10.))
+                    .text_size(px(13.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.ink_muted)
                     .on_mouse_down(
@@ -122,7 +122,10 @@ impl<H: WebHost> Browser<H> {
                     .child(
                         div()
                             .id("space-icon")
-                            .text_size(px(11.))
+                            .w(px(16.))
+                            .flex()
+                            .justify_center()
+                            .text_size(px(15.))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                                 this.open_space_picker(space, true, e.position(), window, cx)
@@ -169,7 +172,7 @@ impl<H: WebHost> Browser<H> {
                     .flex()
                     .flex_none()
                     .flex_col()
-                    .gap(px(6.))
+                    .gap(px(ROW_GAP))
                     .children(
                         self.session
                             .subfolders(space, None)
@@ -178,7 +181,9 @@ impl<H: WebHost> Browser<H> {
                     )
                     .child(self.render_zone(space, Zone::Pinned, theme, cx)),
             )
-            .child(if ascii() {
+            // As in Arc, no divider over an empty Today: the last pinned row's lower half
+            // is still the end of Pinned.
+            .when(ascii() || self.list_len(today) > 0, |d| d.child(if ascii() {
                 crate::theme::ascii::rule_label("TODAY", theme.ink_faint).debug_selector(|| "today-rule".into()).flex_none().h(px(20.)).mt(px(4.))
             } else {
                 div()
@@ -202,7 +207,7 @@ impl<H: WebHost> Browser<H> {
                 if e.bounds.contains(&e.event.position) {
                     this.aim_drop(Some((pinned, this.list_len(pinned))), cx);
                 }
-            })))
+            }))))
             .child(
                 {
                     let key = ("new-tab", 0);
@@ -219,7 +224,7 @@ impl<H: WebHost> Browser<H> {
                             .px(px(10.))
                             .mx(px(2.5 * p))
                             .rounded(r(10.))
-                            .text_size(px(13.))
+                            .text_size(px(14.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(mix(theme.ink_muted, theme.ink, h))
                             .bg(fade(theme.hover, h))
@@ -260,9 +265,9 @@ impl<H: WebHost> Browser<H> {
             .h_full()
             .flex()
             .flex_col()
-            .pr(px(12.))
+            .pr(px(8.))
             .pb(px(4.))
-            .pl(px(10.))
+            .pl(px(8.))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
             .child(self.render_favorites(space, theme, cx))
             .child(lists)
@@ -273,8 +278,9 @@ impl<H: WebHost> Browser<H> {
             .into_any_element()
     }
 
-    /// Room for the traffic lights, then the sidebar toggle and back/forward/reload.
-    pub(crate) fn render_window_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Room for the traffic lights, then the sidebar toggle and back/forward/reload;
+    /// `spread`: navigation at the far end, as in Arc's sidebar.
+    pub(crate) fn render_window_controls(&self, theme: &Theme, spread: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self
             .active_tab()
             .and_then(|id| self.pages.get(&id))
@@ -329,12 +335,14 @@ impl<H: WebHost> Browser<H> {
             }),
         );
         div()
+            .when(spread, |d| d.flex_1())
             .flex()
             .items_center()
             .gap(px(8.))
             // Traffic lights: 52 wide, then a 14 gap.
             .child(div().w(px(58.)))
             .child(toggle)
+            .children(spread.then(|| div().flex_1()))
             .child(
                 div()
                     .flex()
@@ -403,7 +411,7 @@ impl<H: WebHost> Browser<H> {
                 .overflow_hidden()
                 .opacity(t)
                 .rounded(r(10.))
-                .text_size(px(13.))
+                .text_size(px(14.))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .child(favicon(image, &g.title, false, 16., theme))
                 .child(div().flex_1().min_w_0().truncate().child(g.title.clone()));
@@ -540,7 +548,7 @@ impl<H: WebHost> Browser<H> {
             .px(px(10.))
             .mx(px(2.5 * p))
             .rounded(r(10.))
-            .text_size(px(13.))
+            .text_size(px(14.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .bg(mix(fade(theme.hover, h), theme.glass_strong, sel))
             // Claude is driving it (PLAN-m4 D4: visible at all times).
@@ -856,7 +864,7 @@ impl<H: WebHost> Browser<H> {
                     .px(px(10.))
                     .rounded(r(10.))
                     .mx(px(2.5 * p))
-                    .text_size(px(13.))
+                    .text_size(px(14.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .bg(fade(theme.hover, h))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -898,7 +906,7 @@ impl<H: WebHost> Browser<H> {
             .when(!rows.is_empty() || error.is_some(), |d| {
                 d.child(
                     div()
-                        .pl(px(14.))
+                        .pl(px(16.))
                         .flex()
                         .flex_col()
                         .debug_selector(move || if top { "folder-rows" } else { "subfolder-rows" }.into())
@@ -985,7 +993,7 @@ impl<H: WebHost> Browser<H> {
                     .child(
                         div()
                             // Emoji are text: size stands in for scale.
-                            .text_size(px(13. * (1. + 0.12 * h - 0.15 * p)))
+                            .text_size(px(14. * (1. + 0.12 * h - 0.15 * p)))
                             .opacity(0.45 + 0.55 * sel.max(h * 0.6))
                             .child(SharedString::from(space.icon.clone())),
                     );
@@ -999,7 +1007,6 @@ impl<H: WebHost> Browser<H> {
             .left(px(self.motion.get(("space-pill", 0), Feel::Glide)))
             .size(px(SPACE_DOT))
             .rounded(r(6.))
-            .bg(theme.glass)
             .when(ascii(), |d| {
                 let bracket = |c: &'static str| div().absolute().top(px(3.)).text_color(theme.accent).child(c);
                 d.bg(theme.glass_strong)
@@ -1064,7 +1071,7 @@ fn stack(rows: Vec<(f32, AnyElement)>, lead: bool) -> Vec<AnyElement> {
         .collect()
 }
 
-const ROW_GAP: f32 = 6.;
+const ROW_GAP: f32 = 5.;
 
 fn favicon(
     image: Option<std::sync::Arc<gpui::Image>>,

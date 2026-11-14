@@ -60,7 +60,8 @@ mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
 pub(crate) use peek::PeekPage;
 
-pub(crate) const SIDEBAR_WIDTH: f32 = 258.0;
+/// Arc's sidebar width.
+pub(crate) const SIDEBAR_WIDTH: f32 = 228.0;
 /// The window-wide row with the traffic lights, navigation, URL and extensions.
 pub(crate) const HEADER_H: f32 = 38.0;
 /// Gap between the window edge and the page card (and the floating sidebar).
@@ -1137,7 +1138,7 @@ impl<H: WebHost> Browser<H> {
 pub(crate) type List = (SpaceId, Zone, Option<FolderId>);
 pub(crate) const FAVORITES: List = (SpaceId(0), Zone::Favorite, None);
 /// Width of a Space's emoji button in the bottom bar; the pill slides by it.
-pub(crate) const SPACE_DOT: f32 = 24.0;
+pub(crate) const SPACE_DOT: f32 = 30.0;
 
 struct Placement {
     list: List,
@@ -1301,7 +1302,21 @@ impl<H: WebHost> Render for Browser<H> {
             return self.register_actions(view, cx);
         }
         let theme = self.theme();
+        let left = self.side() == SidebarSide::Left;
+        let card = !self.docked() && (self.reveal.value() > 0.001 || self.reveal_hovered());
         let sidebar = self.render_sidebar(&theme, window, cx);
+        // A left sidebar runs the window's full height and brings the header's controls.
+        let sidebar = if left {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.render_sidebar_top(&theme, card, cx))
+                .child(div().flex_1().min_h_0().child(sidebar))
+                .into_any_element()
+        } else {
+            sidebar
+        };
         let page = self.render_page(&theme, window, cx);
         // One sidebar element: docked, or in the reveal card while that is out.
         let (docked, reveal) = if self.docked() {
@@ -1322,9 +1337,13 @@ impl<H: WebHost> Render for Browser<H> {
         // The sidebar brings its own padding; collapsed, the page gets the inset.
         let docked_w = self.sidebar_w.value().max(0.0);
         let edge = INSET * (1.0 - docked_w / SIDEBAR_WIDTH).clamp(0.0, 1.0);
-        let right = self.side() == SidebarSide::Right;
-
-        let header = self.render_header(&theme, cx);
+        let right = !left;
+        // The window-wide header: always with the sidebar on the right; with it on the left,
+        // only while it is collapsed, growing in as it folds away.
+        let header_t = if right { 1.0 } else { edge / INSET };
+        let header = (header_t > 0.0).then(|| {
+            div().flex_none().h(px(HEADER_H * header_t)).overflow_hidden().child(self.render_header(&theme, cx))
+        });
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
@@ -1352,7 +1371,7 @@ impl<H: WebHost> Render for Browser<H> {
             .text_size(px(13.))
             .when(crate::theme::ascii(), |d| d.font_family(crate::theme::MONO).text_size(px(12.5)))
             .children(mid_stop(&theme, 0.))
-            .child(header)
+            .children(header)
             .child(
                 div()
                     .flex_1()
@@ -1370,7 +1389,8 @@ impl<H: WebHost> Render for Browser<H> {
                             .overflow_hidden()
                             .children(docked),
                     )
-                    .child(page),
+                    // With no header above it, the page keeps the inset from the top edge.
+                    .child(div().flex_1().min_w_0().h_full().flex().flex_col().pt(px(INSET * (1.0 - header_t))).child(page)),
             )
             .children(reveal.into_iter().flatten())
             .children(peek)

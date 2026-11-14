@@ -570,7 +570,8 @@ impl<H: WebHost> Browser<H> {
         let width = self.reveal_w.value();
         let offset = INSET + (shown - 1.0) * (width + INSET * 2.0);
         let card = sidebar.map(|sidebar| {
-            edge(div().absolute().top(px(HEADER_H)).bottom(px(INSET)), offset)
+            // On the left it runs the full height, the traffic lights in its top row (Arc).
+            edge(div().absolute().top(px(if right { HEADER_H } else { INSET })).bottom(px(INSET)), offset)
                 .id("reveal-card")
                 .occlude()
                 .w(px(width))
@@ -579,8 +580,9 @@ impl<H: WebHost> Browser<H> {
                 .overflow_hidden()
                 .bg(gradient_fill(theme))
                 .children(crate::browser::mid_stop(theme, PAGE_RADIUS - 1.))
+                // Arc's light rim; the shadow sets it off the page.
                 .border_1()
-                .border_color(Hsla { a: 0.10, ..theme.ink })
+                .border_color(Hsla { a: 0.35, ..gpui::white() })
                 .shadow(vec![
                     shadow(Hsla { a: 0.20, ..theme.ink }, 12., 32.),
                     shadow(Hsla { a: 0.10, ..theme.ink }, 2., 6.),

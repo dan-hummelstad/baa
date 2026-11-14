@@ -318,6 +318,23 @@ fn an_update_card_shows_once_one_is_ready_and_drives_the_updater(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn a_left_sidebar_runs_the_full_height_with_the_toolbar(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.run_until_parked();
+    let toolbar = cx.debug_bounds("toolbar").expect("the sidebar brings the toolbar");
+    assert_eq!(f32::from(toolbar.top()), 0., "level with the traffic lights");
+    assert!(cx.debug_bounds("header").is_none(), "no window-wide header while docked");
+    cx.dispatch_action(ToggleSidebar);
+    // Frames only draw when asked under test: skip the fold.
+    b.update(cx, |b, cx| {
+        b.sidebar_w.snap(0.);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("header").is_some(), "collapsed, the header holds the controls");
+}
+
+#[gpui::test]
 fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
     use gpui::{point, px, Modifiers};
     let (b, cx) = browser(cx);
@@ -331,7 +348,7 @@ fn collapsed_sidebar_reveals_from_the_window_edge(cx: &mut TestAppContext) {
     );
 
     // The inset gap at the edge and a little past the card keep it out.
-    for x in [0., 5., 280.] {
+    for x in [0., 5., 250.] {
         cx.simulate_mouse_move(point(px(x), px(300.)), None, Modifiers::none());
         assert!(b.read_with(cx, |b, _| b.reveal_hovered()), "still out at x = {x}");
     }
@@ -932,8 +949,8 @@ fn an_opening_folder_pushes_today_down_with_it(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
         let (below, height) = gap(cx).expect("the folder's rows render");
-        assert_eq!(below, 20., "TODAY stays the same distance under the rows at t={t}");
-        assert!((height - 88. * t).abs() < 1.5, "the rows are {height}px tall at t={t}, not grown with the spring");
+        assert_eq!(below, 18., "TODAY stays the same distance under the rows at t={t}");
+        assert!((height - 82. * t).abs() < 1.5, "the rows are {height}px tall at t={t}, not grown with the spring");
     }
 }
 
@@ -1003,7 +1020,7 @@ fn a_subfolder_folds_with_its_parent(cx: &mut TestAppContext) {
             });
             cx.run_until_parked();
             let row = height("subfolder-row", cx).expect("the subfolder row is there mid-fold");
-            assert!((row - 38. * t).abs() < 1.5, "its row is {row}px at t={t}, open={open}");
+            assert!((row - 36. * t).abs() < 1.5, "its row is {row}px at t={t}, open={open}");
             let rows = height("subfolder-rows", cx).unwrap();
             assert!(rows < full * t + 1.5, "its tabs fold too: {rows}px of {full} at t={t}, open={open}");
         }
