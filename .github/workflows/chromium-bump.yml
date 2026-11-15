@@ -1,0 +1,62 @@
+# Daily: follow Chromium inside the milestone that the vendored Helium patches were written for.
+# Helium's patch set is frozen at chromium/HELIUM_RELEASE (user, 2026-11-15): nothing here takes
+# upstream Helium. If Chrome stable for macOS has a newer build of that milestone and its source
+# tarballs are published (chromium-next.sh), put that version on a bot branch and start the
+# chromium (release) and ci runs on it. The commit changes one line,
+# chromium/helium/chromium_version.txt. From there it runs itself: when that release build passes
+# its privacy and harness tests and ci is green, chromium.yml's land job puts the branch on main,
+# bumps the version and starts release.yml. No PR (trunk-based; Actions may not open one).
+# A patch that no longer applies fails the build's first phase: refresh it on the bot branch and
+# run chromium.yml release on it again.
+# A NEW milestone needs the patches rebased, which nothing here does. The run then fails, every
+# day, until a Helium release for that milestone is taken by hand (.github/helium-take.sh,
+# PLAN-chromium.md "Taking a Helium release"): the old milestone gets no more security fixes.
+name: chromium-bump
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: Bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          OLD=$(cat chromium/helium/chromium_version.txt)
+          rc=0
+          NEW=$(curl -fsS --proto '=https' 'https://versionhistory.googleapis.com/v1/chrome/platforms/mac_arm64/channels/stable/versions?pageSize=50' | .github/chromium-next.sh "$OLD") || rc=$?
+          [ "$rc" = 0 ] || [ "$rc" = 10 ] || exit "$rc"
+          # Said last, so a bump inside the old milestone still starts first.
+          milestone() {
+            [ "$rc" = 0 ] || { echo "::error::Chrome stable is on a newer milestone than ${OLD%%.*}, which gets no more security fixes. Helium's patches are frozen for ${OLD%%.*}: take a Helium release for the new milestone by hand (.github/helium-take.sh <helium-macos tag> on a branch, review, chromium.yml release, land)"; exit 1; }
+          }
+          if [ -z "$NEW" ]; then echo "Chromium $OLD is the newest build of its milestone with published tarballs"; milestone; exit 0; fi
+          B=bot/chromium-$NEW
+          # One bump at a time: an engine build takes a day or two, and a second would only race it.
+          if git ls-remote --heads origin 'bot/chromium-*' | grep -q .; then
+            echo "::warning::Chromium $NEW waits: a bot/chromium-* branch exists. Its chromium.yml release run lands it, or delete it to bump again"
+            milestone
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$B"
+          echo "$NEW" > chromium/helium/chromium_version.txt
+          git commit -qam "chromium: Chromium $NEW (Helium patches stay at $(cat chromium/HELIUM_RELEASE))"
+          git push origin "$B"
+          # A push by GITHUB_TOKEN starts no workflows, so start both here.
+          gh workflow run chromium.yml --ref "$B" -f mode=release
+          gh workflow run ci.yml --ref "$B"
+          milestone

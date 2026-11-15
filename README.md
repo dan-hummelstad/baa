@@ -17,8 +17,9 @@ motion, on baa's own Chromium build.
   Origin (Helium's) is built in, one per Space, also in ephemeral Spaces. Its default filter lists
   are bundled and update with the engine; a list you add in its settings downloads from that
   list's own site. Open "Chrome Web Store" or "Extensions" from the command bar (⌘T).
-- Targets: macOS (Apple silicon). Windows later, through the same `//baa`. Helium releases are
-  picked up by a weekly bot PR.
+- Targets: macOS (Apple silicon). Windows later, through the same `//baa`. Helium's patch
+  set is frozen at `chromium/HELIUM_RELEASE`. A daily bot follows Chromium's builds inside that
+  milestone by itself; a new milestone needs a Helium release taken by hand (`.github/helium-take.sh`).
 
 `PLAN.md` is the spec (the engine is in `PLAN-chromium.md`). `CLAUDE.md` holds the rules for agents
 working in this repo.
@@ -186,7 +187,7 @@ workflow changes do not run until a maintainer approves them.
 
 ### Cutting a release by hand
 
-Helium bumps release themselves (`chromium.yml`'s `land` job bumps the patch version, tags and starts
+Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch version, tags and starts
 `release.yml`). Do this for anything else:
 
 1. Commit the version bump on `main`: `version` in the root `Cargo.toml` plus the matching

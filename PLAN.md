@@ -18,8 +18,8 @@ browsers, profiles and tabs through a C ABI (`BaaCore.framework`, loaded by the 
 page element punches a rounded transparent hole in GPUI's frame and moves the view to its rect, so GPUI
 still draws chrome, popovers and the command bar over it, while Chromium renders and scrolls natively at
 the display's refresh rate. Each Space is one Chrome `Profile` under `--user-data-dir`, which gives
-per-space cookies / localStorage / IndexedDB / service workers and a real extension system. A weekly
-bot PR takes new Helium releases; a release chain builds the engine in CI. No baa.me backend exists in v1.
+per-space cookies / localStorage / IndexedDB / service workers and a real extension system. A daily
+bot takes Chromium builds of the current milestone (Helium's patches are frozen, `PLAN-chromium.md`); a release chain builds the engine in CI. No baa.me backend exists in v1.
 
 ```
 ┌───────────────────────────── baa (GPUI, Rust) ─────────────────────────────┐
@@ -43,7 +43,7 @@ bot PR takes new Helium releases; a release chain builds the engine in CI. No ba
 | Frame path | Native: Chromium presents its own layer; nothing is copied. | — | See `PLAN-chromium.md`. |
 | De-Googling | Helium's patch set in the build, plus baa's switches | Runtime stripping of stock CEF | See `PLAN-chromium.md`. |
 | Storage isolation | One Chrome `Profile` per Space (`space-<id>`) | — | See `PLAN-chromium.md` and §6. |
-| Updates | Weekly Helium bump PR, release chain builds the engine, `release.yml` ships a signed DMG; no in-app updater yet | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
+| Updates | Daily Chromium bump inside the milestone (Helium frozen), release chain builds the engine, `release.yml` ships a signed DMG; no in-app updater yet | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
 | Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. Per Space by default; "Add to All Spaces" (Settings → Extensions, or the install prompt's Space picker) installs one into every Space's profile through `baa_profile_copy_extension` (ABI 8, no second prompt). Each Space keeps its own copy's data and on/off; removing a shared one removes it everywhere. Deleting a Space names the extensions that go with it. |
 
 ---
@@ -107,7 +107,7 @@ baa/
 ├─ chromium/                      vendored Helium + helium-macos, baa's patches, //baa, local-build.sh
 ├─ vendor/gpui_apple/             gpui's macOS backend with the punch-hole surface
 ├─ xtask/                         cargo bundle, sign the DMG, notarize, privacy_test.py
-├─ .github/workflows/             ci.yml · chromium.yml · chromium-phase.yml · helium-bump.yml · release.yml
+├─ .github/workflows/             ci.yml · chromium.yml · chromium-phase.yml · chromium-bump.yml · release.yml
 ├─ assets/                        icons, fonts, default themes
 └─ PLAN.md
 ```
@@ -286,7 +286,7 @@ You said "macOS & Android" for later; I read that as **iOS & Android**, since ma
 Details: `PLAN-chromium-phase5.md` §6.
 - `ci.yml` (push/PR, manual): `scripts` (python tests) and `build` on `macos-15`: `cargo test --release --workspace`, `cargo clippy ... -D warnings`, then the privacy test (§5.3) on the release engine for this commit's `chromium/` tree, if one exists (else a notice). No Chromium tree is needed: `baa-web` loads BaaCore at run time.
 - `chromium.yml` (manual; `mode=dev` component build with the tree kept for 7 days, `mode=release` official build): chained phases (`chromium-phase.yml`), each compiling up to about 4.75 h. A release run uploads `baa-engine-<tree>` (`baa.app`, `baa Packaging`, `engine.json`, 90 days) and runs the `privacy` job on it.
-- `helium-bump.yml` (weekly): a newer `imputnet/helium-macos` release is subtree-pulled onto a bot branch, a PR is opened, and `chromium.yml` (release) and `ci.yml` start on it. No auto-merge.
+- `chromium-bump.yml` (daily): a newer Chrome stable build of the vendored milestone goes onto a bot branch as a one-line `chromium_version.txt` change, and `chromium.yml` (release) and `ci.yml` start on it; the `land` job releases it. Helium's patches are frozen (`PLAN-chromium.md`); a new milestone needs a Helium release taken by hand.
 - `release.yml` (tag `vX.Y.Z` = `Cargo.toml` version): takes `baa-engine-<tree>` of the tagged commit (fails with the command to run if none), adds the Rust binary, signs with Chromium's signer, runs the privacy test on the signed app, builds and notarises `baa-<ver>-macos-arm64.dmg`, writes `rust-credits.html` with `cargo about`, publishes a GitHub Release. Engine versions go in the release notes, not in the version.
 
 ---

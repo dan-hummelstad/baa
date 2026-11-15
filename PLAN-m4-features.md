@@ -120,7 +120,7 @@ Holes, hitboxes and click-to-focus are per page (`baa-web/src/core_host/slot.rs`
    toolbar icon or popup and can't be paused per site. `:300` and `:435` refuse changes and opening.
 2. **Frozen filter lists.** `chromium/patches/baa/remove-helium-services.patch` makes
    `ShouldAccessServices()` false, so `ShouldAccessUBlockAssets()` is false and uBO uses only its
-   bundled lists. Those refresh only when the Helium bump rebuilds the engine.
+   bundled lists. Those refresh only when a Helium release is taken, which is by hand since 2026-11-15 (Helium frozen).
 3. **Off in ephemeral Spaces.** Helium excludes uBO from "component extensions run in incognito"
    (`ublock-reconfigure-defaults.patch:116`).
 4. **Docs contradict this.** `README.md:15-16` tells users to install uBO Lite, which gives

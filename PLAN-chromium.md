@@ -161,12 +161,24 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
   at `~/chromium/helium-ref` for reading/grepping while builds run.
 - **Faster later:** Helium uses `sccache` in CI and NativeLink remote execution for dev; add a cache
   backend or a self-hosted runner if chained phases are too slow.
-- **Engine bumps run themselves to a release** (user, 2026-11-12): `helium-bump.yml` (weekly) takes
-  Helium's next release onto `bot/helium-<tag>` and starts `chromium.yml` (release) and `ci.yml` on it.
-  When that build passes its privacy and harness tests and `ci.yml` is green, `chromium.yml`'s `land` job
-  rebases the branch onto `main`, pushes it fast-forward, bumps the patch version, tags `v<version>` and
-  starts `release.yml`. No PR. A conflict or a baa patch that no longer applies stops it: commit the fix
+- **Helium's patches are frozen; Chromium bumps run themselves to a release** (user, 2026-11-15;
+  replaces the weekly Helium bump of 2026-11-12). Nothing takes upstream Helium by itself any more.
+  `chromium-bump.yml` (daily) asks Google's version history for Chrome stable on macOS and
+  `.github/chromium-next.sh` picks the newest build of the milestone in
+  `chromium/helium/chromium_version.txt` whose imputnet tarballs exist. It writes that one line on
+  `bot/chromium-<version>` and starts `chromium.yml` (release) and `ci.yml` on it. When that build
+  passes its privacy and harness tests and `ci.yml` is green, `chromium.yml`'s `land` job rebases the
+  branch onto `main`, pushes it fast-forward, bumps the patch version, tags `v<version>` and starts
+  `release.yml`. No PR. A patch that no longer applies stops it in the first phase: commit the refresh
   to the bot branch and run `chromium.yml` release on it again.
+  - Ceiling: only inside a milestone. Chromium moves to a new one about every four weeks and the old
+    one then gets no more security fixes. The frozen patches do not apply to it (Helium changed
+    `domain_substitution.list` and dozens of patches for 156 → 157), so `chromium-bump.yml` fails
+    every day from then on until someone takes a Helium release for the new milestone by hand
+    ("Taking a Helium release" above), reviews it and lands it.
+  - Still fetched from imputnet at build time: the Chromium source tarballs and their hashes
+    (`downloads.ini` `hash_url`), and the pinned, hashed `deps.ini` archives.
+  - Frozen with the patches: uBlock Origin's version and its bundled filter lists (`deps.ini`).
 - **Release:** `release.yml` on a `vX.Y.Z` tag uses exactly the `baa-engine-<T>` of the tagged
   commit's `chromium/` tree (equal tree hashes mean the same `baa.h` ABI and patches), adds the Rust
   binary, signs, notarises and publishes. No such artifact: the run fails and names the command.
