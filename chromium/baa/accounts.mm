@@ -92,7 +92,7 @@ class Watch : public network::mojom::CookieChangeListener {
 
   void Write(const net::CanonicalCookie& cookie) {
     std::string key = KeyOf(cookie);
-    echoes_[key] = cookie.Value();
+    echoes_.emplace(key, cookie.Value());
     net::CookieOptions options;
     options.set_include_httponly();
     options.set_same_site_cookie_context(
@@ -111,7 +111,7 @@ class Watch : public network::mojom::CookieChangeListener {
 
   void Delete(const net::CanonicalCookie& cookie) {
     std::string key = KeyOf(cookie);
-    echoes_[key] = std::string(kGone);
+    echoes_.emplace(key, std::string(kGone));
     Manager()->DeleteCanonicalCookie(
         cookie, base::BindOnce(
                     [](base::WeakPtr<Watch> self, std::string key, bool deleted) {
@@ -133,13 +133,14 @@ class Watch : public network::mojom::CookieChangeListener {
     // site refreshing a sign-in, not a new one.
     bool replacing = replaced_.erase(key) > 0;
     if (change.cause == net::CookieChangeCause::OVERWRITE) {
+      // The old cookie leaving; the INSERTED* that follows is the change, and
+      // the echo of a Write. It must not take a Delete's echo.
       replaced_.insert(key);
+      return;
     }
     bool deletion = net::CookieChangeCauseIsDeletion(change.cause);
     // Our own Write or Delete coming back: nothing a site did.
-    auto echo = echoes_.find(key);
-    if (echo != echoes_.end() && echo->second == (deletion ? std::string(kGone) : cookie.Value())) {
-      echoes_.erase(echo);
+    if (TakeEcho(key, deletion ? std::string(kGone) : cookie.Value())) {
       return;
     }
     if (change.cause == net::CookieChangeCause::INSERTED && !replacing &&
@@ -195,22 +196,35 @@ class Watch : public network::mojom::CookieChangeListener {
         base::BindOnce(&Watch::Bind, base::Unretained(this)));
   }
 
-  // ponytail: an echo whose write was refused, or that changed nothing (no
-  // event), stays until the next event for its cookie, which it then hides if
-  // the value matches. That change is then not copied; harmless, as the value
-  // it would copy is that same one.
-  void Forget(const std::string& key, const std::string& value) {
-    auto it = echoes_.find(key);
-    if (it != echoes_.end() && it->second == value) {
-      echoes_.erase(it);
+  // One echo per Write or Delete, not one per cookie: a site that refreshes a
+  // cookie twice before the first copy's event is back (GitHub's _gh_sess)
+  // has two on their way here. With one slot the first event matched nothing,
+  // was taken for the site's and copied on to every other profile; with three
+  // profiles those copies never stopped, and what waited on them ran the
+  // browser out of memory.
+  bool TakeEcho(const std::string& key, const std::string& value) {
+    auto [first, last] = echoes_.equal_range(key);
+    for (auto it = first; it != last; ++it) {
+      if (it->second == value) {
+        echoes_.erase(it);
+        return true;
+      }
     }
+    return false;
+  }
+
+  // A refused write has no event. ponytail: nor has an accepted Write of a
+  // cookie that expired on its way; its echo stays and hides one later change
+  // to that same value, which is then not copied. Harmless: the others have it.
+  void Forget(const std::string& key, const std::string& value) {
+    TakeEcho(key, value);
   }
 
   const raw_ptr<BaaProfile> owner_;
   const raw_ptr<Profile> profile_;
   uint32_t reported_ = 0;
-  // Cookies we just wrote (their value) or deleted (kGone), by KeyOf.
-  std::map<std::string, std::string> echoes_;
+  // Each Write (its value) and Delete (kGone) whose event is still to come, by KeyOf.
+  std::multimap<std::string, std::string> echoes_;
   std::set<std::string> replaced_;
   mojo::Receiver<network::mojom::CookieChangeListener> receiver_{this};
   base::WeakPtrFactory<Watch> weak_{this};
