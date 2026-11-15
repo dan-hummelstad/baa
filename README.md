@@ -186,24 +186,33 @@ workflow changes do not run until a maintainer approves them.
 
 ### Cutting a release by hand
 
-Helium bumps release themselves (`chromium.yml`'s `land` job bumps the patch version, tags and starts
-`release.yml`). Do this for anything else:
+Helium bumps release themselves: `chromium.yml`'s `land` job bumps the patch version, tags and
+starts `release.yml`. Do this for anything else.
 
-1. Commit the version bump on `main`: `version` in the root `Cargo.toml` plus the matching
-   `baa`, `baa-*` and `xtask` entries in `Cargo.lock`. Message: `baa X.Y.Z: <what changed>`.
-   Push to `main`.
-2. Check for an engine: the artifact `baa-engine-$(git rev-parse HEAD:chromium)` must exist in a
-   `workflow_dispatch` run of `chromium.yml`. A bump that leaves `chromium/` alone reuses the last one.
-3. If `chromium/` changed since the last release, build one, about an hour with a base run:
-   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id of an earlier successful
-   release run whose chromium-tree artifact has not expired>`. Without `base_run` it takes 1-2 days.
-   Wait for it: `gh run watch <id>`.
-4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
-   version or `release.yml` stops in its first job.
-5. Watch `release.yml` (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
-   and, when signing secrets exist, `appcast.xml`.
+1. **Pick the commit.** Normally `main`. For a hotfix without newer changes, branch from the commit
+   you want (`git switch -c release/X.Y.Z <sha>`); the tag does not have to be on `main`.
+2. **Bump the version** on that commit: `version` in the root `Cargo.toml`, and the `baa`, `baa-*`
+   and `xtask` entries in `Cargo.lock` (not third-party crates that share the number). Commit it as
+   `baa X.Y.Z: <what changed>`. A version is used once: if `main` already says X.Y.Z, use the next one.
+3. **Land it.** For `main`, push it (fast-forward only). For a hotfix branch, push the branch.
+4. **Find the engine.** `release.yml` needs the artifact `baa-engine-<tree>`, where
+   `<tree>` is `git rev-parse <commit>:chromium`, from a `workflow_dispatch` run of `chromium.yml`.
+   Look: `gh api "repos/dan-hummelstad/baa/actions/artifacts?name=baa-engine-<tree>" -q '.artifacts[]|[.workflow_run.id,.expired]|@tsv'`.
+   A bump that leaves `chromium/` alone, or a commit before any `chromium/` change, reuses an existing one.
+5. **If there is none, build it** (about an hour with a base run):
+   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id>`, where `<id>` is an earlier
+   successful release run whose `chromium-tree` artifact has not expired (`gh run list -w chromium.yml`).
+   Without `base_run` it takes 1-2 days. A new run waits for a running one. Watch it with
+   `gh run watch <id>`. Run it on a branch that holds the `chromium/` tree you are releasing.
+6. **Tag and push the tag:** `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the
+   `Cargo.toml` version or `release.yml` stops in its first job.
+7. **Check the result:** `gh run watch` on `release.yml`, then `gh release view vX.Y.Z`. It has the DMG,
+   `engine.json` and, when signing secrets exist, `appcast.xml`.
 
-If `release.yml` fails for want of an engine, do step 3 and re-run it (`gh run rerun <id>`).
+Releasing two versions in a row: tag the older one first and let it finish. The release created last is
+"latest", and the update feed follows "latest".
+
+If `release.yml` fails for want of an engine, do step 5 and re-run it (`gh run rerun <id>`).
 
 ## Layout
 
