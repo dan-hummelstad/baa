@@ -1,4 +1,4 @@
-# DevTools: docked front-end is a BaaTab (no tab_created), loads devtools://, closes silently; inspect; reopen at once; Chrome's own window
+# DevTools: docked front-end is a BaaTab (no tab_created), loads devtools://, shows its close button, closes silently; inspect; reopen at once; closed by its own button; Chrome's own window
 load https://example.com/
 waitload 20000
 activate
@@ -6,6 +6,9 @@ devtools 0
 sleep 4000
 use 1
 state
+# the front-end's own close button, which //baa un-hides
+eval (() => { const find = root => { for (const el of root.querySelectorAll("*")) { if (el.classList.contains("close-devtools")) return el; const inner = el.shadowRoot && find(el.shadowRoot); if (inner) return inner; } }; const b = find(document); console.log("baa-close-button " + (b ? "hidden=" + b.classList.contains("hidden") : "missing")); })()
+sleep 500
 # console message from the front-end reaches the app
 eval console.debug("baa:devtools-dock:left")
 sleep 1000
@@ -19,6 +22,9 @@ devtools 0
 sleep 4000
 use 3
 state
+# clicking it closes DevTools, and the app hears of it
+eval (() => { const find = root => { for (const el of root.querySelectorAll("*")) { if (el.classList.contains("close-devtools")) return el; const inner = el.shadowRoot && find(el.shadowRoot); if (inner) return inner; } }; find(document).click(); })()
+sleep 1500
 use 0
 devtools-window
 sleep 4000

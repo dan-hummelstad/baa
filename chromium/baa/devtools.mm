@@ -67,7 +67,6 @@ BaaTabId baa_tab_open_devtools(BaaTabId tab_id, bool inspect, int x, int y, int 
   }
   if (front) {
     baa::Fronts()[tab] = front;
-    baa::SetDockSide(front, side == BAA_DOCK_BOTTOM ? "bottom" : side == BAA_DOCK_LEFT ? "left" : "right");
   }
   return baa::IdOf(front);
 }

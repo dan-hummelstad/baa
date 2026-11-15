@@ -97,10 +97,8 @@ struct BaaTab : content::WebContentsObserver,
   bool background = false;
   bool user_gesture = false;
   base::WeakPtr<BaaTab> opener;
-  // A DevTools front-end baa docks: where, and the document the dock script last ran for.
+  // A DevTools front-end baa docks.
   bool devtools_front = false;
-  std::string dock_side = "right";
-  std::string docked_url;
   std::string icon_url;
   // Storage behind get_state's strings.
   std::string url_s, title_s, icon_s;
@@ -142,13 +140,13 @@ struct BaaTab : content::WebContentsObserver,
   }
 
   void TryReport(const GURL& url, bool force);
-  void DockDevtools();
+  void ShowDevtoolsClose();
 
   // content::WebContentsObserver:
   void DidStartLoading() override { SendState(); }
   void DidStopLoading() override {
     SendState();
-    DockDevtools();
+    ShowDevtoolsClose();
   }
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override { SendState(); }
   void TitleWasSet(content::NavigationEntry*) override { SendState(); }
@@ -192,7 +190,8 @@ struct BaaTab : content::WebContentsObserver,
       web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(init_script, base::NullCallback());
     }
   }
-  // The DevTools dock picker (see DockDevtools) reports through console.debug.
+  // A dock picker in the front-end would report through console.debug. It has none today
+  // (see ShowDevtoolsClose); the harness plays the message.
   void OnDidAddMessageToConsole(content::RenderFrameHost*,
                                 blink::mojom::ConsoleMessageLevel,
                                 const std::u16string& message,
@@ -379,47 +378,40 @@ void BaaTab::Attach(content::WebContents* wc) {
   }
 }
 
-// A DevTools front-end needs its dock picker switched on, and Chrome only does that for DevTools
-// docked in its own window. baa docks it, so each devtools:// document gets its half of the
-// script: the first load comes back with can_dock=true and the side preselected; after that a
-// change in the picker is reported as console "baa:devtools-dock:<side>". Chrome is always told
-// "not docked": SetIsDocked(true) would hit a DCHECK in a window that cannot dock.
-void BaaTab::DockDevtools() {
+// A docked DevTools front-end is closed with its own button. The front-end always makes one
+// and hides it in a window that cannot dock, which is what Chrome takes this one for; the
+// button itself works there (DevToolsWindow::CloseWindow closes the tab, and the app hears
+// tab_closed). The toolbar gets the item some time after the load, hence the retries.
+// ponytail: found by its class, through the shadow roots. Ceiling: a DevTools that renames
+// close-devtools has no button again, and devtools.expect fails first. Upgrade: dock for
+// real, the page inside the front-end's placeholder (setInspectedPageBounds); can_dock then
+// brings the button, the dock picker and device mode. Reloading the front-end into can_dock,
+// as the CEF build did, cannot work here: DevToolsWindow::OpenURLFromTab answers every
+// navigation of its front-end with a reload of the URL it has.
+void BaaTab::ShowDevtoolsClose() {
   content::WebContents* wc = web_contents();
-  if (!devtools_front || !wc || wc->IsLoading()) {
+  if (!devtools_front || !wc || wc->IsLoading() ||
+      !wc->GetLastCommittedURL().spec().starts_with("devtools://")) {
     return;
   }
-  std::string url = wc->GetLastCommittedURL().spec();
-  if (!url.starts_with("devtools://") || url == docked_url) {
-    return;
-  }
-  docked_url = url;
-  std::string script;
-  if (url.find("can_dock=true") == std::string::npos) {
-    script = R"((() => {
-  InspectorFrontendHost.setPreference('currentDockState', JSON.stringify(')" + dock_side + R"('));
-  const url = new URL(location.href);
-  url.searchParams.delete('dockSide');
-  url.searchParams.set('can_dock', 'true');
-  location.replace(url.href);
-})())";
-  } else {
-    script = R"((() => {
-  const host = InspectorFrontendHost;
-  if (host.__appDock) return;
-  host.__appDock = true;
-  const setIsDocked = host.setIsDocked.bind(host);
-  host.setIsDocked = (docked, done) => {
-    setIsDocked(false, done);
-    host.getPreferences(prefs => {
-      let side = 'right';
-      try { side = JSON.parse(prefs.currentDockState); } catch {}
-      console.debug('baa:devtools-dock:' + (docked ? side : 'undocked'));
-    });
+  static constexpr char16_t kScript[] = uR"((() => {
+  if (window.__baaClose) return;
+  window.__baaClose = true;
+  const find = root => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.classList.contains('close-devtools')) return el;
+      const inner = el.shadowRoot && find(el.shadowRoot);
+      if (inner) return inner;
+    }
   };
+  const show = tries => {
+    const button = find(document);
+    if (button) return button.classList.remove('hidden');
+    if (tries) setTimeout(show, 250, tries - 1);
+  };
+  show(80);
 })())";
-  }
-  wc->GetPrimaryMainFrame()->ExecuteJavaScript(base::UTF8ToUTF16(script), base::NullCallback());
+  wc->GetPrimaryMainFrame()->ExecuteJavaScript(kScript, base::NullCallback());
 }
 
 void BaaTab::Detach() {
@@ -790,10 +782,6 @@ namespace baa {
 
 uint64_t NextId() {
   return g_next_id++;
-}
-
-void SetDockSide(BaaTab* front, const char* side) {
-  front->dock_side = side;
 }
 
 uint64_t IdOf(BaaTab* tab) {

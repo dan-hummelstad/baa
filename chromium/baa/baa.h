@@ -640,9 +640,9 @@ BAA_EXPORT void baa_profile_set_color_schemes(BaaProfile* profile, int website,
 // DevTools for `tab`, to be docked by the caller: returns the front-end page
 // (place its state.view; baa_tab_close closes DevTools). With `inspect`,
 // selects the element at (x, y) in the page's view. `side` (BAA_DOCK_RIGHT/
-// BOTTOM/LEFT) preselects the front-end's dock menu; a change there comes back
-// as devtools_dock. Closes DevTools already open for the tab first. 0 if
-// Chrome refused.
+// BOTTOM/LEFT) is where the caller docks it; nothing reads it yet, because the
+// front-end has no dock menu of its own (tab.mm, ShowDevtoolsClose). Closes
+// DevTools already open for the tab first. 0 if Chrome refused.
 BAA_EXPORT BaaTabId baa_tab_open_devtools(BaaTabId tab, bool inspect, int x,
                                           int y, int side);
 

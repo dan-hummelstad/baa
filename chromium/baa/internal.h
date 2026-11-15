@@ -102,7 +102,6 @@ void AttachPermissions(content::WebContents* wc);
 // Back to Chrome's own prompt (a tab that left our windows).
 void RestoreChromePermissions(content::WebContents* wc);
 void ForgetDevtoolsOf(BaaTab* tab);
-void SetDockSide(BaaTab* front, const char* side);  // tab.mm: for the front's dock script
 
 // cdp.mm: the tab's DevTools session leaves its host (the tab closes, or its
 // contents are swapped). With `tell`, waiting commands get error replies and

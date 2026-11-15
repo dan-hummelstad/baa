@@ -1,8 +1,11 @@
-# docked DevTools: no tab_created, front-end loads devtools://, devtools_dock callback, inspect, reopen, Chrome's own window
+# docked DevTools: no tab_created, front-end loads devtools://, its close button shows and closes it, devtools_dock callback, inspect, reopen, Chrome's own window
 script: devtools.txt
 mustnot: baa: tab_created
 must: baa: devtools 0 -> 1
 must: baa: get_state ok=true url=devtools://devtools/bundled/devtools_app.html
+# without the button a docked DevTools can only be closed with the shortcut
+must: baa-close-button hidden=false
+must: baa: tab_closed tab=3 reason=0
 must: baa: devtools_dock tab=1 side=2
 must: baa: devtools 0 -> 2
 must: panel=elements

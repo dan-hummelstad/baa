@@ -30,7 +30,7 @@ impl<H: WebHost> SettingsView<H> {
             self.section("Tools"),
             self.row(
                 "devtools",
-                "Where Inspect and ⌥⌘I open DevTools. DevTools' own Dock side menu changes it too.",
+                "Where Inspect and ⌥⌘I open DevTools.",
                 self.segments("pref-devtools", docks, s.devtools_dock, |v, s| s.devtools_dock = v, cx),
             ),
             self.row("chrome_pages", "Chrome's own pages open in a tab.", pages.into_any_element()),
