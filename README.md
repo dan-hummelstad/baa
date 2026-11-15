@@ -184,6 +184,27 @@ CI trusts an artifact by the run that made it, never by its name: only a `workfl
 Settings → Actions → General → "Require approval for all outside collaborators" on, so a fork's
 workflow changes do not run until a maintainer approves them.
 
+### Cutting a release by hand
+
+Helium bumps release themselves (`chromium.yml`'s `land` job bumps the patch version, tags and starts
+`release.yml`). Do this for anything else:
+
+1. Commit the version bump on `main`: `version` in the root `Cargo.toml` plus the matching
+   `baa`, `baa-*` and `xtask` entries in `Cargo.lock`. Message: `baa X.Y.Z: <what changed>`.
+   Push to `main`.
+2. Check for an engine: the artifact `baa-engine-$(git rev-parse HEAD:chromium)` must exist in a
+   `workflow_dispatch` run of `chromium.yml`. A bump that leaves `chromium/` alone reuses the last one.
+3. If `chromium/` changed since the last release, build one, about an hour with a base run:
+   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id of an earlier successful
+   release run whose chromium-tree artifact has not expired>`. Without `base_run` it takes 1-2 days.
+   Wait for it: `gh run watch <id>`.
+4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
+   version or `release.yml` stops in its first job.
+5. Watch `release.yml` (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
+   and, when signing secrets exist, `appcast.xml`.
+
+If `release.yml` fails for want of an engine, do step 3 and re-run it (`gh run rerun <id>`).
+
 ## Layout
 
 | Path | Owns |
