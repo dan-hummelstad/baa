@@ -1,6 +1,6 @@
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -723,6 +723,11 @@
+@@ -723,6 +723,24 @@
  inline constexpr char kHeliumCrashReportingMode[] =
      "helium.crash_reporting.mode";
  
@@ -9,19 +9,56 @@
 +// neither fetched nor loaded. Local State; read once at startup.
 +inline constexpr char kBaaWidevineEnabled[] = "baa.widevine_enabled";
 +
++// baa: Settings > Privacy "Update extensions automatically". On, about every
++// five hours the ids and versions of the installed extensions go to Google's
++// Web Store update server, which answers with any newer version. Off, no
++// extension is checked. Local State; read at every check.
++inline constexpr char kBaaExtensionUpdatesEnabled[] =
++    "baa.extension_updates_enabled";
++
++// baa: Settings > Privacy, certificate revocation list updates. On, the CRLSet
++// component (Chrome's list of revoked certificates) is registered and fetched
++// from Google's update server; off, it is neither fetched nor loaded. Local
++// State; read once at startup.
++inline constexpr char kBaaCrlSetUpdatesEnabled[] = "baa.crlset_updates_enabled";
++
  // A boolean pref set to true if the Back button should be visible on the
  // toolbar.
  inline constexpr char kShowBackButton[] = "helium.browser.show_back_button";
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -1672,6 +1672,7 @@
+@@ -1672,6 +1672,9 @@
    registry->RegisterIntegerPref(
        prefs::kHeliumCrashReportingMode,
        static_cast<int>(helium::CrashReportingMode::kAsk));
 +  registry->RegisterBooleanPref(prefs::kBaaWidevineEnabled, false);
++  registry->RegisterBooleanPref(prefs::kBaaExtensionUpdatesEnabled, true);
++  registry->RegisterBooleanPref(prefs::kBaaCrlSetUpdatesEnabled, true);
    ChromeContentBrowserClient::RegisterLocalStatePrefs(registry);
  #if BUILDFLAG(CHROME_FOR_TESTING)
    chrome_for_testing::RegisterPrefs(registry);
+--- a/chrome/browser/extensions/chrome_extensions_browser_client.cc
++++ b/chrome/browser/extensions/chrome_extensions_browser_client.cc
+@@ -615,8 +615,17 @@
+ }
+ 
+ bool ChromeExtensionsBrowserClient::IsBackgroundUpdateAllowed() {
+-  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+-      ::switches::kDisableBackgroundNetworking);
++  // baa: the only gate of extension update checks. baa runs with
++  // --disable-background-networking, which still stops Chrome's other
++  // background requests; for extensions the user's setting decides
++  // (kBaaExtensionUpdatesEnabled), read here so a change applies at once.
++  PrefService* local =
++      g_browser_process ? g_browser_process->local_state() : nullptr;
++  if (!local) {
++    return !base::CommandLine::ForCurrentProcess()->HasSwitch(
++        ::switches::kDisableBackgroundNetworking);
++  }
++  return local->GetBoolean(prefs::kBaaExtensionUpdatesEnabled);
+ }
+ 
+ bool ChromeExtensionsBrowserClient::IsMinBrowserVersionSupported(
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
 @@ -147,7 +147,12 @@
@@ -38,6 +75,20 @@
  #endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
  
    RegisterSubresourceFilterComponent(cus);
+@@ -174,7 +179,12 @@
+   // CRLSetFetcher attempts to load a CRL set from either the local disk or
+   // network.
+   // For Chrome OS this registration is delayed until user login.
+-  component_updater::RegisterCRLSetComponent(cus);
++  // baa: off, no CRLSet is fetched and the copy on disk is not loaded either
++  // (registering is what loads it).
++  if (g_browser_process->local_state()->GetBoolean(
++          prefs::kBaaCrlSetUpdatesEnabled)) {
++    component_updater::RegisterCRLSetComponent(cus);
++  }
+ #endif  // !BUILDFLAG(IS_CHROMEOS)
+ 
+   RegisterOriginTrialsComponent(cus);
 --- a/chrome/browser/component_updater/chrome_component_updater_configurator.cc
 +++ b/chrome/browser/component_updater/chrome_component_updater_configurator.cc
 @@ -31,6 +31,7 @@
@@ -48,14 +99,17 @@
  #include "components/component_updater/component_updater_command_line_config_policy.h"
  #include "components/component_updater/configurator_impl.h"
  #include "components/helium_services/helium_services_helpers.h"
-@@ -185,12 +186,17 @@
+@@ -185,12 +186,20 @@
  
  std::vector<GURL> ChromeConfigurator::UpdateUrl() const {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-+  // baa: WidevineCdm is the only component left (component_installer.cc), and
-+  // it is registered only with this pref on (registration.cc). It comes from
-+  // Google's server, as in Chrome: there is no Helium proxy in baa.
-+  if (pref_service_->GetBoolean(prefs::kBaaWidevineEnabled)) {
++  // baa: Helium's allowlist (component_installer.cc) keeps every component
++  // but CRLSet and WidevineCdm from registering, and each of those registers
++  // only with its setting on (registration.cc). With either on, component
++  // update requests (the registered components' ids and versions) go to
++  // Google's update server, as in Chrome: there is no Helium proxy in baa.
++  if (pref_service_->GetBoolean(prefs::kBaaWidevineEnabled) ||
++      pref_service_->GetBoolean(prefs::kBaaCrlSetUpdatesEnabled)) {
 +    return {GURL("https://update.googleapis.com/service/update2/json")};
 +  }
    return {helium::GetComponentUpdateURL(GetProfilePrefs())};
@@ -68,15 +122,3 @@
  }
  
  std::string ChromeConfigurator::GetProdId() const {
---- a/components/component_updater/component_installer.cc
-+++ b/components/component_updater/component_installer.cc
-@@ -112,7 +112,8 @@
-       base::MakeFixedFlatSet<std::string_view>(
-           base::sorted_unique,
-           {
--              "hfnkpimlhhgieaddgfemjhofmfblmnib",  // CRLSet
-+              // baa: not CRLSet. The DRM setting (kBaaWidevineEnabled) sends
-+              // component requests to Google, and promises only Widevine.
-               "oimompecagnajdejgnnjijobebaeigek",  // WidevineCdm
-           });
-   auto registration_info = base::MakeRefCounted<RegistrationInfo>();
