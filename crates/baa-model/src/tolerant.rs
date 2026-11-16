@@ -42,13 +42,11 @@ tolerant! {
     PermissionState => PermissionState::Ask,
 }
 
-/// A list without the entries this build cannot read.
 pub(crate) fn known<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
     let values = Vec::<serde_json::Value>::deserialize(d)?;
     Ok(values.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
 }
 
-/// `None` for a value this build cannot read.
 pub(crate) fn known_or_none<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
     Ok(Option::<serde_json::Value>::deserialize(d)?.and_then(|v| serde_json::from_value(v).ok()))
 }
@@ -90,7 +88,6 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(back, expected);
-        // The data-carrying one, with an unknown variant that carries data too.
         assert_eq!(serde_json::from_value::<SecureDns>(json!({ "Doh3": "x" })).unwrap(), SecureDns::Automatic);
 
         let mut s = Session::first_run();
@@ -108,7 +105,6 @@ mod tests {
         assert_eq!(back.spaces[0].sidebar_side, Some(SidebarSide::Left));
         assert_eq!(back.folder(live).unwrap().live, None, "a plain folder");
 
-        // Known values still round-trip through the tolerant impls.
         let known = Settings { chrome: ChromeStyle::Ascii, web: WebPrefs { secure_dns: SecureDns::Custom("https://d/".into()), ..WebPrefs::default() }, ..Settings::default() };
         let v: Value = serde_json::to_value(&known).unwrap();
         assert_eq!(v["chrome"], "Ascii");

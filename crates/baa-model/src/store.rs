@@ -51,7 +51,6 @@ pub struct WindowFrame {
 }
 
 impl Store {
-    /// A database from a newer baa is refused before anything is written.
     pub fn open(path: impl AsRef<Path>) -> Result<Store> {
         Self::init(Connection::open(path)?)
     }
@@ -502,7 +501,6 @@ mod tests {
         assert_eq!(back.last_id, s.last_id);
     }
 
-    /// An empty directory of its own, removed when dropped.
     struct TempDir(std::path::PathBuf);
 
     impl TempDir {

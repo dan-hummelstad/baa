@@ -500,8 +500,6 @@ fn agent_peer(stream: UnixStream) -> AgentPeer {
     AgentPeer { stream, pid, path: path.map(|p| p.display().to_string()), ancestors }
 }
 
-/// `pid`, then its parent and so on up to six levels, nearest first; stops below launchd (pid 1)
-/// or at a lookup that fails.
 fn lineage(pid: Option<libc::pid_t>) -> Vec<i32> {
     std::iter::successors(pid, |p| parent_pid(*p)).take_while(|p| *p > 1).take(7).collect()
 }

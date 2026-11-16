@@ -16,7 +16,6 @@ use core_foundation::{
 
 const TITLE: &str = "baa could not start";
 
-/// Set once the first window is open: a panic after that is logged, not shown.
 static WINDOW_UP: AtomicBool = AtomicBool::new(false);
 static LOGGING: AtomicBool = AtomicBool::new(false);
 
@@ -24,7 +23,6 @@ pub fn window_up() {
     WINDOW_UP.store(true, Ordering::SeqCst);
 }
 
-/// The GUI launch's way out: stderr, the log, and an alert, then status 1.
 pub fn fail(what: &str, err: impl std::fmt::Display) -> ! {
     let message = format!("{what}: {err}");
     // The logger tees to stderr; before it starts, stderr is all there is.
@@ -98,7 +96,6 @@ fn log_path(data_dir: &Path, home: Option<&Path>, dev: bool) -> PathBuf {
     }
 }
 
-/// The previous run's log becomes `baa.log.1`, replacing the one before it.
 fn open_log(path: &Path) -> io::Result<File> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -126,8 +123,6 @@ impl io::Write for Tee {
     }
 }
 
-/// Logging to stderr and the log file, `info` unless `RUST_LOG` says otherwise. A log
-/// file that cannot be opened leaves stderr only.
 pub fn init_log(data_dir: &Path) {
     let mut builder = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -168,7 +163,6 @@ mod tests {
     fn the_log_goes_to_the_users_logs_only_for_an_installed_baa() {
         let (data, home) = (Path::new("/d/baa"), Path::new("/Users/u"));
         assert_eq!(log_path(data, Some(home), false), Path::new("/Users/u/Library/Logs/baa/baa.log"));
-        // A debug build or BAA_DATA_DIR.
         assert_eq!(log_path(data, Some(home), true), Path::new("/d/baa/baa.log"));
         assert_eq!(log_path(data, None, false), Path::new("/d/baa/baa.log"));
     }

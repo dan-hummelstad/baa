@@ -274,7 +274,6 @@ pub struct Browser<H: WebHost> {
     pub(crate) sidebar_w: Spring,
     /// An update is downloaded and waits for a restart (`update.rs`).
     pub(crate) update_ready: bool,
-    /// The saved session or settings were unreadable at launch, and the card saying so is up.
     pub(crate) data_notice: bool,
     /// The hover card's width, so opening the Library in it grows rather than jumps.
     reveal_w: Spring,

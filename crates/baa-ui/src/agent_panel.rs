@@ -1055,7 +1055,6 @@ mod tests {
     #[test]
     fn garbage_and_other_types_are_ignored() {
         assert!(parse_line("not json").is_empty());
-        // The init line is no transcript entry; `init_problem` reads it.
         assert!(parse_line(r#"{"type":"system","subtype":"init"}"#).is_empty());
     }
 
@@ -1078,7 +1077,6 @@ mod tests {
             assert!(why.starts_with("Stopped claude"), "{why}");
         }
         assert!(init(json!(["Bash", "Read"]), baa).unwrap().contains("Bash, Read"), "the notice names them");
-        // Only the init line is checked.
         assert_eq!(init_problem(&json!({"type": "assistant", "tools": ["Bash"]}).to_string()), None);
     }
 

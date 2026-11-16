@@ -57,7 +57,6 @@ pub struct Folder {
     #[serde(default)]
     pub parent: Option<FolderId>,
     /// Set: its tabs mirror this source (see [`Session::set_live_items`]); it holds no subfolders.
-    /// A source this build does not know loads as a plain folder.
     #[serde(default, deserialize_with = "known_or_none")]
     pub live: Option<LiveSource>,
 }

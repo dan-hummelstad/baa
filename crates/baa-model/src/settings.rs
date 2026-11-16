@@ -290,11 +290,7 @@ pub struct Settings {
     /// A red count of console errors on localhost tabs' rows (E4).
     pub console_badge: bool,
     pub claude: Claude,
-    /// Extensions check Google's Web Store update server for new versions. Nothing reads this
-    /// yet: the engine batch that adds extension updates will.
     pub extension_updates: bool,
-    /// The engine fetches the certificate revocation list (CRLSet) from Google's update server.
-    /// Nothing reads this yet: the engine batch that adds CRLSet updates will.
     pub revocation_updates: bool,
 }
 

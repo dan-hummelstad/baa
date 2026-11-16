@@ -214,12 +214,10 @@ fn a_chat_childs_client_goes_to_the_window_that_started_it(cx: &mut TestAppConte
     assert_eq!(owner(cx, &[101, 100, 50]), Some(b.read_with(bcx, |b, _| b.window.window_id())));
     assert_eq!(owner(cx, &[201, 200]), Some(p.read_with(pcx, |p, _| p.window.window_id())), "incognito windows have chats too");
     assert_eq!(owner(cx, &[300, 50]), front, "anyone else is served by the front window");
-    // A nonce that was used up or went with its child routes nothing.
     b.update(bcx, |b, _| b.agent.nonce = None);
     assert_eq!(owner(cx, &[101, 100]), front);
 }
 
-/// A served client and a chat child's nonce in `w`.
 fn claude_busy(w: &B, cx: &mut VisualTestContext) {
     w.update(cx, |w, cx| {
         let conn = w.agent_connect(None, None, None, vec![]);
@@ -258,7 +256,6 @@ fn report_a_problem_opens_the_issue_in_a_normal_window(cx: &mut TestAppContext) 
     let new = "https://github.com/dan-hummelstad/baa/issues/new?title=&body=";
     assert!(tabs(&a, cx).first().is_some_and(|u| u.starts_with(new)), "{:?}", tabs(&a, cx));
     assert!(tabs(&p, pcx).is_empty(), "never the incognito window, where nobody is signed in");
-    // A load the user asked for, not a page-supplied one.
     a.read_with(cx, |a, _| assert!(a.host.supplied.borrow().is_empty()));
 }
 
@@ -286,7 +283,6 @@ fn importing_is_refused_in_an_incognito_window(cx: &mut TestAppContext) {
     pcx.run_until_parked();
     assert_eq!(toast(&p, pcx).as_deref(), Some(crate::tools::IMPORT_PRIVATE));
 
-    // A normal window still imports.
     let before = counts(&a, cx);
     a.update_in(cx, |a, window, cx| a.import_arc_from(Some(sidebar.clone()), window, cx));
     assert_eq!(counts(&a, cx), (before.0 + 1, before.1 + 1));

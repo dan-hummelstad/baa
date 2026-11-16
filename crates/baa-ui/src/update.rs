@@ -1,5 +1,5 @@
 //! "New baa Version Available" at the foot of the sidebar (Arc's card), once the app
-//! shell's updater holds a downloaded update; the same card says when saved data was unreadable.
+//! shell's updater holds a downloaded update.
 
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context};
@@ -110,7 +110,6 @@ impl<H: WebHost> Browser<H> {
     }
 }
 
-/// A card at the foot of the sidebar (Arc's): a title strip over `body`, stacked.
 fn sidebar_card(id: &'static str, title: &'static str, body: impl IntoIterator<Item = AnyElement>) -> AnyElement {
     let card = div()
         .debug_selector(move || id.into())

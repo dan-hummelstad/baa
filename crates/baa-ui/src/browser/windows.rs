@@ -68,7 +68,6 @@ pub fn regular<H: WebHost>(cx: &App) -> Vec<WindowHandle<Browser<H>>> {
         .collect()
 }
 
-/// Every browser window, regular and incognito.
 pub(crate) fn browsers<H: WebHost>(cx: &App) -> Vec<WindowHandle<Browser<H>>> {
     cx.windows().into_iter().filter_map(|w| w.downcast::<Browser<H>>()).collect()
 }
@@ -83,8 +82,6 @@ pub fn front_window<H: WebHost>(cx: &App) -> Option<WindowHandle<Browser<H>>> {
         .or_else(|| all.first().copied())
 }
 
-/// The window that serves a client on agent.sock with these `ancestors`: the one whose chat
-/// child started it, which holds that child's nonce (incognito ones too), else the front window.
 pub fn agent_window<H: WebHost>(ancestors: &[i32], cx: &App) -> Option<WindowHandle<Browser<H>>> {
     browsers::<H>(cx)
         .into_iter()

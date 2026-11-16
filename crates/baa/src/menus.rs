@@ -24,7 +24,6 @@ pub fn set(cx: &mut App) {
     cx.set_menus(menus());
 }
 
-/// The standard About panel: name, version and icon from the app bundle.
 fn show_about_panel() {
     // SAFETY: on the main thread (an action); the pointer is used within this call only.
     unsafe {

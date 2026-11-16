@@ -96,14 +96,10 @@ fn same_secret(given: &str, expected: &str) -> bool {
     std::hint::black_box(a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y))) == 0
 }
 
-/// The chat child's one-time hello: used up by its first hello, gone when the child exits or
-/// on Stop.
 pub(crate) struct Nonce {
     pub secret: String,
     pub made: Instant,
-    /// The child it was made for: its hello must come from below it.
     pub child: Option<i32>,
-    /// That child was started in auto mode (`--permission-mode auto`).
     pub auto: bool,
 }
 
@@ -113,7 +109,6 @@ impl Nonce {
     }
 }
 
-/// A fresh nonce made `now`, for a child not started yet.
 pub(crate) fn issue_nonce(auto: bool, now: Instant) -> Nonce {
     Nonce { secret: secret(), made: now, child: None, auto }
 }
@@ -378,8 +373,6 @@ fn js_str(sel: &str) -> String {
     serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into())
 }
 
-/// `sel`'s centre after scrolling it into view, or `{ frame: true }` for a frame, embed or
-/// plugin, as `frame_at_script` finds by position.
 fn center_script(sel: &str) -> String {
     format!(
         r#"((sel) => {{
@@ -441,7 +434,6 @@ fn frame_at_script(x: f64, y: f64) -> String {
 
 const FRAME: &str = "baa does not let Claude click into frames, embedded content or plugins by position.";
 
-/// Ok only for a point the check saw and found outside any frame; anything else refuses.
 fn click_allowed(checked: &Result<Value, String>) -> Result<(), String> {
     match checked.as_ref().map_err(|e| e.clone())?.get("frame").and_then(Value::as_bool) {
         Some(false) => Ok(()),

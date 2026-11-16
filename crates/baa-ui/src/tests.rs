@@ -347,13 +347,11 @@ fn unreadable_saved_data_is_said_in_the_window_and_nothing_is_saved(cx: &mut Tes
     for key in ["session", "settings"] {
         let db = TempDb::new(&format!("unreadable-{key}"));
         Store::open(&db.0).unwrap().save_session(&baa_model::Session::first_run()).unwrap();
-        // A value the store cannot read as text.
         rusqlite::Connection::open(&db.0).unwrap().execute("INSERT OR REPLACE INTO kv VALUES (?1, X'00FF')", [key]).unwrap();
         let (b, cx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), Store::open(&db.0).unwrap(), window, cx));
         cx.run_until_parked();
         b.read_with(cx, |b, _| assert!(b.data_notice && b.store().is_none(), "{key}: this run saves nothing"));
         assert!(cx.debug_bounds("data-notice").is_some(), "{key}");
-        // It stays until dismissed.
         cx.executor().advance_clock(std::time::Duration::from_secs(60));
         cx.run_until_parked();
         let ok = cx.debug_bounds("data-notice-ok").expect("a button to dismiss it").center();

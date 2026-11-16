@@ -52,7 +52,6 @@ fn asks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> usize {
     b.read_with(cx, |b, _| b.agent.asks.len())
 }
 
-/// Answers each check waiting in `tab`'s page with `v`, oldest first; returns their scripts.
 fn answer_checks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, v: Value) -> Vec<String> {
     let pending = b.read_with(cx, |b, cx| std::mem::take(&mut *b.pages[&tab].0.read(cx).evals.borrow_mut()));
     let mut scripts = Vec::new();
@@ -65,7 +64,6 @@ fn answer_checks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab:
     scripts
 }
 
-/// The page finds nothing secret focused and no frame under the click.
 fn pass_checks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId) {
     answer_checks(b, cx, tab, json!({"secret": false, "frame": false}));
 }
@@ -212,7 +210,6 @@ fn type_refuses_secret_fields(cx: &mut TestAppContext) {
     assert_eq!(cdp(&b, cx, tab), ["insert_text hello"]);
 }
 
-/// The tab's page goes to `url` behind the session's back, as a redirect would.
 fn moved(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, url: &str) {
     b.read_with(cx, |b, cx| *b.pages[&tab].0.read(cx).url.borrow_mut() = url.into());
 }
@@ -228,7 +225,6 @@ fn press_key_refuses_secret_fields_and_a_page_that_moved_on(cx: &mut TestAppCont
     let (refused, text) = answer(&rx).unwrap();
     assert!(refused && text.contains("password"), "{text}");
 
-    // A check that did not come back clean refuses too.
     let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
     answer_checks(&b, cx, tab, Value::Null);
     assert!(answer(&rx).unwrap().0);
@@ -425,11 +421,8 @@ const CLAUDE: &str = "/Users/me/.local/share/claude/versions/2.1.318";
 const BAD: &str = "A process tried to connect to Claude with a bad token";
 const INIT: &str = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
 
-/// The chat's `claude` child; the `baa mcp` it starts is 4243.
 const CHILD: i32 = 4242;
 
-/// A new client on agent.sock, before its hello; pid, path and lineage as the app shell found
-/// them for a `baa mcp` that the chat's child started.
 fn connect(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> u64 {
     connect_from(b, cx, vec![4243, CHILD, 300])
 }
@@ -438,7 +431,6 @@ fn connect_from(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, ances
     b.update(cx, |b, _| b.agent_connect(None, Some(CHILD), Some(CLAUDE.into()), ancestors))
 }
 
-/// What spawn_agent keeps for its child: a fresh nonce, made now.
 fn issue_nonce(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> String {
     b.update(cx, |b, cx| {
         let nonce = crate::agent::issue_nonce(false, cx.background_executor().now());
@@ -609,7 +601,6 @@ fn the_nonce_pairs_only_a_process_below_the_chats_child(cx: &mut TestAppContext)
     let (b, cx) = browser(cx);
     enabled_with(&b, cx, "https://github.com/");
     let nonce = issue_nonce(&b, cx);
-    // Read from `baa mcp`'s environment by another process of the user's.
     for ancestors in [vec![], vec![9000], vec![9000, 9001, 1], vec![CHILD + 1]] {
         b.update(cx, |b, _| b.toast = None);
         let conn = connect_from(&b, cx, ancestors.clone());
@@ -619,12 +610,10 @@ fn the_nonce_pairs_only_a_process_below_the_chats_child(cx: &mut TestAppContext)
         assert_eq!(asks(&b, cx), 0);
     }
     assert!(b.read_with(cx, |b, _| b.agent.nonce.is_some()), "not used up: the real one still pairs");
-    // The child itself, or anything it started a few levels down.
     let conn = connect_from(&b, cx, vec![4244, 4243, CHILD, 300]);
     send(&b, cx, conn, &hello("nonce", &nonce));
     assert!(served(&b, cx, conn));
 
-    // A nonce with no child (it exited) pairs nothing.
     let nonce = issue_nonce(&b, cx);
     b.update(cx, |b, _| b.agent.nonce.as_mut().unwrap().child = None);
     let conn = connect(&b, cx);
