@@ -169,8 +169,18 @@ impl<H: WebHost> SettingsView<H> {
         }
         out.push(self.row(
             "widevine",
-            "Downloads Google's Widevine module from Google, so sites like Spotify can play. Netflix may still refuse. Applies when baa restarts.",
+            "Downloads Google's Widevine module from Google's update server, so sites like Spotify can play. Netflix may still refuse. Applies when baa restarts.",
             self.toggle("pref-widevine", s.web.widevine, |s, v| s.web.widevine = v, cx),
+        ));
+        out.push(self.row(
+            "extension_updates",
+            "On by default. About every five hours baa asks Google's Web Store update server for new versions, sending the ids and versions of your extensions. Off: extensions stay at the version you installed.",
+            self.toggle("pref-extension-updates", s.extension_updates, |s, v| s.extension_updates = v, cx),
+        ));
+        out.push(self.row(
+            "revocation_updates",
+            "On by default. Fetches the list of revoked HTTPS certificates from Google's update server. Off: a revoked certificate stays trusted until the next baa update. Applies after baa restarts.",
+            self.toggle("pref-revocation-updates", s.revocation_updates, |s, v| s.revocation_updates = v, cx),
         ));
         out.push(self.section("Data"));
         out.push(self.row(

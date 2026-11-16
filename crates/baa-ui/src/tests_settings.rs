@@ -656,3 +656,22 @@ fn baas_own_appearance_turns_auto_spaces_and_chrome_pages_dark_and_leaves_websit
         assert!(!b.host.skins.borrow().last().unwrap().2);
     });
 }
+
+#[gpui::test]
+fn update_rows_for_extensions_and_revocations_are_on_and_save(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Privacy");
+    assert!(b.read_with(&s, |b, _| b.settings.extension_updates && b.settings.revocation_updates));
+    click(&mut s, "pref-extension-updates");
+    click(&mut s, "pref-revocation-updates");
+    b.read_with(&s, |b, _| {
+        let saved = b.store().unwrap().load_settings().unwrap();
+        assert!(!saved.extension_updates && !saved.revocation_updates);
+        let applied = b.host.applied.borrow();
+        assert!(!applied.as_ref().unwrap().extension_updates && !applied.as_ref().unwrap().revocation_updates);
+    });
+    assert_eq!(rows::find("extension_updates").map(|r| r.tab), Some(Tab::Privacy));
+    assert_eq!(rows::find("revocation_updates").map(|r| r.tab), Some(Tab::Privacy));
+}
