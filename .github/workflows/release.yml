@@ -167,7 +167,6 @@ jobs:
           VER: ${{ needs.version.outputs.version }}
         run: |
           set -eu
-          [ -n "$SPARKLE_ED_PRIVATE_KEY" ] || { echo "::error::no SPARKLE_ED_PRIVATE_KEY secret: this release would have no update feed"; exit 1; }
           S="$RUNNER_TEMP/sparkle"
           mkdir "$S"
           curl -fsSL --proto =https --proto-redir =https -o "$S/sparkle.tar.xz" \

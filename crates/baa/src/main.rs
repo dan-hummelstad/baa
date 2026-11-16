@@ -506,20 +506,6 @@ fn lineage(pid: Option<libc::pid_t>) -> Vec<i32> {
     std::iter::successors(pid, |p| parent_pid(*p)).take_while(|p| *p > 1).take(7).collect()
 }
 
-#[test]
-fn a_lineage_climbs_from_the_process_itself() {
-    let me = std::process::id() as libc::pid_t;
-    // SAFETY: getppid has no preconditions.
-    let parent = unsafe { libc::getppid() };
-    let l = lineage(Some(me));
-    assert_eq!(l[0], me);
-    if parent > 1 {
-        assert_eq!(l[1], parent);
-    }
-    assert!(l.len() <= 7 && !l.contains(&1), "{l:?}");
-    assert!(lineage(None).is_empty());
-}
-
 /// `baa mcp`: a hello line (BAA_AGENT_NONCE from the chat panel's `claude`, else the pairing
 /// token from `claude mcp add -e BAA_AGENT_TOKEN=…`), then stdin to agent.sock and agent.sock to
 /// stdout, until either side closes.
@@ -610,8 +596,22 @@ impl AgentSocket {
 
 #[cfg(test)]
 mod tests {
-    use super::{coming_in, frame_fits};
+    use super::{coming_in, frame_fits, lineage};
     use baa_web::{DangerKind, Download, DownloadState};
+
+    #[test]
+    fn a_lineage_climbs_from_the_process_itself() {
+        let me = std::process::id() as libc::pid_t;
+        // SAFETY: getppid has no preconditions.
+        let parent = unsafe { libc::getppid() };
+        let l = lineage(Some(me));
+        assert_eq!(l[0], me);
+        if parent > 1 {
+            assert_eq!(l[1], parent);
+        }
+        assert!(l.len() <= 7 && !l.contains(&1), "{l:?}");
+        assert!(lineage(None).is_empty());
+    }
 
     #[test]
     fn a_quit_waits_only_for_files_that_are_coming_in() {
