@@ -51,5 +51,9 @@ for f in $(git ls-files '.github/*.yml' '.github/**/*.yml'); do
   ' "$f"
 done | grep . && fail=1
 
+# A release is Developer ID signed and notarised or it fails; there is no ad-hoc fallback (user, 2026-11-16).
+out=$(grep -nE -- '--sign -( |$)|-unsigned' .github/workflows/release.yml) && hit "$out
+  ^ ad-hoc or unsigned release path in release.yml: a missing signing secret must fail the release"
+
 [ $fail -eq 0 ] && echo "security-lint: ok"
 exit $fail

@@ -173,11 +173,10 @@ not survive that move, so sign in to sites once more.
 Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` uses the engine built from the
 tagged commit's `chromium/` tree (`baa-engine-<tree>`, built by `chromium.yml` with `mode=release`;
 it fails and says what to run if there is none), adds the Rust binary, signs with Chromium's signer,
-runs the privacy test, notarises a DMG and publishes a GitHub Release. Signing is optional for now:
-without the secrets the app is ad-hoc signed, the DMG is `baa-X.Y.Z-macos-arm64-unsigned.dmg`, nothing
-is notarised, and the release notes say to open it with right-click → Open. Adding these secrets
-switches to Developer ID + notarisation: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`,
-`MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`.
+runs the privacy test, notarises a DMG and publishes a GitHub Release with its Sparkle appcast. A
+release fails in its first step when any of these seven secrets is missing; there is no unsigned
+release: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`,
+`APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`.
 
 CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
 `chromium.yml` in this repository with a recorded `.sha256` counts (`.github/actions/engine/trusted.sh`).
@@ -202,7 +201,7 @@ Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch v
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
    version or `release.yml` stops in its first job.
 5. Watch `release.yml` (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
-   and, when signing secrets exist, `appcast.xml`.
+   and `appcast.xml`.
 
 If `release.yml` fails for want of an engine, do step 3 and re-run it (`gh run rerun <id>`).
 
