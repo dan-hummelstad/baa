@@ -23,8 +23,11 @@ use gpui::{
     MenuItem, Pixels, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 
+mod fatal;
 mod menus;
 mod updater;
+
+use fatal::fail;
 
 actions!(baa_app, [Quit, DockNewWindow, DockNewIncognito, DockShowLil, DockCloseLil]);
 
@@ -35,10 +38,8 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         return mcp_bridge(&data_dir());
     }
-    // First: loading the framework installs PartitionAlloc's malloc zone,
-    // which is only safe while the process has one thread.
-    let core = baa_web::CoreRuntime::load();
-    env_logger::init();
+    // So that a framework that will not load is an alert and a log line.
+    fatal::install_panic_hook();
     let dir = data_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         fail("creating the data directory", e);
@@ -46,8 +47,13 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let urls: Vec<String> = args.iter().skip(1).filter(|a| !a.starts_with('-')).cloned().collect();
 
-    // Before Chrome starts, so Chrome's own process singleton never meets a second instance.
+    // Before Chrome starts, so Chrome's own process singleton never meets a second instance;
+    // before the log, so a second launch does not rotate away the running one's log.
     let Some(_lock) = single_instance(&dir, &urls) else { return };
+    fatal::init_log(&dir);
+    // Nothing above starts a thread. Loading the framework installs PartitionAlloc's
+    // malloc zone, which is only safe while the process has one thread.
+    let core = baa_web::CoreRuntime::load();
 
     let chromium = dir.join("chromium");
     if let Err(e) = std::fs::create_dir_all(&chromium) {
@@ -145,6 +151,7 @@ fn launch<H: WebHost>(
     let window: WindowHandle<Browser<H>> = cx
         .open_window(options, |window, cx| cx.new(|cx| Browser::new(host, store, window, cx)))
         .unwrap_or_else(|e| fail("opening the window", e));
+    fatal::window_up();
     cx.activate(true);
     cx.set_global(Background { window: window.into(), downloads: downloads.clone(), quitting: false });
     window.update(cx, |_, window, cx| hide_when_last::<H>(window, cx)).ok();
@@ -386,11 +393,6 @@ fn frame_fits([x, y, w, h]: [f32; 4], (display_w, display_h): (f32, f32)) -> boo
         && (0. ..=display_h - 100.).contains(&y)
 }
 
-fn fail(what: &str, err: impl std::fmt::Display) -> ! {
-    eprintln!("baa: {what}: {err}");
-    std::process::exit(1);
-}
-
 /// `<app data>/baa`: chromium/, session database, keymap.json and the instance lock.
 /// A debug build is "baa Dev" (xtask gives its bundle its own id) so it runs beside an
 /// installed baa instead of handing off to it. `BAA_DATA_DIR` replaces it, for tests.
@@ -506,23 +508,23 @@ fn mcp_bridge(dir: &Path) {
     let (key, secret) = match (var("BAA_AGENT_NONCE"), var("BAA_AGENT_TOKEN")) {
         (Some(nonce), _) => ("nonce", nonce),
         (None, Some(token)) => ("token", token),
-        (None, None) => fail("BAA_AGENT_TOKEN is not set", "copy the command from Settings → Claude again"),
+        (None, None) => fatal::fail_quietly("BAA_AGENT_TOKEN is not set", "copy the command from Settings → Claude again"),
     };
     // Both are hex, so the line below is valid JSON without an encoder.
     if !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
-        fail("BAA_AGENT_TOKEN", "copy the command from Settings → Claude again");
+        fatal::fail_quietly("BAA_AGENT_TOKEN", "copy the command from Settings → Claude again");
     }
     let hello = format!(r#"{{"baa":"hello","{key}":"{secret}"}}"#);
     let stream = UnixStream::connect(dir.join("agent.sock"))
-        .unwrap_or_else(|e| fail("baa is not running, or Claude is off in Settings → Claude", e));
+        .unwrap_or_else(|e| fatal::fail_quietly("baa is not running, or Claude is off in Settings → Claude", e));
     // Talk only to our own app, whoever else could have put a socket there.
     if !is_me(&stream) {
-        fail("agent.sock", "it belongs to another user");
+        fatal::fail_quietly("agent.sock", "it belongs to another user");
     }
     if writeln!(&stream, "{hello}").is_err() {
-        fail("agent.sock", "baa closed the connection");
+        fatal::fail_quietly("agent.sock", "baa closed the connection");
     }
-    let mut to_app = stream.try_clone().unwrap_or_else(|e| fail("agent.sock", e));
+    let mut to_app = stream.try_clone().unwrap_or_else(|e| fatal::fail_quietly("agent.sock", e));
     std::thread::spawn(move || {
         let _ = std::io::copy(&mut std::io::stdin().lock(), &mut to_app);
         let _ = to_app.shutdown(std::net::Shutdown::Write);

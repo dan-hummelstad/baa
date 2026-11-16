@@ -558,6 +558,7 @@ dependencies = [
  "baa-ui",
  "baa-web",
  "block2 0.6.2",
+ "core-foundation 0.10.1",
  "env_logger",
  "futures",
  "gpui",
