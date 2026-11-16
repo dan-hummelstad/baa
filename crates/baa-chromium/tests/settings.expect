@@ -13,6 +13,12 @@ must: baa: prefi 1 enable_do_not_track 1 -> 0
 must: baa: prefs 1 enable_do_not_track x -> 0
 must: baa: prefb local hardware_acceleration_mode.enabled false -> 1
 must: baa: prefb local no.such true -> 0
+# widevine-opt-in.patch's settings exist (ABI 15)
+must: baa: prefb local baa\.extension_updates_enabled false -> 1
+must: baa: prefclear local baa\.extension_updates_enabled -> 1
+must: baa: prefb local baa\.crlset_updates_enabled false -> 1
+must: baa: prefclear local baa\.crlset_updates_enabled -> 1
+must: baa: prefb local baa\.widevine_enabled false -> 1
 must: baa: prefi 1 webkit.webprefs.default_font_size 24 -> 1
 must: title="24px"
 must: title="dnt:1"

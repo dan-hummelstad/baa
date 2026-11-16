@@ -17,7 +17,11 @@ ext {EXT_ID} access 3
 extensions
 ext {EXT_ID} disable
 extensions
+sleep 500
+# through Chrome's re-enable flow: no prompt for a user-disabled extension
 ext {EXT_ID} enable
+sleep 500
+extensions
 ext {EXT_ID} remove
 extensions
 quit

@@ -1,0 +1,24 @@
+# ABI 15 committed origin: a page, a blank popup its opener writes into, an error page; and
+# chrome://components lists CRLSet again (widevine-opt-in.patch)
+load https://example.com/
+waitload 20000
+activate
+state
+# a real click gives window.open a user gesture
+eval document.body.innerHTML='<a id=o href="#" style="position:fixed;inset:0;display:block;background:#fcc">open</a>';document.getElementById('o').onclick=(e)=>{e.preventDefault();window.open('about:blank').document.title='written'}
+sleep 500
+click 200 200
+sleep 3000
+use 1
+state
+use 0
+load http://baa-unreachable.invalid/
+sleep 5000
+state
+tab 1 chrome://components/
+sleep 4500
+use 2
+eval document.title='crlset:'+document.body.innerText.includes('CRLSet')
+sleep 500
+state
+quit

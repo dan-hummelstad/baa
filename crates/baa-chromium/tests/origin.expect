@@ -1,0 +1,9 @@
+# BaaTabState.committed_origin (ABI 15): a page's own origin; a blank popup's is its opener's; an
+# error page's is "null". chrome://components lists CRLSet (registered by widevine-opt-in.patch).
+script: origin.txt
+must: baa: get_state ok=true url=https://example\.com/ .* origin=https://example\.com$
+must: tab_created tab=1 opener=0 .* url=about:blank
+must: baa: get_state ok=true url=about:blank .* origin=https://example\.com$
+must: baa: get_state ok=true url=http://baa-unreachable\.invalid/ .* origin=null$
+must: baa: tab_state tab=0 url=http://baa-unreachable\.invalid/ .* origin=null$
+must: title="crlset:true"

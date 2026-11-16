@@ -6,6 +6,12 @@ prefi 1 enable_do_not_track 1
 prefs 1 enable_do_not_track x
 prefb local hardware_acceleration_mode.enabled false
 prefb local no.such true
+# ABI 15: the Local State settings of widevine-opt-in.patch are registered
+prefb local baa.extension_updates_enabled false
+prefclear local baa.extension_updates_enabled
+prefb local baa.crlset_updates_enabled false
+prefclear local baa.crlset_updates_enabled
+prefb local baa.widevine_enabled false
 prefi 1 webkit.webprefs.default_font_size 24
 load data:text/html,<p>x
 sleep 2000

@@ -10,6 +10,12 @@ must: baa: dialog tab=1 id=\d+ kind=0 message="from popup"
 must: ext \w{32} access 1 -> true
 must: site_access=1
 must: enabled=0
+# ABI 15: needs_approval is false for a user-disabled extension, which comes back at once
+must: baa: extension id=\w{32} name="baa probe" version=\S+ enabled=0 unpacked=\d needs_approval=0
+count: 4 baa: extension id=\w{32} name="baa probe" version=\S+ enabled=1 unpacked=\d needs_approval=0
+must: baa: ext \w{32} disable -> true
+must: baa: ext \w{32} enable -> true
+must: baa: extensions_changed
 must: baa: tab_closed tab=1
 # uBO (a component every Space has) stays after the probe goes
 must: baa: extensions count=1
