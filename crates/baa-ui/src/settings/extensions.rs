@@ -2,8 +2,9 @@
 //! a hidden Chrome page (baa-web), since baa's pages cannot run Chrome's.
 
 use baa_model::{Settings, SpaceId};
+use baa_web::ProfileId;
 use baa_web::{ExtensionChange, ExtensionInfo, SiteAccess, WebHost};
-use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString, Window};
 
 use super::{Item, SettingsView};
 use crate::{
@@ -61,9 +62,29 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    pub(crate) fn extensions_changed(&mut self, profiles: &[ProfileId], cx: &mut Context<Self>) {
+        let named = |b: &Self, space: SpaceId| b.session.space(space).is_some_and(|s| profiles.contains(&s.profile));
+        if let Some(space) = self.extensions_page.space.filter(|s| named(self, *s)) {
+            self.refresh_extensions_for(space, cx);
+        }
+        if let Some(active) = self.active_space().filter(|s| profiles.contains(&s.profile)) {
+            self.extensions = self.host.extensions(active.profile);
+            cx.notify();
+        }
+    }
+
+    fn needs_approval(&self, space: SpaceId, id: &str) -> bool {
+        self.extensions_page.space == Some(space)
+            && self.extensions_page.list.as_ref().is_some_and(|l| l.iter().any(|e| e.id == id && e.needs_approval))
+    }
+
     /// Shown at once; then Chrome's answer replaces it.
     pub(crate) fn change_extension(&mut self, space: SpaceId, id: &str, change: ExtensionChange, cx: &mut Context<Self>) {
         let Some(profile) = self.session.space(space).map(|s| s.profile) else { return };
+        // Its new permissions are shown first, through review_extension only.
+        if change == ExtensionChange::Enable(true) && self.needs_approval(space, id) {
+            return;
+        }
         if self.extensions_page.space == Some(space) {
             if let Some(list) = &mut self.extensions_page.list {
                 match change {
@@ -93,6 +114,37 @@ impl<H: WebHost> Browser<H> {
             }),
         );
         cx.notify();
+    }
+
+    /// Chrome shows the update's new permissions on the Space's active tab and enables the
+    /// extension only if the user accepts, so the Space comes forward with a tab first.
+    pub(crate) fn review_extension(&mut self, space: SpaceId, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((profile, tab)) = self.session.space(space).map(|s| (s.profile, s.active_tab)) else { return };
+        self.close_overlays(window, cx);
+        match tab {
+            Some(_) => self.activate_space(space, window, cx),
+            None => self.open_url_in(space, "about:blank", window, cx),
+        }
+        let this = cx.weak_entity();
+        // ponytail: asked at once; an engine that has not announced a tab just opened answers
+        // false, and the toast asks for a second try.
+        self.host.change_extension(
+            profile,
+            id,
+            ExtensionChange::Enable(true),
+            cx,
+            Box::new(move |shown, cx| {
+                cx.defer(move |cx| {
+                    this.update(cx, |this, cx| {
+                        if !shown {
+                            this.show_toast("Couldn't show the extension's new permissions. Try Review again.", cx);
+                        }
+                        this.refresh_extensions_for(space, cx);
+                    })
+                    .ok();
+                })
+            }),
+        );
     }
 
     /// Developer mode: an extension straight from a folder.
@@ -198,9 +250,25 @@ impl<H: WebHost> SettingsView<H> {
         let icon_path = b.extensions.iter().find(|x| x.id == e.id).and_then(|x| x.icon.clone());
         let shared = b.is_extension_shared(&e.id);
         let (id, on) = (e.id.clone(), e.enabled);
-        let switch = self.switch("ext-on", on).on_click(cx.listener(move |this, _, _, cx| {
-            this.browser.update(cx, |b, cx| b.change_extension(space, &id, ExtensionChange::Enable(!on), cx))
-        }));
+        let control = if e.needs_approval {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(8.))
+                .child(div().text_size(px(12.5)).text_color(surface::muted()).child("Needs new permissions"))
+                .child(self.button("ext-review", "Review", true, cx).on_click(cx.listener(move |this, _, _, cx| {
+                    let id = id.clone();
+                    this.in_browser(cx, true, move |b, w, cx| b.review_extension(space, &id, w, cx))
+                })))
+                .into_any_element()
+        } else {
+            self.switch("ext-on", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.browser.update(cx, |b, cx| b.change_extension(space, &id, ExtensionChange::Enable(!on), cx))
+                }))
+                .into_any_element()
+        };
         let mut actions: Vec<AnyElement> = Vec::new();
         let id = e.id.clone();
         actions.push(
@@ -335,7 +403,7 @@ impl<H: WebHost> SettingsView<H> {
                             )
                             .child(div().text_size(px(12.5)).text_color(surface::muted()).line_clamp(2).child(SharedString::from(e.description.clone()))),
                     )
-                    .child(switch),
+                    .child(control),
             )
             .child(div().flex().flex_wrap().gap(px(6.)).children(actions))
             .children(details)

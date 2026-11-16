@@ -252,6 +252,7 @@ pub struct Browser<H: WebHost> {
     _downloads: Subscription,
     _chrome_tabs: Option<Subscription>,
     _sign_ins: Option<Subscription>,
+    _extensions_changed: Option<Subscription>,
     /// Sign-ins waiting on "use this account in all Spaces?", oldest first; the first shows.
     pub(crate) account_asks: Vec<shared_accounts::AccountAsk>,
     pub(crate) extensions_page: crate::settings::ExtensionsPage,
@@ -401,6 +402,15 @@ impl<H: WebHost> Browser<H> {
                 this.signed_in(sign_ins, cx);
             }
         }));
+        // Read, not taken: each window keeps its own copy of a Space's extensions. Cleared once
+        // every window has seen it.
+        let extensions_changed = (!private).then(|| cx.observe(&host.extensions_changed(), |this: &mut Self, list, cx| {
+            let profiles = list.read(cx).0.clone();
+            if !profiles.is_empty() {
+                cx.defer(move |cx| list.update(cx, |list, _| list.0.clear()));
+                this.extensions_changed(&profiles, cx);
+            }
+        }));
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let sidebar_open = !session.sidebar_collapsed;        let mut this = Self {
             host,
@@ -479,6 +489,7 @@ impl<H: WebHost> Browser<H> {
             _downloads: downloads,
             _chrome_tabs: chrome_tabs,
             _sign_ins: sign_ins,
+            _extensions_changed: extensions_changed,
             account_asks: Vec::new(),
             extensions_page: Default::default(),
             skin_sent: None,

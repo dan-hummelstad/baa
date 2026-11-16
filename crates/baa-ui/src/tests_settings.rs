@@ -675,3 +675,53 @@ fn update_rows_for_extensions_and_revocations_are_on_and_save(cx: &mut TestAppCo
     assert_eq!(rows::find("extension_updates").map(|r| r.tab), Some(Tab::Privacy));
     assert_eq!(rows::find("revocation_updates").map(|r| r.tab), Some(Tab::Privacy));
 }
+
+#[gpui::test]
+fn an_extension_that_asks_for_more_is_reviewed_on_a_tab_never_switched_on(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let grown = ExtensionInfo { id: "grown".into(), name: "Grown".into(), needs_approval: true, ..Default::default() };
+    b.update(vcx, |b, _| *b.host.extension_details.borrow_mut() = vec![grown]);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Extensions");
+    assert!(drawn(&mut s, "ext-review") && !drawn(&mut s, "ext-on"));
+
+    let space = b.read_with(&s, |b, _| b.session.active_space().unwrap());
+    b.update(&mut s, |b, cx| b.change_extension(space, "grown", ExtensionChange::Enable(true), cx));
+    s.run_until_parked();
+    assert!(b.read_with(&s, |b, _| b.host.extension_changes.borrow().is_empty()), "the switch's path cannot enable it");
+
+    click(&mut s, "ext-review");
+    b.read_with(&s, |b, _| {
+        assert_eq!(*b.host.extension_changes.borrow(), [("grown".to_string(), ExtensionChange::Enable(true))]);
+        assert!(b.session.space(space).unwrap().active_tab.is_some(), "the Space has a tab to ask on");
+        assert!(b.toast.is_none());
+    });
+    b.read_with(&s, |b, _| b.host.change_result.set(false));
+    click(&mut s, "ext-review");
+    assert!(b.read_with(&s, |b, _| b.toast.as_ref().is_some_and(|t| t.contains("new permissions"))));
+}
+
+#[gpui::test]
+fn extensions_changed_rereads_that_spaces_list(cx: &mut TestAppContext) {
+    let (b, vcx) = browser(cx);
+    let h = open_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "tab:Extensions");
+    assert!(b.read_with(&s, |b, _| b.extensions_page.list.as_ref().is_some_and(|l| l.is_empty())));
+
+    // An update disabled it for more permissions.
+    let grown = ExtensionInfo { id: "grown".into(), name: "Grown".into(), needs_approval: true, ..Default::default() };
+    let (list, profile) = b.read_with(&s, |b, _| {
+        *b.host.extension_details.borrow_mut() = vec![grown];
+        (b.host.extensions_changed.clone(), b.active_space().unwrap().profile)
+    });
+    list.update(&mut s, |list, cx| {
+        list.0.push(profile);
+        cx.notify();
+    });
+    s.run_until_parked();
+    assert!(b.read_with(&s, |b, _| b.extensions_page.list.as_ref().is_some_and(|l| l.len() == 1 && l[0].needs_approval)));
+    assert!(list.read_with(&s, |list, _| list.0.is_empty()), "cleared once seen");
+    assert!(drawn(&mut s, "ext-review"));
+}
