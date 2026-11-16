@@ -193,3 +193,37 @@ fn a_swipe_with_one_space_springs_back(cx: &mut TestAppContext) {
         });
     }
 }
+
+#[gpui::test]
+fn importing_is_refused_in_an_incognito_window(cx: &mut TestAppContext) {
+    use baa_model::import::{Source, SourceKind};
+    let (a, cx) = browser(cx);
+    let dir = std::env::temp_dir().join(format!("baa-ui-import-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sidebar = dir.join("StorableSidebar.json");
+    std::fs::write(&sidebar, r#"{"sidebar":{"containers":[{"spaces":[{"title":"Work","containerIDs":[]}]}]}}"#).unwrap();
+    let source = || Source { name: "Chrome", history: dir.join("no-such-History"), kind: SourceKind::Chromium };
+    let counts = |b: &B, cx: &mut VisualTestContext| b.read_with(cx, |b, _| (b.session().spaces().len(), b.session().profiles().len()));
+    let toast = |b: &B, cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.toast.as_ref().map(|t| t.to_string()));
+
+    let (p, pcx) = open(cx, true);
+    let before = counts(&p, pcx);
+    p.update_in(pcx, |p, window, cx| p.import_arc_from(Some(sidebar.clone()), window, cx));
+    assert_eq!(counts(&p, pcx), before, "no Space and no profile from the incognito counter");
+    assert_eq!(toast(&p, pcx).as_deref(), Some(crate::tools::IMPORT_PRIVATE));
+    p.update(pcx, |p, cx| {
+        p.toast = None;
+        p.import_history(source(), cx);
+    });
+    pcx.run_until_parked();
+    assert_eq!(toast(&p, pcx).as_deref(), Some(crate::tools::IMPORT_PRIVATE));
+
+    // A normal window still imports.
+    let before = counts(&a, cx);
+    a.update_in(cx, |a, window, cx| a.import_arc_from(Some(sidebar.clone()), window, cx));
+    assert_eq!(counts(&a, cx), (before.0 + 1, before.1 + 1));
+    a.update(cx, |a, cx| a.import_history(source(), cx));
+    cx.run_until_parked();
+    assert_eq!(toast(&a, cx).as_deref(), Some("Couldn't import history from Chrome"), "it ran, and found no file");
+    std::fs::remove_dir_all(&dir).ok();
+}

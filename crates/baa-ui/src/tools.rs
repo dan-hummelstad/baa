@@ -16,6 +16,7 @@ use crate::{
 const TOAST_FOR: std::time::Duration = std::time::Duration::from_millis(2600);
 /// A toast with Undo stays longer, so there is time to reach it.
 const UNDO_FOR: std::time::Duration = std::time::Duration::from_secs(6);
+pub(crate) const IMPORT_PRIVATE: &str = "Import from a normal window";
 
 /// The page's main text in a clean column; run again (or reload) to go back.
 // ponytail: a "most paragraph text wins" heuristic, not Readability.js. Pages
@@ -212,7 +213,16 @@ impl<H: WebHost> Browser<H> {
 
     /// Arc's Spaces, pinned tabs, folders and favourites, as new Spaces.
     pub(crate) fn import_arc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let arc = import::arc_sidebar_path().ok_or_else(|| "Arc's data was not found".into()).and_then(|p| import::read_arc_sidebar(&p));
+        self.import_arc_from(import::arc_sidebar_path(), window, cx);
+    }
+
+    pub(crate) fn import_arc_from(&mut self, path: Option<std::path::PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        // An incognito session numbers profiles on its own and deletes them when it closes: an
+        // imported Space's profile there could be a regular Space's.
+        if self.private {
+            return self.show_toast(IMPORT_PRIVATE, cx);
+        }
+        let arc = path.ok_or_else(|| "Arc's data was not found".into()).and_then(|p| import::read_arc_sidebar(&p));
         let arc = match arc {
             Ok(arc) => arc,
             Err(e) => {
@@ -243,6 +253,10 @@ impl<H: WebHost> Browser<H> {
 
     /// Another browser's history, read off the main thread.
     pub(crate) fn import_history(&mut self, source: import::Source, cx: &mut Context<Self>) {
+        // An incognito window keeps nothing to import into.
+        if self.private {
+            return self.show_toast(IMPORT_PRIVATE, cx);
+        }
         let name = source.name;
         let read = cx.background_spawn(async move { import::read_history(&source).map_err(|e| e.to_string()) });
         cx.spawn(async move |this, cx| {
