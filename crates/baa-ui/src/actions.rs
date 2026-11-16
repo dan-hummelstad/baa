@@ -56,6 +56,8 @@ gpui::actions!(
         ResponsiveView,
         ManageExtensions,
         KeyboardShortcuts,
+        AboutBaa,
+        ReportProblem,
     ]
 );
 

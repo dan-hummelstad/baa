@@ -266,6 +266,20 @@ fn turning_claude_off_stops_it_in_every_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn report_a_problem_opens_the_issue_in_a_normal_window(cx: &mut TestAppContext) {
+    let (a, cx) = browser(cx);
+    let (p, pcx) = open(cx, true);
+    pcx.dispatch_action(ReportProblem);
+    pcx.run_until_parked();
+    cx.run_until_parked();
+    let new = "https://github.com/dan-hummelstad/baa/issues/new?title=&body=";
+    assert!(tabs(&a, cx).first().is_some_and(|u| u.starts_with(new)), "{:?}", tabs(&a, cx));
+    assert!(tabs(&p, pcx).is_empty(), "never the incognito window, where nobody is signed in");
+    // A load the user asked for, not a page-supplied one.
+    a.read_with(cx, |a, _| assert!(a.host.supplied.borrow().is_empty()));
+}
+
+#[gpui::test]
 fn importing_is_refused_in_an_incognito_window(cx: &mut TestAppContext) {
     use baa_model::import::{Source, SourceKind};
     let (a, cx) = browser(cx);

@@ -81,7 +81,64 @@ fn language() -> String {
         .unwrap_or_else(|| "en".into())
 }
 
+const CHROMIUM_VERSION: &str = include_str!("../../../chromium/helium/chromium_version.txt");
+const HELIUM_RELEASE: &str = include_str!("../../../chromium/HELIUM_RELEASE");
+
+/// Help → Report a Problem's issue text: versions and where the log is, nothing from the
+/// user's browsing; they read and send it themselves.
+pub(crate) fn problem_body(macos: &str) -> String {
+    format!(
+        "Describe what happened and what you expected:\n\n\n---\nbaa {}\nChromium {} (Helium {})\nmacOS {}\n\nbaa's log is at ~/Library/Logs/baa/baa.log. Read it before attaching it: it can name sites you visited.\n",
+        env!("CARGO_PKG_VERSION"),
+        CHROMIUM_VERSION.trim(),
+        HELIUM_RELEASE.trim(),
+        macos.trim(),
+    )
+}
+
+pub(crate) fn problem_url(macos: &str) -> String {
+    format!("https://github.com/dan-hummelstad/baa/issues/new?title=&body={}", encode(&problem_body(macos)))
+}
+
+fn macos_version() -> String {
+    std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// The standard About panel: name, version and icon from the app bundle.
+pub(crate) fn show_about_panel() {
+    #[cfg(target_os = "macos")]
+    // SAFETY: on the main thread (an action); the pointer is used within this call only.
+    unsafe {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if !app.is_null() {
+            let _: () = msg_send![app, orderFrontStandardAboutPanel: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+}
+
 impl<H: WebHost> Browser<H> {
+    /// Opens the prefilled issue in a tab of the front normal window, where the user is signed
+    /// in to GitHub; baa wrote the URL, so it is the user's own load.
+    pub(crate) fn report_problem(&mut self, cx: &mut Context<Self>) {
+        let url = problem_url(&macos_version());
+        cx.defer(move |cx| {
+            let Some(w) = crate::front_window::<H>(cx).or_else(|| crate::open_window::<H>(false, cx)) else { return };
+            w.update(cx, |b, window, cx| {
+                b.close_overlays(window, cx);
+                b.open_url(&url, window, cx);
+                window.activate_window();
+            })
+            .ok();
+        });
+    }
+
     pub(crate) fn show_toast(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.toast_for(text, TOAST_FOR, cx);
     }
@@ -297,6 +354,20 @@ mod tests {
     #[test]
     fn urls_are_encoded_for_a_query() {
         assert_eq!(encode("https://a.example/?q=1 2"), "https%3A%2F%2Fa.example%2F%3Fq%3D1%202");
+    }
+
+    #[test]
+    fn a_problem_report_names_versions_and_the_log() {
+        let body = problem_body("15.1\n");
+        assert!(body.contains(&format!("baa {}\n", env!("CARGO_PKG_VERSION"))));
+        assert!(body.contains(&format!("Chromium {} (Helium {})\n", CHROMIUM_VERSION.trim(), HELIUM_RELEASE.trim())));
+        assert!(!CHROMIUM_VERSION.trim().is_empty() && !HELIUM_RELEASE.trim().is_empty());
+        assert!(body.contains("macOS 15.1\n") && body.contains("~/Library/Logs/baa/baa.log") && body.contains("Read it before attaching"));
+        let url = problem_url("15.1");
+        let (base, body) = url.split_once("&body=").unwrap();
+        assert_eq!(base, "https://github.com/dan-hummelstad/baa/issues/new?title=");
+        assert!(body.bytes().all(|b| b.is_ascii_alphanumeric() || b"%-._~".contains(&b)), "{body}");
+        assert!(body.contains("%0A") && !body.contains('&'));
     }
 
 }

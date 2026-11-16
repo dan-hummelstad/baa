@@ -43,6 +43,8 @@ fn menus() -> Vec<Menu> {
     let edit = |name: &str, os| MenuItem::os_action(name.to_string(), EditOs, os);
     vec![
         Menu::new("baa").items([
+            a("About baa", AboutBaa),
+            Sep,
             a("Settings…", OpenSettings),
             Sep,
             MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -126,6 +128,6 @@ fn menus() -> Vec<Menu> {
             a("Minimize", Minimize),
             a("Zoom", Zoom),
         ]),
-        Menu::new("Help").items([a("Keyboard Shortcuts", KeyboardShortcuts)]),
+        Menu::new("Help").items([a("Keyboard Shortcuts", KeyboardShortcuts), a("Report a Problem…", ReportProblem)]),
     ]
 }
