@@ -1,5 +1,5 @@
 //! "New baa Version Available" at the foot of the sidebar (Arc's card), once the app
-//! shell's updater holds a downloaded update.
+//! shell's updater holds a downloaded update; the same card says when saved data was unreadable.
 
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context};
@@ -86,32 +86,57 @@ impl<H: WebHost> Browser<H> {
                     (updater.install)();
                 }
             }));
-        let card = div()
-            .debug_selector(|| "update-card".into())
-            .flex_none()
-            .mb(px(6.))
-            .flex()
-            .flex_col()
-            .rounded(r(12.))
-            .overflow_hidden()
-            .bg(surface::bg())
-            .border_1()
-            .border_color(surface::border())
-            .text_color(surface::ink())
-            .child(
-                div()
-                    .h(px(30.))
-                    // gpui clips children to the box, not to its rounded corners.
-                    .rounded_t(r(11.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(surface::key())
-                    .text_size(px(12.5))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child("New baa Version Available"),
-            )
-            .child(div().p(px(8.)).flex().flex_col().gap(px(8.)).child(check).child(install));
-        Some(drop_in(card, "update-card").into_any_element())
+        Some(sidebar_card("update-card", "New baa Version Available", [check.into_any_element(), install.into_any_element()]))
     }
+
+    /// The saved session or settings could not be read, so this run saves nothing; shown until
+    /// dismissed, as the log is not where anyone looks.
+    pub(crate) fn render_data_notice(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.data_notice {
+            return None;
+        }
+        let text = div()
+            .text_size(px(12.5))
+            .text_color(surface::muted())
+            .child("baa could not read its saved session or settings. Changes in this session will not be saved.");
+        let ok = crate::prompts::button(("data-notice-ok", 0), "OK", true, theme, self, cx)
+            .debug_selector(|| "data-notice-ok".into())
+            .justify_center()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.data_notice = false;
+                cx.notify();
+            }));
+        Some(sidebar_card("data-notice", "Saved Data Unreadable", [text.into_any_element(), ok.into_any_element()]))
+    }
+}
+
+/// A card at the foot of the sidebar (Arc's): a title strip over `body`, stacked.
+fn sidebar_card(id: &'static str, title: &'static str, body: impl IntoIterator<Item = AnyElement>) -> AnyElement {
+    let card = div()
+        .debug_selector(move || id.into())
+        .flex_none()
+        .mb(px(6.))
+        .flex()
+        .flex_col()
+        .rounded(r(12.))
+        .overflow_hidden()
+        .bg(surface::bg())
+        .border_1()
+        .border_color(surface::border())
+        .text_color(surface::ink())
+        .child(
+            div()
+                .h(px(30.))
+                // gpui clips children to the box, not to its rounded corners.
+                .rounded_t(r(11.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(surface::key())
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title),
+        )
+        .child(div().p(px(8.)).flex().flex_col().gap(px(8.)).children(body));
+    drop_in(card, id).into_any_element()
 }

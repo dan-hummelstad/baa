@@ -608,6 +608,7 @@ dependencies = [
  "log",
  "objc2 0.6.5",
  "raw-window-handle",
+ "rusqlite",
  "serde",
  "serde_json",
  "url",

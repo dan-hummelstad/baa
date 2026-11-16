@@ -340,6 +340,34 @@ fn an_update_card_shows_once_one_is_ready_and_drives_the_updater(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn unreadable_saved_data_is_said_in_the_window_and_nothing_is_saved(cx: &mut TestAppContext) {
+    cx.update(crate::init);
+    let readable = TempDb::new("readable");
+    Store::open(&readable.0).unwrap();
+    for key in ["session", "settings"] {
+        let db = TempDb::new(&format!("unreadable-{key}"));
+        Store::open(&db.0).unwrap().save_session(&baa_model::Session::first_run()).unwrap();
+        // A value the store cannot read as text.
+        rusqlite::Connection::open(&db.0).unwrap().execute("INSERT OR REPLACE INTO kv VALUES (?1, X'00FF')", [key]).unwrap();
+        let (b, cx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), Store::open(&db.0).unwrap(), window, cx));
+        cx.run_until_parked();
+        b.read_with(cx, |b, _| assert!(b.data_notice && b.store().is_none(), "{key}: this run saves nothing"));
+        assert!(cx.debug_bounds("data-notice").is_some(), "{key}");
+        // It stays until dismissed.
+        cx.executor().advance_clock(std::time::Duration::from_secs(60));
+        cx.run_until_parked();
+        let ok = cx.debug_bounds("data-notice-ok").expect("a button to dismiss it").center();
+        cx.simulate_click(ok, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("data-notice").is_none(), "{key}");
+    }
+    let (b, cx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), Store::open(&readable.0).unwrap(), window, cx));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert!(!b.data_notice && b.store().is_some()));
+    assert!(cx.debug_bounds("data-notice").is_none());
+}
+
+#[gpui::test]
 fn a_left_sidebar_runs_the_full_height_with_the_traffic_lights(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.run_until_parked();

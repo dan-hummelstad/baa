@@ -22,6 +22,8 @@ image = { version = "0.25", default-features = false }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# Already in the graph via baa-model: a test writes a value baa.db cannot read back.
+rusqlite.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Already in the graph via baa-web: the traffic lights' hover areas after a move (browser.rs).

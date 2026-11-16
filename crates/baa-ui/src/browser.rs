@@ -274,6 +274,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) sidebar_w: Spring,
     /// An update is downloaded and waits for a restart (`update.rs`).
     pub(crate) update_ready: bool,
+    /// The saved session or settings were unreadable at launch, and the card saying so is up.
+    pub(crate) data_notice: bool,
     /// The hover card's width, so opening the Library in it grows rather than jumps.
     reveal_w: Spring,
     /// Where the traffic lights were last put (`lights_at`), so AppKit is told only on a change.
@@ -298,10 +300,15 @@ pub struct Browser<H: WebHost> {
 
 impl<H: WebHost> Browser<H> {
     pub fn new(host: H, store: Store, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut settings = store.load_settings().unwrap_or_else(|e| {
-            log::error!("settings unreadable, using defaults: {e}");
-            Default::default()
-        });
+        // Unreadable settings are not overwritten with defaults: like an unreadable session, the
+        // run goes on without saving anything, and the sidebar says so.
+        let (mut settings, settings_read) = match store.load_settings() {
+            Ok(s) => (s, true),
+            Err(e) => {
+                log::error!("settings unreadable, using defaults; this run will not be saved: {e}");
+                (Default::default(), false)
+            }
+        };
         // Claude was turned on before pairing existed: give it a token now, as turning it on would.
         if settings.claude.enabled && settings.claude.token.is_empty() {
             settings.claude.token = crate::agent::secret();
@@ -310,12 +317,13 @@ impl<H: WebHost> Browser<H> {
             }
         }
         let (mut session, store) = match store.load_session() {
-            Ok(session) => (session, Some(store)),
+            Ok(session) => (session, settings_read.then_some(store)),
             Err(e) => {
                 log::error!("session unreadable; this run will not be saved: {e}");
                 (Session::first_run(), None)
             }
         };
+        let data_notice = store.is_none();
         // The extensions page is the settings window's tab now; a restored tab for it has no page.
         // ponytail: auto-archive runs at launch and on Space switch only; a timer comes with milestone 4.
         session.on_launch(&settings, now(), |t| crate::pages::route(&t.url) == Some(crate::pages::Route::Extensions));
@@ -338,6 +346,7 @@ impl<H: WebHost> Browser<H> {
         }
         let store = store.map(std::rc::Rc::new);
         let mut this = Self::build(std::rc::Rc::new(host), store, settings, session, false, window, cx);
+        this.data_notice = data_notice;
         this.start_live_refresh(window, cx);
         // ponytail: a fixed wait for Chrome to load each profile's extensions before the
         // launch pass looks for copies to make; later passes run when Spaces are added.
@@ -485,6 +494,7 @@ impl<H: WebHost> Browser<H> {
             sidebar_open,
             sidebar_w: Spring::new(if sidebar_open { SIDEBAR_WIDTH } else { 0. }),
             update_ready: false,
+            data_notice: false,
             reveal_w: Spring::new(SIDEBAR_WIDTH),
             lights: None,
             reveal: Spring::quick(0.0),
