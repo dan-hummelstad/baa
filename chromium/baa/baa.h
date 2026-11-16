@@ -58,6 +58,13 @@ typedef struct {
   bool secure;  // committed over valid TLS (security level SECURE)
   bool crashed;  // the renderer is gone (crash, killed, "Exit page"); a reload
                  // brings it back
+  // The primary main frame's last committed origin, serialized
+  // ("https://x.com"; "file://" for files). "null" for an opaque origin: an
+  // error page, data:, a sandboxed page, or a tab whose first navigation has
+  // not committed. It can differ from `url`'s origin (a pending navigation, a
+  // blank popup its opener writes into): whoever acts on the page for the user
+  // must not act while they differ.
+  const char* committed_origin;
 } BaaTabState;
 
 // One row of a page's context menu, flattened depth-first. A SUBMENU row is

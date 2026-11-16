@@ -316,6 +316,16 @@ bool Window::UpdateToolbarSecurityState() {
   return false;
 }
 
+// `contents` is null unless Chrome restores a saved toolbar state; the URL
+// change is always the active tab's.
+void Window::UpdateToolbar(content::WebContents* contents) {
+  SendTabState(TabFor(browser_->GetTabStripModel()->GetActiveWebContents()));
+}
+
+void Window::ResetToolbarTabState(content::WebContents* contents) {
+  SendTabState(TabFor(contents));
+}
+
 ui::AcceleratorProvider* Window::GetAcceleratorProvider() {
   return nullptr;
 }

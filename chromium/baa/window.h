@@ -125,10 +125,13 @@ class Window : public BrowserWindow,
   autofill::AutofillBubbleHandler* GetAutofillBubbleHandler() override;
   void SetFocusToLocationBar(bool is_user_initiated) override {}
   void UpdateReloadStopState(bool is_loading, bool force) override {}
-  void UpdateToolbar(content::WebContents* contents) override {}
+  // Chrome's only signal for a visible-URL change with no commit (a pending
+  // entry, an opener writing into a blank popup): the app's URL and committed
+  // origin must not drift apart.
+  void UpdateToolbar(content::WebContents* contents) override;
   bool UpdateToolbarSecurityState() override;
   void UpdateCustomTabBarVisibility(bool visible, bool animate) override {}
-  void ResetToolbarTabState(content::WebContents* contents) override {}
+  void ResetToolbarTabState(content::WebContents* contents) override;
   void FocusToolbar() override {}
   void ToolbarSizeChanged(bool is_animating) override {}
   void TabDraggingStatusChanged(bool is_dragging) override {}

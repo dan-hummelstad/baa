@@ -54,6 +54,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 struct BaaTab;
 
@@ -101,7 +102,7 @@ struct BaaTab : content::WebContentsObserver,
   bool devtools_front = false;
   std::string icon_url;
   // Storage behind get_state's strings.
-  std::string url_s, title_s, icon_s;
+  std::string url_s, title_s, icon_s, origin_s;
   raw_ptr<find_in_page::FindTabHelper> find_helper;
   base::WeakPtrFactory<BaaTab> weak_factory{this};
 
@@ -110,12 +111,17 @@ struct BaaTab : content::WebContentsObserver,
   void Attach(content::WebContents* wc);
   void Detach();
 
-  BaaTabState Snapshot(std::string& url, std::string& title, std::string& icon) {
+  BaaTabState Snapshot(std::string& url,
+                       std::string& title,
+                       std::string& icon,
+                       std::string& origin) {
     BaaTabState state = {};
     content::WebContents* wc = web_contents();
     url = wc->GetVisibleURL().spec();
     title = base::UTF16ToUTF8(wc->GetTitle());
     icon = icon_url;
+    // Not GetLastCommittedURL(): an error page keeps the failed URL there.
+    origin = wc->GetPrimaryMainFrame()->GetLastCommittedOrigin().Serialize();
     state.url = url.c_str();
     state.title = title.c_str();
     state.favicon_url = icon.c_str();
@@ -127,6 +133,7 @@ struct BaaTab : content::WebContentsObserver,
     state.muted = wc->IsAudioMuted();
     state.secure = chrome_security_state::GetSecurityLevel(wc) == security_state::SECURE;
     state.crashed = wc->IsCrashed();
+    state.committed_origin = origin.c_str();
     return state;
   }
 
@@ -134,8 +141,8 @@ struct BaaTab : content::WebContentsObserver,
     if (!reported || !web_contents()) {
       return;
     }
-    std::string url, title, icon;
-    BaaTabState state = Snapshot(url, title, icon);
+    std::string url, title, icon, origin;
+    BaaTabState state = Snapshot(url, title, icon, origin);
     baa::Callbacks().tab_state(baa::CallbackContext(), id, &state);
   }
 
@@ -637,7 +644,7 @@ bool baa_tab_get_state(BaaTabId tab_id, BaaTabState* state) {
   if (!baa::ContentsOf(tab)) {
     return false;
   }
-  *state = tab->Snapshot(tab->url_s, tab->title_s, tab->icon_s);
+  *state = tab->Snapshot(tab->url_s, tab->title_s, tab->icon_s, tab->origin_s);
   return true;
 }
 
