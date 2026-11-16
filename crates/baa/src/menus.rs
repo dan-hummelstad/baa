@@ -7,9 +7,10 @@ use gpui::{actions, App, Menu, MenuItem, OsAction, SystemMenuType};
 
 use crate::Quit;
 
-actions!(baa_app, [Hide, HideOthers, ShowAll, Minimize, Zoom, EditOs]);
+actions!(baa_app, [About, Hide, HideOthers, ShowAll, Minimize, Zoom, EditOs]);
 
 pub fn set(cx: &mut App) {
+    cx.on_action(|_: &About, _| show_about_panel());
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -21,6 +22,18 @@ pub fn set(cx: &mut App) {
         gpui::KeyBinding::new("cmd-m", Minimize, None),
     ]);
     cx.set_menus(menus());
+}
+
+/// The standard About panel: name, version and icon from the app bundle.
+fn show_about_panel() {
+    // SAFETY: on the main thread (an action); the pointer is used within this call only.
+    unsafe {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if !app.is_null() {
+            let _: () = msg_send![app, orderFrontStandardAboutPanel: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
 }
 
 fn on_window(cx: &mut App, f: fn(&gpui::Window)) {
@@ -43,7 +56,7 @@ fn menus() -> Vec<Menu> {
     let edit = |name: &str, os| MenuItem::os_action(name.to_string(), EditOs, os);
     vec![
         Menu::new("baa").items([
-            a("About baa", AboutBaa),
+            a("About baa", About),
             Sep,
             a("Settings…", OpenSettings),
             Sep,

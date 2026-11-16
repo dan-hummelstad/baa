@@ -128,7 +128,6 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))
         .on_action(cx.listener(|this, _: &ManageExtensions, window, cx| { this.open_own_page("baa://extensions", window, cx); }))
         .on_action(cx.listener(|this, _: &KeyboardShortcuts, _, cx| this.open_settings_at(Some(crate::settings::Tab::Keyboard), None, cx)))
-        .on_action(cx.listener(|_, _: &AboutBaa, _, _| crate::tools::show_about_panel()))
         .on_action(cx.listener(|this, _: &ReportProblem, _, cx| this.report_problem(cx)))
         .on_action(cx.listener(|this, _: &NewWindow, window, cx| {
             // In the chat, ⌘N is a new chat (bindings run before the panel sees the key).

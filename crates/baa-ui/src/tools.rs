@@ -110,19 +110,6 @@ fn macos_version() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// The standard About panel: name, version and icon from the app bundle.
-pub(crate) fn show_about_panel() {
-    #[cfg(target_os = "macos")]
-    // SAFETY: on the main thread (an action); the pointer is used within this call only.
-    unsafe {
-        use objc2::{class, msg_send, runtime::AnyObject};
-        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        if !app.is_null() {
-            let _: () = msg_send![app, orderFrontStandardAboutPanel: std::ptr::null_mut::<AnyObject>()];
-        }
-    }
-}
-
 impl<H: WebHost> Browser<H> {
     /// Opens the prefilled issue in a tab of the front normal window, where the user is signed
     /// in to GitHub; baa wrote the URL, so it is the user's own load.
