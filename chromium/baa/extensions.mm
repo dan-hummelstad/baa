@@ -16,6 +16,7 @@
 #include "base/files/file_path.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_view.h"
 #include "chrome/browser/extensions/extension_view_host.h"
@@ -57,6 +58,7 @@
 #include "extensions/common/permissions/permission_message_provider.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -399,6 +401,73 @@ std::map<BaaProfile*, std::unique_ptr<ExtensionsWatch>>& ExtensionsWatches() {
   return *watches;
 }
 
+// ---- extension_action ----------------------------------------------------------
+
+class ActionWatch;
+std::map<extensions::ExtensionActionDispatcher*, std::unique_ptr<ActionWatch>>& ActionWatches() {
+  static base::NoDestructor<std::map<extensions::ExtensionActionDispatcher*, std::unique_ptr<ActionWatch>>>
+      watches;
+  return *watches;
+}
+
+// One per dispatcher: a profile and its incognito profiles share one. It lives until the
+// dispatcher shuts down, since its observer list is unchecked.
+class ActionWatch final : public extensions::ExtensionActionDispatcher::Observer {
+ public:
+  explicit ActionWatch(extensions::ExtensionActionDispatcher* dispatcher) : dispatcher_(dispatcher) {
+    dispatcher_->AddObserver(this);
+  }
+  ~ActionWatch() override { dispatcher_->RemoveObserver(this); }
+
+  // extensions::ExtensionActionDispatcher::Observer:
+  void OnExtensionActionUpdated(extensions::ExtensionAction* action, content::WebContents* contents,
+                                content::BrowserContext* context) override {
+    const std::string id = action->extension_id();
+    if (contents) {
+      BaaTab* tab = TabFor(contents);
+      BaaProfile* owner = ProfileFor(Profile::FromBrowserContext(contents->GetBrowserContext()));
+      if (owner && TabAnnounced(tab)) {
+        Callbacks().extension_action(CallbackContext(), owner, id.c_str(), IdOf(tab));
+      }
+      return;
+    }
+    if (!context) {
+      return;
+    }
+    // The default for every tab: each Space of the profile hears it, the incognito ones too.
+    Profile* original = Profile::FromBrowserContext(context)->GetOriginalProfile();
+    std::vector<BaaProfile*> owners;
+    for (const auto& [owner, watch] : ExtensionsWatches()) {
+      Profile* profile = ChromeProfileOf(owner);
+      if (profile && profile->GetOriginalProfile() == original) {
+        owners.push_back(owner);
+      }
+    }
+    for (BaaProfile* owner : owners) {
+      Callbacks().extension_action(CallbackContext(), owner, id.c_str(), 0);
+    }
+  }
+  void OnShuttingDown() override {
+    extensions::ExtensionActionDispatcher* dispatcher = dispatcher_;
+    ActionWatches().erase(dispatcher);  // deletes this
+  }
+
+ private:
+  const raw_ptr<extensions::ExtensionActionDispatcher> dispatcher_;
+};
+
+void WatchActions(Profile* profile) {
+  extensions::ExtensionActionDispatcher* dispatcher = extensions::ExtensionActionDispatcher::Get(profile);
+  if (dispatcher && !ActionWatches().contains(dispatcher)) {
+    ActionWatches()[dispatcher] = std::make_unique<ActionWatch>(dispatcher);
+  }
+}
+
+// SkColor is ARGB; the ABI's colours are 0xRRGGBBAA.
+uint32_t Rgba(SkColor color) {
+  return (SkColorGetR(color) << 24) | (SkColorGetG(color) << 16) | (SkColorGetB(color) << 8) | SkColorGetA(color);
+}
+
 // The ExtensionsContainer of a baa window: enough that Chrome's extension code
 // can ask it, and answer "no" (there is no toolbar).
 class Container final : public ExtensionsContainer {
@@ -432,6 +501,7 @@ void WatchExtensions(BaaProfile* owner, Profile* profile) {
     return;
   }
   ExtensionsWatches()[owner] = std::make_unique<ExtensionsWatch>(owner, profile);
+  WatchActions(profile);
 }
 
 void UnwatchExtensions(BaaProfile* owner) {
@@ -484,6 +554,45 @@ int baa_profile_extensions(BaaProfile* profile, BaaExtensionVisitor visit, void*
     out.unpacked = extensions::Manifest::IsUnpackedLocation(ext.location());
     out.needs_approval =
         !out.enabled && extensions::ExtensionPrefs::Get(chrome_profile)->DidExtensionEscalatePermissions(ext.id());
+    visit(ctx, &out);
+    ++count;
+  }
+  return count;
+}
+
+int baa_profile_extension_actions(BaaProfile* profile, BaaTabId tab, BaaActionVisitor visit, void* ctx) {
+  Profile* chrome_profile = baa::ChromeProfileOf(profile);
+  if (!chrome_profile) {
+    return -1;
+  }
+  int tab_id = extensions::ExtensionAction::kDefaultTabId;
+  if (tab) {
+    content::WebContents* contents = baa::ContentsOf(baa::TabFromId(tab));
+    if (!contents || Profile::FromBrowserContext(contents->GetBrowserContext()) != chrome_profile) {
+      return -1;
+    }
+    tab_id = sessions::SessionTabHelper::IdForTab(contents).id();
+  }
+  extensions::ExtensionActionManager* manager = extensions::ExtensionActionManager::Get(chrome_profile);
+  int count = 0;
+  for (const auto& ext : extensions::ExtensionRegistry::Get(chrome_profile)->enabled_extensions()) {
+    if (baa::HiddenExtension(*ext) ||
+        (chrome_profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(ext->id(), chrome_profile))) {
+      continue;
+    }
+    extensions::ExtensionAction* action = manager->GetExtensionAction(*ext);
+    if (!action) {
+      continue;
+    }
+    std::string badge = action->GetDisplayBadgeText(tab_id), title = action->GetTitle(tab_id);
+    BaaAction out = {};
+    out.extension_id = ext->id().c_str();
+    out.badge_text = badge.c_str();
+    out.title = title.c_str();
+    out.badge_rgba = baa::Rgba(action->GetBadgeBackgroundColor(tab_id));
+    out.text_rgba = baa::Rgba(action->GetBadgeTextColor(tab_id));
+    out.enabled = action->GetIsVisible(tab_id);
+    out.has_popup = action->HasPopup(tab_id);
     visit(ctx, &out);
     ++count;
   }

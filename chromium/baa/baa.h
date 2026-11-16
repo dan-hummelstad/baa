@@ -363,6 +363,16 @@ typedef struct {
   // never load it. Chrome sends no "" on a tab switch, a navigation or the
   // tab closing: the receiver clears it itself then.
   void (*target_url)(void* ctx, BaaTabId tab, const char* url);
+
+  // The extension's toolbar action changed (badge, title, colours, enabled,
+  // popup) for `tab`, or for every tab of the profile when `tab` is 0 (its
+  // default; then every profile sharing the extensions hears it, incognito
+  // ones too). Read the new state with baa_profile_extension_actions. May come
+  // inside a baa_* call. Not sent for state an extension set before its
+  // profile was opened: read it when a tab is shown and on
+  // extensions_changed.
+  void (*extension_action)(void* ctx, BaaProfile* profile,
+                           const char* extension_id, BaaTabId tab);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
@@ -542,6 +552,29 @@ typedef void (*BaaExtensionVisitor)(void* ctx, const BaaExtension* extension);
 // themes), synchronously. Returns the count, -1 for a gone profile.
 BAA_EXPORT int baa_profile_extensions(BaaProfile* profile,
                                       BaaExtensionVisitor visit, void* ctx);
+
+// An extension's toolbar action as Chrome's toolbar would draw it on one tab.
+typedef struct {
+  const char* extension_id;
+  const char* badge_text;  // "" for no badge
+  const char* title;       // the tooltip; the extension's name by default
+  // 0xRRGGBBAA. Alpha 0 means the extension set none: draw your default (for
+  // the text, a colour that contrasts with the badge).
+  uint32_t badge_rgba;
+  uint32_t text_rgba;
+  bool enabled;    // false: draw it greyed (the extension disabled it here)
+  bool has_popup;  // baa_extension_popup opens a popup, else it fires onClicked
+} BaaAction;
+
+typedef void (*BaaActionVisitor)(void* ctx, const BaaAction* action);
+
+// Every enabled extension of the profile that has a toolbar action (in an
+// incognito profile, only those allowed there), with its state on `tab`, or
+// its default for all tabs when `tab` is 0. Synchronous; strings are borrowed
+// for the visit. Returns the number visited, -1 for a gone profile or a `tab`
+// that is closed or not this profile's.
+BAA_EXPORT int baa_profile_extension_actions(BaaProfile* profile, BaaTabId tab,
+                                             BaaActionVisitor visit, void* ctx);
 
 enum {
   BAA_EXTENSION_ENABLE = 0,       // value: 1 enable (see below), 0 disable

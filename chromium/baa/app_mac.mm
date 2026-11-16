@@ -158,6 +158,7 @@ void baa_install_app(int argc,
   REQUIRE(signed_in);
   REQUIRE(extensions_changed);
   REQUIRE(target_url);
+  REQUIRE(extension_action);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;
