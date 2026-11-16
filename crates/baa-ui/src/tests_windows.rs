@@ -217,6 +217,54 @@ fn a_chat_childs_client_goes_to_the_window_that_started_it(cx: &mut TestAppConte
     assert_eq!(owner(cx, &[101, 100]), None);
 }
 
+/// A served client and a chat child's nonce in `w`.
+fn claude_busy(w: &B, cx: &mut VisualTestContext) {
+    w.update(cx, |w, cx| {
+        let conn = w.agent_connect(None, None, None, vec![]);
+        w.agent.state.insert(conn, crate::agent::Conn::Open);
+        w.agent.nonce = Some((crate::agent::secret(), cx.background_executor().now()));
+    });
+}
+
+fn claude_idle(w: &B, cx: &mut VisualTestContext) -> bool {
+    w.read_with(cx, |w, _| !w.agent.connected() && w.agent.state.is_empty() && w.agent.nonce.is_none())
+}
+
+#[gpui::test]
+fn turning_claude_off_stops_it_in_every_window(cx: &mut TestAppContext) {
+    let (a, cx) = browser(cx);
+    a.update(cx, |a, cx| a.set_claude_enabled(true, cx));
+    let (b, bcx) = open(cx, false);
+    let (p, pcx) = open(cx, true);
+    claude_busy(&a, cx);
+    claude_busy(&b, bcx);
+    claude_busy(&p, pcx);
+    a.update(cx, |a, cx| a.set_claude_enabled(false, cx));
+    cx.run_until_parked();
+    assert!(claude_idle(&a, cx) && claude_idle(&b, bcx));
+    assert!(claude_idle(&p, pcx), "an incognito window, which never adopts settings, stops too");
+    p.read_with(pcx, |p, _| assert!(!p.settings.claude.enabled && p.settings.claude.token.is_empty()));
+
+    // Settings adopted from another window that turned Claude off and on: a new token, and
+    // what was paired with the old one goes.
+    a.update(cx, |a, cx| a.set_claude_enabled(true, cx));
+    cx.run_until_parked();
+    let (session, mut settings) = b.read_with(bcx, |b, _| (b.session.clone(), b.settings.clone()));
+    assert!(settings.claude.enabled, "b has adopted a's settings");
+    claude_busy(&b, bcx);
+    b.update_in(bcx, |b, window, cx| b.adopt(session.clone(), settings.clone(), window, cx));
+    assert!(!claude_idle(&b, bcx), "the same settings again leave it be");
+    settings.claude.token = crate::agent::secret();
+    b.update_in(bcx, |b, window, cx| b.adopt(session.clone(), settings.clone(), window, cx));
+    assert!(claude_idle(&b, bcx));
+    // And off.
+    claude_busy(&b, bcx);
+    let mut off = settings.clone();
+    off.claude.enabled = false;
+    b.update_in(bcx, |b, window, cx| b.adopt(session, off, window, cx));
+    assert!(claude_idle(&b, bcx));
+}
+
 #[gpui::test]
 fn importing_is_refused_in_an_incognito_window(cx: &mut TestAppContext) {
     use baa_model::import::{Source, SourceKind};

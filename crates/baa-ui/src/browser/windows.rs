@@ -195,8 +195,14 @@ impl<H: WebHost> Browser<H> {
             session.set_active_space(id);
         }
         session.sidebar_collapsed = mine.sidebar_collapsed;
+        // Claude turned off, or off and on again (a new token): what this window serves goes.
+        let (old, new) = (&self.settings.claude, &settings.claude);
+        let stop = (old.enabled && !new.enabled) || old.token != new.token;
         self.session = session;
         self.settings = settings;
+        if stop {
+            self.stop_agent(cx);
+        }
         self.adopting = true;
         self.sync(window, cx);
         self.adopting = false;

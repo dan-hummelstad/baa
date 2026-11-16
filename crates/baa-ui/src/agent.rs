@@ -710,6 +710,20 @@ impl<H: WebHost> Browser<H> {
         c.enabled = on;
         if !on {
             self.stop_agent(cx);
+            // Each window has its own clients and chat child, and an incognito one never adopts
+            // these settings: off is off in all of them, now.
+            let me = self.window.window_id();
+            let others: Vec<_> = crate::browser::windows::browsers::<H>(cx).into_iter().filter(|w| w.window_id() != me).collect();
+            cx.defer(move |cx| {
+                for w in others {
+                    w.update(cx, |b, _, cx| {
+                        b.settings.claude.enabled = false;
+                        b.settings.claude.token.clear();
+                        b.stop_agent(cx);
+                    })
+                    .ok();
+                }
+            });
         }
         if let Some(switch) = cx.try_global::<AgentSwitch>() {
             (switch.0)(on);
