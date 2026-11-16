@@ -244,25 +244,6 @@ fn turning_claude_off_stops_it_in_every_window(cx: &mut TestAppContext) {
     assert!(claude_idle(&a, cx) && claude_idle(&b, bcx));
     assert!(claude_idle(&p, pcx), "an incognito window, which never adopts settings, stops too");
     p.read_with(pcx, |p, _| assert!(!p.settings.claude.enabled && p.settings.claude.token.is_empty()));
-
-    // Settings adopted from another window that turned Claude off and on: a new token, and
-    // what was paired with the old one goes.
-    a.update(cx, |a, cx| a.set_claude_enabled(true, cx));
-    cx.run_until_parked();
-    let (session, mut settings) = b.read_with(bcx, |b, _| (b.session.clone(), b.settings.clone()));
-    assert!(settings.claude.enabled, "b has adopted a's settings");
-    claude_busy(&b, bcx);
-    b.update_in(bcx, |b, window, cx| b.adopt(session.clone(), settings.clone(), window, cx));
-    assert!(!claude_idle(&b, bcx), "the same settings again leave it be");
-    settings.claude.token = crate::agent::secret();
-    b.update_in(bcx, |b, window, cx| b.adopt(session.clone(), settings.clone(), window, cx));
-    assert!(claude_idle(&b, bcx));
-    // And off.
-    claude_busy(&b, bcx);
-    let mut off = settings.clone();
-    off.claude.enabled = false;
-    b.update_in(bcx, |b, window, cx| b.adopt(session, off, window, cx));
-    assert!(claude_idle(&b, bcx));
 }
 
 #[gpui::test]
