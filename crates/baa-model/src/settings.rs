@@ -290,6 +290,12 @@ pub struct Settings {
     /// A red count of console errors on localhost tabs' rows (E4).
     pub console_badge: bool,
     pub claude: Claude,
+    /// Extensions check Google's Web Store update server for new versions. Nothing reads this
+    /// yet: the engine batch that adds extension updates will.
+    pub extension_updates: bool,
+    /// The engine fetches the certificate revocation list (CRLSet) from Google's update server.
+    /// Nothing reads this yet: the engine batch that adds CRLSet updates will.
+    pub revocation_updates: bool,
 }
 
 /// Claude Code's access to the browser (PLAN-m4-features D). Off by default: nothing is
@@ -382,6 +388,8 @@ impl Default for Settings {
             environments: Vec::new(),
             console_badge: true,
             claude: Claude::default(),
+            extension_updates: true,
+            revocation_updates: true,
         }
     }
 }
@@ -458,6 +466,12 @@ mod tests {
         assert_eq!(s.resolve_input("rust lang"), "https://www.google.com/search?q=rust+lang");
         assert_eq!(s.resolve_input("foo"), "https://www.google.com/search?q=foo");
         assert_eq!(s.resolve_input("c++"), "https://www.google.com/search?q=c%2B%2B");
+    }
+
+    #[test]
+    fn settings_saved_before_the_update_switches_have_them_on() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s.extension_updates && s.revocation_updates);
     }
 
     #[test]
