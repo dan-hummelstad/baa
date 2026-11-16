@@ -372,20 +372,21 @@ fn center_script(sel: &str) -> String {
 }
 
 /// Focuses `sel` (if any) and says whether the focused element holds a secret. Frames count as
-/// secret: what is focused inside one cannot be seen from here.
+/// secret: what is focused inside one cannot be seen from here. `keys` (press_key): nothing
+/// focused is fine, as a key pressed on the page itself reaches no field.
 // ponytail: a heuristic; the ceiling is fields that hide their purpose (no type or autocomplete).
-fn secret_script(sel: Option<&str>) -> String {
+fn secret_script(sel: Option<&str>, keys: bool) -> String {
     format!(
-        r#"((sel) => {{
+        r#"((sel, keys) => {{
   if (sel) {{ const t = document.querySelector(sel); if (!t) return {{ error: 'No element matches the selector.' }}; t.focus(); }}
   let e = document.activeElement;
   while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement;
-  if (!e || e === document.body || e === document.documentElement) return {{ error: 'Nothing is focused; pass a selector.' }};
+  if (!e || e === document.body || e === document.documentElement) return keys ? {{ secret: false }} : {{ error: 'Nothing is focused; pass a selector.' }};
   if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') return {{ secret: true }};
   const type = (e.getAttribute('type') || '').toLowerCase();
   const ac = (e.getAttribute('autocomplete') || '').toLowerCase();
   return {{ secret: type === 'password' || /(^|\s)cc-|one-time-code|password/.test(ac) }};
-}})({})"#,
+}})({}, {keys})"#,
         sel.map_or("null".into(), js_str)
     )
 }
@@ -401,6 +402,53 @@ fn typing_allowed(checked: &Result<Value, String>) -> Result<(), String> {
         Some(false) => Ok(()),
         _ => Err(SECRET.into()),
     }
+}
+
+/// Whether the element at viewport `(x, y)`, through open shadow roots, is a frame, embed or
+/// plugin: a click there lands in a document no check here can see.
+fn frame_at_script(x: f64, y: f64) -> String {
+    format!(
+        r#"((x, y) => {{
+  let e = document.elementFromPoint(x, y);
+  while (e && e.shadowRoot) {{ const i = e.shadowRoot.elementFromPoint(x, y); if (!i || i === e) break; e = i; }}
+  return {{ frame: !!e && ['IFRAME', 'FRAME', 'EMBED', 'OBJECT'].includes(e.tagName) }};
+}})({x}, {y})"#
+    )
+}
+
+/// Ok only for a point the check saw and found outside any frame; anything else refuses.
+fn click_allowed(checked: &Result<Value, String>) -> Result<(), String> {
+    const FRAME: &str = "baa does not let Claude click into frames, embedded content or plugins by position.";
+    match checked.as_ref().map_err(|e| e.clone())?.get("frame").and_then(Value::as_bool) {
+        Some(false) => Ok(()),
+        _ => Err(FRAME.into()),
+    }
+}
+
+/// Runs `script` in the page, then `act` only if `allowed` passes on its answer and the page is
+/// still on `origin`: the check ran on that origin's document, and one that moved on gets nothing.
+fn checked_act<P: PageHandle + 'static>(
+    page: Entity<P>,
+    script: &str,
+    allowed: fn(&Result<Value, String>) -> Result<(), String>,
+    origin: String,
+    reply: Reply,
+    cx: &App,
+    act: impl FnOnce(&P) -> String + 'static,
+) {
+    let target = page.clone();
+    page.read(cx).eval_value(
+        script,
+        Box::new(move |checked, cx| {
+            if let Err(e) = allowed(&checked) {
+                return reply.refuse(e);
+            }
+            if web_origin(&target.read(cx).url()).as_deref() != Some(origin.as_str()) {
+                return reply.refuse("The page changed; try again.");
+            }
+            reply.text(act(target.read(cx)));
+        }),
+    );
 }
 
 fn wait_script(selector: Option<&str>, text: Option<&str>) -> String {
@@ -998,18 +1046,19 @@ impl<H: WebHost> Browser<H> {
 
     fn page_act(&mut self, tool: &'static str, page: Entity<H::Page>, origin: String, args: &Value, reply: Reply, cx: &mut Context<Self>) {
         match tool {
-            "press_key" => match args["key"].as_str().filter(|k| !k.is_empty()) {
-                Some(key) => {
-                    page.read(cx).press_key(key);
-                    reply.text("Pressed.");
-                }
+            // Every key is checked: a character types, and Enter or Tab can carry what a secret field holds.
+            "press_key" => match args["key"].as_str().filter(|k| !k.is_empty()).map(str::to_string) {
+                Some(key) => checked_act(page, &secret_script(None, true), typing_allowed, origin, reply, cx, move |p| {
+                    p.press_key(&key);
+                    "Pressed.".into()
+                }),
                 None => reply.refuse("Pass a key."),
             },
             "click" => match (args["x"].as_f64(), args["y"].as_f64(), args["selector"].as_str()) {
-                (Some(x), Some(y), _) => {
-                    page.read(cx).click(x as f32, y as f32);
-                    reply.text("Clicked.");
-                }
+                (Some(x), Some(y), _) => checked_act(page, &frame_at_script(x, y), click_allowed, origin, reply, cx, move |p| {
+                    p.click(x as f32, y as f32);
+                    "Clicked.".into()
+                }),
                 (_, _, Some(sel)) => {
                     let target = page.clone();
                     page.read(cx).eval_value(
@@ -1029,21 +1078,10 @@ impl<H: WebHost> Browser<H> {
             },
             "type" => {
                 let Some(text) = args["text"].as_str().map(str::to_string) else { return reply.refuse("Pass a text.") };
-                let target = page.clone();
-                page.read(cx).eval_value(
-                    &secret_script(args["selector"].as_str()),
-                    Box::new(move |checked, cx| {
-                        if let Err(e) = typing_allowed(&checked) {
-                            return reply.refuse(e);
-                        }
-                        // The check ran on this origin's document; a page that moved on since gets nothing.
-                        if web_origin(&target.read(cx).url()).as_deref() != Some(origin.as_str()) {
-                            return reply.refuse("The page changed; try again.");
-                        }
-                        target.read(cx).insert_text(&text);
-                        reply.text("Typed.");
-                    }),
-                );
+                checked_act(page, &secret_script(args["selector"].as_str(), false), typing_allowed, origin, reply, cx, move |p| {
+                    p.insert_text(&text);
+                    "Typed.".into()
+                });
             }
             _ => {
                 let script = args["script"].as_str().unwrap_or_default();

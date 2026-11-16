@@ -52,6 +52,24 @@ fn asks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> usize {
     b.read_with(cx, |b, _| b.agent.asks.len())
 }
 
+/// Answers each check waiting in `tab`'s page with `v`, oldest first; returns their scripts.
+fn answer_checks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, v: Value) -> Vec<String> {
+    let pending = b.read_with(cx, |b, cx| std::mem::take(&mut *b.pages[&tab].0.read(cx).evals.borrow_mut()));
+    let mut scripts = Vec::new();
+    for (script, done) in pending {
+        scripts.push(script);
+        let v = v.clone();
+        cx.update(|_, cx| done(Ok(v), cx));
+    }
+    cx.run_until_parked();
+    scripts
+}
+
+/// The page finds nothing secret focused and no frame under the click.
+fn pass_checks(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId) {
+    answer_checks(b, cx, tab, json!({"secret": false, "frame": false}));
+}
+
 #[gpui::test]
 fn claude_sees_only_web_pages_of_ticked_spaces(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
@@ -114,6 +132,7 @@ fn acting_asks_per_origin_once_session_and_deny(cx: &mut TestAppContext) {
     b.update_in(cx, |b, window, cx| b.answer_agent_ask(Answer::Once, window, cx));
     assert_eq!(asks(&b, cx), 1);
     decide(&b, cx, Answer::Once);
+    pass_checks(&b, cx, gh);
     assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, gh), ["click 1 2"]);
     assert!(b.read_with(cx, |b, _| b.agent.driven.contains(&gh)));
@@ -122,9 +141,11 @@ fn acting_asks_per_origin_once_session_and_deny(cx: &mut TestAppContext) {
     let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
     assert_eq!(asks(&b, cx), 1);
     decide(&b, cx, Answer::Session);
+    pass_checks(&b, cx, gh);
     assert!(!answer(&rx).unwrap().0);
     let rx = call(&b, cx, "press_key", json!({"key": "Tab"}));
     assert_eq!(asks(&b, cx), 0, "for this session: no second sheet");
+    pass_checks(&b, cx, gh);
     assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, gh), ["click 1 2", "press_key Enter", "press_key Tab"]);
 
@@ -191,12 +212,77 @@ fn type_refuses_secret_fields(cx: &mut TestAppContext) {
     assert_eq!(cdp(&b, cx, tab), ["insert_text hello"]);
 }
 
+/// The tab's page goes to `url` behind the session's back, as a redirect would.
+fn moved(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, url: &str) {
+    b.read_with(cx, |b, cx| *b.pages[&tab].0.read(cx).url.borrow_mut() = url.into());
+}
+
+#[gpui::test]
+fn press_key_refuses_secret_fields_and_a_page_that_moved_on(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tab = enabled_with(&b, cx, "https://bank.example/login");
+    let rx = call(&b, cx, "press_key", json!({"key": "a"}));
+    decide(&b, cx, Answer::Session);
+    let scripts = answer_checks(&b, cx, tab, json!({"secret": true}));
+    assert!(scripts.len() == 1 && scripts[0].contains("one-time-code") && scripts[0].contains("activeElement"));
+    let (refused, text) = answer(&rx).unwrap();
+    assert!(refused && text.contains("password"), "{text}");
+
+    // A check that did not come back clean refuses too.
+    let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
+    answer_checks(&b, cx, tab, Value::Null);
+    assert!(answer(&rx).unwrap().0);
+    assert!(cdp(&b, cx, tab).is_empty(), "no key was pressed");
+
+    let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
+    pass_checks(&b, cx, tab);
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(cdp(&b, cx, tab), ["press_key Enter"]);
+
+    // The check ran on bank.example; the key would land on another site.
+    let rx = call(&b, cx, "press_key", json!({"key": "Enter"}));
+    moved(&b, cx, tab, "https://evil.example/");
+    pass_checks(&b, cx, tab);
+    let (refused, text) = answer(&rx).unwrap();
+    assert!(refused && text.contains("changed"), "{text}");
+    assert_eq!(cdp(&b, cx, tab), ["press_key Enter"]);
+}
+
+#[gpui::test]
+fn a_click_by_position_refuses_frames_and_a_page_that_moved_on(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tab = enabled_with(&b, cx, "https://shop.example/");
+    let rx = call(&b, cx, "click", json!({"x": 10, "y": 20}));
+    decide(&b, cx, Answer::Session);
+    let scripts = answer_checks(&b, cx, tab, json!({"frame": true}));
+    assert!(scripts.len() == 1 && scripts[0].contains("elementFromPoint") && scripts[0].ends_with("(10, 20)"), "{scripts:?}");
+    let (refused, text) = answer(&rx).unwrap();
+    assert!(refused && text.contains("frames"), "{text}");
+
+    let rx = call(&b, cx, "click", json!({"x": 10, "y": 20}));
+    answer_checks(&b, cx, tab, json!({"frame": "no"}));
+    assert!(answer(&rx).unwrap().0, "only a clear answer clicks");
+    assert!(cdp(&b, cx, tab).is_empty());
+
+    let rx = call(&b, cx, "click", json!({"x": 10, "y": 20}));
+    pass_checks(&b, cx, tab);
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(cdp(&b, cx, tab), ["click 10 20"]);
+
+    let rx = call(&b, cx, "click", json!({"x": 10, "y": 20}));
+    moved(&b, cx, tab, "https://evil.example/");
+    pass_checks(&b, cx, tab);
+    assert!(answer(&rx).unwrap().0);
+    assert_eq!(cdp(&b, cx, tab), ["click 10 20"]);
+}
+
 #[gpui::test]
 fn navigating_to_a_new_origin_needs_its_own_approval(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let tab = enabled_with(&b, cx, "https://github.com/");
     let rx = call(&b, cx, "press_key", json!({"key": "a"}));
     decide(&b, cx, Answer::Session);
+    pass_checks(&b, cx, tab);
     answer(&rx).unwrap();
 
     let loads = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).loads.borrow().clone());
@@ -229,6 +315,7 @@ fn evaluate_is_off_by_default_and_asks_every_call(cx: &mut TestAppContext) {
     b.update(cx, |b, _| b.settings.claude.evaluate_allowed = true);
     let rx = call(&b, cx, "press_key", json!({"key": "a"}));
     decide(&b, cx, Answer::Session);
+    pass_checks(&b, cx, tab);
     answer(&rx).unwrap();
     let evals = |cx: &mut VisualTestContext| b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).evals.borrow().len());
     let before = evals(cx);
@@ -592,6 +679,7 @@ fn auto_mode_skips_the_sheet_only_for_the_panels_auto_child(cx: &mut TestAppCont
     auto(&b, cx, true);
     let rx = call(&b, cx, "click", json!({"x": 1, "y": 2}));
     assert_eq!(asks(&b, cx), 0, "Claude Code's classifier approved it");
+    pass_checks(&b, cx, gh);
     assert!(!answer(&rx).unwrap().0);
     assert_eq!(cdp(&b, cx, gh), ["click 1 2"]);
     assert_eq!(last_activity(&b, cx).0, "click", "still in the activity log");
@@ -670,6 +758,7 @@ fn a_paused_auto_mode_asks_on_baas_sheet(cx: &mut TestAppContext) {
     assert_eq!(asks(&b, cx), 1, "that act shows the sheet");
     assert!(answer(&rx).is_none() && cdp(&b, cx, gh).is_empty());
     decide(&b, cx, Answer::Once);
+    pass_checks(&b, cx, gh);
     assert_eq!(cdp(&b, cx, gh), ["click 3 4"]);
     // Only that one.
     let _rx = call(&b, cx, "click", json!({"x": 5, "y": 6}));
@@ -722,7 +811,8 @@ fn terminal_auto_lets_an_allowed_terminal_client_approve_its_own_acts(cx: &mut T
     });
     let rx = call_on(&b, cx, conn, "click", json!({"tab": other.0, "x": 2, "y": 3}));
     assert_eq!(asks(&b, cx), 0);
-    assert!(rx.try_recv().is_ok(), "answered at once");
+    pass_checks(&b, cx, other);
+    assert!(rx.try_recv().is_ok(), "answered without a sheet");
     assert_eq!(cdp(&b, cx, other), ["click 2 3"]);
 
     // evaluate still asks every call.
