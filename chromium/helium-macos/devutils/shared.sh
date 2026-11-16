@@ -71,7 +71,17 @@ prepare_sources() {
   } || return
 
   mkdir -p "$_out_dir"
-  python3 "$_main_repo/utils/prune_binaries.py" --keep-build-dependencies "$_src_dir" "$_main_repo/pruning.list"
+  local prune_list="$_main_repo/pruning.list" f
+  if [ "${1:-true}" = false ]; then
+    # baa: pruning.list is made from imputnet's tarball, which also carries other hosts' files
+    # (Linux dependencies). A macOS gclient checkout never has them, and the pruner fails on a
+    # listed file that is missing, so give it only the ones that are there.
+    prune_list="$_download_cache/pruning.present"
+    while IFS= read -r f; do
+      if [ -e "$_src_dir/$f" ] || [ -L "$_src_dir/$f" ]; then printf '%s\n' "$f"; fi
+    done < "$_main_repo/pruning.list" > "$prune_list"
+  fi
+  python3 "$_main_repo/utils/prune_binaries.py" --keep-build-dependencies "$_src_dir" "$prune_list"
 
   python3 "$_main_repo/utils/patches.py" apply "$_src_dir" "$_main_repo/patches" "$_root_dir/patches" "$_root_dir/../patches"
   python3 "$_main_repo/utils/domain_substitution.py" apply -r "$_main_repo/domain_regex.list" -f "$_main_repo/domain_substitution.list" "$_src_dir"
