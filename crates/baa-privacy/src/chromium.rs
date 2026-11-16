@@ -31,4 +31,8 @@ pub const PROXY_ALLOWLIST: &[&str] = &[
     "localhost",
     "127.0.0.1",
     "::1",
+    // Extension update checks (remove-helium-services.patch); Settings › Privacy turns them off.
+    "clients2.google.com",
+    // CRLSet, and Widevine once opted in (widevine-opt-in.patch); each has a setting.
+    "update.googleapis.com",
 ];
