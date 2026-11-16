@@ -39,35 +39,7 @@ pub struct Store {
 
 /// The data version this build writes, as SQLite's `user_version`. Raise it when a change is not
 /// covered by `serde(default)`, and convert the older data in `Store::init`.
-pub const SCHEMA: u32 = 1;
-
-/// baa.db was written by a newer baa. Nothing was written to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NewerSchema {
-    pub found: u32,
-    pub supported: u32,
-}
-
-impl std::fmt::Display for NewerSchema {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "baa.db was written by a newer baa (data version {}; this build reads up to {}). \
-             Update baa, or move baa.db out of the data folder to start fresh.",
-            self.found, self.supported
-        )
-    }
-}
-
-impl std::error::Error for NewerSchema {}
-
-/// The [`NewerSchema`] inside an error from [`Store::open`], if that is why it failed.
-pub fn newer_schema(e: &Error) -> Option<&NewerSchema> {
-    match e {
-        Error::ToSqlConversionFailure(inner) => inner.downcast_ref(),
-        _ => None,
-    }
-}
+const SCHEMA: u32 = 1;
 
 /// The browser window as it was last left.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,8 +51,7 @@ pub struct WindowFrame {
 }
 
 impl Store {
-    /// A database from a newer baa is refused before anything is written: the error holds a
-    /// [`NewerSchema`] (see [`newer_schema`]).
+    /// A database from a newer baa is refused before anything is written.
     pub fn open(path: impl AsRef<Path>) -> Result<Store> {
         Self::init(Connection::open(path)?)
     }
@@ -94,7 +65,13 @@ impl Store {
         )?;
         let has_data = has_kv && conn.query_row("SELECT count(*) > 0 FROM kv", [], |r| r.get(0))?;
         if stored > SCHEMA {
-            return Err(Error::ToSqlConversionFailure(Box::new(NewerSchema { found: stored, supported: SCHEMA })));
+            return Err(Error::ToSqlConversionFailure(
+                format!(
+                    "baa.db was written by a newer baa (data version {stored}; this build reads up to {SCHEMA}). \
+                     Update baa, or move baa.db out of the data folder to start fresh."
+                )
+                .into(),
+            ));
         }
         // Before this build first writes to data an older one left. VACUUM INTO is a consistent
         // copy even with a WAL beside the file; the old backup stays until the new one is whole.
@@ -581,11 +558,9 @@ mod tests {
         }
         let before = std::fs::read(dir.db()).unwrap();
         let Err(e) = Store::open(dir.db()) else { panic!("a newer database opened") };
-        assert_eq!(newer_schema(&e), Some(&NewerSchema { found: SCHEMA + 1, supported: SCHEMA }));
         assert!(e.to_string().starts_with(&format!("baa.db was written by a newer baa (data version {}", SCHEMA + 1)));
         assert_eq!(std::fs::read(dir.db()).unwrap(), before);
         assert!(!dir.bak().exists());
-        assert_eq!(newer_schema(&Error::QueryReturnedNoRows), None);
     }
 
     #[test]
