@@ -63,6 +63,9 @@ jobs:
   macos:
     needs: [version, engine]
     runs-on: macos-15
+    # The `release` environment has a required reviewer and holds the signing
+    # secrets: nothing is signed or published until the owner approves the run.
+    environment: release
     steps:
       - name: Signing secrets present
         env:

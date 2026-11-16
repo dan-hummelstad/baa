@@ -178,11 +178,14 @@ release fails in its first step when any of these seven secrets is missing; ther
 release: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`,
 `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`.
 
+The secrets live in the `release` environment, which has a required reviewer, and only the `macos`
+job uses it. Each release waits for the owner's approval before anything is signed or published.
+
 CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
 `chromium.yml` in this repository with a recorded `.sha256` counts (`.github/actions/engine/trusted.sh`).
-`ci.yml` runs on fork pull requests with no token permissions beyond what each job declares. Keep
-Settings → Actions → General → "Require approval for all outside collaborators" on, so a fork's
-workflow changes do not run until a maintainer approves them.
+`ci.yml` runs on fork pull requests with no token permissions beyond what each job declares. The
+repository setting Settings → Actions → General → "Require approval for all outside collaborators"
+is on, so a fork's workflow changes do not run until a maintainer approves them.
 
 ### Cutting a release by hand
 
@@ -200,7 +203,8 @@ Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch v
    Wait for it: `gh run watch <id>`.
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
    version or `release.yml` stops in its first job.
-5. Watch `release.yml` (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
+5. Approve the `macos` job when `release.yml` asks (the `release` environment), watch it
+   (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
    and `appcast.xml`.
 
 If `release.yml` fails for want of an engine, do step 3 and re-run it (`gh run rerun <id>`).
