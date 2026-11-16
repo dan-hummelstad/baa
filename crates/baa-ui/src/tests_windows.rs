@@ -202,8 +202,8 @@ fn a_chat_childs_client_goes_to_the_window_that_started_it(cx: &mut TestAppConte
     let (p, pcx) = open(cx, true);
     let issue = |w: &B, cx: &mut VisualTestContext, child: i32| {
         w.update(cx, |w, cx| {
-            w.agent.nonce = Some((crate::agent::secret(), cx.background_executor().now()));
-            w.agent.nonce_child = Some(child);
+            let nonce = crate::agent::issue_nonce(false, cx.background_executor().now());
+            w.agent.nonce = Some(crate::agent::Nonce { child: Some(child), ..nonce });
         })
     };
     issue(&b, bcx, 100);
@@ -222,7 +222,7 @@ fn claude_busy(w: &B, cx: &mut VisualTestContext) {
     w.update(cx, |w, cx| {
         let conn = w.agent_connect(None, None, None, vec![]);
         w.agent.state.insert(conn, crate::agent::Conn::Open);
-        w.agent.nonce = Some((crate::agent::secret(), cx.background_executor().now()));
+        w.agent.nonce = Some(crate::agent::issue_nonce(false, cx.background_executor().now()));
     });
 }
 

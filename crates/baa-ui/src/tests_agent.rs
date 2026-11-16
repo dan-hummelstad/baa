@@ -422,12 +422,12 @@ fn connect_from(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, ances
 
 /// What spawn_agent keeps for its child: a fresh nonce, made now.
 fn issue_nonce(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> String {
-    let nonce = crate::agent::secret();
     b.update(cx, |b, cx| {
-        b.agent.nonce = Some((nonce.clone(), cx.background_executor().now()));
-        b.agent.nonce_child = Some(CHILD);
-    });
-    nonce
+        let nonce = crate::agent::issue_nonce(false, cx.background_executor().now());
+        let secret = nonce.secret.clone();
+        b.agent.nonce = Some(crate::agent::Nonce { child: Some(CHILD), ..nonce });
+        secret
+    })
 }
 
 fn send(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64, line: &str) -> Receiver<String> {
@@ -571,7 +571,7 @@ fn the_panel_nonce_skips_the_sheet_once(cx: &mut TestAppContext) {
     assert_eq!(toast(&b, cx).as_deref(), Some(BAD));
 
     // The token is not a nonce, nor the other way round.
-    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    let nonce = issue_nonce(&b, cx);
     let t = token(&b, cx);
     let swapped = connect(&b, cx);
     send(&b, cx, swapped, &hello("nonce", &t));
@@ -608,7 +608,7 @@ fn the_nonce_pairs_only_a_process_below_the_chats_child(cx: &mut TestAppContext)
 
     // A nonce with no child (it exited) pairs nothing.
     let nonce = issue_nonce(&b, cx);
-    b.update(cx, |b, _| b.agent.nonce_child = None);
+    b.update(cx, |b, _| b.agent.nonce.as_mut().unwrap().child = None);
     let conn = connect(&b, cx);
     send(&b, cx, conn, &hello("nonce", &nonce));
     assert!(closed(&b, cx, conn));
@@ -765,7 +765,7 @@ fn only_a_nonce_child_started_in_auto_mode_is_auto(cx: &mut TestAppContext) {
     b.update(cx, |b, _| b.settings.claude.auto_mode = true);
     for started_auto in [false, true] {
         let nonce = issue_nonce(&b, cx);
-        b.update(cx, |b, _| b.agent.nonce_auto = started_auto);
+        b.update(cx, |b, _| b.agent.nonce.as_mut().unwrap().auto = started_auto);
         let conn = connect(&b, cx);
         send(&b, cx, conn, &hello("nonce", &nonce));
         assert!(served(&b, cx, conn));

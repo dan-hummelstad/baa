@@ -479,10 +479,10 @@ impl<H: WebHost> Browser<H> {
         let dir = agent_dir();
         std::fs::create_dir_all(&dir)?;
         // The hello of the `baa mcp` this child starts: lets it in without the connect sheet, once.
-        let nonce = crate::agent::secret();
         let auto = self.settings.claude.auto_mode;
+        let mut nonce = crate::agent::issue_nonce(auto, cx.background_executor().now());
         let mut child = Command::new(claude)
-            .args(argv(&exe, &nonce, self.agent.panel.chat.session.as_deref(), auto))
+            .args(argv(&exe, &nonce.secret, self.agent.panel.chat.session.as_deref(), auto))
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -507,9 +507,8 @@ impl<H: WebHost> Browser<H> {
                 let _ = tx.unbounded_send(Msg::Stderr(tail.into_iter().rev().collect::<Vec<_>>().join("\n")));
             });
         }
-        self.agent.nonce = Some((nonce, cx.background_executor().now()));
-        self.agent.nonce_child = i32::try_from(child.id()).ok();
-        self.agent.nonce_auto = auto;
+        nonce.child = i32::try_from(child.id()).ok();
+        self.agent.nonce = Some(nonce);
         let p = &mut self.agent.panel;
         p.stdin = child.stdin.take();
         p.child = Some(child);

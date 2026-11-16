@@ -96,9 +96,31 @@ fn same_secret(given: &str, expected: &str) -> bool {
     std::hint::black_box(a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y))) == 0
 }
 
+/// The chat child's one-time hello: used up by its first hello, gone when the child exits or
+/// on Stop.
+pub(crate) struct Nonce {
+    pub secret: String,
+    pub made: Instant,
+    /// The child it was made for: its hello must come from below it.
+    pub child: Option<i32>,
+    /// That child was started in auto mode (`--permission-mode auto`).
+    pub auto: bool,
+}
+
+impl Nonce {
+    pub(crate) fn started(&self, ancestors: &[i32]) -> bool {
+        self.child.is_some_and(|c| ancestors.contains(&c))
+    }
+}
+
+/// A fresh nonce made `now`, for a child not started yet.
+pub(crate) fn issue_nonce(auto: bool, now: Instant) -> Nonce {
+    Nonce { secret: secret(), made: now, child: None, auto }
+}
+
 /// A client's first line: `{"baa":"hello","token":"…"}` or `{"baa":"hello","nonce":"…"}`, never
 /// both. `nonce` is the panel's unused one, if any. The error says why, without the secret.
-pub(crate) fn check_hello(line: &str, token: &str, nonce: Option<&(String, Instant)>, now: Instant) -> Result<Hello, &'static str> {
+pub(crate) fn check_hello(line: &str, token: &str, nonce: Option<&Nonce>, now: Instant) -> Result<Hello, &'static str> {
     let v: Value = serde_json::from_str(line).map_err(|_| "no hello")?;
     if v.get("baa").and_then(Value::as_str) != Some("hello") {
         return Err("no hello");
@@ -109,8 +131,8 @@ pub(crate) fn check_hello(line: &str, token: &str, nonce: Option<&(String, Insta
             _ => Err("bad token"),
         },
         (None, Some(n)) => match (n.as_str(), nonce) {
-            (Some(n), Some((want, at))) if same_secret(n, want) => {
-                if now.saturating_duration_since(*at) < NONCE_FOR {
+            (Some(n), Some(want)) if same_secret(n, &want.secret) => {
+                if now.saturating_duration_since(want.made) < NONCE_FOR {
                     Ok(Hello::Nonce)
                 } else {
                     Err("expired nonce")
@@ -206,13 +228,7 @@ pub(crate) struct Agent<H: WebHost> {
     conns: HashMap<u64, UnixStream>,
     /// Each client's handshake; a client with none is closed or refused and gets nothing.
     pub(crate) state: HashMap<u64, Conn>,
-    /// The panel child's one-time nonce and when it was made: used up by its first hello,
-    /// gone when the child exits or on Stop.
-    pub(crate) nonce: Option<(String, Instant)>,
-    /// The pid of the child the nonce was made for: its hello must come from below it.
-    pub(crate) nonce_child: Option<i32>,
-    /// That child was started in auto mode (`--permission-mode auto`).
-    pub(crate) nonce_auto: bool,
+    pub(crate) nonce: Option<Nonce>,
     /// Clients that are a panel child started in auto mode.
     pub(crate) auto: HashSet<u64>,
     /// Token clients the user allowed on the connect sheet (Terminal's Claude Code).
@@ -243,8 +259,6 @@ impl<H: WebHost> Default for Agent<H> {
             conns: HashMap::new(),
             state: HashMap::new(),
             nonce: None,
-            nonce_child: None,
-            nonce_auto: false,
             auto: HashSet::new(),
             terminal: HashSet::new(),
             ask_next: HashSet::new(),
@@ -537,7 +551,7 @@ impl<H: WebHost> Browser<H> {
     /// Another window whose chat child is among `ancestors` and still waits for its hello.
     pub(crate) fn nonce_owner(&self, ancestors: &[i32], cx: &App) -> Option<gpui::WindowHandle<Self>> {
         crate::browser::windows::browsers::<H>(cx).into_iter().filter(|w| w.window_id() != self.window.window_id()).find(|w| {
-            w.read(cx).is_ok_and(|b| b.agent.nonce.is_some() && b.agent.nonce_child.is_some_and(|c| ancestors.contains(&c)))
+            w.read(cx).is_ok_and(|b| b.agent.nonce.as_ref().is_some_and(|n| n.started(ancestors)))
         })
     }
 
@@ -591,17 +605,16 @@ impl<H: WebHost> Browser<H> {
             // The nonce sits in `baa mcp`'s environment, which any process of the user's can read:
             // it pairs only a process the chat's own child started. Not used up, so the real one
             // still pairs.
-            // ponytail: a pid can be reused once its process is gone; the child is alive while
-            // its nonce is kept (both go when it exits).
-            Ok(Hello::Nonce) if !self.agent.nonce_child.is_some_and(|c| ancestors.contains(&c)) => {
+            // ponytail: a pid can be reused once its process is gone; the nonce, and the pid with
+            // it, goes when the child exits.
+            Ok(Hello::Nonce) if !self.agent.nonce.as_ref().is_some_and(|n| n.started(ancestors)) => {
                 self.agent_refuse(conn, "nonce from outside the chat's child", true, window, cx)
             }
             // baa started this process itself: no sheet. Used up.
             Ok(Hello::Nonce) => {
-                if self.agent.nonce_auto {
+                if self.agent.nonce.take().is_some_and(|n| n.auto) {
                     self.agent.auto.insert(conn);
                 }
-                self.agent.nonce = None;
                 self.agent.state.insert(conn, Conn::Open);
                 self.agent_open(conn, "claude", window, cx);
             }
@@ -1431,21 +1444,21 @@ mod tests {
     fn the_hello_names_one_secret() {
         let now = Instant::now();
         let tok = "ab".repeat(32);
-        let nonce = ("cd".repeat(32), now);
+        let nonce = issue_nonce(false, now);
         let h = |v: Value| check_hello(&v.to_string(), &tok, Some(&nonce), now);
         assert_eq!(h(json!({"baa": "hello", "token": tok})), Ok(Hello::Token));
-        assert_eq!(h(json!({"baa": "hello", "nonce": nonce.0})), Ok(Hello::Nonce));
-        assert_eq!(h(json!({"baa": "hello", "token": nonce.0})), Err("bad token"));
+        assert_eq!(h(json!({"baa": "hello", "nonce": nonce.secret})), Ok(Hello::Nonce));
+        assert_eq!(h(json!({"baa": "hello", "token": nonce.secret})), Err("bad token"));
         assert_eq!(h(json!({"baa": "hello", "nonce": tok})), Err("bad nonce"));
-        assert_eq!(h(json!({"baa": "hello", "token": tok, "nonce": nonce.0})), Err("bad token"));
+        assert_eq!(h(json!({"baa": "hello", "token": tok, "nonce": nonce.secret})), Err("bad token"));
         assert_eq!(h(json!({"baa": "hello", "token": 1})), Err("bad token"));
         assert_eq!(h(json!({"baa": "hi", "token": tok})), Err("no hello"));
         assert_eq!(h(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize"})), Err("no hello"));
         assert_eq!(check_hello("not json", &tok, None, now), Err("no hello"));
-        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.0}).to_string(), &tok, None, now), Err("bad nonce"));
+        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.secret}).to_string(), &tok, None, now), Err("bad nonce"));
         assert_eq!(check_hello(&json!({"baa": "hello", "token": ""}).to_string(), "", None, now), Err("bad token"));
         let later = now + NONCE_FOR;
-        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.0}).to_string(), &tok, Some(&nonce), later), Err("expired nonce"));
+        assert_eq!(check_hello(&json!({"baa": "hello", "nonce": nonce.secret}).to_string(), &tok, Some(&nonce), later), Err("expired nonce"));
     }
 
     #[test]
