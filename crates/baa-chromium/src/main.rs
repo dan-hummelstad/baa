@@ -284,7 +284,7 @@ mod app {
     extern "C" fn on_tab_state(_: *mut c_void, tab: ffi::TabId, s: *const ffi::TabState) {
         let s = unsafe { &*s };
         eprintln!(
-            "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={} muted={}",
+            "baa: tab_state tab={} url={} title={:?} icon={} loading={} back={} forward={} audible={} secure={} muted={} origin={}",
             tab_index(tab),
             text(s.url),
             text(s.title),
@@ -294,7 +294,8 @@ mod app {
             s.can_go_forward,
             s.audible,
             s.secure,
-            s.muted
+            s.muted,
+            text(s.committed_origin)
         );
         if s.crashed {
             eprintln!("baa: tab_crashed tab={}", tab_index(tab));
@@ -482,12 +483,13 @@ mod app {
     extern "C" fn visit_extension(_: *mut c_void, e: *const ffi::Extension) {
         let e = unsafe { &*e };
         eprintln!(
-            "baa: extension id={} name={:?} version={} enabled={} unpacked={} site_access={} popup={} options={} icon={} permissions={:?}",
+            "baa: extension id={} name={:?} version={} enabled={} unpacked={} needs_approval={} site_access={} popup={} options={} icon={} permissions={:?}",
             text(e.id),
             text(e.name),
             text(e.version),
             e.enabled as u8,
             e.unpacked as u8,
+            e.needs_approval as u8,
             e.site_access,
             text(e.popup_url),
             text(e.options_url),
@@ -559,7 +561,8 @@ mod app {
                         let mut s = empty_state();
                         let ok = (core.tab_get_state)(tab, &mut s);
                         let (url, title) = if ok { (text(s.url), text(s.title)) } else { Default::default() };
-                        eprintln!("baa: get_state ok={ok} url={url} title={title:?} loading={}", s.loading);
+                        let origin = if ok { text(s.committed_origin) } else { String::new() };
+                        eprintln!("baa: get_state ok={ok} url={url} title={title:?} loading={} origin={origin}", s.loading);
                     }
                     "cdpeval" => {
                         // What baa-web's eval_value sends (cdp.rs allows Runtime.evaluate).
