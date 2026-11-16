@@ -164,7 +164,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Developer, "environments", "Environments", "local staging production prod origin project env"),
     row(Developer, "dev_servers", "Dev servers folder", "localhost ports node vite live"),
     row(Developer, "console_badge", "Console errors on localhost tabs", "badge console error devtools localhost"),
-    row(Claude, "claude_enabled", "Let Claude use baa", "mcp agent ai assistant"),
+    row(Claude, "claude_enabled", "Let Claude use baa", "mcp agent ai assistant experimental"),
     row(Claude, "claude_spaces", "Spaces Claude can see", "allowed incognito"),
     row(Claude, "claude_evaluate", "Allow evaluate", "javascript run script"),
     row(Claude, "claude_auto", "Auto mode for the chat", "classifier permission approve ask automatic"),

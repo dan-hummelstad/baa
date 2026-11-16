@@ -244,7 +244,7 @@ impl<H: WebHost> SettingsView<H> {
         out.push(self.section("Typing"));
         out.push(self.row(
             "suggest",
-            "Sends what you type in the command bar to the search engine.",
+            &format!("On by default. Sends what you type in the command bar to {} before you press Enter.", s.search_engine.name),
             self.toggle("pref-suggest", s.search_suggest, |s, v| s.search_suggest = v, cx),
         ));
         out

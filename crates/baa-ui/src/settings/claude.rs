@@ -19,8 +19,8 @@ impl<H: WebHost> SettingsView<H> {
             }))
             .into_any_element();
         let mut out = vec![
-            self.section("Claude"),
-            self.row("claude_enabled", "Claude Code, in the panel (⌘J) or in a terminal, can read your tabs in the Spaces below. Acting on a site asks you first.", enabled),
+            self.section("Claude (experimental)"),
+            self.row("claude_enabled", "Experimental. Claude Code, in the panel (⌘J) or in a terminal, can read your tabs in the Spaces below. Acting on a site asks you first.", enabled),
             self.section("Access"),
             self.row("claude_spaces", "Incognito windows are never visible.", div().into_any_element()),
         ];
