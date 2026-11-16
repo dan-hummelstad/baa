@@ -83,6 +83,15 @@ pub fn front_window<H: WebHost>(cx: &App) -> Option<WindowHandle<Browser<H>>> {
         .or_else(|| all.first().copied())
 }
 
+/// The window that serves a client on agent.sock with these `ancestors`: the one whose chat
+/// child started it, which holds that child's nonce (incognito ones too), else the front window.
+pub fn agent_window<H: WebHost>(ancestors: &[i32], cx: &App) -> Option<WindowHandle<Browser<H>>> {
+    browsers::<H>(cx)
+        .into_iter()
+        .find(|w| w.read(cx).is_ok_and(|b| b.agent.nonce.as_ref().is_some_and(|n| n.started(ancestors))))
+        .or_else(|| front_window::<H>(cx))
+}
+
 /// A new window: a regular one on the front window's session (its Space, no tab yet), or
 /// an incognito one. Call it outside any window's update, so the front window can be read.
 pub fn open_window<H: WebHost>(private: bool, cx: &mut App) -> Option<WindowHandle<Browser<H>>> {

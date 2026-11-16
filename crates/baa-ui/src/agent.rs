@@ -509,14 +509,6 @@ impl<H: WebHost> Browser<H> {
         if !self.settings.claude.enabled {
             return;
         }
-        // The app shell hands every client to the front window; one that a chat's child started
-        // goes to that chat's window, which holds its nonce.
-        if let Some(owner) = self.nonce_owner(&peer.ancestors, cx) {
-            cx.defer(move |cx| {
-                owner.update(cx, |b, window, cx| b.serve_agent(peer, window, cx)).ok();
-            });
-            return;
-        }
         let AgentPeer { stream, pid, path, ancestors } = peer;
         let (Ok(read), Ok(mut write)) = (stream.try_clone(), stream.try_clone()) else { return };
         let conn = self.agent_connect(Some(stream), pid, path, ancestors);
@@ -546,13 +538,6 @@ impl<H: WebHost> Browser<H> {
             this.update_in(cx, |b, window, cx| b.agent_disconnected(conn, window, cx)).ok();
         })
         .detach();
-    }
-
-    /// Another window whose chat child is among `ancestors` and still waits for its hello.
-    pub(crate) fn nonce_owner(&self, ancestors: &[i32], cx: &App) -> Option<gpui::WindowHandle<Self>> {
-        crate::browser::windows::browsers::<H>(cx).into_iter().filter(|w| w.window_id() != self.window.window_id()).find(|w| {
-            w.read(cx).is_ok_and(|b| b.agent.nonce.as_ref().is_some_and(|n| n.started(ancestors)))
-        })
     }
 
     /// A new client waiting for its hello. `stream` is `None` in tests.

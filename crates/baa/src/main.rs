@@ -212,7 +212,7 @@ fn launch<H: WebHost>(
 
     cx.spawn(async move |cx| {
         while let Some(peer) = agent_rx.next().await {
-            let Some(window) = cx.update(|cx| baa_ui::front_window::<H>(cx)) else { break };
+            let Some(window) = cx.update(|cx| baa_ui::agent_window::<H>(&peer.ancestors, cx)) else { break };
             window.update(cx, |browser, window, cx| browser.serve_agent(peer, window, cx)).ok();
         }
     })

@@ -40,7 +40,7 @@ mod tests_windows;
 
 pub use agent::{AgentPeer, AgentSwitch};
 pub use browser::Browser;
-pub use browser::windows::{front_window, open_window, regular as browser_windows, window_options};
+pub use browser::windows::{agent_window, front_window, open_window, regular as browser_windows, window_options};
 pub use lil_baa::LilBaa;
 pub use icons::Assets;
 pub use settings::KeymapPath;

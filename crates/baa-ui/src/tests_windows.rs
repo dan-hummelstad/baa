@@ -208,13 +208,15 @@ fn a_chat_childs_client_goes_to_the_window_that_started_it(cx: &mut TestAppConte
     };
     issue(&b, bcx, 100);
     issue(&p, pcx, 200);
-    let owner = |cx: &mut VisualTestContext, ancestors: &'static [i32]| a.read_with(cx, |a, cx| a.nonce_owner(ancestors, cx).map(|w| w.window_id()));
+    let owner = |cx: &mut VisualTestContext, ancestors: &'static [i32]| cx.update(|_, cx| crate::agent_window::<MockHost>(ancestors, cx).map(|w| w.window_id()));
+    let front = cx.update(|_, cx| crate::front_window::<MockHost>(cx).map(|w| w.window_id()));
+    assert_eq!(front, Some(a.read_with(cx, |a, _| a.window.window_id())), "not a window that holds a nonce");
     assert_eq!(owner(cx, &[101, 100, 50]), Some(b.read_with(bcx, |b, _| b.window.window_id())));
     assert_eq!(owner(cx, &[201, 200]), Some(p.read_with(pcx, |p, _| p.window.window_id())), "incognito windows have chats too");
-    assert_eq!(owner(cx, &[300, 50]), None, "anyone else is served by the front window");
+    assert_eq!(owner(cx, &[300, 50]), front, "anyone else is served by the front window");
     // A nonce that was used up or went with its child routes nothing.
     b.update(bcx, |b, _| b.agent.nonce = None);
-    assert_eq!(owner(cx, &[101, 100]), None);
+    assert_eq!(owner(cx, &[101, 100]), front);
 }
 
 /// A served client and a chat child's nonce in `w`.
