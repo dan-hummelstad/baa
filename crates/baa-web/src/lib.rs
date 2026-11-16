@@ -279,6 +279,12 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     fn go_back(&self);
     fn go_forward(&self);
     fn url(&self) -> String;
+    /// The origin of the document the page shows now, serialized (`"https://x.com"`).
+    /// It can differ from [`Self::url`]'s origin: a pending navigation, or a blank popup
+    /// its opener writes into. `None` while it is opaque (an error page, `data:`, a
+    /// sandboxed page, a first navigation that has not committed). A change of it alone
+    /// emits [`PageEvent::HistoryChanged`].
+    fn committed_origin(&self) -> Option<String>;
     fn title(&self) -> String;
     fn is_loading(&self) -> bool;
     fn can_go_back(&self) -> bool;

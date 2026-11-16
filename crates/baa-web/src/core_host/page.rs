@@ -131,7 +131,10 @@ impl CorePage {
         if new.loading != old.loading {
             cx.emit(PageEvent::LoadingChanged(new.loading));
         }
-        if (new.can_go_back, new.can_go_forward) != (old.can_go_back, old.can_go_forward) {
+        // UrlChanged would record a visit; HistoryChanged only redraws. Its values may repeat.
+        if (new.can_go_back, new.can_go_forward) != (old.can_go_back, old.can_go_forward)
+            || new.committed_origin != old.committed_origin
+        {
             cx.emit(PageEvent::HistoryChanged { can_go_back: new.can_go_back, can_go_forward: new.can_go_forward });
         }
         if new.audible != old.audible {
@@ -300,6 +303,10 @@ impl PageHandle for CorePage {
     }
     fn url(&self) -> String {
         self.state.url.clone()
+    }
+    fn committed_origin(&self) -> Option<String> {
+        let origin = &self.state.committed_origin;
+        (!origin.is_empty() && origin != "null").then(|| origin.clone())
     }
     fn title(&self) -> String {
         self.state.title.clone()

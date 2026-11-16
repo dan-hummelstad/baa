@@ -66,6 +66,28 @@ fn tab_state_becomes_exactly_the_changed_events(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_committed_origin_is_its_own_and_a_change_of_it_alone_wakes_observers(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let page = env.page(1, "https://a.test", cx);
+    let tab = env.tab_of(&page, cx);
+    let origin = |cx: &mut TestAppContext| page.read_with(cx, |page, _| page.committed_origin());
+    assert_eq!(origin(cx), None, "nothing committed yet");
+
+    // A blank popup's opener wrote into it: the visible URL is the pending target's.
+    let pending = State { url: "https://b.test/", origin: "null", ..Default::default() };
+    env.state(tab, &pending);
+    cx.run_until_parked();
+    assert_eq!(origin(cx), None, "an opaque origin is none");
+    let seen = events(&page, cx);
+    let committed = State { origin: "https://a.test", ..pending.clone() };
+    env.state(tab, &committed);
+    cx.run_until_parked();
+    assert_eq!(origin(cx).as_deref(), Some("https://a.test"));
+    page.read_with(cx, |page, _| assert_eq!(page.url(), "https://b.test/"));
+    assert_eq!(*seen.borrow(), [PageEvent::HistoryChanged { can_go_back: false, can_go_forward: false }]);
+}
+
+#[gpui::test]
 fn dropping_a_page_closes_its_tab_once_and_unknown_tabs_are_ignored(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     let page = env.page(1, "https://a.test", cx);
