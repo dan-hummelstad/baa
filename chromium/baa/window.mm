@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/baa_target_url_hook.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
@@ -38,6 +39,7 @@
 #include "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/gfx/range/range.h"
 #include "ui/gfx/native_ui_types.h"
+#include "url/gurl.h"
 
 namespace baa {
 
@@ -868,6 +870,31 @@ bool OfferKey(const input::NativeWebKeyboardEvent& event, bool after_page) {
   }
   return Callbacks().key(CallbackContext(), (__bridge void*)ns_event,
                          after_page);
+}
+
+namespace {
+
+// Chrome's status bubble, drawn by the app: the link under the pointer in one of its pages.
+bool TargetUrl(content::WebContents* source, const GURL& url) {
+  BaaTab* tab = TabFor(source);
+  if (!tab) {
+    return false;
+  }
+  if (TabAnnounced(tab)) {
+    // A renderer can hover a link of any length; the app only shows it.
+    std::string spec = url.is_valid() ? url.spec() : std::string();
+    if (spec.size() > 2048) {
+      spec.resize(2048);
+    }
+    Callbacks().target_url(CallbackContext(), IdOf(tab), spec.c_str());
+  }
+  return true;
+}
+
+}  // namespace
+
+void InstallTargetUrlHook() {
+  g_baa_target_url = &TargetUrl;
 }
 
 }  // namespace baa

@@ -1,0 +1,62 @@
+--- a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
++++ b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
+@@ -8,6 +8,7 @@
+ if (!is_android) {
+   source_set("browser_web_contents_delegate") {
+     sources = [
++      "baa_target_url_hook.h",
+       "browser_web_contents_delegate.cc",
+       "browser_web_contents_delegate.h",
+     ]
+--- /dev/null
++++ b/chrome/browser/ui/browser_web_contents_delegate/baa_target_url_hook.h
+@@ -0,0 +1,18 @@
++// baa: lets the embedding app (//baa) show the URL of the link under the
++// pointer. //chrome cannot depend on //baa, so //baa sets this pointer. Null
++// keeps Chrome's status bubble.
++#ifndef CHROME_BROWSER_UI_BROWSER_WEB_CONTENTS_DELEGATE_BAA_TARGET_URL_HOOK_H_
++#define CHROME_BROWSER_UI_BROWSER_WEB_CONTENTS_DELEGATE_BAA_TARGET_URL_HOOK_H_
++
++class GURL;
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++// `url` is empty when the pointer left the link. Returns false to leave
++// `source` to Chrome's status bubble.
++using BaaTargetUrlFn = bool (*)(content::WebContents* source, const GURL& url);
++extern BaaTargetUrlFn g_baa_target_url;
++
++#endif  // CHROME_BROWSER_UI_BROWSER_WEB_CONTENTS_DELEGATE_BAA_TARGET_URL_HOOK_H_
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_ui_controller/browser_ui_controller.h"
++#include "chrome/browser/ui/browser_web_contents_delegate/baa_target_url_hook.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -125,6 +126,8 @@
+ 
+ DEFINE_USER_DATA(BrowserWebContentsDelegate);
+ 
++BaaTargetUrlFn g_baa_target_url = nullptr;
++
+ namespace {
+ 
+ const extensions::Extension* GetExtensionForOrigin(
+@@ -788,6 +791,11 @@
+ 
+ void BrowserWebContentsDelegate::UpdateTargetURL(content::WebContents* source,
+                                                  const GURL& url) {
++  // baa: the embedding app draws the hovered link of its pages itself; its
++  // window has no StatusBubbleViews, which the loop below casts every bubble to.
++  if (g_baa_target_url && g_baa_target_url(source, url)) {
++    return;
++  }
+   GURL patched_url = url;
+   if (patched_url.SchemeIs(content::kChromeUIScheme)) {
+     GURL::Replacements replacements;

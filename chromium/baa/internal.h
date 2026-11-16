@@ -37,6 +37,7 @@ void InstallContextMenuHook();  // menu.mm
 void InstallPipHook();          // media.mm
 void InstallAppModalFactory();  // dialogs: after Chrome installed its own
 void InstallSwipeHook();        // swipe.mm: patches/baa/history-swipe-hook.patch
+void InstallTargetUrlHook();    // window.mm: patches/baa/target-url-hook.patch
 // swipe.mm: a picture of what `contents` shows now, for a later swipe back or
 // forward to it; and dropping a closing page's pictures.
 void KeepPicture(content::WebContents* contents);

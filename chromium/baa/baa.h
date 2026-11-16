@@ -355,6 +355,14 @@ typedef struct {
   // again with baa_profile_extensions. Coalesced: at most one per turn of the
   // run loop, never inside a baa_* call. Never for an ephemeral profile.
   void (*extensions_changed)(void* ctx, BaaProfile* profile);
+
+  // The link under the pointer in the tab's page (Chrome's status bubble):
+  // `url` is where it goes, its spec cut at 2048 bytes, "" when the pointer
+  // left the link. Sent for the page the pointer is over, also when it is not
+  // its window's active tab (split view). The page chooses it: display only,
+  // never load it. Chrome sends no "" on a tab switch, a navigation or the
+  // tab closing: the receiver clears it itself then.
+  void (*target_url)(void* ctx, BaaTabId tab, const char* url);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
