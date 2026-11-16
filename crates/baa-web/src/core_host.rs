@@ -151,6 +151,7 @@ struct Snapshot {
     muted: bool,
     secure: bool,
     crashed: bool,
+    committed_origin: String,
 }
 
 impl Default for Snapshot {
@@ -167,6 +168,7 @@ impl Default for Snapshot {
             muted: false,
             secure: false,
             crashed: false,
+            committed_origin: String::new(),
         }
     }
 }
@@ -186,6 +188,7 @@ impl Snapshot {
                 muted: state.muted,
                 secure: state.secure,
                 crashed: state.crashed,
+                committed_origin: skin::to_baa(from_c(state.committed_origin)),
             }
         }
     }

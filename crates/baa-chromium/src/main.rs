@@ -211,6 +211,7 @@ mod app {
         focus_requested: on_focus_requested,
         swipe: on_swipe,
         signed_in: on_signed_in,
+        extensions_changed: on_extensions_changed,
     };
 
     thread_local! {
@@ -460,6 +461,9 @@ mod app {
     }
     extern "C" fn on_signed_in(_: *mut c_void, _: *mut ffi::Profile, account: u32) {
         eprintln!("baa: signed_in account={account}");
+    }
+    extern "C" fn on_extensions_changed(_: *mut c_void, _: *mut ffi::Profile) {
+        eprintln!("baa: extensions_changed");
     }
 
     extern "C" fn on_media(_: *mut c_void, tab: ffi::TabId, m: *const ffi::Media) {

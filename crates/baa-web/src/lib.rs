@@ -250,6 +250,12 @@ pub struct ChromeTabs(pub Vec<String>);
 #[derive(Default)]
 pub struct SignIns(pub Vec<(ProfileId, Account)>);
 
+/// Spaces whose extensions changed (installed, removed, enabled, disabled, updated, or
+/// disabled by an update that asks for more), oldest first, each once. Never an
+/// incognito profile. List them again with [`WebHost::extension_details`].
+#[derive(Default)]
+pub struct ExtensionsChanged(pub Vec<ProfileId>);
+
 /// Every download any page started this session, oldest first.
 #[derive(Default)]
 pub struct Downloads {
@@ -372,6 +378,13 @@ pub trait WebHost: 'static {
     /// for baa's own; `done` gets `None` if it could not be read.
     fn extension_details(&self, profile: ProfileId, cx: &mut App, done: Callback<Option<Vec<ExtensionInfo>>>);
     /// Carries out `change`; `done` once it has, with whether it worked.
+    /// `Enable(true)` goes through Chrome's re-enable flow: an extension that asks for no
+    /// more than the user approved is enabled at once (`true`). One with
+    /// [`ExtensionInfo::needs_approval`] gets the [`DialogKind::ExtensionInstall`] dialog on the
+    /// Space's active tab and is enabled only if the user accepts: `true` then means the
+    /// dialog is showing, and the outcome arrives through [`WebHost::extensions_changed`].
+    /// `false` changes nothing: it cannot be enabled, or it needs approval and the Space
+    /// has no active tab to ask on.
     fn change_extension(&self, profile: ProfileId, id: &str, change: ExtensionChange, cx: &mut App, done: Callback<bool>);
     /// Extensions installed in `profile`, for the toolbar.
     fn extensions(&self, profile: ProfileId) -> Vec<Extension>;
@@ -386,6 +399,8 @@ pub trait WebHost: 'static {
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
     /// Observe it and take them.
     fn sign_ins(&self) -> Entity<SignIns>;
+    /// Observe it and take them.
+    fn extensions_changed(&self) -> Entity<ExtensionsChanged>;
     /// From now on each of `accounts` is signed in (or out) alike in every Space but
     /// incognito ones, including Spaces opened later; the rest go their own way. Where
     /// Spaces differ now, `from`'s sign-in wins, else the newest.
@@ -475,6 +490,9 @@ pub struct ExtensionInfo {
     pub options: Option<String>,
     /// Loaded from a folder (developer mode); only these reload.
     pub unpacked: bool,
+    /// Disabled because it asks for more than the user approved (an update with new
+    /// permissions): [`ExtensionChange::Enable`]`(true)` shows the new permissions first.
+    pub needs_approval: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

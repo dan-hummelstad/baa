@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 14;
+pub const ABI_VERSION: c_int = 15;
 
 #[repr(C)]
 pub struct Profile {
@@ -26,6 +26,8 @@ pub struct TabState {
     pub muted: bool,
     pub secure: bool,
     pub crashed: bool,
+    /// Serialized; "null" when opaque. Can differ from `url`'s origin.
+    pub committed_origin: *const c_char,
 }
 
 /// One row of a context menu, depth-first (`BaaMenuItem`).
@@ -199,6 +201,7 @@ pub struct Extension {
     pub site_access: c_int,
     pub enabled: bool,
     pub unpacked: bool,
+    pub needs_approval: bool,
 }
 
 pub type ExtensionVisitor = extern "C" fn(ctx: *mut c_void, extension: *const Extension);
@@ -259,6 +262,7 @@ pub struct Callbacks {
         height: c_int,
     ),
     pub signed_in: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, account: u32),
+    pub extensions_changed: extern "C" fn(ctx: *mut c_void, profile: *mut Profile),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.

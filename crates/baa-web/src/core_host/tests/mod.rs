@@ -336,6 +336,7 @@ struct FakeExtension {
     popup: &'static str,
     enabled: bool,
     unpacked: bool,
+    needs_approval: bool,
 }
 
 impl FakeExtension {
@@ -364,6 +365,7 @@ impl FakeExtension {
             site_access: self.site_access,
             enabled: self.enabled,
             unpacked: self.unpacked,
+            needs_approval: self.needs_approval,
         };
         (raw, strings)
     }
@@ -459,13 +461,14 @@ struct State {
     audible: bool,
     muted: bool,
     crashed: bool,
+    origin: &'static str,
     view: usize,
 }
 
 impl State {
     /// The C struct and the strings it borrows.
-    fn raw(&self) -> (TabState, [CString; 3]) {
-        let strings = [self.url, self.title, self.favicon].map(|s| CString::new(s).unwrap());
+    fn raw(&self) -> (TabState, [CString; 4]) {
+        let strings = [self.url, self.title, self.favicon, self.origin].map(|s| CString::new(s).unwrap());
         let state = TabState {
             url: strings[0].as_ptr(),
             title: strings[1].as_ptr(),
@@ -478,6 +481,7 @@ impl State {
             muted: self.muted,
             secure: false,
             crashed: self.crashed,
+            committed_origin: strings[3].as_ptr(),
         };
         (state, strings)
     }

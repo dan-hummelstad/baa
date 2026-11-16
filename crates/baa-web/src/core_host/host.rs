@@ -20,7 +20,7 @@ use super::{
 };
 use crate::{
     Account, Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
-    PageHandle, Permission, PermissionState, ProfileId, SignIns, WebHost,
+    PageHandle, Permission, PermissionState, ProfileId, SignIns, ExtensionsChanged, WebHost,
 };
 
 /// `BAA_PERMISSION_*` bits, in bit order.
@@ -79,6 +79,7 @@ pub struct CoreWebHost {
     downloads: Entity<Downloads>,
     chrome_tabs: Entity<ChromeTabs>,
     sign_ins: Entity<SignIns>,
+    extensions_changed: Entity<ExtensionsChanged>,
     /// What `apply_settings` last sent; none before the first call.
     applied: RefCell<Option<Writes>>,
     /// Kept as the user chose it until it is sent to the engine.
@@ -95,6 +96,8 @@ impl CoreWebHost {
         *dispatch.downloads.borrow_mut() = Some(downloads.downgrade());
         let sign_ins = cx.new(|_| SignIns::default());
         *dispatch.sign_ins.borrow_mut() = Some(sign_ins.downgrade());
+        let extensions_changed = cx.new(|_| ExtensionsChanged::default());
+        *dispatch.extensions_changed.borrow_mut() = Some(extensions_changed.downgrade());
         *dispatch.app.borrow_mut() = Some(cx.to_async());
         Self {
             core,
@@ -105,6 +108,7 @@ impl CoreWebHost {
             downloads,
             chrome_tabs,
             sign_ins,
+            extensions_changed,
             applied: RefCell::default(),
             page_scheme: Cell::default(),
             skins: RefCell::default(),
@@ -301,6 +305,10 @@ impl WebHost for CoreWebHost {
 
     fn sign_ins(&self) -> Entity<SignIns> {
         self.sign_ins.clone()
+    }
+
+    fn extensions_changed(&self) -> Entity<ExtensionsChanged> {
+        self.extensions_changed.clone()
     }
 
     fn share_accounts(&self, accounts: &[Account], from: Option<ProfileId>) {

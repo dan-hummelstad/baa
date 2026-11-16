@@ -48,6 +48,7 @@ fn convert(raw: &ffi::Extension) -> (Extension, ExtensionInfo) {
             },
             options: some(raw.options_url),
             unpacked: raw.unpacked,
+            needs_approval: raw.needs_approval,
         },
     )
 }

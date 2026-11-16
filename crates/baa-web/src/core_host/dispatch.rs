@@ -25,7 +25,7 @@ use super::{
 };
 use crate::{
     Account, Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate, SwipePhase,
-    SignIns, Suggestion, ProfileId,
+    SignIns, Suggestion, ProfileId, ExtensionsChanged,
 };
 
 /// `BAA_ACCOUNT_*` bits.
@@ -100,6 +100,7 @@ pub(super) struct Dispatch {
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) sign_ins: RefCell<Option<WeakEntity<SignIns>>>,
+    pub(super) extensions_changed: RefCell<Option<WeakEntity<ExtensionsChanged>>>,
     /// The open profiles, for callbacks that name one by handle.
     pub(super) profile_ids: RefCell<HashMap<*mut Profile, ProfileId>>,
     pub(super) clears: Waiting<Callback<()>>,
@@ -121,6 +122,7 @@ impl Dispatch {
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
             sign_ins: RefCell::default(),
+            extensions_changed: RefCell::default(),
             profile_ids: RefCell::default(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
@@ -304,6 +306,26 @@ impl Dispatch {
             if let Some(list) = list {
                 list.update(cx, |list, cx| {
                     list.0.push((id, account));
+                    cx.notify();
+                })
+                .ok();
+            }
+        });
+    }
+
+    /// Like [`Self::signed_in`]: an incognito profile has no extensions of its own to list.
+    pub(super) fn extensions_changed(&'static self, profile: *mut Profile) {
+        let Some(id) = self.profile_ids.borrow().get(&profile).copied() else { return };
+        if super::profiles::is_ephemeral(id) {
+            return;
+        }
+        self.queue(move |cx| {
+            let list = self.extensions_changed.borrow().clone();
+            if let Some(list) = list {
+                list.update(cx, |list, cx| {
+                    if !list.0.contains(&id) {
+                        list.0.push(id);
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -549,6 +571,9 @@ pub(super) fn callbacks() -> Callbacks {
     extern "C" fn signed_in(ctx: *mut c_void, profile: *mut Profile, account: u32) {
         unsafe { dispatch(ctx) }.signed_in(profile, account);
     }
+    extern "C" fn extensions_changed(ctx: *mut c_void, profile: *mut Profile) {
+        unsafe { dispatch(ctx) }.extensions_changed(profile);
+    }
     Callbacks {
         key,
         tab_created,
@@ -574,6 +599,7 @@ pub(super) fn callbacks() -> Callbacks {
         focus_requested,
         swipe,
         signed_in,
+        extensions_changed,
     }
 }
 

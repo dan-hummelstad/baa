@@ -5,9 +5,9 @@ fn extensions_serve_the_toolbar_and_the_page_from_one_list(cx: &mut TestAppConte
     let env = Env::new(cx);
     EXTENSIONS.with(|list| {
         list.borrow_mut().extend([
-            FakeExtension { id: "bbb", name: "beta", permissions: "Read x\nChange y", site_access: 3, popup: "chrome-extension://bbb/p.html", enabled: true, unpacked: false },
-            FakeExtension { id: "aaa", name: "Alpha", permissions: "", site_access: 0, popup: "", enabled: false, unpacked: false },
-            FakeExtension { id: "ccc", name: "charlie", permissions: "Z", site_access: 2, popup: "", enabled: true, unpacked: true },
+            FakeExtension { id: "bbb", name: "beta", permissions: "Read x\nChange y", site_access: 3, popup: "chrome-extension://bbb/p.html", enabled: true, unpacked: false, needs_approval: false },
+            FakeExtension { id: "aaa", name: "Alpha", permissions: "", site_access: 0, popup: "", enabled: false, unpacked: false, needs_approval: true },
+            FakeExtension { id: "ccc", name: "charlie", permissions: "Z", site_access: 2, popup: "", enabled: true, unpacked: true, needs_approval: false },
         ]);
     });
 
@@ -26,6 +26,7 @@ fn extensions_serve_the_toolbar_and_the_page_from_one_list(cx: &mut TestAppConte
     assert_eq!(details[1].site_access, Some(SiteAccess::OnAllSites));
     assert_eq!(details[0].site_access, None);
     assert_eq!(details.iter().map(|e| e.unpacked).collect::<Vec<_>>(), [false, false, true]);
+    assert_eq!(details.iter().map(|e| e.needs_approval).collect::<Vec<_>>(), [true, false, false]);
 
     let ephemeral = env.host.ephemeral_profile();
     assert_eq!(env.host.extensions(ephemeral), []);
@@ -49,6 +50,36 @@ fn extension_changes_are_forwarded_with_their_codes(cx: &mut TestAppContext) {
         calls("profile_extension_change"),
         ["profile_extension_change bbb 0 0", "profile_extension_change bbb 1 0", "profile_extension_change bbb 2 2", "profile_extension_change bbb 3 0"]
     );
+}
+
+fn changed(env: &Env, cx: &mut TestAppContext) -> Vec<ProfileId> {
+    let list = env.host.extensions_changed();
+    cx.run_until_parked();
+    list.update(cx, |list, _| std::mem::take(&mut list.0))
+}
+
+#[gpui::test]
+fn a_change_of_a_spaces_extensions_reaches_the_ui_once_per_space(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    env.page(1, "https://a.test", cx);
+    env.page(2, "https://b.test", cx);
+    let (one, two) = (env.host.profile_handle(ProfileId(1)), env.host.profile_handle(ProfileId(2)));
+    for handle in [two, one, two] {
+        (env.callbacks.extensions_changed)(env.ctx(), handle);
+    }
+    assert_eq!(changed(&env, cx), [ProfileId(2), ProfileId(1)]);
+    (env.callbacks.extensions_changed)(env.ctx(), one);
+    assert_eq!(changed(&env, cx), [ProfileId(1)], "taken ones come again");
+}
+
+#[gpui::test]
+fn incognito_and_unknown_profiles_report_no_extension_change(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let private = env.host.ephemeral_profile();
+    env.page(private.0, "https://a.test", cx);
+    (env.callbacks.extensions_changed)(env.ctx(), env.host.profile_handle(private));
+    (env.callbacks.extensions_changed)(env.ctx(), fresh());
+    assert_eq!(changed(&env, cx), []);
 }
 
 #[gpui::test]
