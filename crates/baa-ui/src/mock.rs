@@ -32,6 +32,7 @@ pub struct MockHost {
     pub copies: RefCell<Vec<(ProfileId, ProfileId, String)>>,
     pub chrome_tabs: Entity<baa_web::ChromeTabs>,
     pub sign_ins: Entity<baa_web::SignIns>,
+    pub extensions_changed: Entity<baa_web::ExtensionsChanged>,
     /// Each `share_accounts`, in order.
     pub shares: RefCell<Vec<(Vec<baa_web::Account>, Option<ProfileId>)>>,
     pub extension_details: RefCell<Vec<baa_web::ExtensionInfo>>,
@@ -57,10 +58,14 @@ pub struct MockHost {
     pub made_default: Cell<u32>,
     /// (profile, css, dark) of each `set_webui_skin`.
     pub skins: RefCell<Vec<(ProfileId, String, bool)>>,
+    /// What `change_extension` answers.
+    pub change_result: Cell<bool>,
 }
 
 pub struct MockPage {
     pub url: RefCell<String>,
+    /// Set to split the committed document from `url`, as a pending load does; unset, it is `url`'s.
+    pub committed: RefCell<Option<Option<String>>>,
     pub visible: Cell<bool>,
     /// When it was last shown, counting every page's `set_visible(true)`: Chromium's active tab is the last.
     pub shown_at: Cell<u64>,
@@ -103,6 +108,12 @@ impl PageHandle for MockPage {
     fn go_forward(&self) {}
     fn url(&self) -> String {
         self.url.borrow().clone()
+    }
+    fn committed_origin(&self) -> Option<String> {
+        if let Some(set) = self.committed.borrow().clone() {
+            return set;
+        }
+        url::Url::parse(&self.url.borrow()).ok().map(|u| u.origin()).filter(|o| o.is_tuple()).map(|o| o.ascii_serialization())
     }
     fn title(&self) -> String {
         String::new()
@@ -238,6 +249,7 @@ impl MockHost {
             copies: RefCell::default(),
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
             sign_ins: cx.new(|_| baa_web::SignIns::default()),
+            extensions_changed: cx.new(|_| baa_web::ExtensionsChanged::default()),
             shares: RefCell::default(),
             extension_details: RefCell::default(),
             extension_changes: RefCell::default(),
@@ -254,6 +266,7 @@ impl MockHost {
             default_browser: Cell::default(),
             made_default: Cell::default(),
             skins: RefCell::default(),
+            change_result: Cell::new(true),
         }
     }
 }
@@ -283,6 +296,7 @@ impl WebHost for MockHost {
         }
         cx.new(|cx| MockPage {
             url: RefCell::new(url.into()),
+            committed: RefCell::default(),
             visible: Cell::new(true),
             shown_at: Cell::new(0),
             zoom: Cell::new(1.0),
@@ -341,7 +355,7 @@ impl WebHost for MockHost {
             }
         }
         drop(list);
-        done(true, cx)
+        done(self.change_result.get(), cx)
     }
     fn extensions(&self, profile: ProfileId) -> Vec<baa_web::Extension> {
         match self.profile_extensions.borrow().get(&profile) {
@@ -369,6 +383,9 @@ impl WebHost for MockHost {
     }
     fn sign_ins(&self) -> Entity<baa_web::SignIns> {
         self.sign_ins.clone()
+    }
+    fn extensions_changed(&self) -> Entity<baa_web::ExtensionsChanged> {
+        self.extensions_changed.clone()
     }
     fn share_accounts(&self, accounts: &[baa_web::Account], from: Option<ProfileId>) {
         self.shares.borrow_mut().push((accounts.to_vec(), from));

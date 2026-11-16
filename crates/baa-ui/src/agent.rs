@@ -171,7 +171,7 @@ pub(crate) struct AgentAsk<H: WebHost> {
     pub id: u64,
     conn: u64,
     /// `scheme://host:port`, what the approval is for.
-    origin: String,
+    pub origin: String,
     /// What the sheet says Claude wants to do: "click", "run JavaScript".
     pub what: &'static str,
     /// `evaluate` and connect: Once and Deny cover this call only. `evaluate`'s "For this
@@ -284,7 +284,17 @@ fn web_origin(url: &str) -> Option<String> {
     Some(u.origin().ascii_serialization())
 }
 
+/// The origin CDP input and scripts reach: the committed document's. The visible URL leads a
+/// browser-initiated load, so an approval keyed on it could cover the previous site's document,
+/// still committed while the load waits; until the two agree the page is not used at all.
+fn page_origin<P: PageHandle>(page: &P) -> Result<String, &'static str> {
+    let visible = web_origin(&page.url()).ok_or(NOT_WEB)?;
+    let committed = page.committed_origin().as_deref().and_then(web_origin).ok_or(LOADING)?;
+    if committed == visible { Ok(committed) } else { Err(LOADING) }
+}
+
 const NOT_WEB: &str = "Claude can only use http and https pages.";
+const LOADING: &str = "The page is still loading; try again.";
 const NO_TAB: &str = "No such tab (or it is in a Space Claude cannot see).";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -459,7 +469,7 @@ fn checked_act<P: PageHandle + 'static>(
             if let Err(e) = allowed(&checked) {
                 return reply.refuse(e);
             }
-            if web_origin(&target.read(cx).url()).as_deref() != Some(origin.as_str()) {
+            if page_origin(target.read(cx)).ok() != Some(origin) {
                 return reply.refuse("The page changed; try again.");
             }
             reply.text(act(target.read(cx)));
@@ -810,17 +820,19 @@ impl<H: WebHost> Browser<H> {
         self.settings.claude.allowed_spaces.contains(&space) && self.session.space(space).is_some_and(|s| !s.ephemeral)
     }
 
-    /// The tab `args` names (or the active one), if Claude may see it, and its page's origin.
+    /// The tab `args` names (or the active one), if Claude may see it, and its origin: the
+    /// committed document's when it has a page, else the address it would load.
     fn agent_tab(&self, args: &Value, cx: &App) -> Result<(TabId, String), String> {
         let id = match args.get("tab").and_then(Value::as_u64) {
             Some(n) => TabId(n),
             None => self.active_tab().ok_or(NO_TAB)?,
         };
         let tab = self.session.tab(id).filter(|t| self.space_visible(t.space)).ok_or(NO_TAB)?;
-        // The page's own address is the one that counts: the session's can lag a load.
-        let live = self.pages.get(&id).map(|(p, _)| p.read(cx).url());
-        web_origin(&tab.url).ok_or(NOT_WEB)?;
-        let origin = web_origin(live.as_deref().unwrap_or(&tab.url)).ok_or(NOT_WEB)?;
+        let unloaded = web_origin(&tab.url).ok_or(NOT_WEB)?;
+        let origin = match self.pages.get(&id) {
+            Some((p, _)) => page_origin(p.read(cx))?,
+            None => unloaded,
+        };
         Ok((id, origin))
     }
 
@@ -930,20 +942,22 @@ impl<H: WebHost> Browser<H> {
                     self.log(tool, kind, "", true);
                     return reply.refuse(NOT_WEB);
                 };
-                let id = match self.agent_tab(&args, cx) {
-                    Ok((id, _)) => id,
+                let (id, from) = match self.agent_tab(&args, cx) {
+                    Ok(x) => x,
                     Err(e) => {
                         self.log(tool, kind, "", true);
                         return reply.refuse(e);
                     }
                 };
-                // The new origin is the one approved: acting on it later needs no second sheet
-                // for this load, and a later act on the tab checks its origin again.
-                let origin = web_origin(&url).expect("checked above");
-                self.gate(conn, tool, origin, false, reply, window, cx, move |b, reply, window, cx| {
+                // Leaving a page acts on it, so its origin is asked for first; then the new origin,
+                // which is the one approved for acting after the load with no second sheet.
+                let to = web_origin(&url).expect("checked above");
+                let left = from.clone();
+                let load = move |b: &mut Self, reply: Reply, window: &mut Window, cx: &mut Context<Self>| {
                     let Ok(page) = b.agent_page(id) else { return reply.refuse("That tab is not loaded; activate_tab first.") };
-                    if b.agent_tab(&json!({"tab": id.0}), cx).is_err() {
-                        return reply.refuse(NO_TAB);
+                    match b.agent_tab(&json!({"tab": id.0}), cx) {
+                        Ok((_, now)) if now == left => {}
+                        _ => return reply.refuse("The page changed while waiting for approval; try again."),
                     }
                     // Agent-supplied, not typed: loaded only after the user approved its origin on
                     // the sheet just now (that approval is the user's pick), and only http(s).
@@ -954,6 +968,18 @@ impl<H: WebHost> Browser<H> {
                     b.agent.driven.insert(id);
                     b.sync(window, cx);
                     reply.text(format!("Loading {url}"));
+                };
+                if to == from {
+                    return self.gate(conn, tool, to, false, reply, window, cx, load);
+                }
+                // The first sheet takes Claude Code's "ask next time"; the destination must not
+                // ride on an answer given for the page being left.
+                let ask_next = self.agent.ask_next.contains(&conn);
+                self.gate(conn, tool, from, false, reply, window, cx, move |b, reply, window, cx| {
+                    if ask_next {
+                        b.agent.ask_next.insert(conn);
+                    }
+                    b.gate(conn, tool, to, false, reply, window, cx, load);
                 });
             }
             _ => self.act_tool(conn, tool, args, reply, window, cx),
@@ -1116,7 +1142,7 @@ impl<H: WebHost> Browser<H> {
                             }
                             let at = result.ok().and_then(|v| Some((v["x"].as_f64()?, v["y"].as_f64()?)));
                             let Some((x, y)) = at else { return reply.refuse("No element matches the selector.") };
-                            if web_origin(&target.read(cx).url()).as_deref() != Some(origin.as_str()) {
+                            if page_origin(target.read(cx)).ok() != Some(origin) {
                                 return reply.refuse("The page changed; try again.");
                             }
                             target.read(cx).click(x as f32, y as f32);

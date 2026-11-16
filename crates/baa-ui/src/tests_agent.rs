@@ -887,3 +887,127 @@ fn terminal_auto_lets_an_allowed_terminal_client_approve_its_own_acts(cx: &mut T
     b.update(cx, |b, cx| b.stop_agent(cx));
     assert!(b.read_with(cx, |b, _| b.agent.terminal.is_empty()));
 }
+
+/// The engine's committed document, apart from the visible URL: a load still waiting for its response.
+fn committed(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, origin: Option<&str>) {
+    b.read_with(cx, |b, cx| *b.pages[&tab].0.read(cx).committed.borrow_mut() = Some(origin.map(str::to_string)));
+}
+
+fn evals(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId) -> usize {
+    b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).evals.borrow().len())
+}
+
+#[gpui::test]
+fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| b.settings.claude.evaluate_allowed = true);
+    let tab = enabled_with(&b, cx, "https://approved.example/");
+    let rx = call(&b, cx, "press_key", json!({"key": "a"}));
+    decide(&b, cx, Answer::Session);
+    pass_checks(&b, cx, tab);
+    assert!(!answer(&rx).unwrap().0);
+    let acts = [
+        ("type", json!({"text": "x"})),
+        ("press_key", json!({"key": "Enter"})),
+        ("click", json!({"x": 1, "y": 1})),
+        ("click", json!({"selector": "#go"})),
+        ("evaluate", json!({"script": "1"})),
+    ];
+
+    // The bank is still committed while the tab already shows approved.example's pending URL.
+    moved(&b, cx, tab, "https://approved.example/slow");
+    for origin in [Some("https://bank.example"), None] {
+        committed(&b, cx, tab, origin);
+        for (tool, args) in &acts {
+            let (refused, text) = answer(&call(&b, cx, tool, args.clone())).unwrap();
+            assert!(refused && text.contains("loading"), "{tool} on {origin:?}: {text}");
+        }
+        let (refused, _) = answer(&call(&b, cx, "read_page", json!({}))).unwrap();
+        assert!(refused, "a page mid-navigation is not read");
+    }
+    assert_eq!(asks(&b, cx), 0);
+    assert_eq!(evals(&b, cx, tab), 0);
+
+    // A commit elsewhere while a check runs: the act it was checking is dropped.
+    for (tool, args) in &acts[..4] {
+        committed(&b, cx, tab, Some("https://approved.example"));
+        let rx = call(&b, cx, tool, args.clone());
+        committed(&b, cx, tab, Some("https://bank.example"));
+        answer_checks(&b, cx, tab, json!({"secret": false, "frame": false, "x": 1, "y": 1}));
+        let (refused, text) = answer(&rx).unwrap();
+        assert!(refused && text.contains("changed"), "{tool}: {text}");
+    }
+    assert_eq!(cdp(&b, cx, tab), ["press_key a"], "no input reached the bank");
+
+    // evaluate: the commit lands while its sheet is up.
+    committed(&b, cx, tab, Some("https://approved.example"));
+    let rx = call(&b, cx, "evaluate", json!({"script": "document.cookie"}));
+    assert_eq!(asks(&b, cx), 1);
+    committed(&b, cx, tab, Some("https://bank.example"));
+    decide(&b, cx, Answer::Once);
+    assert!(answer(&rx).unwrap().0);
+    assert_eq!(evals(&b, cx, tab), 0, "the script never ran");
+}
+
+#[gpui::test]
+fn navigating_away_needs_the_page_being_left_approved(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let target = enabled_with(&b, cx, "https://approved.example/");
+    let rx = call(&b, cx, "press_key", json!({"key": "a"}));
+    decide(&b, cx, Answer::Session);
+    pass_checks(&b, cx, target);
+    answer(&rx).unwrap();
+    let open = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, url: &str| {
+        b.update_in(cx, |b, window, cx| {
+            b.open_url(url, window, cx);
+            b.active_tab().unwrap()
+        })
+    };
+    let loads = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId| b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).loads.borrow().clone());
+    let ask_origin = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.agent.asks[0].origin.clone());
+
+    // The destination is approved; the bank the tab shows is not.
+    let bank = open(&b, cx, "https://bank.example/");
+    let rx = call(&b, cx, "navigate", json!({"tab": bank.0, "url": "https://approved.example/x"}));
+    assert_eq!(asks(&b, cx), 1);
+    assert_eq!(ask_origin(&b, cx), "https://bank.example");
+    decide(&b, cx, Answer::Deny);
+    assert!(answer(&rx).unwrap().0);
+    let rx = call(&b, cx, "navigate", json!({"tab": bank.0, "url": "https://approved.example/x"}));
+    assert_eq!(asks(&b, cx), 0, "denied for the session: refused with no sheet");
+    assert!(answer(&rx).unwrap().0);
+    assert!(loads(&b, cx, bank).is_empty());
+
+    // Allowed on the page being left, then the destination asks for itself.
+    let shop = open(&b, cx, "https://shop.example/");
+    let rx = call(&b, cx, "navigate", json!({"tab": shop.0, "url": "https://new.example/"}));
+    assert_eq!(ask_origin(&b, cx), "https://shop.example");
+    decide(&b, cx, Answer::Once);
+    assert_eq!(asks(&b, cx), 1);
+    assert_eq!(ask_origin(&b, cx), "https://new.example");
+    assert!(loads(&b, cx, shop).is_empty());
+    decide(&b, cx, Answer::Once);
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(loads(&b, cx, shop), ["https://new.example/"]);
+
+    // A tab mid-navigation is not navigated again.
+    committed(&b, cx, target, Some("https://bank.example"));
+    let (refused, text) = answer(&call(&b, cx, "navigate", json!({"tab": target.0, "url": "https://approved.example/"}))).unwrap();
+    assert!(refused && text.contains("loading"), "{text}");
+}
+
+#[gpui::test]
+fn an_unloaded_tab_is_neither_read_nor_acted_on(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let idle = b.update(cx, |b, _| {
+        let here = b.session.active_space().unwrap();
+        b.session.open_tab(here, "https://idle.example/", baa_model::now())
+    });
+    let (refused, text) = answer(&call(&b, cx, "read_page", json!({"tab": idle.0}))).unwrap();
+    assert!(refused && text.contains("not loaded"), "{text}");
+    let rx = call(&b, cx, "type", json!({"tab": idle.0, "text": "x"}));
+    decide(&b, cx, Answer::Once);
+    let (refused, text) = answer(&rx).unwrap();
+    assert!(refused && text.contains("not loaded"), "{text}");
+}
