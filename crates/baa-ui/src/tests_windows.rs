@@ -195,6 +195,29 @@ fn a_swipe_with_one_space_springs_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_chat_childs_client_goes_to_the_window_that_started_it(cx: &mut TestAppContext) {
+    let (a, cx) = browser(cx);
+    a.update(cx, |a, cx| a.set_claude_enabled(true, cx));
+    let (b, bcx) = open(cx, false);
+    let (p, pcx) = open(cx, true);
+    let issue = |w: &B, cx: &mut VisualTestContext, child: i32| {
+        w.update(cx, |w, cx| {
+            w.agent.nonce = Some((crate::agent::secret(), cx.background_executor().now()));
+            w.agent.nonce_child = Some(child);
+        })
+    };
+    issue(&b, bcx, 100);
+    issue(&p, pcx, 200);
+    let owner = |cx: &mut VisualTestContext, ancestors: &'static [i32]| a.read_with(cx, |a, cx| a.nonce_owner(ancestors, cx).map(|w| w.window_id()));
+    assert_eq!(owner(cx, &[101, 100, 50]), Some(b.read_with(bcx, |b, _| b.window.window_id())));
+    assert_eq!(owner(cx, &[201, 200]), Some(p.read_with(pcx, |p, _| p.window.window_id())), "incognito windows have chats too");
+    assert_eq!(owner(cx, &[300, 50]), None, "anyone else is served by the front window");
+    // A nonce that was used up or went with its child routes nothing.
+    b.update(bcx, |b, _| b.agent.nonce = None);
+    assert_eq!(owner(cx, &[101, 100]), None);
+}
+
+#[gpui::test]
 fn importing_is_refused_in_an_incognito_window(cx: &mut TestAppContext) {
     use baa_model::import::{Source, SourceKind};
     let (a, cx) = browser(cx);

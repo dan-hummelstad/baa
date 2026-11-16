@@ -491,12 +491,33 @@ fn parent_pid(pid: libc::pid_t) -> Option<libc::pid_t> {
 fn agent_peer(stream: UnixStream) -> AgentPeer {
     let me = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
     let mut pid = peer_pid(&stream);
+    let ancestors = lineage(pid);
     let mut path = pid.and_then(pid_path);
     if me.is_some() && path.as_ref().and_then(|p| p.canonicalize().ok()) == me {
         pid = pid.and_then(parent_pid);
         path = pid.and_then(pid_path);
     }
-    AgentPeer { stream, pid, path: path.map(|p| p.display().to_string()) }
+    AgentPeer { stream, pid, path: path.map(|p| p.display().to_string()), ancestors }
+}
+
+/// `pid`, then its parent and so on up to six levels, nearest first; stops below launchd (pid 1)
+/// or at a lookup that fails.
+fn lineage(pid: Option<libc::pid_t>) -> Vec<i32> {
+    std::iter::successors(pid, |p| parent_pid(*p)).take_while(|p| *p > 1).take(7).collect()
+}
+
+#[test]
+fn a_lineage_climbs_from_the_process_itself() {
+    let me = std::process::id() as libc::pid_t;
+    // SAFETY: getppid has no preconditions.
+    let parent = unsafe { libc::getppid() };
+    let l = lineage(Some(me));
+    assert_eq!(l[0], me);
+    if parent > 1 {
+        assert_eq!(l[1], parent);
+    }
+    assert!(l.len() <= 7 && !l.contains(&1), "{l:?}");
+    assert!(lineage(None).is_empty());
 }
 
 /// `baa mcp`: a hello line (BAA_AGENT_NONCE from the chat panel's `claude`, else the pairing

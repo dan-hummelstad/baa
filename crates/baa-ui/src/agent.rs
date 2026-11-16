@@ -52,12 +52,15 @@ pub struct AgentPeer {
     pub stream: UnixStream,
     pub pid: Option<i32>,
     pub path: Option<String>,
+    /// The socket peer's own pid, then its parent's and so on up to six levels, nearest first:
+    /// a nonce pairs only a process the panel's own child started.
+    pub ancestors: Vec<i32>,
 }
 
 /// Where a client is in the handshake.
 pub(crate) enum Conn {
     /// Its first line must be the hello.
-    Hello { pid: Option<i32>, path: Option<String> },
+    Hello { pid: Option<i32>, path: Option<String>, ancestors: Vec<i32> },
     /// Paired by token, the connect sheet is up; what it sent meanwhile waits here unanswered.
     Asking { lines: Vec<String>, tx: std_mpsc::Sender<String> },
     /// Allowed (or the panel's own child): served.
@@ -206,6 +209,8 @@ pub(crate) struct Agent<H: WebHost> {
     /// The panel child's one-time nonce and when it was made: used up by its first hello,
     /// gone when the child exits or on Stop.
     pub(crate) nonce: Option<(String, Instant)>,
+    /// The pid of the child the nonce was made for: its hello must come from below it.
+    pub(crate) nonce_child: Option<i32>,
     /// That child was started in auto mode (`--permission-mode auto`).
     pub(crate) nonce_auto: bool,
     /// Clients that are a panel child started in auto mode.
@@ -238,6 +243,7 @@ impl<H: WebHost> Default for Agent<H> {
             conns: HashMap::new(),
             state: HashMap::new(),
             nonce: None,
+            nonce_child: None,
             nonce_auto: false,
             auto: HashSet::new(),
             terminal: HashSet::new(),
@@ -489,9 +495,17 @@ impl<H: WebHost> Browser<H> {
         if !self.settings.claude.enabled {
             return;
         }
-        let AgentPeer { stream, pid, path } = peer;
+        // The app shell hands every client to the front window; one that a chat's child started
+        // goes to that chat's window, which holds its nonce.
+        if let Some(owner) = self.nonce_owner(&peer.ancestors, cx) {
+            cx.defer(move |cx| {
+                owner.update(cx, |b, window, cx| b.serve_agent(peer, window, cx)).ok();
+            });
+            return;
+        }
+        let AgentPeer { stream, pid, path, ancestors } = peer;
         let (Ok(read), Ok(mut write)) = (stream.try_clone(), stream.try_clone()) else { return };
-        let conn = self.agent_connect(Some(stream), pid, path);
+        let conn = self.agent_connect(Some(stream), pid, path, ancestors);
         let (reply_tx, reply_rx) = std_mpsc::channel::<String>();
         std::thread::spawn(move || {
             for line in reply_rx {
@@ -520,14 +534,21 @@ impl<H: WebHost> Browser<H> {
         .detach();
     }
 
+    /// Another window whose chat child is among `ancestors` and still waits for its hello.
+    pub(crate) fn nonce_owner(&self, ancestors: &[i32], cx: &App) -> Option<gpui::WindowHandle<Self>> {
+        crate::browser::windows::browsers::<H>(cx).into_iter().filter(|w| w.window_id() != self.window.window_id()).find(|w| {
+            w.read(cx).is_ok_and(|b| b.agent.nonce.is_some() && b.agent.nonce_child.is_some_and(|c| ancestors.contains(&c)))
+        })
+    }
+
     /// A new client waiting for its hello. `stream` is `None` in tests.
-    pub(crate) fn agent_connect(&mut self, stream: Option<UnixStream>, pid: Option<i32>, path: Option<String>) -> u64 {
+    pub(crate) fn agent_connect(&mut self, stream: Option<UnixStream>, pid: Option<i32>, path: Option<String>, ancestors: Vec<i32>) -> u64 {
         self.agent.next_conn += 1;
         let conn = self.agent.next_conn;
         if let Some(stream) = stream {
             self.agent.conns.insert(conn, stream);
         }
-        self.agent.state.insert(conn, Conn::Hello { pid, path });
+        self.agent.state.insert(conn, Conn::Hello { pid, path, ancestors });
         conn
     }
 
@@ -541,15 +562,25 @@ impl<H: WebHost> Browser<H> {
             Some(Conn::Asking { lines, .. }) if lines.len() < PENDING_CAP => lines.push(line.to_string()),
             Some(Conn::Asking { .. }) => self.agent_refuse(conn, "too many messages before Allow", false, window, cx),
             Some(Conn::Hello { .. }) => {
-                let Some(Conn::Hello { pid, path }) = self.agent.state.remove(&conn) else { return };
-                self.agent_hello(conn, line, pid, path, tx, window, cx);
+                let Some(Conn::Hello { pid, path, ancestors }) = self.agent.state.remove(&conn) else { return };
+                self.agent_hello(conn, line, pid, path, &ancestors, tx, window, cx);
             }
             None => {}
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn agent_hello(&mut self, conn: u64, line: &str, pid: Option<i32>, path: Option<String>, tx: std_mpsc::Sender<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn agent_hello(
+        &mut self,
+        conn: u64,
+        line: &str,
+        pid: Option<i32>,
+        path: Option<String>,
+        ancestors: &[i32],
+        tx: std_mpsc::Sender<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let now = cx.background_executor().now();
         let hello = check_hello(line, &self.settings.claude.token, self.agent.nonce.as_ref(), now);
         if hello == Err("expired nonce") {
@@ -557,6 +588,14 @@ impl<H: WebHost> Browser<H> {
         }
         match hello {
             Err(why) => self.agent_refuse(conn, why, true, window, cx),
+            // The nonce sits in `baa mcp`'s environment, which any process of the user's can read:
+            // it pairs only a process the chat's own child started. Not used up, so the real one
+            // still pairs.
+            // ponytail: a pid can be reused once its process is gone; the child is alive while
+            // its nonce is kept (both go when it exits).
+            Ok(Hello::Nonce) if !self.agent.nonce_child.is_some_and(|c| ancestors.contains(&c)) => {
+                self.agent_refuse(conn, "nonce from outside the chat's child", true, window, cx)
+            }
             // baa started this process itself: no sheet. Used up.
             Ok(Hello::Nonce) => {
                 if self.agent.nonce_auto {

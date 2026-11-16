@@ -68,6 +68,11 @@ pub fn regular<H: WebHost>(cx: &App) -> Vec<WindowHandle<Browser<H>>> {
         .collect()
 }
 
+/// Every browser window, regular and incognito.
+pub(crate) fn browsers<H: WebHost>(cx: &App) -> Vec<WindowHandle<Browser<H>>> {
+    cx.windows().into_iter().filter_map(|w| w.downcast::<Browser<H>>()).collect()
+}
+
 /// The regular window nearest the front: links from other apps, Claude and the dock go there.
 pub fn front_window<H: WebHost>(cx: &App) -> Option<WindowHandle<Browser<H>>> {
     let all = regular::<H>(cx);

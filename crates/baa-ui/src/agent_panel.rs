@@ -485,6 +485,7 @@ impl<H: WebHost> Browser<H> {
             });
         }
         self.agent.nonce = Some((nonce, cx.background_executor().now()));
+        self.agent.nonce_child = i32::try_from(child.id()).ok();
         self.agent.nonce_auto = auto;
         let p = &mut self.agent.panel;
         p.stdin = child.stdin.take();

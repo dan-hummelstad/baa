@@ -407,9 +407,27 @@ const CLAUDE: &str = "/Users/me/.local/share/claude/versions/2.1.318";
 const BAD: &str = "A process tried to connect to Claude with a bad token";
 const INIT: &str = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
 
-/// A new client on agent.sock, before its hello; pid and path as the app shell found them.
+/// The chat's `claude` child; the `baa mcp` it starts is 4243.
+const CHILD: i32 = 4242;
+
+/// A new client on agent.sock, before its hello; pid, path and lineage as the app shell found
+/// them for a `baa mcp` that the chat's child started.
 fn connect(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> u64 {
-    b.update(cx, |b, _| b.agent_connect(None, Some(4242), Some(CLAUDE.into())))
+    connect_from(b, cx, vec![4243, CHILD, 300])
+}
+
+fn connect_from(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, ancestors: Vec<i32>) -> u64 {
+    b.update(cx, |b, _| b.agent_connect(None, Some(CHILD), Some(CLAUDE.into()), ancestors))
+}
+
+/// What spawn_agent keeps for its child: a fresh nonce, made now.
+fn issue_nonce(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> String {
+    let nonce = crate::agent::secret();
+    b.update(cx, |b, cx| {
+        b.agent.nonce = Some((nonce.clone(), cx.background_executor().now()));
+        b.agent.nonce_child = Some(CHILD);
+    });
+    nonce
 }
 
 fn send(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, conn: u64, line: &str) -> Receiver<String> {
@@ -535,8 +553,7 @@ fn deny_closes_the_connection(cx: &mut TestAppContext) {
 fn the_panel_nonce_skips_the_sheet_once(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     enabled_with(&b, cx, "https://github.com/");
-    let nonce = crate::agent::secret();
-    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    let nonce = issue_nonce(&b, cx);
     cx.executor().advance_clock(std::time::Duration::from_secs(30));
 
     let conn = connect(&b, cx);
@@ -570,11 +587,38 @@ fn the_panel_nonce_skips_the_sheet_once(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_nonce_pairs_only_a_process_below_the_chats_child(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    enabled_with(&b, cx, "https://github.com/");
+    let nonce = issue_nonce(&b, cx);
+    // Read from `baa mcp`'s environment by another process of the user's.
+    for ancestors in [vec![], vec![9000], vec![9000, 9001, 1], vec![CHILD + 1]] {
+        b.update(cx, |b, _| b.toast = None);
+        let conn = connect_from(&b, cx, ancestors.clone());
+        send(&b, cx, conn, &hello("nonce", &nonce));
+        assert!(closed(&b, cx, conn), "{ancestors:?}");
+        assert_eq!(toast(&b, cx).as_deref(), Some(BAD));
+        assert_eq!(asks(&b, cx), 0);
+    }
+    assert!(b.read_with(cx, |b, _| b.agent.nonce.is_some()), "not used up: the real one still pairs");
+    // The child itself, or anything it started a few levels down.
+    let conn = connect_from(&b, cx, vec![4244, 4243, CHILD, 300]);
+    send(&b, cx, conn, &hello("nonce", &nonce));
+    assert!(served(&b, cx, conn));
+
+    // A nonce with no child (it exited) pairs nothing.
+    let nonce = issue_nonce(&b, cx);
+    b.update(cx, |b, _| b.agent.nonce_child = None);
+    let conn = connect(&b, cx);
+    send(&b, cx, conn, &hello("nonce", &nonce));
+    assert!(closed(&b, cx, conn));
+}
+
+#[gpui::test]
 fn an_expired_nonce_is_refused(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     enabled_with(&b, cx, "https://github.com/");
-    let nonce = crate::agent::secret();
-    b.update(cx, |b, cx| b.agent.nonce = Some((nonce.clone(), cx.background_executor().now())));
+    let nonce = issue_nonce(&b, cx);
     cx.executor().advance_clock(crate::agent::NONCE_FOR);
     let conn = connect(&b, cx);
     send(&b, cx, conn, &hello("nonce", &nonce));
@@ -619,12 +663,12 @@ fn bad_hellos_and_deny_shut_the_socket(cx: &mut TestAppContext) {
     };
 
     let (client, server) = UnixStream::pair().unwrap();
-    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None));
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None, vec![]));
     send(&b, cx, conn, &hello("token", "00"));
     assert!(eof(client), "a bad token is closed without a word");
 
     let (client, server) = UnixStream::pair().unwrap();
-    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), Some(7), Some("/x/claude".into())));
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), Some(7), Some("/x/claude".into()), vec![8, 7]));
     send(&b, cx, conn, &hello("token", &t));
     send(&b, cx, conn, INIT);
     decide(&b, cx, Answer::Deny);
@@ -632,7 +676,7 @@ fn bad_hellos_and_deny_shut_the_socket(cx: &mut TestAppContext) {
 
     // Stop with a sheet up: the sheet goes and the socket closes.
     let (client, server) = UnixStream::pair().unwrap();
-    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None));
+    let conn = b.update(cx, |b, _| b.agent_connect(Some(server), None, None, vec![]));
     send(&b, cx, conn, &hello("token", &t));
     assert_eq!(asks(&b, cx), 1);
     b.update(cx, |b, cx| b.stop_agent(cx));
@@ -720,11 +764,8 @@ fn only_a_nonce_child_started_in_auto_mode_is_auto(cx: &mut TestAppContext) {
     enabled_with(&b, cx, "https://github.com/");
     b.update(cx, |b, _| b.settings.claude.auto_mode = true);
     for started_auto in [false, true] {
-        let nonce = crate::agent::secret();
-        b.update(cx, |b, cx| {
-            b.agent.nonce = Some((nonce.clone(), cx.background_executor().now()));
-            b.agent.nonce_auto = started_auto;
-        });
+        let nonce = issue_nonce(&b, cx);
+        b.update(cx, |b, _| b.agent.nonce_auto = started_auto);
         let conn = connect(&b, cx);
         send(&b, cx, conn, &hello("nonce", &nonce));
         assert!(served(&b, cx, conn));
