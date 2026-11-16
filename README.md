@@ -10,7 +10,8 @@ motion, on baa's own Chromium build.
   and animates at the display's refresh rate, while GPUI still draws the chrome, popovers and
   command bar over it.
 - Privacy: Helium patches out Google services; baa's switches cover the rest; CI checks it. No
-  baa.me backend, no telemetry.
+  baa.me backend, no telemetry. The default search engine is Google, with suggestions on; both
+  are in Settings › Search. `PRIVACY.md` lists everything baa contacts by itself.
 - Icons: [Lucide](https://lucide.dev) (ISC), embedded from `crates/baa-ui/assets/icons`. App icon: "The leap, solid"
   from the design file, as `assets/baa.icns` (`cargo bundle` installs it) and `crates/baa-ui/assets/baa.png`.
 - Extensions: Chrome Web Store extensions install per Space profile and run in every tab. uBlock
@@ -39,10 +40,25 @@ pages (`baa://flags` and the like) open as tabs in baa's skin. DevTools dock bes
 prompts (HTTP auth, external-protocol links, hung or crashed pages, extension install) are drawn by
 baa on the tab, page fullscreen fills the window, find shows `3/12`, tabs in a folder are a Chrome
 tab group (an extension's `chrome.tabs.group` fills a folder), and the command bar ranks with
-Chrome's omnibox (ABI 6). Not yet (M4): `chrome.commands` shortcuts, `chrome.action.openPopup`,
+Chrome's omnibox. Not yet (M4): `chrome.commands` shortcuts, `chrome.action.openPopup`,
 action badges, the screen-share picker. Password managers
 work through their Chrome extensions; Apple's iCloud Passwords cannot (macOS only lets Chrome and
-Edge start its helper). The UI follows the pen.dev mocks. Still to come from milestone 4: split view.
+Edge start its helper). The UI follows the pen.dev mocks. Split view shows tabs of one Space side
+by side.
+
+## Known limitations
+
+- No Safe Browsing: baa shows no phishing or malware warnings, and judges downloads by file type
+  only.
+- Passwords, passkeys and autofill only through extensions (a password manager's Chrome
+  extension). baa has no password store of its own.
+- No sync between Macs.
+- English only.
+- No VoiceOver support in the browser's own chrome (sidebar, command bar, settings).
+- Import brings in only history (from other browsers) and Arc's Spaces: no bookmarks or
+  passwords.
+- Apple silicon only, macOS 13 or later.
+- Claude is experimental and off by default.
 
 ## Build
 
@@ -239,7 +255,7 @@ flowchart TB
     end
 
     subgraph engine["BaaCore.framework: baa's Chromium build"]
-        abi{{"C ABI: chromium/baa/baa.h<br/>ABI 6, functions + callbacks"}}
+        abi{{"C ABI: chromium/baa/baa.h<br/>versioned: BAA_ABI_VERSION,<br/>functions + callbacks"}}
         layer["//baa: chromium/baa<br/>one Browser per Space profile,<br/>baa::Window, TabStripModel,<br/>request registry, autocomplete,<br/>groups, dialog hooks"]
         chrome["Chrome browser code<br/>Helium patches + chromium/patches/baa<br/>profiles, extensions, downloads"]
         procs["renderer, GPU, utility processes"]

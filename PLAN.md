@@ -43,7 +43,7 @@ bot takes Chromium builds of the current milestone (Helium's patches are frozen,
 | Frame path | Native: Chromium presents its own layer; nothing is copied. | — | See `PLAN-chromium.md`. |
 | De-Googling | Helium's patch set in the build, plus baa's switches | Runtime stripping of stock CEF | See `PLAN-chromium.md`. |
 | Storage isolation | One Chrome `Profile` per Space (`space-<id>`) | — | See `PLAN-chromium.md` and §6. |
-| Updates | Daily Chromium bump inside the milestone (Helium frozen), release chain builds the engine, `release.yml` ships a signed DMG; no in-app updater yet | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
+| Updates | Daily Chromium bump inside the milestone (Helium frozen), release chain builds the engine, `release.yml` ships a signed DMG; Sparkle updates in the app from the appcast on GitHub Releases | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
 | Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. Per Space by default; "Add to All Spaces" (Settings → Extensions, or the install prompt's Space picker) installs one into every Space's profile through `baa_profile_copy_extension` (ABI 8, no second prompt). Each Space keeps its own copy's data and on/off; removing a shared one removes it everywhere. Deleting a Space names the extensions that go with it. |
 
 ---
@@ -137,10 +137,10 @@ Mapping each item to what a *binary* CEF Alloy build lets us do:
 | UMA metrics / crash reporting (Crashpad) | Opt-in; off unless `CefSettings` enables | leave off; no `crash_reporter.cfg` |
 | Field trials / variations seed + `X-Client-Data` header | Fetch disabled in CEF, header logic exists | `--disable-field-trial-config --disable-features=…`; strip header in `OnBeforeResourceLoad` as belt-and-braces |
 | Safe Browsing | Not wired in Alloy | nothing; verify with network test |
-| Component updater (CRLSet, PKI metadata, Widevine, etc.) | Yes, calls `update.googleapis.com` | `--disable-component-update`; CRLSet loss accepted (Chromium still does OS revocation) |
+| Component updater (CRLSet, PKI metadata, Widevine, etc.) | Yes, calls `update.googleapis.com` | `--disable-component-update`; CRLSet loss accepted (Chromium still does OS revocation). Superseded (launch plan, user 2026-11-16): CRLSet updates return, on by default, with a Settings › Privacy toggle in the next engine batch |
 | GCM / push | Yes (Alloy includes GCM driver) | `--disable-features=GCMDriver` equivalent + host block |
 | Network time, DoH autoupgrade to Google, `clients*.google.com` connectivity checks | Yes | switches + host blocklist |
-| Default search / suggest | n/a (no omnibox) | baa ships DuckDuckGo default, user-settable; no suggest requests unless user enables |
+| Default search / suggest | n/a (no omnibox) | baa ships Google as the default engine with suggestions on, both user-settable in Settings › Search; suggestions off means typing contacts nobody (user, 2026-11-16: kept, disclosed in README and `PRIVACY.md`) |
 | Translate, spellcheck dictionary download | Yes | translate off; spellcheck uses OS (mac) / Hunspell local (win) or off |
 | Media router / Cast | Yes | `--disable-features=MediaRouter` + host block |
 | Google Fonts / Google domains in web content | web content, not browser | not our business (that is the page) |
@@ -263,7 +263,7 @@ Each milestone ends with something runnable. Estimates are solo-dev, full-time.
 | 0 | **Skeleton** | Workspace builds on mac+win in CI; GPUI window with empty sidebar; CEF 154 initialised, one OSR tab renders example.com as a rounded element with a GPUI badge over it (gpui-cef demo, vendored). | 1 |
 | 1 | **Tabs + input** | Multiple tabs, switch, close, title/favicon/loading from CEF handlers; keyboard, IME, scroll, cursor, context menu, `<select>` popups, downloads, find. Sidebar today/pinned zones with drag. Session persisted to SQLite. | 3 |
 | 2 | **Spaces + isolation** | Spaces CRUD, theme tint, per-space request context, incognito space, switcher + keybinds, single-instance + open-URL. Login to two Google accounts in two Spaces proves isolation. | 2 |
-| 3 | **Privacy + extensions** | `baa-privacy` switches/blocklist; CI proxy test green; default search DDG; settings UI; Web Store installs via the Chrome-style window; extension icons + popups in the sidebar. | 2 |
+| 3 | **Privacy + extensions** | `baa-privacy` switches/blocklist; CI proxy test green; default search Google with suggestions on (user, 2026-11-16: kept, disclosed); settings UI; Web Store installs via the Chrome-style window; extension icons + popups in the sidebar. | 2 |
 | 4 | **Arc feel** | Spring/FLIP motion, sidebar collapse + hover reveal, space swipe, page back/forward swipe, Peek, Little baa, command bar with fuzzy search over tabs/history, auto-archive. | 4 |
 | 5 | **Ship** | Engine move and release: see `PLAN-chromium.md` phases 5–6 (`PLAN-chromium-phase5.md`). Then split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
 | 6 | **Zero-copy** | IOSurface path on mac, D3D11 shared-texture path on win, GPUI BGRA patch upstreamed. | 2 |
