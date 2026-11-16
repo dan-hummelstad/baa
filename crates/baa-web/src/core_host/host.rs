@@ -374,7 +374,9 @@ impl WebHost for CoreWebHost {
         let code = state.map_or(ffi::SITE_UNSET, state_code);
         let done = (self.core.profile_set_site_rule)(handle, bit, c_string(&pattern).as_ptr(), code);
         if !done {
-            log::warn!("Chrome refused the {kind:?} rule {pattern:?}");
+            // The log is a file now (~/Library/Logs/baa): the site stays out of it unless debugging.
+            log::warn!("Chrome refused a {kind:?} rule");
+            log::debug!("the refused {kind:?} rule was for {pattern:?}");
         }
         done
     }

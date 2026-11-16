@@ -106,7 +106,9 @@ impl<H: WebHost> Browser<H> {
                             }
                         }
                         Err(e) => {
-                            log::warn!("live folder {}: {e}", id.0);
+                            // `e` can name the feed's host; the folder row shows it, the log file does not.
+                            log::warn!("live folder {} could not refresh", id.0);
+                            log::debug!("live folder {}: {e}", id.0);
                             this.live_errors.insert(id, e);
                         }
                     }
