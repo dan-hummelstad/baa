@@ -176,9 +176,23 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
     `domain_substitution.list` and dozens of patches for 156 → 157), so `chromium-bump.yml` fails
     every day from then on until someone takes a Helium release for the new milestone by hand
     ("Taking a Helium release" above), reviews it and lands it.
-  - Still fetched from imputnet at build time: the Chromium source tarballs and their hashes
-    (`downloads.ini` `hash_url`), and the pinned, hashed `deps.ini` archives.
-  - Frozen with the patches: uBlock Origin's version and its bundled filter lists (`deps.ini`).
+  - **Nothing is fetched from imputnet at build time** (user, 2026-11-16). Chromium comes from
+    `chromium.googlesource.com`: both callers run `prepare_sources false`, which is Helium's
+    `utils/clone.py` (`gclient sync` at the version's tag; dependencies and toolchains from Google).
+    `.git` directories are removed after the sync, as in imputnet's tarballs. `chromium-next.sh`
+    asks for the tag, not for a tarball. `downloads.ini` and `downloads.arm64.ini` are unused.
+  - uBlock Origin is Helium's 1.75.4 build, kept as `chromium/vendor/ublock-origin-1.75.4.zip` and
+    checked against `deps.ini`'s `sha256` (`fetch_sources` puts `chromium/vendor/*` in the download
+    cache). Its version and bundled filter lists change only when that file does; a new one must be
+    Helium's build (its patches expect the fork: DNS uncloaking, Helium's `assets.json`) and needs
+    `devutils/clear-ublock-assets.js`.
+  - Dropped: the search-engine logos (`fix-search-engine-icons.patch` is out of the series, so
+    `enable_builtin_search_provider_assets` is Chromium's default, off; baa's own settings and command
+    bar never used them) and Helium's onboarding page `chrome://setup`
+    (`baa/no-helium-onboarding.patch`; baa starts with `--no-first-run`, so it never opened, and the
+    start page is baa's onboarding). Its C++ stays in the tree, unbuilt.
+  - Still fetched from outside Google: Sparkle's source, from its own project, pinned by `sha512`
+    (`helium-macos/downloads.ini`).
 - **Release:** `release.yml` on a `vX.Y.Z` tag uses exactly the `baa-engine-<T>` of the tagged
   commit's `chromium/` tree (equal tree hashes mean the same `baa.h` ABI and patches), adds the Rust
   binary, signs, notarises and publishes. No such artifact: the run fails and names the command.

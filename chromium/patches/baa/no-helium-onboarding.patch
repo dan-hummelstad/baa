@@ -1,0 +1,110 @@
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -286,9 +286,6 @@
+       <!-- Global Media Controls specific strings -->
+       <part file="gmc_strings.grdp" />
+ 
+-      <!-- Helium onboarding strings -->
+-      <part file="../../components/helium_onboarding/helium_onboarding_strings.grdp" />
+-
+       <!-- Media live preview specific strings -->
+       <part file="media_live_preview_strings.grdp" />
+ 
+--- a/chrome/app/generated_resources.grd.gritdeps
++++ b/chrome/app/generated_resources.grd.gritdeps
+@@ -108,4 +108,3 @@
+ chrome/app/support_tool_strings.grdp
+ chrome/app/vr_strings.grdp
+ chrome/app/whats_new_strings.grdp
+-components/helium_onboarding/helium_onboarding_strings.grdp
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -5486,7 +5486,6 @@
+     "//chrome/browser/ui/webui/user_education_internals:mojo_bindings",
+     "//chrome/browser/web_applications/mojom:mojom_web_apps_enum",
+     "//chrome/common/request_header_integrity:buildflags",
+-    "//components/helium_onboarding:generated_resources",
+     "//components/autofill/core/browser/ml_model/logging:mojo_bindings",
+     "//components/enterprise/connectors:mojom",
+     "//components/webui/chrome_urls/mojom:mojo_bindings",
+--- a/chrome/browser/ui/webui/BUILD.gn
++++ b/chrome/browser/ui/webui/BUILD.gn
+@@ -44,7 +44,6 @@
+     ":gcm_internals_ui",
+     ":net_export_ui",
+     ":ntp_tiles_internals_ui",
+-    ":onboarding",
+     ":signin_internals_ui",
+     ":webui",
+     "//chrome/browser/actor/ui:actor_overlay",
+@@ -690,36 +689,6 @@
+       "//ash/webui/vc_background_ui",
+     ]
+   }
+-}
+-
+-source_set("onboarding") {
+-  sources = [
+-    "onboarding/onboarding_handler.cc",
+-    "onboarding/onboarding_page_ui.cc",
+-  ]
+-  public = [
+-    "onboarding/onboarding_handler.h",
+-    "onboarding/onboarding_page_ui.h",
+-  ]
+-  public_deps = [
+-    "//chrome/browser/profiles:profile",
+-    "//chrome/common",
+-    "//components/prefs",
+-    "//content/public/browser",
+-    "//extensions/browser",
+-  ]
+-  deps = [
+-    "//base",
+-    "//chrome/browser:browser_process",
+-    "//chrome/browser/extensions",
+-    "//chrome/browser/profiles",
+-    "//chrome/browser/ui/webui/settings",
+-    "//components/helium_onboarding:generated_resources",
+-    "//components/helium_onboarding:localized_strings",
+-    "//components/helium_services",
+-    "//extensions/common",
+-    "//ui/webui",
+-  ]
+ }
+ 
+ if (enable_extensions_core) {
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -47,7 +47,6 @@
+ #include "chrome/browser/ui/webui/notebooks_internals/notebooks_internals_ui_config.h"
+ #include "chrome/browser/ui/webui/ntp_tiles_internals_ui.h"
+ #include "chrome/browser/ui/webui/omnibox_internals/omnibox_internals_ui.h"
+-#include "chrome/browser/ui/webui/onboarding/onboarding_page_ui.h"
+ #include "chrome/browser/ui/webui/policy/policy_ui.h"
+ #include "chrome/browser/ui/webui/predictors/predictors_ui.h"
+ #include "chrome/browser/ui/webui/regional_capabilities_internals/regional_capabilities_internals_ui.h"
+@@ -494,7 +493,6 @@
+ #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+   map.AddWebUIConfig(std::make_unique<DefaultBrowserModalUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ManagedUserProfileNoticeUIConfig>());
+-  map.AddWebUIConfig(std::make_unique<HeliumOnboardingPageConfig>());
+   map.AddWebUIConfig(std::make_unique<ProfileCustomizationUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ProfilePickerUIConfig>());
+   map.AddWebUIConfig(std::make_unique<SigninErrorUIConfig>());
+--- a/chrome/chrome_paks.gni
++++ b/chrome/chrome_paks.gni
+@@ -483,13 +483,11 @@
+       sources += [
+         "$root_gen_dir/chrome/default_browser_modal_resources.pak",
+         "$root_gen_dir/chrome/profile_picker_resources.pak",
+-        "$root_gen_dir/components/helium_onboarding/resources/helium_onboarding_generated.pak",
+       ]
+       deps += [
+         "//chrome/browser/resources/default_browser/default_browser_modal:resources",
+         "//chrome/browser/resources/intro:resources",
+         "//chrome/browser/resources/signin/profile_picker:resources",
+-        "//components/helium_onboarding:generated_resources",
+       ]
+     }
+ 

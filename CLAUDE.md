@@ -23,6 +23,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - `crates/baa-web`     BaaCore host (`WebHost` in lib.rs is the contract; UI codes against it)
 - `crates/baa-chromium` the `//baa` test harness: a gpui shell (`spike`) plus `tests/*.expect`, run by `ci.sh` against an engine; engine orchestrator
 - `chromium/baa`, `chromium/patches`: engine orchestrator; `chromium/helium*`: frozen at `chromium/HELIUM_RELEASE` (user, 2026-11-15). `chromium-bump.yml` changes only `chromium_version.txt`; anything else there is the engine orchestrator's, and a Helium release is taken only by hand (`.github/helium-take.sh`), when a new Chromium milestone needs it
+- `chromium/vendor`: archives the engine build takes from the repository instead of downloading (uBlock Origin); engine orchestrator. A file here must match its `sha256` in `chromium/helium/deps.ini`
 - `vendor/gpui_apple`  baa-web orchestrator
 - `crates/baa-ui`      GPUI views, theme, motion
 - `crates/baa`         app shell wiring (integration orchestrator only)

@@ -111,7 +111,6 @@ helium/core/scan-chrome-native-messaging-hosts.patch
 
 helium/core/search/restore-google.patch
 helium/core/search/engine-defaults.patch
-helium/core/search/fix-search-engine-icons.patch
 helium/core/search/force-eu-search-features.patch
 helium/core/search/remove-description-snippet-deps.patch
 helium/core/search/break-favicons.patch

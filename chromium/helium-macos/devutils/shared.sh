@@ -23,6 +23,10 @@ fetch_sources() {
   mkdir -p "$_download_cache" || return
   if [ "$download" = false ]; then
     python3 "$_main_repo/utils/clone.py" -o "$_src_dir" || return
+    # baa: imputnet's tarballs carry no .git, and the tree handed from phase to phase drops it
+    # too (chromium-phase.yml), so drop it here: every phase then sees the same tree. gclient's
+    # hooks have run, so nothing reads it again.
+    find "$_src_dir" -name .git -prune -exec rm -rf {} + || return
   else
     # Select host tools; each overlay supports both target architectures.
     case "$(uname -m)" in
@@ -32,6 +36,10 @@ fetch_sources() {
     esac
     downloads=("$_main_repo/downloads.ini" "$_root_dir/downloads.$host_arch.ini" "${downloads[@]}")
   fi
+
+  # baa: what deps.ini names is in the repository (chromium/vendor), not fetched from imputnet.
+  # retrieve skips a file the cache already holds and still checks it against deps.ini's hash.
+  cp "$_root_dir"/../vendor/* "$_download_cache/" || return
 
   # baa: GitHub release downloads 504 for minutes at a time; retrieve resumes
   # (curl -C -), so wait and try again instead of failing the build.
@@ -73,6 +81,12 @@ prepare_sources() {
     --tree "$_main_repo" --platform-tree "$_root_dir" --chromium-tree "$_src_dir"
 
   helium_resources
+  # baa: Helium's onboarding page is not built (chromium/patches/baa/no-helium-onboarding.patch),
+  # so its archive is not fetched and the two credits entries that took their licence files from
+  # it change: Helium's own entry gets the GPL text from the vendored tree, the page's font goes.
+  cp "$_main_repo/LICENSE" "$_src_dir/third_party/helium/LICENSE"
+  sed -i '' 's|^License File: .*|License File: LICENSE|' "$_src_dir/third_party/helium/README.chromium"
+  rm -r "$_src_dir/third_party/instrument-sans"
   # baa: //baa goes in last, so name substitution never rewrites baa's own code.
   cp -R "$_root_dir/../baa" "$_src_dir/"
 }

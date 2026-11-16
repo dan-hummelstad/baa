@@ -1,7 +1,7 @@
 # Daily: follow Chromium inside the milestone that the vendored Helium patches were written for.
 # Helium's patch set is frozen at chromium/HELIUM_RELEASE (user, 2026-11-15): nothing here takes
-# upstream Helium. If Chrome stable for macOS has a newer build of that milestone and its source
-# tarballs are published (chromium-next.sh), put that version on a bot branch and start the
+# upstream Helium. If Chrome stable for macOS has a newer build of that milestone and Google has
+# tagged it (chromium-next.sh), put that version on a bot branch and start the
 # chromium (release) and ci runs on it. The commit changes one line,
 # chromium/helium/chromium_version.txt. From there it runs itself: when that release build passes
 # its privacy and harness tests and ci is green, chromium.yml's land job puts the branch on main,
@@ -42,7 +42,7 @@ jobs:
           milestone() {
             [ "$rc" = 0 ] || { echo "::error::Chrome stable is on a newer milestone than ${OLD%%.*}, which gets no more security fixes. Helium's patches are frozen for ${OLD%%.*}: take a Helium release for the new milestone by hand (.github/helium-take.sh <helium-macos tag> on a branch, review, chromium.yml release, land)"; exit 1; }
           }
-          if [ -z "$NEW" ]; then echo "Chromium $OLD is the newest build of its milestone with published tarballs"; milestone; exit 0; fi
+          if [ -z "$NEW" ]; then echo "Chromium $OLD is the newest tagged build of its milestone"; milestone; exit 0; fi
           B=bot/chromium-$NEW
           # One bump at a time: an engine build takes a day or two, and a second would only race it.
           if git ls-remote --heads origin 'bot/chromium-*' | grep -q .; then
