@@ -24,6 +24,7 @@ pub enum Permission {
 
 /// What a profile remembers about a site's permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum PermissionState {
     Ask,
     Allow,

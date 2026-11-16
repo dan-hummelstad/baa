@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum SidebarSide {
     #[default]
     Left,
@@ -10,6 +11,7 @@ pub enum SidebarSide {
 /// Window chrome look: Arc's Space gradients, or a monospace terminal frame
 /// (pen.dev "1. ASCII Chrome").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum ChromeStyle {
     #[default]
     Arc,
@@ -19,6 +21,7 @@ pub enum ChromeStyle {
 /// Where DevTools opens: docked beside or below the page, as Chrome does, or
 /// in a window of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum DevToolsDock {
     #[default]
     Right,
@@ -94,6 +97,7 @@ impl Account {
 
 /// Where a link another app opens goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum ExternalLinks {
     #[default]
     LilBaa,
@@ -103,6 +107,7 @@ pub enum ExternalLinks {
 /// Light or dark: the prefers-color-scheme websites see (`page_scheme`), or
 /// baa's own look (`appearance`). `System` is macOS's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum PageScheme {
     #[default]
     System,
@@ -111,6 +116,7 @@ pub enum PageScheme {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum Cookies {
     AllowAll,
     #[default]
@@ -119,6 +125,7 @@ pub enum Cookies {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum Https {
     Off,
     /// Upgrade when possible (Helium's default).
@@ -129,6 +136,7 @@ pub enum Https {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum Preload {
     #[default]
     Off,
@@ -151,6 +159,7 @@ impl SecureDns {
 
 /// Cloudflare and Quad9 are `Custom` with their template.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub enum SecureDns {
     Off,
     #[default]
@@ -192,7 +201,18 @@ pub struct WebPrefs {
     /// Extension developer mode (load unpacked, reload).
     pub developer_mode: bool,
     /// Only the kinds the user changed; the others are Chrome's ([`crate::Permission::chrome_default`]).
+    #[serde(deserialize_with = "site_defaults")]
     pub site_defaults: Vec<(crate::Permission, crate::PermissionState)>,
+}
+
+/// An unknown kind is dropped (the kind keeps Chrome's default), and so is a state the kind
+/// cannot default to, as an unknown state read as `Ask` is for kinds that never ask.
+fn site_defaults<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<(crate::Permission, crate::PermissionState)>, D::Error> {
+    let mut v: Vec<(crate::Permission, crate::PermissionState)> = crate::known(d)?;
+    v.retain(|&(kind, state)| kind.takes_default(state));
+    Ok(v)
 }
 
 impl Default for WebPrefs {
@@ -244,8 +264,10 @@ pub struct Settings {
     pub shared_extensions: Vec<String>,
     /// Accounts signed in to in every Space (not incognito): a sign-in or sign-out in one
     /// is made in all.
+    #[serde(deserialize_with = "crate::known")]
     pub shared_accounts: Vec<Account>,
     /// Sign-ins the user chose to keep to their Space, so it is not asked again.
+    #[serde(deserialize_with = "crate::known")]
     pub kept_accounts: Vec<(crate::ProfileId, Account)>,
     pub devtools_dock: DevToolsDock,
     /// false archives Today tabs at startup instead of restoring them.
