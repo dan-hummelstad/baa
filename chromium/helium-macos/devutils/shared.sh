@@ -25,8 +25,10 @@ fetch_sources() {
     python3 "$_main_repo/utils/clone.py" -o "$_src_dir" || return
     # baa: imputnet's tarballs carry no .git, and the tree handed from phase to phase drops it
     # too (chromium-phase.yml), so drop it here: every phase then sees the same tree. gclient's
-    # hooks have run, so nothing reads it again.
-    find "$_src_dir" -name .git -prune -exec rm -rf {} + || return
+    # hooks have run, so nothing reads it again. From the directory above src, because clone.py
+    # leaves its own depot_tools checkout there, and packing the tree (which skips .git and
+    # removes what it packs) cannot remove a directory that still holds one.
+    find "$(dirname "$_src_dir")" -name .git -prune -exec rm -rf {} + || return
   else
     # Select host tools; each overlay supports both target architectures.
     case "$(uname -m)" in
