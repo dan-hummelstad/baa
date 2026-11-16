@@ -139,7 +139,20 @@ pub fn apply(core: &Core, profile: *mut Profile, write: &Write) {
         }
     };
     if !accepted {
-        log::warn!("Chrome refused {write:?}");
+        // The log is a file: names only, values (a search template, a DNS server) at debug.
+        log::warn!("Chrome refused the {}", write.kind());
+        log::debug!("Chrome refused {write:?}");
+    }
+}
+
+impl Write {
+    fn kind(&self) -> String {
+        match self {
+            Write::Bool(name, _) | Write::Int(name, _) | Write::Str(name, _) | Write::Clear(name) => format!("pref {name}"),
+            Write::SiteDefault(kind, _) => format!("site default for {kind:?}"),
+            Write::Engine { .. } => "search engine".into(),
+            Write::Zoom(_) => "default zoom".into(),
+        }
     }
 }
 
@@ -263,6 +276,13 @@ mod tests {
         assert!(list.contains(&Write::Str("intl.accept_languages", "en-US, sv".into())));
         assert!(list.contains(&Write::Str("download.default_directory", "/tmp/dl".into())));
         assert!(!list.contains(&Write::Clear("intl.accept_languages")));
+    }
+
+    #[test]
+    fn a_refused_write_is_named_without_its_value() {
+        let engine = Write::Engine { name: "Mine".into(), url: "https://s.test/?q=%s&token=secret".into() };
+        assert_eq!(engine.kind(), "search engine");
+        assert_eq!(Write::Str("dns_over_https.templates", "https://dns.test/q".into()).kind(), "pref dns_over_https.templates");
     }
 
     #[test]
