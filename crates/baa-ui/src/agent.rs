@@ -378,11 +378,14 @@ fn js_str(sel: &str) -> String {
     serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// `sel`'s centre after scrolling it into view, or `{ frame: true }` for a frame, embed or
+/// plugin, as `frame_at_script` finds by position.
 fn center_script(sel: &str) -> String {
     format!(
         r#"((sel) => {{
   const e = document.querySelector(sel);
   if (!e) return null;
+  if (['IFRAME', 'FRAME', 'EMBED', 'OBJECT'].includes(e.tagName)) return {{ frame: true }};
   e.scrollIntoView({{ block: 'center', inline: 'center' }});
   const r = e.getBoundingClientRect();
   return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }};
@@ -436,9 +439,10 @@ fn frame_at_script(x: f64, y: f64) -> String {
     )
 }
 
+const FRAME: &str = "baa does not let Claude click into frames, embedded content or plugins by position.";
+
 /// Ok only for a point the check saw and found outside any frame; anything else refuses.
 fn click_allowed(checked: &Result<Value, String>) -> Result<(), String> {
-    const FRAME: &str = "baa does not let Claude click into frames, embedded content or plugins by position.";
     match checked.as_ref().map_err(|e| e.clone())?.get("frame").and_then(Value::as_bool) {
         Some(false) => Ok(()),
         _ => Err(FRAME.into()),
@@ -1115,6 +1119,9 @@ impl<H: WebHost> Browser<H> {
                     page.read(cx).eval_value(
                         &center_script(sel),
                         Box::new(move |result, cx| {
+                            if result.as_ref().is_ok_and(|v| v["frame"] == true) {
+                                return reply.refuse(FRAME);
+                            }
                             let at = result.ok().and_then(|v| Some((v["x"].as_f64()?, v["y"].as_f64()?)));
                             let Some((x, y)) = at else { return reply.refuse("No element matches the selector.") };
                             if web_origin(&target.read(cx).url()).as_deref() != Some(origin.as_str()) {

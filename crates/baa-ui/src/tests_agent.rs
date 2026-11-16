@@ -277,6 +277,24 @@ fn a_click_by_position_refuses_frames_and_a_page_that_moved_on(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn a_click_by_selector_refuses_frames(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tab = enabled_with(&b, cx, "https://shop.example/");
+    let rx = call(&b, cx, "click", json!({"selector": "#pay"}));
+    decide(&b, cx, Answer::Session);
+    let scripts = answer_checks(&b, cx, tab, json!({"frame": true}));
+    assert!(scripts.len() == 1 && scripts[0].contains("'IFRAME', 'FRAME', 'EMBED', 'OBJECT'"), "{scripts:?}");
+    let (refused, text) = answer(&rx).unwrap();
+    assert!(refused && text.contains("frames"), "{text}");
+    assert!(cdp(&b, cx, tab).is_empty());
+
+    let rx = call(&b, cx, "click", json!({"selector": "#buy"}));
+    answer_checks(&b, cx, tab, json!({"x": 5, "y": 6}));
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(cdp(&b, cx, tab), ["click 5 6"]);
+}
+
+#[gpui::test]
 fn navigating_to_a_new_origin_needs_its_own_approval(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let tab = enabled_with(&b, cx, "https://github.com/");
