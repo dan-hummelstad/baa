@@ -100,6 +100,10 @@ pub fn writes(settings: &Settings) -> Writes {
         Write::Int("performance_tuning.high_efficiency_mode.state", if web.memory_saver { 2 } else { 0 }),
         // Registered by chromium/patches/baa/widevine-opt-in.patch; read once at startup.
         Write::Bool("baa.widevine_enabled", web.widevine),
+        // Same patch. Read on every update check (clients2.google.com, about every five hours).
+        Write::Bool("baa.extension_updates_enabled", settings.extension_updates),
+        // Same patch. Read once at startup (update.googleapis.com).
+        Write::Bool("baa.crlset_updates_enabled", settings.revocation_updates),
     ];
     Writes { profile, local }
 }
@@ -190,6 +194,8 @@ mod tests {
                 Write::Bool("hardware_acceleration_mode.enabled", true),
                 Write::Int("performance_tuning.high_efficiency_mode.state", 0),
                 Write::Bool("baa.widevine_enabled", false),
+                Write::Bool("baa.extension_updates_enabled", true),
+                Write::Bool("baa.crlset_updates_enabled", true),
             ]
         );
     }
@@ -260,6 +266,21 @@ mod tests {
     }
 
     #[test]
+    fn extension_and_revocation_updates_are_local_state_prefs_on_by_default() {
+        let local = |s: &Settings| writes(s).local;
+        let d = local(&Settings::default());
+        assert!(d.contains(&Write::Bool("baa.extension_updates_enabled", true)));
+        assert!(d.contains(&Write::Bool("baa.crlset_updates_enabled", true)));
+        let s = Settings { extension_updates: false, ..Settings::default() };
+        assert!(local(&s).contains(&Write::Bool("baa.extension_updates_enabled", false)));
+        assert!(local(&s).contains(&Write::Bool("baa.crlset_updates_enabled", true)), "each follows its own setting");
+        let s = Settings { revocation_updates: false, ..Settings::default() };
+        assert!(local(&s).contains(&Write::Bool("baa.crlset_updates_enabled", false)));
+        assert!(local(&s).contains(&Write::Bool("baa.extension_updates_enabled", true)));
+        assert!(!writes(&s).profile.iter().any(|w| matches!(w, Write::Bool(n, _) if n.starts_with("baa."))));
+    }
+
+    #[test]
     fn local_state_and_enums_map_to_chrome_values() {
         let mut s = Settings::default();
         s.web.secure_dns = SecureDns::Custom("https://dns.quad9.net/dns-query".into());
@@ -275,6 +296,8 @@ mod tests {
                 Write::Bool("hardware_acceleration_mode.enabled", false),
                 Write::Int("performance_tuning.high_efficiency_mode.state", 0),
                 Write::Bool("baa.widevine_enabled", false),
+                Write::Bool("baa.extension_updates_enabled", true),
+                Write::Bool("baa.crlset_updates_enabled", true),
             ]
         );
         assert!(w.profile.contains(&Write::Int("net.network_prediction_options", 3)));
