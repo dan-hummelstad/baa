@@ -4,6 +4,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,6 +23,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+// Like extensions_container.h, without a GN dep (//chrome/browser/ui/extensions links them).
+#include "chrome/browser/ui/extensions/extension_enable_flow.h"
+#include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
 #include "chrome/browser/ui/extensions/extension_popup_types.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -224,6 +228,176 @@ void DestroyPopup(Popup* popup) {
   }
 }
 
+// ---- Re-enable -----------------------------------------------------------------
+
+class Reenable;
+std::vector<std::unique_ptr<Reenable>>& Reenables() {
+  static base::NoDestructor<std::vector<std::unique_ptr<Reenable>>> reenables;
+  return *reenables;
+}
+
+void DestroyReenable(Reenable* reenable);
+
+// One BAA_EXTENSION_ENABLE through Chrome's ExtensionEnableFlow: it enables at once unless the
+// extension was disabled for asking more than the user approved (an update), and then asks with
+// the install prompt (asks.mm's TakeInstall draws it) and enables only on accept.
+class Reenable final : public ExtensionEnableFlowDelegate {
+ public:
+  Reenable(BaaProfile* owner, Profile* profile, const std::string& id)
+      : owner_(owner), profile_(profile), flow_(profile, id, this) {}
+
+  BaaProfile* owner() const { return owner_; }
+  Profile* profile() const { return profile_; }
+  const std::string& id() const { return flow_.extension_id(); }
+  bool done() const { return state_ != State::kPending; }
+
+  void DestroyLater() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Reenable> reenable) {
+                         if (reenable) {
+                           DestroyReenable(reenable.get());
+                         }
+                       },
+                       weak_factory_.GetWeakPtr()));
+  }
+
+  // True when the extension is enabled now or its prompt is up. The delegate may run inside
+  // Start*: the caller deletes a done flow after this returns, never the callback.
+  bool Start(content::WebContents* anchor) {
+    starting_ = true;
+    if (anchor) {
+      flow_.StartForWebContents(anchor);
+    } else {
+      flow_.Start();
+    }
+    starting_ = false;
+    return state_ != State::kAborted;
+  }
+
+  // ExtensionEnableFlowDelegate:
+  void ExtensionEnableFlowFinished() override { End(State::kFinished); }
+  void ExtensionEnableFlowAborted(bool) override { End(State::kAborted); }
+
+ private:
+  enum class State { kPending, kFinished, kAborted };
+
+  // Runs inside the flow: deleted from a task (Start's caller deletes it when it ran inside Start).
+  void End(State state) {
+    state_ = state;
+    if (!starting_) {
+      DestroyLater();
+    }
+  }
+
+  const raw_ptr<BaaProfile> owner_;
+  const raw_ptr<Profile> profile_;
+  ExtensionEnableFlow flow_;
+  State state_ = State::kPending;
+  bool starting_ = false;
+  base::WeakPtrFactory<Reenable> weak_factory_{this};
+};
+
+void DestroyReenable(Reenable* reenable) {
+  std::erase_if(Reenables(), [&](const auto& r) { return r.get() == reenable; });
+}
+
+bool StartReenable(BaaProfile* owner, Profile* chrome_profile, const std::string& id) {
+  // An incognito Space shares its parent's extensions.
+  Profile* profile = chrome_profile->GetOriginalProfile();
+  extensions::ExtensionRegistry* registry = extensions::ExtensionRegistry::Get(profile);
+  if (registry->enabled_extensions().Contains(id)) {
+    return true;
+  }
+  // The flow never calls back for an extension that is not disabled (terminated, gone).
+  if (!registry->disabled_extensions().GetByID(id)) {
+    return false;
+  }
+  for (const auto& r : Reenables()) {
+    if (r->profile() == profile && r->id() == id) {
+      return true;  // its prompt is up
+    }
+  }
+  content::WebContents* anchor = nullptr;
+  if (BrowserWindowInterface* browser = ExistingBrowserOf(owner)) {
+    content::WebContents* active = browser->GetTabStripModel()->GetActiveWebContents();
+    if (TabAnnounced(TabFor(active))) {
+      anchor = active;
+    }
+  }
+  // With no tab to show the prompt on, Chrome would build its views dialog with no BrowserView:
+  // an extension that asks for more stays disabled.
+  if (!anchor && extensions::ExtensionPrefs::Get(profile)->DidExtensionEscalatePermissions(id)) {
+    return false;
+  }
+  Reenables().push_back(std::make_unique<Reenable>(owner, profile, id));
+  Reenable* reenable = Reenables().back().get();
+  bool ok = reenable->Start(anchor);
+  // ponytail: a flow that neither finishes nor prompts (a locked profile, which baa never has)
+  // waits for baa_profile_close.
+  if (reenable->done()) {
+    DestroyReenable(reenable);
+  }
+  return ok;
+}
+
+// ---- extensions_changed ----------------------------------------------------------
+
+// Tells the app to list a profile's extensions again: one callback per turn, however many
+// changes (an update disabling an extension for new permissions shows up this way).
+class ExtensionsWatch final : public extensions::ExtensionRegistryObserver {
+ public:
+  ExtensionsWatch(BaaProfile* owner, Profile* profile) : owner_(owner) {
+    registry_.Observe(extensions::ExtensionRegistry::Get(profile));
+  }
+
+  // extensions::ExtensionRegistryObserver:
+  void OnExtensionLoaded(content::BrowserContext*, const extensions::Extension*) override { Changed(); }
+  void OnExtensionUnloaded(content::BrowserContext*, const extensions::Extension*,
+                           extensions::UnloadedExtensionReason) override {
+    Changed();
+  }
+  void OnExtensionInstalled(content::BrowserContext*, const extensions::Extension*, bool) override {
+    Changed();
+  }
+  void OnExtensionUninstalled(content::BrowserContext*, const extensions::Extension* extension,
+                              extensions::UninstallReason) override {
+    // A flow of the extension waits on nothing now; deleted from a task, as this may run
+    // inside one.
+    for (const auto& r : Reenables()) {
+      if (r->owner() == owner_ && r->id() == extension->id()) {
+        r->DestroyLater();
+      }
+    }
+    Changed();
+  }
+  void OnShutdown(extensions::ExtensionRegistry*) override { registry_.Reset(); }
+
+ private:
+  void Changed() {
+    if (pending_) {
+      return;
+    }
+    pending_ = true;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ExtensionsWatch::Send, weak_factory_.GetWeakPtr()));
+  }
+  void Send() {
+    pending_ = false;
+    Callbacks().extensions_changed(CallbackContext(), owner_);
+  }
+
+  const raw_ptr<BaaProfile> owner_;
+  bool pending_ = false;
+  base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver> registry_{this};
+  base::WeakPtrFactory<ExtensionsWatch> weak_factory_{this};
+};
+
+std::map<BaaProfile*, std::unique_ptr<ExtensionsWatch>>& ExtensionsWatches() {
+  static base::NoDestructor<std::map<BaaProfile*, std::unique_ptr<ExtensionsWatch>>> watches;
+  return *watches;
+}
+
 // The ExtensionsContainer of a baa window: enough that Chrome's extension code
 // can ask it, and answer "no" (there is no toolbar).
 class Container final : public ExtensionsContainer {
@@ -250,6 +424,16 @@ void DestroyAllPopups() {
   while (!Popups().empty()) {
     delete Popups().back();
   }
+}
+
+void WatchExtensions(BaaProfile* owner, Profile* profile) {
+  ExtensionsWatches()[owner] = std::make_unique<ExtensionsWatch>(owner, profile);
+}
+
+void UnwatchExtensions(BaaProfile* owner) {
+  ExtensionsWatches().erase(owner);
+  // A pending prompt's answer is bound to the flow's WeakPtr: dropping it is safe.
+  std::erase_if(Reenables(), [&](const auto& r) { return r->owner() == owner; });
 }
 
 void DeleteExtensionsContainer::operator()(ExtensionsContainer* container) const {
@@ -294,6 +478,8 @@ int baa_profile_extensions(BaaProfile* profile, BaaExtensionVisitor visit, void*
     out.site_access = site_access;
     out.enabled = registry->enabled_extensions().Contains(ext.id());
     out.unpacked = extensions::Manifest::IsUnpackedLocation(ext.location());
+    out.needs_approval =
+        !out.enabled && extensions::ExtensionPrefs::Get(chrome_profile)->DidExtensionEscalatePermissions(ext.id());
     visit(ctx, &out);
     ++count;
   }
@@ -321,10 +507,11 @@ bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id,
       return true;
     case BAA_EXTENSION_ENABLE:
       if (value) {
-        registrar->EnableExtension(id);
-      } else {
-        registrar->DisableExtension(id, {extensions::disable_reason::DISABLE_USER_ACTION});
+        // Not ExtensionRegistrar::EnableExtension: it clears every disable reason, which would
+        // approve an update's new permissions without asking.
+        return baa::StartReenable(profile, chrome_profile, id);
       }
+      registrar->DisableExtension(id, {extensions::disable_reason::DISABLE_USER_ACTION});
       return true;
     case BAA_EXTENSION_REMOVE: {
       std::u16string error;

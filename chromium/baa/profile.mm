@@ -53,12 +53,17 @@ struct BaaProfile : ProfileObserver {
       baa::SetPrefBool(profile, name, false);
     }
     baa::WatchAccounts(this, profile);
+    baa::WatchExtensions(this, profile);
   }
 
-  ~BaaProfile() { baa::UnwatchAccounts(this); }
+  ~BaaProfile() {
+    baa::UnwatchAccounts(this);
+    baa::UnwatchExtensions(this);
+  }
 
   void OnProfileWillBeDestroyed(Profile*) override {
     baa::UnwatchAccounts(this);
+    baa::UnwatchExtensions(this);
     observation.Reset();
     autocomplete.reset();  // its providers hold the profile
     profile = nullptr;

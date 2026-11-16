@@ -349,6 +349,12 @@ typedef struct {
   // there was none (not baa_accounts_share, not a refresh of one already
   // there). At most once per profile and account per run.
   void (*signed_in)(void* ctx, BaaProfile* profile, uint32_t account);
+
+  // The profile's extensions changed (installed, uninstalled, enabled,
+  // disabled, updated, or disabled by an update that asks for more): list them
+  // again with baa_profile_extensions. Coalesced: at most one per turn of the
+  // run loop, never inside a baa_* call.
+  void (*extensions_changed)(void* ctx, BaaProfile* profile);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
@@ -516,6 +522,10 @@ typedef struct {
   int site_access;          // BAA_SITE_ACCESS_*
   bool enabled;
   bool unpacked;            // loaded from a folder (developer mode): reloadable
+  // Disabled because it asks for more than the user approved (an update with
+  // new permissions, a remote install): BAA_EXTENSION_ENABLE shows the new
+  // permissions on the profile's active tab and enables it only on accept.
+  bool needs_approval;
 } BaaExtension;
 
 typedef void (*BaaExtensionVisitor)(void* ctx, const BaaExtension* extension);
@@ -526,7 +536,7 @@ BAA_EXPORT int baa_profile_extensions(BaaProfile* profile,
                                       BaaExtensionVisitor visit, void* ctx);
 
 enum {
-  BAA_EXTENSION_ENABLE = 0,       // value: 1 enable, 0 disable
+  BAA_EXTENSION_ENABLE = 0,       // value: 1 enable (see below), 0 disable
   BAA_EXTENSION_REMOVE = 1,       // value ignored
   BAA_EXTENSION_SITE_ACCESS = 2,  // value: BAA_SITE_ACCESS_ON_*
   BAA_EXTENSION_RELOAD = 3,       // unpacked extensions only; value ignored
@@ -534,6 +544,14 @@ enum {
 
 // Carries out the change at once (RELOAD starts the reload); false if it was
 // refused or the id is unknown.
+// ENABLE with value 1 goes through Chrome's re-enable flow. An extension that
+// asks for no more than the user approved is enabled at once (true). One with
+// `needs_approval` gets a `dialog` (BAA_DIALOG_EXTENSION_INSTALL) on the
+// profile's active tab and is enabled only when the user accepts it: true
+// means the dialog is up (or already was), and the outcome comes by
+// extensions_changed. False, and nothing changes, when it cannot be enabled
+// (another disable reason, policy, not installed) or when `needs_approval` and
+// the profile has no active tab to show the dialog on.
 BAA_EXPORT bool baa_profile_extension_change(BaaProfile* profile,
                                              const char* extension_id,
                                              int change, int value);

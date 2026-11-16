@@ -129,6 +129,11 @@ class DownloadWatch : public content::DownloadManager::Observer {
 void WatchAccounts(BaaProfile* owner, Profile* profile);
 void UnwatchAccounts(BaaProfile* owner);
 
+// extensions.mm: `extensions_changed` for a profile, from open until close. Unwatch also drops
+// the profile's pending re-enable prompts.
+void WatchExtensions(BaaProfile* owner, Profile* profile);
+void UnwatchExtensions(BaaProfile* owner);
+
 // window.mm -> tab.mm: what the window's tab strip observer found.
 void OnTabInserted(TabStripModel* model,
                    tabs::TabInterface* tab,

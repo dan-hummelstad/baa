@@ -155,6 +155,7 @@ void baa_install_app(int argc,
   REQUIRE(focus_requested);
   REQUIRE(swipe);
   REQUIRE(signed_in);
+  REQUIRE(extensions_changed);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;
