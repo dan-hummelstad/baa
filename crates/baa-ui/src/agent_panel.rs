@@ -204,16 +204,13 @@ fn init_problem(line: &str) -> Option<String> {
     if v["type"] != "system" || v["subtype"] != "init" {
         return None;
     }
-    let names = |key: &str, of: fn(&Value) -> Option<&str>| -> Vec<String> {
-        v[key].as_array().into_iter().flatten().map(|x| of(x).unwrap_or("?").to_string()).collect()
-    };
-    let tools = names("tools", Value::as_str).into_iter().filter(|t| !t.starts_with("mcp__baa__"));
-    let servers = names("mcp_servers", |s| s["name"].as_str()).into_iter().filter(|s| s != "baa");
-    let foreign: Vec<String> = tools.chain(servers).collect();
-    if foreign.is_empty() {
+    let tools = v["tools"].as_array().into_iter().flatten().map(|t| t.as_str().unwrap_or("?"));
+    let servers = v["mcp_servers"].as_array().into_iter().flatten().map(|s| s["name"].as_str().unwrap_or("?"));
+    let shown: Vec<&str> =
+        tools.filter(|t| !t.starts_with("mcp__baa__")).chain(servers.filter(|s| *s != "baa")).take(5).collect();
+    if shown.is_empty() {
         return None;
     }
-    let shown: Vec<&str> = foreign.iter().take(5).map(String::as_str).collect();
     Some(format!("Stopped claude: it started with tools that are not baa's ({}). Check its settings and plugins.", shown.join(", ")))
 }
 
