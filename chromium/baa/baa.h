@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 14
+#define BAA_ABI_VERSION 15
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
