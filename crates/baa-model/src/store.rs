@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::Path;
 
 use rusqlite::{types::Type, Connection, Error, OptionalExtension, Result};
@@ -35,6 +36,7 @@ pub struct DownloadRecord {
 
 pub struct Store {
     conn: Connection,
+    settings_unreadable: Cell<bool>,
 }
 
 /// The data version this build writes; `kv` key `schema`. Raise it when a change is not
@@ -136,7 +138,7 @@ impl Store {
              session TEXT, transcript TEXT NOT NULL)",
             [],
         )?;
-        let store = Store { conn };
+        let store = Store { conn, settings_unreadable: Cell::new(false) };
         if stored != Some(SCHEMA) {
             store.put("schema", &SCHEMA)?;
         }
@@ -174,16 +176,32 @@ impl Store {
         self.put("session", &s)
     }
 
-    /// Unreadable settings fall back to defaults rather than failing startup.
+    /// None stored → defaults. Unreadable settings are an error, and from then on
+    /// [`Store::settings_unreadable`] is true.
     pub fn load_settings(&self) -> Result<Settings> {
-        Ok(self.get("settings")?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+        let Some(v) = self.get("settings")? else { return Ok(Settings::default()) };
+        serde_json::from_str(&v).map_err(|e| {
+            self.settings_unreadable.set(true);
+            Error::FromSqlConversionFailure(0, Type::Text, e.into())
+        })
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
+        // The caller runs on defaults after an unreadable load; saving them would replace the
+        // user's settings for good, so they stay on disk for a fixed or newer baa to read.
+        if self.settings_unreadable.get() {
+            return Ok(());
+        }
         self.put("settings", settings)
     }
 
-    /// Where the browser window was last left; nothing saved, or unreadable, is `None`.
+    /// The stored settings could not be read, so this run does not save them.
+    pub fn settings_unreadable(&self) -> bool {
+        self.settings_unreadable.get()
+    }
+
+    /// Where the browser window was last left; nothing saved, or unreadable, is `None`. An
+    /// unreadable frame is overwritten by the next save: it is only a window position.
     pub fn window_frame(&self) -> Result<Option<WindowFrame>> {
         Ok(self.get("window")?.and_then(|v| serde_json::from_str(&v).ok()))
     }
@@ -561,6 +579,18 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_settings_are_an_error_and_never_overwritten() {
+        let store = Store::open(":memory:").unwrap();
+        store.put("settings", &serde_json::json!({ "archive_after_hours": "soon" })).unwrap();
+        let stored = store.get("settings").unwrap();
+        assert!(!store.settings_unreadable());
+        assert!(store.load_settings().is_err());
+        assert!(store.settings_unreadable());
+        store.save_settings(&Settings::default()).unwrap();
+        assert_eq!(store.get("settings").unwrap(), stored);
+    }
+
+    #[test]
     fn a_fresh_database_gets_the_schema_and_no_backup() {
         let dir = TempDir::new("fresh");
         let store = Store::open(dir.db()).unwrap();
@@ -605,7 +635,7 @@ mod tests {
             assert_eq!(schema_of(&store), Some(SCHEMA.to_string()));
             assert!(store.load_settings().unwrap().reduce_motion);
 
-            let bak = Store { conn: Connection::open(dir.bak()).unwrap() };
+            let bak = Store { conn: Connection::open(dir.bak()).unwrap(), settings_unreadable: Cell::new(false) };
             assert!(bak.load_settings().unwrap().reduce_motion, "the backup replaced the older one");
             assert_eq!(schema_of(&bak), older.map(|v| v.to_string()), "the backup is the data as it was");
             drop((store, bak));
