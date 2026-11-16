@@ -37,7 +37,7 @@ pub struct Store {
     conn: Connection,
 }
 
-/// The data version this build writes; `kv` key `schema`. Raise it when a change is not
+/// The data version this build writes, as SQLite's `user_version`. Raise it when a change is not
 /// covered by `serde(default)`, and convert the older data in `Store::init`.
 pub const SCHEMA: u32 = 1;
 
@@ -86,31 +86,22 @@ impl Store {
     }
 
     fn init(conn: Connection) -> Result<Store> {
+        let stored: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         let has_kv: bool = conn.query_row(
             "SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'kv'",
             [],
             |r| r.get(0),
         )?;
-        let (stored, has_data) = if has_kv {
-            let stored: Option<String> =
-                conn.query_row("SELECT value FROM kv WHERE key = 'schema'", [], |r| r.get(0)).optional()?;
-            let stored = stored
-                .map(|v| serde_json::from_str::<u32>(&v))
-                .transpose()
-                .map_err(|e| Error::FromSqlConversionFailure(0, Type::Text, e.into()))?;
-            (stored, conn.query_row("SELECT count(*) > 0 FROM kv", [], |r| r.get(0))?)
-        } else {
-            (None, false)
-        };
-        if let Some(found) = stored.filter(|&v| v > SCHEMA) {
-            return Err(Error::ToSqlConversionFailure(Box::new(NewerSchema { found, supported: SCHEMA })));
+        let has_data = has_kv && conn.query_row("SELECT count(*) > 0 FROM kv", [], |r| r.get(0))?;
+        if stored > SCHEMA {
+            return Err(Error::ToSqlConversionFailure(Box::new(NewerSchema { found: stored, supported: SCHEMA })));
         }
         // Before this build first writes to data an older one left. VACUUM INTO is a consistent
         // copy even with a WAL beside the file; the old backup stays until the new one is whole.
         // Private mode: the copy holds only what baa.db already holds, and incognito Spaces never
         // reach baa.db (`save_session` strips them), so they never reach the backup either. The
-        // `schema` key holds only a number.
-        if has_data && stored.is_none_or(|v| v < SCHEMA) {
+        // data version is a number in the file header, not a row.
+        if has_data && stored < SCHEMA {
             if let Some(db) = conn.path().filter(|p| !p.is_empty()) {
                 let (bak, tmp) = (format!("{db}.bak"), format!("{db}.bak.tmp"));
                 let _ = std::fs::remove_file(&tmp);
@@ -136,11 +127,10 @@ impl Store {
              session TEXT, transcript TEXT NOT NULL)",
             [],
         )?;
-        let store = Store { conn };
-        if stored != Some(SCHEMA) {
-            store.put("schema", &SCHEMA)?;
+        if stored != SCHEMA {
+            conn.pragma_update(None, "user_version", SCHEMA)?;
         }
-        Ok(store)
+        Ok(Store { conn })
     }
 
     /// No stored Space → [`Session::first_run`]. An unreadable session is an error, not a
@@ -559,8 +549,8 @@ mod tests {
         }
     }
 
-    fn schema_of(store: &Store) -> Option<String> {
-        store.get("schema").unwrap()
+    fn schema_of(store: &Store) -> u32 {
+        store.conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap()
     }
 
     #[test]
@@ -574,7 +564,7 @@ mod tests {
     fn a_fresh_database_gets_the_schema_and_no_backup() {
         let dir = TempDir::new("fresh");
         let store = Store::open(dir.db()).unwrap();
-        assert_eq!(schema_of(&store), Some(SCHEMA.to_string()));
+        assert_eq!(schema_of(&store), SCHEMA);
         assert!(!dir.bak().exists());
         drop(store);
         Store::open(dir.db()).unwrap();
@@ -587,7 +577,7 @@ mod tests {
         {
             let store = Store::open(dir.db()).unwrap();
             store.save_settings(&Settings { reduce_motion: true, ..Settings::default() }).unwrap();
-            store.put("schema", &(SCHEMA + 1)).unwrap();
+            store.conn.pragma_update(None, "user_version", SCHEMA + 1).unwrap();
         }
         let before = std::fs::read(dir.db()).unwrap();
         let Err(e) = Store::open(dir.db()) else { panic!("a newer database opened") };
@@ -599,35 +589,31 @@ mod tests {
     }
 
     #[test]
-    fn an_older_or_missing_schema_is_backed_up_once_then_carries_the_current_one() {
-        for older in [None, Some(SCHEMA - 1)] {
-            let dir = TempDir::new("older");
-            {
-                let store = Store::open(dir.db()).unwrap();
-                store.save_settings(&Settings { reduce_motion: true, ..Settings::default() }).unwrap();
-                match older {
-                    Some(v) => store.put("schema", &v).unwrap(),
-                    None => store.conn.execute("DELETE FROM kv WHERE key = 'schema'", []).map(drop).unwrap(),
-                }
-            }
-            std::fs::write(dir.bak(), b"an older backup").unwrap();
+    fn an_older_schema_is_backed_up_once_then_carries_the_current_one() {
+        let older = SCHEMA - 1;
+        let dir = TempDir::new("older");
+        {
             let store = Store::open(dir.db()).unwrap();
-            assert_eq!(schema_of(&store), Some(SCHEMA.to_string()));
-            assert!(store.load_settings().unwrap().reduce_motion);
-
-            let bak = Store { conn: Connection::open(dir.bak()).unwrap() };
-            assert!(bak.load_settings().unwrap().reduce_motion, "the backup replaced the older one");
-            assert_eq!(schema_of(&bak), older.map(|v| v.to_string()), "the backup is the data as it was");
-            drop((store, bak));
-
-            std::fs::remove_file(dir.bak()).unwrap();
-            Store::open(dir.db()).unwrap();
-            assert!(!dir.bak().exists(), "backed up once");
+            store.save_settings(&Settings { reduce_motion: true, ..Settings::default() }).unwrap();
+            store.conn.pragma_update(None, "user_version", older).unwrap();
         }
+        std::fs::write(dir.bak(), b"an older backup").unwrap();
+        let store = Store::open(dir.db()).unwrap();
+        assert_eq!(schema_of(&store), SCHEMA);
+        assert!(store.load_settings().unwrap().reduce_motion);
+
+        let bak = Store { conn: Connection::open(dir.bak()).unwrap() };
+        assert!(bak.load_settings().unwrap().reduce_motion, "the backup replaced the older one");
+        assert_eq!(schema_of(&bak), older, "the backup is the data as it was");
+        drop((store, bak));
+
+        std::fs::remove_file(dir.bak()).unwrap();
+        Store::open(dir.db()).unwrap();
+        assert!(!dir.bak().exists(), "backed up once");
     }
 
     #[test]
-    fn the_schema_key_and_backup_never_hold_an_incognito_space() {
+    fn the_backup_never_holds_an_incognito_space() {
         let dir = TempDir::new("incognito");
         {
             let store = Store::open(dir.db()).unwrap();
@@ -637,11 +623,9 @@ mod tests {
             let incog = s.add_ephemeral_space("Incognito", ProfileId(u64::MAX));
             s.open_tab(incog, "https://secret.example/incognito", 2);
             store.save_session(&s).unwrap();
-            store.conn.execute("DELETE FROM kv WHERE key = 'schema'", []).unwrap();
+            store.conn.pragma_update(None, "user_version", 0).unwrap();
         }
-        let store = Store::open(dir.db()).unwrap();
-        assert_eq!(schema_of(&store), Some(SCHEMA.to_string()), "a number, nothing else");
-        drop(store);
+        drop(Store::open(dir.db()).unwrap());
         let has = |bytes: &[u8], what: &str| bytes.windows(what.len()).any(|w| w == what.as_bytes());
         let bak = std::fs::read(dir.bak()).unwrap();
         assert!(has(&bak, "https://kept.example/"), "the backup holds the session");
