@@ -196,6 +196,27 @@ fn parse_line(line: &str) -> Vec<Entry> {
     }
 }
 
+/// Why the child must stop, from its `system`/`init` line: a tool or MCP server that is not
+/// baa's (a settings file or plugin got in, or a flag above stopped working). Fails closed on a
+/// name that is not a string.
+fn init_problem(line: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v["type"] != "system" || v["subtype"] != "init" {
+        return None;
+    }
+    let names = |key: &str, of: fn(&Value) -> Option<&str>| -> Vec<String> {
+        v[key].as_array().into_iter().flatten().map(|x| of(x).unwrap_or("?").to_string()).collect()
+    };
+    let tools = names("tools", Value::as_str).into_iter().filter(|t| !t.starts_with("mcp__baa__"));
+    let servers = names("mcp_servers", |s| s["name"].as_str()).into_iter().filter(|s| s != "baa");
+    let foreign: Vec<String> = tools.chain(servers).collect();
+    if foreign.is_empty() {
+        return None;
+    }
+    let shown: Vec<&str> = foreign.iter().take(5).map(String::as_str).collect();
+    Some(format!("Stopped claude: it started with tools that are not baa's ({}). Check its settings and plugins.", shown.join(", ")))
+}
+
 /// `key=value` pairs of a tool's input on one line.
 fn summarize(input: &Value) -> String {
     let Some(map) = input.as_object() else { return String::new() };
@@ -246,8 +267,10 @@ fn argv(exe: &Path, nonce: &str, resume: Option<&str>, auto: bool) -> Vec<String
         "",
         "--permission-prompt-tool",
         "mcp__baa__approve",
+        // No user, project or local settings: their hooks, permissions and MCP servers would run
+        // beside baa's tools. `init_problem` checks what the child started with.
         "--setting-sources",
-        "user",
+        "",
     ]
     .into_iter()
     .chain(auto.then_some(["--permission-mode", "auto"]).into_iter().flatten())
@@ -512,6 +535,12 @@ impl<H: WebHost> Browser<H> {
     fn on_agent_msg(&mut self, msg: Msg, cx: &mut Context<Self>) {
         match msg {
             Msg::Line(line) => {
+                if let Some(why) = init_problem(&line) {
+                    log::warn!("agent panel: {why}");
+                    self.kill_agent_child();
+                    self.agent.panel.chat.transcript.push(Entry::Notice(why));
+                    return cx.notify();
+                }
                 let p = &mut self.agent.panel;
                 if let Some(id) = session_of(&line) {
                     p.chat.session = Some(id);
@@ -1030,7 +1059,31 @@ mod tests {
     #[test]
     fn garbage_and_other_types_are_ignored() {
         assert!(parse_line("not json").is_empty());
+        // The init line is no transcript entry; `init_problem` reads it.
         assert!(parse_line(r#"{"type":"system","subtype":"init"}"#).is_empty());
+    }
+
+    #[test]
+    fn the_child_may_start_with_baas_tools_only() {
+        let init = |tools: Value, servers: Value| init_problem(&json!({"type": "system", "subtype": "init", "session_id": "s", "tools": tools, "mcp_servers": servers}).to_string());
+        let baa = json!([{"name": "baa", "status": "connected"}]);
+        assert_eq!(init(json!(["mcp__baa__read_page", "mcp__baa__click"]), baa.clone()), None);
+        assert_eq!(init(json!([]), json!([])), None);
+        assert_eq!(init_problem(r#"{"type":"system","subtype":"init"}"#), None);
+        for (tools, servers) in [
+            (json!(["mcp__baa__read_page", "Bash"]), baa.clone()),
+            (json!(["mcp__baa_evil__x"]), baa.clone()),
+            (json!(["mcp__github__create_issue"]), json!([{"name": "baa"}, {"name": "github"}])),
+            (json!([]), json!([{"name": "github", "status": "failed"}])),
+            (json!([7]), baa.clone()),
+            (json!([]), json!([{"status": "connected"}])),
+        ] {
+            let why = init(tools.clone(), servers.clone()).unwrap_or_else(|| panic!("{tools} {servers}"));
+            assert!(why.starts_with("Stopped claude"), "{why}");
+        }
+        assert!(init(json!(["Bash", "Read"]), baa).unwrap().contains("Bash, Read"), "the notice names them");
+        // Only the init line is checked.
+        assert_eq!(init_problem(&json!({"type": "assistant", "tools": ["Bash"]}).to_string()), None);
     }
 
     #[test]
@@ -1040,6 +1093,7 @@ mod tests {
         assert!(!a.iter().any(|x| x == "--permission-mode"), "Claude Code's default mode unless asked");
         let at = |f: &str| a.iter().position(|x| x == f).unwrap_or_else(|| panic!("{f} missing"));
         assert_eq!(a[at("--tools") + 1], "");
+        assert_eq!(a[at("--setting-sources") + 1], "", "no user, project or local settings");
         assert_eq!(a[at("--permission-prompt-tool") + 1], "mcp__baa__approve");
         at("--strict-mcp-config");
         // Every arg is a flag or follows one, so nothing positional can be swallowed by a variadic.
