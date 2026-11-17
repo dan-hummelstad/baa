@@ -827,20 +827,24 @@ impl<H: WebHost> Browser<H> {
         self.settings.claude.allowed_spaces.contains(&space) && self.session.space(space).is_some_and(|s| !s.ephemeral)
     }
 
-    /// The tab `args` names (or the active one), if Claude may see it, and its origin: the
-    /// committed document's when it has a usable one, else the address it would load.
+    /// The tab `args` names (or the active one) and its [`Self::tab_origin`].
     fn agent_tab(&self, args: &Value, cx: &App) -> Result<(TabId, String), String> {
         let id = match args.get("tab").and_then(Value::as_u64) {
             Some(n) => TabId(n),
             None => self.active_tab().ok_or(NO_TAB)?,
         };
+        Ok((id, self.tab_origin(id, cx)?))
+    }
+
+    /// If Claude may see the tab: its committed document's origin when that is usable, else
+    /// the origin of the address it would load.
+    fn tab_origin(&self, id: TabId, cx: &App) -> Result<String, String> {
         let tab = self.session.tab(id).filter(|t| self.space_visible(t.space)).ok_or(NO_TAB)?;
         let saved = web_origin(&tab.url).ok_or(NOT_WEB)?;
-        let origin = match self.pages.get(&id).map(|(p, _)| page_origin(p.read(cx))) {
-            None | Some(Err(OPAQUE)) => saved,
-            Some(page) => page?,
-        };
-        Ok((id, origin))
+        match self.pages.get(&id).map(|(p, _)| page_origin(p.read(cx))) {
+            None | Some(Err(OPAQUE)) => Ok(saved),
+            Some(page) => Ok(page?),
+        }
     }
 
     fn agent_page(&self, id: TabId) -> Result<Entity<H::Page>, String> {
@@ -962,8 +966,8 @@ impl<H: WebHost> Browser<H> {
                 let left = from.clone();
                 let load = move |b: &mut Self, reply: Reply, window: &mut Window, cx: &mut Context<Self>| {
                     let Ok(page) = b.agent_page(id) else { return reply.refuse("That tab is not loaded; activate_tab first.") };
-                    match b.agent_tab(&json!({"tab": id.0}), cx) {
-                        Ok((_, now)) if now == left => {}
+                    match b.tab_origin(id, cx) {
+                        Ok(now) if now == left => {}
                         _ => return reply.refuse("The page changed while waiting for approval; try again."),
                     }
                     // Agent-supplied, not typed: loaded only after the user approved its origin on
@@ -1077,8 +1081,8 @@ impl<H: WebHost> Browser<H> {
         };
         self.gate(conn, tool, origin.clone(), false, reply, window, cx, move |b, reply, window, cx| {
             // The page may have moved on while the sheet waited: the approval was for `origin`.
-            match b.agent_tab(&json!({"tab": id.0}), cx) {
-                Ok((_, now)) if now == origin => {}
+            match b.tab_origin(id, cx) {
+                Ok(now) if now == origin => {}
                 _ => return reply.refuse("The page changed while waiting for approval; try again."),
             }
             b.agent.driven.insert(id);
