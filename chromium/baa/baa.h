@@ -576,6 +576,70 @@ typedef void (*BaaActionVisitor)(void* ctx, const BaaAction* action);
 BAA_EXPORT int baa_profile_extension_actions(BaaProfile* profile, BaaTabId tab,
                                              BaaActionVisitor visit, void* ctx);
 
+// A shortcut's modifiers, as bits. Mac meanings: a manifest's "Ctrl" is
+// Command (BAA_MOD_CMD) and its "MacCtrl" is Control (BAA_MOD_CTRL).
+enum {
+  BAA_MOD_CMD = 1 << 0,    // ⌘
+  BAA_MOD_CTRL = 1 << 1,   // ⌃
+  BAA_MOD_ALT = 1 << 2,    // ⌥
+  BAA_MOD_SHIFT = 1 << 3,  // ⇧
+};
+
+// One chrome.commands entry of an extension.
+typedef struct {
+  const char* extension_id;
+  const char* name;         // the manifest's command name, e.g. "toggle-feature"
+  const char* description;  // the manifest's; "" for an action's command
+  // The key in force, Chrome's name for it: "A".."Z", "0".."9", "Comma",
+  // "Period", "Up", "Down", "Left", "Right", "Insert", "Delete", "Home",
+  // "End", "PageUp", "PageDown", "Space", "Tab", "MediaNextTrack",
+  // "MediaPlayPause", "MediaPrevTrack", "MediaStop". "" when none is assigned
+  // (the user cleared it, or the manifest's key was taken).
+  const char* key;
+  uint32_t modifiers;  // BAA_MOD_* bits; 0 when `key` is ""
+  // The action's command ("_execute_action" and the MV2 kinds): its shortcut
+  // is a click on the action (baa_extension_popup), which the engine does not
+  // dispatch; the receiver matches it against its own keys.
+  bool action;
+  // A system-wide shortcut, also when the app is not in front: Chrome's global
+  // registry owns it, the window's key handling does not dispatch it.
+  bool global;
+} BaaCommand;
+
+typedef void (*BaaCommandVisitor)(void* ctx, const BaaCommand* command);
+
+// Every command of every user-visible extension of the profile (enabled or
+// not), synchronously; strings are borrowed for the visit. A key reaches an
+// extension only when the app's `key` callback did not take it (the app wins
+// a conflict), and before the page. Returns the number visited, -1 for a gone
+// profile. Media keys are listed but never dispatched.
+BAA_EXPORT int baa_profile_extension_commands(BaaProfile* profile,
+                                              BaaCommandVisitor visit,
+                                              void* ctx);
+
+// Runs the extension's named command as its shortcut would, on the active tab
+// of the profile's window: grants activeTab there and fires
+// commands.onCommand. False, and nothing happens, for a gone profile, a
+// profile with no window yet, an extension that is not enabled (or not
+// allowed in this incognito profile), a command it does not declare, or an
+// action's command (use baa_extension_popup).
+BAA_EXPORT bool baa_extension_run_command(BaaProfile* profile,
+                                          const char* extension_id,
+                                          const char* command);
+
+// Gives the extension's command the shortcut `key` (a BaaCommand.key name)
+// with `modifiers` (BAA_MOD_* bits), taking it from any other extension's
+// command that had it, as Chrome's shortcut page does. `key` "" clears the
+// shortcut (the manifest's suggestion does not come back). False, and nothing
+// changes, for a gone profile, an unknown extension or command, or a key and
+// modifiers Chrome would not accept (no modifier, ⇧ alone, ⌥ with ⌘ or ⌃, an
+// unknown key name, a media key).
+// An incognito profile shares its parent's shortcuts.
+BAA_EXPORT bool baa_extension_set_shortcut(BaaProfile* profile,
+                                           const char* extension_id,
+                                           const char* command,
+                                           const char* key, uint32_t modifiers);
+
 enum {
   BAA_EXTENSION_ENABLE = 0,       // value: 1 enable (see below), 0 disable
   BAA_EXTENSION_REMOVE = 1,       // value ignored

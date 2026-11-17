@@ -50,6 +50,8 @@ void GroupsTabGrouped(TabStripModel* model,
                       tabs::TabInterface* tab);
 void GroupsChanged(const TabGroupChange& change);
 
+class Keybindings;
+
 // The BrowserWindow of every baa Browser: Chrome's logic with no views behind
 // it, drawn by the embedding app. The body is TestBrowserWindow's long tail of
 // no-ops plus the getters Chrome dereferences (PLAN-chromium-phase3.md 15a).
@@ -70,6 +72,7 @@ class Window : public BrowserWindow,
 
   BrowserWindowInterface* browser() const { return browser_; }
   bool closing() const { return closing_; }
+  Keybindings* keybindings() const { return keybindings_.get(); }  // null when hidden
 
   // BrowserWindow:
   void Show() override {}
@@ -287,6 +290,8 @@ class Window : public BrowserWindow,
   base::CallbackListSubscription close_cancelled_;
   ExtensionsContainerPtr extensions_container_;
   std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>> extensions_registration_;
+  // Extensions' chrome.commands shortcuts: Chrome makes its registry only for a views window.
+  std::unique_ptr<Keybindings> keybindings_;
   base::WeakPtrFactory<Window> weak_factory_{this};
 };
 

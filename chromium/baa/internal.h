@@ -233,6 +233,11 @@ bool SetPrefBool(Profile* profile, const char* name, bool value);
 // Makes `browser`'s window the one Chrome treats as active.
 void ActivateBrowser(BrowserWindowInterface* browser);
 
+// window.mm: runs an extension's named command as its shortcut would, on `browser`'s active tab.
+// False when `browser` has no baa window.
+bool RunExtensionCommand(BrowserWindowInterface* browser, const std::string& extension_id,
+                         const std::string& command);
+
 }  // namespace baa
 
 #endif  // BAA_INTERNAL_H_

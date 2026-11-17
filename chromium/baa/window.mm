@@ -10,7 +10,10 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/extensions/commands/command_service.h"
+#include "chrome/browser/extensions/extension_keybinding_registry.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_manager_service.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection.h"
@@ -30,9 +33,12 @@
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/command.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/content_accelerators/accelerator_util.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -89,6 +95,40 @@ class StubFindBar : public FindBar {
 };
 
 }  // namespace
+
+// ExtensionKeybindingRegistryViews without views: the window's key handling asks it.
+class Keybindings final : public extensions::ExtensionKeybindingRegistry {
+ public:
+  explicit Keybindings(BrowserWindowInterface* browser)
+      : ExtensionKeybindingRegistry(browser->GetProfile(), TabListInterface::From(browser),
+                                    extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS) {
+    Init();
+  }
+
+  // True when an extension's command took the key.
+  bool Handle(const ui::Accelerator& accelerator) { return NotifyEventTargets(accelerator); }
+  // As if its shortcut were pressed: grants activeTab and fires commands.onCommand.
+  void Run(const extensions::ExtensionId& extension_id, const std::string& command) {
+    CommandExecuted(extension_id, command, ui::Accelerator());
+  }
+
+ private:
+  // extensions::ExtensionKeybindingRegistry:
+  bool PopulateCommands(const extensions::Extension* extension, ui::CommandMap* commands) override {
+    if (!extensions::CommandService::Get(browser_context())
+             ->GetNamedCommands(extension->id(), extensions::CommandService::ACTIVE,
+                                extensions::CommandService::REGULAR, commands)) {
+      return false;
+    }
+    // ponytail: no media keys. Watching them takes a system-wide event tap (and the
+    // Accessibility permission), for a key the page's media session already gets.
+    std::erase_if(*commands, [](const auto& entry) { return entry.second.accelerator().IsMediaKey(); });
+    return !commands->empty();
+  }
+  bool RegisterAccelerator(const ui::Accelerator&, const extensions::ExtensionId&, const std::string&) override {
+    return true;
+  }
+};
 
 class Window::StubLocationBar : public LocationBar {
    public:
@@ -479,10 +519,14 @@ Window::Window(BrowserWindowInterface* browser, bool hidden)
   // The Browser's TabStripModel exists already (browser.cc builds it before
   // the window), so nothing is missed.
   browser->GetTabStripModel()->AddObserver(this);
+  if (!hidden) {
+    keybindings_ = std::make_unique<Keybindings>(browser);
+  }
   Windows().push_back(this);
 }
 
 Window::~Window() {
+  keybindings_.reset();  // before the Browser's TabListInterface it holds
   for (auto& observer : observers_) {
     observer.OnHostDestroying();
   }
@@ -655,11 +699,18 @@ void Window::ConfirmBrowserCloseWithPendingDownloads(
 }
 
 // The app's shortcuts get the first look, as with CEF's on_pre_key_event.
+// Then extensions' shortcuts, so baa's win a conflict, still before the page as in Chrome. Not
+// through OfferKey's filter: an extension's shortcut may be Option-only.
 content::KeyboardEventProcessingResult Window::PreHandleKeyboardEvent(
     const input::NativeWebKeyboardEvent& event) {
-  return OfferKey(event, false)
-             ? content::KeyboardEventProcessingResult::HANDLED
-             : content::KeyboardEventProcessingResult::NOT_HANDLED;
+  if (OfferKey(event, false)) {
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+  if (keybindings_ && event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
+      keybindings_->Handle(::ui::GetAcceleratorFromNativeWebKeyboardEvent(event))) {
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+  return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool Window::HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event) {
@@ -892,6 +943,17 @@ bool TargetUrl(content::WebContents* source, const GURL& url) {
 }
 
 }  // namespace
+
+bool RunExtensionCommand(BrowserWindowInterface* browser, const std::string& extension_id,
+                         const std::string& command) {
+  for (Window* window : Windows()) {
+    if (window->browser() == browser && window->keybindings()) {
+      window->keybindings()->Run(extension_id, command);
+      return true;
+    }
+  }
+  return false;
+}
 
 void InstallTargetUrlHook() {
   g_baa_target_url = &TargetUrl;

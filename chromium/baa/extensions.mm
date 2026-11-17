@@ -16,6 +16,7 @@
 #include "base/files/file_path.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_view.h"
@@ -49,6 +50,7 @@
 #include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/api/extension_action/action_info.h"
+#include "extensions/common/command.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest.h"
@@ -59,6 +61,9 @@
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/command.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -468,6 +473,65 @@ uint32_t Rgba(SkColor color) {
   return (SkColorGetR(color) << 24) | (SkColorGetG(color) << 16) | (SkColorGetB(color) << 8) | SkColorGetA(color);
 }
 
+// ---- chrome.commands -------------------------------------------------------------
+
+// Every command the extension declares, named ones and its action's, with the manifest's key.
+std::vector<ui::Command> DeclaredCommands(Profile* profile, const extensions::Extension& ext) {
+  extensions::CommandService* service = extensions::CommandService::Get(profile);
+  ui::CommandMap named;
+  service->GetNamedCommands(ext.id(), extensions::CommandService::ALL, extensions::CommandService::ANY_SCOPE,
+                            &named);
+  std::vector<ui::Command> commands;
+  for (const auto& [name, command] : named) {
+    commands.push_back(command);
+  }
+  if (const extensions::ActionInfo* action = extensions::ActionInfo::GetExtensionActionInfo(&ext)) {
+    extensions::Command command;
+    if (service->GetExtensionActionCommand(ext.id(), action->type, extensions::CommandService::ALL, &command,
+                                           /*active=*/nullptr)) {
+      commands.push_back(command);
+    }
+  }
+  return commands;
+}
+
+bool Declares(Profile* profile, const extensions::Extension& ext, const std::string& name) {
+  return std::ranges::any_of(DeclaredCommands(profile, ext),
+                             [&](const ui::Command& command) { return command.command_name() == name; });
+}
+
+// Mac: EF_COMMAND_DOWN is ⌘ and EF_CONTROL_DOWN is ⌃ (a manifest's "Ctrl" was made Command when
+// it was read, its "MacCtrl" Ctrl).
+uint32_t ModifierBits(const ui::Accelerator& accelerator) {
+  return (accelerator.IsCmdDown() ? BAA_MOD_CMD : 0) | (accelerator.IsCtrlDown() ? BAA_MOD_CTRL : 0) |
+         (accelerator.IsAltDown() ? BAA_MOD_ALT : 0) | (accelerator.IsShiftDown() ? BAA_MOD_SHIFT : 0);
+}
+
+// The keystroke string CommandService stores on Mac: "Ctrl" is ⌃ there, "Command" ⌘.
+std::string Keystroke(const std::string& key, uint32_t modifiers) {
+  std::string keystroke;
+  if (modifiers & BAA_MOD_CTRL) {
+    keystroke += "Ctrl+";
+  }
+  if (modifiers & BAA_MOD_ALT) {
+    keystroke += "Alt+";
+  }
+  if (modifiers & BAA_MOD_CMD) {
+    keystroke += "Command+";
+  }
+  if (modifiers & BAA_MOD_SHIFT) {
+    keystroke += "Shift+";
+  }
+  return keystroke + key;
+}
+
+// An extension the command calls may act on in `profile`.
+const extensions::Extension* CommandExtension(Profile* profile, const char* extension_id) {
+  const extensions::Extension* ext =
+      extension_id ? extensions::ExtensionRegistry::Get(profile)->GetInstalledExtension(extension_id) : nullptr;
+  return ext && !HiddenExtension(*ext) && !ext->is_theme() ? ext : nullptr;
+}
+
 // The ExtensionsContainer of a baa window: enough that Chrome's extension code
 // can ask it, and answer "no" (there is no toolbar).
 class Container final : public ExtensionsContainer {
@@ -597,6 +661,81 @@ int baa_profile_extension_actions(BaaProfile* profile, BaaTabId tab, BaaActionVi
     ++count;
   }
   return count;
+}
+
+int baa_profile_extension_commands(BaaProfile* profile, BaaCommandVisitor visit, void* ctx) {
+  Profile* chrome_profile = baa::ChromeProfileOf(profile);
+  if (!chrome_profile) {
+    return -1;
+  }
+  extensions::CommandService* service = extensions::CommandService::Get(chrome_profile);
+  int count = 0;
+  for (const auto& ref : extensions::ExtensionRegistry::Get(chrome_profile)->GenerateInstalledExtensionsSet()) {
+    const extensions::Extension& ext = *ref;
+    if (baa::HiddenExtension(ext) || ext.is_theme()) {
+      continue;
+    }
+    for (const ui::Command& command : baa::DeclaredCommands(chrome_profile, ext)) {
+      // The key in force, not the manifest's: a suggested key another extension holds is not given.
+      extensions::Command saved = service->FindCommandByName(ext.id(), command.command_name());
+      std::string shortcut = saved.accelerator().key_code() == ui::VKEY_UNKNOWN
+                                 ? std::string()
+                                 : ui::Command::AcceleratorToString(saved.accelerator());
+      std::string key = shortcut.substr(shortcut.rfind('+') == std::string::npos ? 0 : shortcut.rfind('+') + 1);
+      std::string description = base::UTF16ToUTF8(command.description());
+      BaaCommand out = {};
+      out.extension_id = ext.id().c_str();
+      out.name = command.command_name().c_str();
+      out.description = description.c_str();
+      out.key = key.c_str();
+      out.modifiers = key.empty() ? 0 : baa::ModifierBits(saved.accelerator());
+      out.action = extensions::Command::IsActionRelatedCommand(command.command_name());
+      out.global = saved.global();
+      visit(ctx, &out);
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool baa_extension_run_command(BaaProfile* profile, const char* extension_id, const char* command) {
+  Profile* chrome_profile = baa::ChromeProfileOf(profile);
+  BrowserWindowInterface* browser = baa::ExistingBrowserOf(profile);
+  if (!chrome_profile || !browser || !command || baa_is_quitting()) {
+    return false;
+  }
+  const extensions::Extension* ext = baa::CommandExtension(chrome_profile, extension_id);
+  if (!ext || !extensions::ExtensionRegistry::Get(chrome_profile)->enabled_extensions().Contains(ext->id()) ||
+      (chrome_profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(ext, chrome_profile))) {
+    return false;
+  }
+  // An action's command is a click on it: baa_extension_popup.
+  if (extensions::Command::IsActionRelatedCommand(command) || !baa::Declares(chrome_profile, *ext, command)) {
+    return false;
+  }
+  return baa::RunExtensionCommand(browser, ext->id(), command);
+}
+
+bool baa_extension_set_shortcut(BaaProfile* profile, const char* extension_id, const char* command,
+                                const char* key, uint32_t modifiers) {
+  Profile* chrome_profile = baa::ChromeProfileOf(profile);
+  const extensions::Extension* ext = chrome_profile ? baa::CommandExtension(chrome_profile, extension_id) : nullptr;
+  if (!ext || !command || !key || !baa::Declares(chrome_profile, *ext, command)) {
+    return false;
+  }
+  std::string keystroke;
+  if (*key) {
+    keystroke = baa::Keystroke(key, modifiers);
+    ui::Accelerator accelerator = extensions::Command::StringToAccelerator(keystroke, command);
+    // Media keys are never watched (window.mm, Keybindings).
+    if (accelerator.key_code() == ui::VKEY_UNKNOWN || accelerator.IsMediaKey()) {
+      return false;
+    }
+  }
+  // Takes the key from another extension's command, as Chrome's shortcut page does; "" clears it
+  // and keeps the manifest's suggestion from coming back.
+  extensions::CommandService::Get(chrome_profile)->UpdateKeybindingPrefs(ext->id(), command, keystroke);
+  return true;
 }
 
 bool baa_profile_extension_change(BaaProfile* profile, const char* extension_id, int change, int value) {

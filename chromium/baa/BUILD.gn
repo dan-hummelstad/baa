@@ -57,6 +57,7 @@ source_set("baa") {
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//ui/base",
+    "//ui/content_accelerators",
     "//ui/events:events_base",
     "//skia",
     "//url",
