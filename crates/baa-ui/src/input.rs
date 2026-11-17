@@ -102,7 +102,6 @@ pub struct TextField {
     pub(crate) sel: Rc<Cell<Sel>>,
     /// Draws bullets for the text (passwords), and keeps it from the input method.
     pub masked: bool,
-    /// The text as last painted; the input method places its candidate window from it.
     pub(crate) drawn: Rc<RefCell<Option<TextLayout>>>,
     /// The input method's uncommitted text, as bytes of `text`.
     pub(crate) marked: Option<Range<usize>>,
@@ -149,7 +148,6 @@ impl TextField {
         self.set(at, at);
     }
 
-    /// `replace` as an undo step; typing and single deletes join the step before.
     fn edit(&mut self, kind: Edit, r: Range<usize>, with: &str) {
         let (caret, anchor) = self.ends();
         let merge = kind != Edit::Other && caret == anchor && self.history.run == Some((kind, self.text.len(), caret));
@@ -177,7 +175,6 @@ impl TextField {
         }
     }
 
-    /// A composition that ended where it began leaves no step behind.
     fn end_composition(&mut self, r: Range<usize>, with: &str) {
         self.replace(r, with);
         self.marked = None;

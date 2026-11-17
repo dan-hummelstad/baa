@@ -79,7 +79,6 @@ impl<H: WebHost> Browser<H> {
         self.asks.get(&self.active_tab()?)?.dialog.as_ref()
     }
 
-    /// The text box keys type into: the prompt's answer, or the focused auth field.
     pub(crate) fn dialog_field(&mut self) -> Option<&mut TextField> {
         let ask = self.active_tab().and_then(|id| self.asks.get_mut(&id))?.dialog.as_mut()?;
         match ask.dialog.kind {

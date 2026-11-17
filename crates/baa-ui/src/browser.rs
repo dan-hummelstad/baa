@@ -1113,7 +1113,6 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    /// The field `on_input_key` sends keys to.
     pub(crate) fn input_field(&mut self) -> Option<&mut TextField> {
         match self.input_target()? {
             InputTarget::Asks => None,

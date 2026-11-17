@@ -69,7 +69,6 @@ impl TextField {
         self.marked = None;
     }
 
-    /// Commits: replaces the marked text, else `r16`, else the selection.
     pub(crate) fn replace_text_in_range(&mut self, r16: Option<Range<usize>>, text: &str) {
         let line = one_line(text);
         let composing = self.marked().is_some();
@@ -247,7 +246,6 @@ pub(crate) fn wire<V: 'static, E: ParentElement + InteractiveElement>(
         .on_action(cx.listener(move |v, _: &Redo, window, cx| step(v, false, window, cx)))
 }
 
-/// The handler `wire` installs, for tests to play an input method through.
 #[cfg(test)]
 pub(crate) fn handler<V: 'static>(owner: &gpui::Entity<V>, field: FieldFn<V>, on_key: KeyFn<V>) -> impl InputHandler {
     Ime { owner: owner.downgrade(), field, on_key }
