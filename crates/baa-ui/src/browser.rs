@@ -35,6 +35,7 @@ mod menus;
 mod spaces;
 mod actions;
 mod page_area;
+mod hover;
 mod header;
 mod groups;
 mod live;
@@ -296,6 +297,8 @@ pub struct Browser<H: WebHost> {
     last_frame: Instant,
     /// Claude's tool server: clients, approvals, the chat panel (PLAN-m4-features D).
     pub(crate) agent: crate::agent::Agent<H>,
+    /// The tab whose page has the pointer on a link, and where that link goes.
+    pub(crate) hover_url: Option<(TabId, String)>,
 }
 
 impl<H: WebHost> Browser<H> {
@@ -510,6 +513,7 @@ impl<H: WebHost> Browser<H> {
             dark: false,
             last_frame: cx.background_executor().now(),
             agent: Default::default(),
+            hover_url: None,
         };
         this.restore_chats();
         if private {
@@ -652,6 +656,9 @@ impl<H: WebHost> Browser<H> {
         }
         let on_screen = self.shown_panes();
         let before = std::mem::replace(&mut self.on_screen, on_screen);
+        if self.hover_url.as_ref().is_some_and(|(t, _)| !self.on_screen.contains(t)) {
+            self.hover_url = None;
+        }
         if before != self.on_screen {
             self.mini_hold = None;
         }
@@ -756,6 +763,9 @@ impl<H: WebHost> Browser<H> {
             PageEvent::UrlChanged(new) if url.strip_prefix("view-source:") == Some(new.as_str()) => return,
             PageEvent::UrlChanged(new) => {
                 tab.url = new.clone();
+                if self.hover_url.as_ref().is_some_and(|(t, _)| *t == id) {
+                    self.hover_url = None;
+                }
                 if !private {
                     // The title arrives after the address; this one is the old page's.
                     if let Some(Err(e)) = self.store.as_ref().map(|s| s.record_visit(new, "", now() as i64)) {
@@ -786,7 +796,12 @@ impl<H: WebHost> Browser<H> {
                 self.favicons.insert(url.clone(), std::sync::Arc::new(image));
                 return cx.notify();
             }
-            PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => return cx.notify(),
+            PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => {
+                if *event == PageEvent::LoadingChanged(true) {
+                    self.clear_hover_url(id, cx);
+                }
+                return cx.notify();
+            }
             PageEvent::OpenRequested {
                 url, background, ..
             } => {
@@ -806,7 +821,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::Closed => self.session.close_tab(id, now()),
             // Only extension popups send it.
             PageEvent::PreferredSize(_) => return,
-            PageEvent::TargetUrl(_) => return,
+            PageEvent::TargetUrl(url) => return self.on_target_url(id, url, cx),
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::Focused => return self.on_page_focused(id, window, cx),
@@ -1341,6 +1356,13 @@ pub(crate) fn host_of(url: &str) -> String {
         Some(port) => format!("{host}:{port}"),
         None => host.to_string(),
     }
+}
+
+/// Text a page or an extension chose, as one line without control or bidi-override
+/// characters, which could hide or reorder what is shown.
+pub(crate) fn plain_text(text: &str) -> String {
+    let bidi = |c: char| matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    text.chars().filter(|c| !c.is_control() && !bidi(*c)).collect()
 }
 
 /// One line of origin text, cut on the left when too long, so the end of the host

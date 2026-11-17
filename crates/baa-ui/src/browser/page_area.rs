@@ -49,7 +49,10 @@ impl<H: WebHost> Browser<H> {
         // A tab with no page here because it is in another window.
         let elsewhere = self.active_tab().filter(|id| page.is_none() && self.holder(*id, cx).is_some());
         let content = match page {
-            Some(page) => page.update(cx, |p, cx| p.render(window, cx)),
+            Some(page) => {
+                let content = page.update(cx, |p, cx| p.render(window, cx));
+                self.with_hover_url(self.active_tab().expect("a page is the active tab's"), content, cx)
+            }
             None if elsewhere.is_some() => self.render_elsewhere(elsewhere.unwrap(), theme, cx),
             None => {
                 let this = cx.entity().downgrade();
@@ -318,7 +321,8 @@ impl<H: WebHost> Browser<H> {
                 None => match self.pages.get(id) {
                     Some((page, _)) => {
                         page.read(cx).set_square_corners(inner(i));
-                        page.update(cx, |p, cx| p.render(window, cx))
+                        let content = page.update(cx, |p, cx| p.render(window, cx));
+                        self.with_hover_url(*id, content, cx)
                     }
                     None if self.holder(*id, cx).is_some() => self.render_elsewhere(*id, theme, cx),
                     None => div().into_any_element(),
