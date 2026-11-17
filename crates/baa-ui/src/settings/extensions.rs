@@ -53,6 +53,7 @@ impl<H: WebHost> Browser<H> {
                         if let Some(active) = this.active_space() {
                             this.extensions = this.host.extensions(active.profile);
                         }
+                        this.refresh_actions(cx);
                         cx.notify();
                     })
                     .ok();
@@ -69,7 +70,7 @@ impl<H: WebHost> Browser<H> {
         }
         if let Some(active) = self.active_space().filter(|s| s.profile == profile) {
             self.extensions = self.host.extensions(active.profile);
-            cx.notify();
+            self.refresh_actions(cx);
         }
     }
 

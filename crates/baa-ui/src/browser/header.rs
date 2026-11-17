@@ -2,6 +2,26 @@
 //! it), and the traffic lights' row at the top of a left-hand sidebar.
 
 use super::*;
+use ext_actions::badge_text;
+
+/// A toolbar button's tooltip.
+struct Tip(SharedString);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(280.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(r(6.))
+            .bg(surface::bg())
+            .border_1()
+            .border_color(surface::border())
+            .text_size(px(12.))
+            .text_color(surface::ink())
+            .child(self.0.clone())
+    }
+}
 
 impl<H: WebHost> Browser<H> {
     /// The row above the page: `controls` (with that much room for the traffic lights) at the
@@ -70,8 +90,34 @@ impl<H: WebHost> Browser<H> {
             let key = ("extension", i as u64);
             let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
             let size = 16. * (1. + 0.08 * h - 0.18 * p);
+            let action = self.actions.get(&ext.id);
+            let badge = action.map(|a| (badge_text(&a.badge_text), a)).filter(|(t, _)| !t.is_empty()).map(|(text, a)| {
+                let id = ext.id.clone();
+                div()
+                    .debug_selector(move || format!("badge:{id}"))
+                    .absolute()
+                    .right(px(-2.))
+                    .bottom(px(-1.))
+                    .min_w(px(12.))
+                    .h(px(12.))
+                    .px(px(2.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(r(3.))
+                    .bg(a.badge_rgba.map_or(theme.accent, |c| gpui::rgba(c).into()))
+                    .text_color(a.text_rgba.map_or(gpui::white(), |c| gpui::rgba(c).into()))
+                    .text_size(px(9.))
+                    .line_height(px(12.))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .whitespace_nowrap()
+                    .child(text)
+            });
+            let dim = action.is_some_and(|a| !a.enabled);
+            let title = action.map(|a| SharedString::from(plain_text(&a.title))).filter(|t| !t.is_empty());
             let el = div()
                 .id(("extension", i))
+                .relative()
                 .size(px(26.))
                 .flex()
                 .items_center()
@@ -80,11 +126,15 @@ impl<H: WebHost> Browser<H> {
                 .bg(fade(theme.hover, h))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
-                .child(match icon_path {
-                    // A component extension (uBlock) names an icon that is only in the resource pak.
-                    Some(path) if path.exists() => gpui::img(path).size(px(size)).into_any_element(),
-                    _ => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
-                });
+                .when_some(title, |d, title| d.tooltip(move |_, cx| cx.new(|_| Tip(title.clone())).into()))
+                .child(
+                    div().when(dim, |d| d.opacity(0.4)).child(match icon_path {
+                        // A component extension (uBlock) names an icon that is only in the resource pak.
+                        Some(path) if path.exists() => gpui::img(path).size(px(size)).into_any_element(),
+                        _ => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
+                    }),
+                )
+                .children(badge);
             feel(el, key, cx)
         }).collect();
         div()

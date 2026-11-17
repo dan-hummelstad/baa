@@ -39,6 +39,8 @@ mod tests_agent;
 mod tests_windows;
 #[cfg(test)]
 mod tests_hover;
+#[cfg(test)]
+mod tests_extensions;
 
 pub use agent::{AgentPeer, AgentSwitch};
 pub use browser::Browser;

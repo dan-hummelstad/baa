@@ -27,6 +27,7 @@ pub(crate) use extensions::ExtensionsPage;
 pub use tabs::KeymapPath;
 #[cfg(test)]
 pub(crate) use tabs::ensure_keymap;
+pub(crate) use tabs::shortcut_label;
 pub(crate) use rows::{Row, Tab};
 
 use crate::{

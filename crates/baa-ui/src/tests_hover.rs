@@ -106,7 +106,8 @@ fn a_permission_question_hides_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn it_clears_when_the_link_or_the_page_goes(cx: &mut TestAppContext) {
     let (b, p, cx) = page(cx);
-    let clears: [(&str, fn(&Entity<MockPage>, &mut VisualTestContext)); 3] = [
+    type Clear = fn(&Entity<MockPage>, &mut VisualTestContext);
+    let clears: [(&str, Clear); 3] = [
         ("an empty URL", |p, cx| hover(p, "", cx)),
         ("a navigation", |p, cx| p.update(cx, |_, cx| cx.emit(PageEvent::UrlChanged("https://n.example/".into())))),
         ("a load starting", |p, cx| p.update(cx, |_, cx| cx.emit(PageEvent::LoadingChanged(true)))),

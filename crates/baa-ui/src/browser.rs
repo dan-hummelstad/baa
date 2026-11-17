@@ -36,6 +36,7 @@ mod spaces;
 mod actions;
 mod page_area;
 mod hover;
+pub(crate) mod ext_actions;
 mod header;
 mod groups;
 mod live;
@@ -299,6 +300,10 @@ pub struct Browser<H: WebHost> {
     pub(crate) agent: crate::agent::Agent<H>,
     /// The tab whose page has the pointer on a link, and where that link goes.
     pub(crate) hover_url: Option<(TabId, String)>,
+    /// The active Space's toolbar actions on its active tab, by extension id.
+    pub(crate) actions: HashMap<String, baa_web::ExtensionAction>,
+    _actions_changed: Subscription,
+    _popups: Subscription,
 }
 
 impl<H: WebHost> Browser<H> {
@@ -408,6 +413,8 @@ impl<H: WebHost> Browser<H> {
         let extensions_changed = (!private).then(|| {
             cx.subscribe(&host.extensions_changed(), |this: &mut Self, _, profile: &baa_model::ProfileId, cx| this.extensions_changed(*profile, cx))
         });
+        let actions_changed = cx.subscribe(&host.extension_actions_changed(), |this: &mut Self, _, change, cx| this.on_action_changed(change, cx));
+        let popups = cx.subscribe_in(&host.extension_popups(), window, |this: &mut Self, _, opened, window, cx| this.on_popup_opened(opened, window, cx));
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let sidebar_open = !session.sidebar_collapsed;        let mut this = Self {
             host,
@@ -514,6 +521,9 @@ impl<H: WebHost> Browser<H> {
             last_frame: cx.background_executor().now(),
             agent: Default::default(),
             hover_url: None,
+            actions: HashMap::new(),
+            _actions_changed: actions_changed,
+            _popups: popups,
         };
         this.restore_chats();
         if private {
@@ -674,6 +684,7 @@ impl<H: WebHost> Browser<H> {
             .active_space()
             .map(|s| self.host.extensions(s.profile))
             .unwrap_or_default();
+        self.refresh_actions(cx);
         self.share_extensions_if_new_profiles(cx);
         self.sync_groups(cx);
         self.save();
@@ -1470,6 +1481,7 @@ impl<H: WebHost> Render for Browser<H> {
         let root = div()
             .key_context("Browser")
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_extension_key))
             .child({
                 // Every move in the window, even over overlays that occlude the root.
                 let track = cx.listener(|this, e: &gpui::MouseMoveEvent, window, cx| {

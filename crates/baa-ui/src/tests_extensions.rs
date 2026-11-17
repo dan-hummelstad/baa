@@ -1,0 +1,193 @@
+//! Extensions' toolbar actions: badges, the activate shortcut, and popups they open themselves.
+
+use baa_model::Store;
+use baa_web::{ExtensionAction, ExtensionActionChanged, ExtensionCommand, ExtensionPopupOpened, PageEvent, ProfileId};
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
+
+use crate::{mock::MockHost, Browser};
+
+const POPUP: &str = "chrome-extension://ubo/popup.html";
+
+fn browser(cx: &mut TestAppContext) -> (Entity<Browser<MockHost>>, &mut VisualTestContext) {
+    cx.update(crate::init);
+    let (b, cx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), Store::open(":memory:").unwrap(), window, cx));
+    let ext = baa_web::Extension { id: "ubo".into(), name: "uBO".into(), icon: None, popup: Some(POPUP.into()), options: None };
+    b.update(cx, |b, _| *b.host.extensions.borrow_mut() = vec![ext]);
+    open(cx, "a.example");
+    (b, cx)
+}
+
+fn open(cx: &mut VisualTestContext, url: &str) {
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input(url);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
+fn action(badge: &str) -> ExtensionAction {
+    ExtensionAction {
+        extension_id: "ubo".into(),
+        badge_text: badge.into(),
+        title: "uBO: 3 blocked".into(),
+        badge_rgba: Some(0xFF0000FF),
+        text_rgba: None,
+        enabled: true,
+        has_popup: true,
+    }
+}
+
+fn profile(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> ProfileId {
+    b.read_with(cx, |b, _| b.active_space().unwrap().profile)
+}
+
+fn changed(b: &Entity<Browser<MockHost>>, page: Option<gpui::EntityId>, cx: &mut VisualTestContext) {
+    let profile = profile(b, cx);
+    b.update(cx, |b, cx| b.host.emit_action_changed(ExtensionActionChanged { profile, extension_id: "ubo".into(), page }, cx));
+    cx.run_until_parked();
+}
+
+fn badge(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Option<String> {
+    b.read_with(cx, |b, _| b.actions.get("ubo").map(|a| a.badge_text.clone()))
+}
+
+fn set_actions(b: &Entity<Browser<MockHost>>, page: Option<gpui::EntityId>, badge: &str, cx: &mut VisualTestContext) {
+    b.update(cx, |b, _| b.host.actions.borrow_mut().insert(page, vec![action(badge)]));
+}
+
+#[gpui::test]
+fn a_badge_is_drawn_over_its_icon_and_follows_changes(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    assert!(cx.debug_bounds("badge:ubo").is_none(), "no badge yet");
+    set_actions(&b, None, "12", cx);
+    changed(&b, None, cx);
+    assert_eq!(badge(&b, cx).as_deref(), Some("12"));
+    let at = cx.debug_bounds("badge:ubo").expect("drawn");
+    assert!(at.size.width > gpui::px(0.));
+
+    set_actions(&b, None, "", cx);
+    changed(&b, None, cx);
+    assert!(cx.debug_bounds("badge:ubo").is_none(), "an empty badge is none");
+}
+
+#[gpui::test]
+fn a_page_change_counts_only_for_the_active_page(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let first = b.read_with(cx, |b, _| b.active_page().unwrap().entity_id());
+    set_actions(&b, None, "d", cx);
+    set_actions(&b, Some(first), "1", cx);
+    changed(&b, Some(first), cx);
+    assert_eq!(badge(&b, cx).as_deref(), Some("1"));
+
+    open(cx, "b.example");
+    assert_eq!(badge(&b, cx).as_deref(), Some("d"), "another tab shows its own");
+    set_actions(&b, Some(first), "2", cx);
+    changed(&b, Some(first), cx);
+    assert_eq!(badge(&b, cx).as_deref(), Some("d"), "a background page's change waits");
+
+    let first_tab = b.read_with(cx, |b, _| *b.pages.iter().find(|(_, (p, _))| p.entity_id() == first).unwrap().0);
+    b.update_in(cx, |b, window, cx| b.activate_tab(first_tab, window, cx));
+    assert_eq!(badge(&b, cx).as_deref(), Some("2"), "read again on activation");
+}
+
+#[gpui::test]
+fn another_profiles_change_is_not_read(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    set_actions(&b, None, "x", cx);
+    b.update(cx, |b, cx| b.host.emit_action_changed(ExtensionActionChanged { profile: ProfileId(4242), extension_id: "ubo".into(), page: None }, cx));
+    cx.run_until_parked();
+    assert_eq!(badge(&b, cx), None);
+}
+
+#[gpui::test]
+fn a_disabled_action_is_still_listed_greyed(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| b.host.actions.borrow_mut().insert(None, vec![ExtensionAction { enabled: false, ..action("3") }]));
+    changed(&b, None, cx);
+    b.read_with(cx, |b, _| assert!(!b.actions["ubo"].enabled));
+    assert!(cx.debug_bounds("badge:ubo").is_some());
+}
+
+fn command(key: &str, modifiers: Modifiers, action: bool) -> ExtensionCommand {
+    let name = if action { "_execute_action" } else { "toggle" };
+    ExtensionCommand { extension_id: "ubo".into(), name: name.into(), description: String::new(), key: key.into(), modifiers, action, global: false }
+}
+
+fn popups(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Vec<String> {
+    b.read_with(cx, |b, _| b.host.popups.borrow().clone())
+}
+
+#[gpui::test]
+fn the_activate_shortcut_opens_the_popup(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", cmd_shift, true), command("U", cmd_shift, false)]);
+    cx.simulate_keystrokes("cmd-shift-u");
+    assert!(popups(&b, cx).is_empty(), "a named command is the engine's");
+    cx.simulate_keystrokes("cmd-shift-y");
+    assert_eq!(popups(&b, cx), [POPUP]);
+    b.read_with(cx, |b, _| assert!(b.peek.as_ref().is_some_and(|p| p.popup)));
+}
+
+#[gpui::test]
+fn an_activate_shortcut_that_is_baas_does_nothing(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("T", Modifiers::command(), true)]);
+    cx.simulate_keystrokes("cmd-t");
+    assert!(popups(&b, cx).is_empty());
+    b.read_with(cx, |b, _| assert!(b.bar.is_some(), "baa's own binding ran"));
+}
+
+#[gpui::test]
+fn the_activate_shortcut_waits_for_a_prompt(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", Modifiers::command(), true)]);
+    let page = b.read_with(cx, |b, _| b.active_page().unwrap().clone());
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::PermissionRequested { id: 1, origin: "https://a.example".into(), kinds: vec![baa_web::Permission::Camera] })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-y");
+    assert!(popups(&b, cx).is_empty());
+}
+
+fn popup_opened(b: &Entity<Browser<MockHost>>, profile: ProfileId, cx: &mut VisualTestContext) {
+    cx.update(|window, _| window.activate_window());
+    b.update(cx, |b, cx| b.host.emit_popup_opened(ExtensionPopupOpened { profile, extension_id: "ubo".into() }, cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_popup_the_extension_opened_shows_as_its_click_would(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let profile = profile(&b, cx);
+    b.update(cx, |b, cx| b.host.emit_popup_opened(ExtensionPopupOpened { profile, extension_id: "ubo".into() }, cx));
+    cx.run_until_parked();
+    assert!(popups(&b, cx).is_empty(), "a window in the background leaves it");
+    popup_opened(&b, ProfileId(4242), cx);
+    assert!(popups(&b, cx).is_empty(), "another profile's");
+    popup_opened(&b, profile, cx);
+    assert_eq!(popups(&b, cx), [POPUP]);
+    b.read_with(cx, |b, _| assert!(b.peek.as_ref().is_some_and(|p| p.popup)));
+}
+
+#[gpui::test]
+fn a_popup_the_extension_opened_never_covers_a_prompt(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let page = b.read_with(cx, |b, _| b.active_page().unwrap().clone());
+    let dialog = baa_web::Dialog {
+        id: 1,
+        kind: baa_web::DialogKind::Alert,
+        message: "hi".into(),
+        default_text: String::new(),
+        title: String::new(),
+        ok_label: String::new(),
+        cancel_label: String::new(),
+        check_label: String::new(),
+    };
+    page.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog)));
+    cx.run_until_parked();
+    let profile = profile(&b, cx);
+    popup_opened(&b, profile, cx);
+    assert!(popups(&b, cx).is_empty());
+    b.read_with(cx, |b, _| assert!(b.peek.is_none()));
+}

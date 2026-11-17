@@ -558,6 +558,11 @@ pub(crate) fn ensure_keymap(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Every action with a default key, labelled for the Keyboard tab.
+/// The Keyboard tab's name for one of baa's actions (`"baa::CloseTab"`).
+pub(crate) fn shortcut_label(action: &str) -> Option<&'static str> {
+    shortcuts().into_iter().find(|(_, a)| a.name() == action).map(|(label, _)| label)
+}
+
 fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
     use actions::*;
     vec![
