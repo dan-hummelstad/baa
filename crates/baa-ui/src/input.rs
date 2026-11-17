@@ -191,6 +191,10 @@ impl TextField {
             return Key::Edited;
         }
         let was = self.marked();
+        // macOS still holds the composition: undoing under it would leave the two apart.
+        if was.is_some() && k == "z" && m.secondary() {
+            return Key::Ignored;
+        }
         self.marked = None;
         if let Some(r) = was {
             match k {

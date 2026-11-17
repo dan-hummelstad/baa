@@ -273,6 +273,17 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn undo_waits_for_the_composition_to_end(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut f = TextField { text: "a".into(), ..Default::default() };
+            f.replace_and_mark_text_in_range(None, "に", None);
+            assert_eq!(key(&mut f, "cmd-z", cx), Key::Ignored);
+            assert_eq!(key(&mut f, "shift-cmd-z", cx), Key::Ignored);
+            assert_eq!((f.text.as_str(), f.marked_text_range()), ("aに", Some(1..2)));
+        });
+    }
+
     #[test]
     fn a_dead_key_and_its_letter_make_one_character() {
         let mut f = TextField { text: "caf".into(), ..Default::default() };
