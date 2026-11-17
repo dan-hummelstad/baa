@@ -67,6 +67,12 @@ fn other_schemes_show_whole_without_a_host(cx: &mut TestAppContext) {
     hover(&p, "mailto:me@a.example", cx);
     assert!(pill(cx).is_some());
     assert!(cx.debug_bounds("hover-host").is_none());
+
+    let long = format!("{}.evil.example", "a".repeat(600));
+    hover(&p, &format!("ftp://{long}/x"), cx);
+    let pill = pill(cx).expect("the pill shows");
+    let host = cx.debug_bounds("hover-host").expect("a host of any scheme has its own slot, cut on the left");
+    assert!(host.right() <= pill.right(), "{host:?} in {pill:?}");
 }
 
 fn alert() -> Dialog {

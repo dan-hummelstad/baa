@@ -2,18 +2,21 @@
 
 use super::*;
 
-/// The pill's text: a web URL's host (always whole) and the rest after it, or `None` and
-/// any other URL whole, scheme first. The page chose it: it is only ever shown.
+/// The pill's text: the host of a URL that has one (always whole, after its scheme unless
+/// that is http(s)) and the rest after it, or `None` and a host-less URL whole. The page
+/// chose it: it is only ever shown.
 pub(crate) fn hover_text(url: &str) -> (Option<String>, String) {
-    if let Some(parsed) = url::Url::parse(url).ok().filter(|u| matches!(u.scheme(), "http" | "https")) {
-        let host = host_of(url);
-        if !host.is_empty() {
-            let path = Some(parsed.path()).filter(|p| *p != "/").unwrap_or_default();
-            let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
-            return (Some(plain_text(&host)), plain_text(&format!("{path}{query}")));
-        }
-    }
-    (None, plain_text(url))
+    let host = host_of(url);
+    let Some(parsed) = url::Url::parse(url).ok().filter(|_| !host.is_empty()) else {
+        return (None, plain_text(url));
+    };
+    let host = match parsed.scheme() {
+        "http" | "https" => host,
+        scheme => format!("{scheme}://{host}"),
+    };
+    let path = Some(parsed.path()).filter(|p| *p != "/").unwrap_or_default();
+    let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
+    (Some(plain_text(&host)), plain_text(&format!("{path}{query}")))
 }
 
 impl<H: WebHost> Browser<H> {
@@ -96,4 +99,7 @@ fn hover_text_keeps_the_host_apart_and_strips_what_could_disguise_it() {
     assert_eq!(hover_text("mailto:me@a.com"), (None, "mailto:me@a.com".into()));
     assert_eq!(hover_text("javascript:alert(1)\n\u{202E}gpj.exe"), (None, "javascript:alert(1)gpj.exe".into()));
     assert_eq!(hover_text("data:text/html,x"), (None, "data:text/html,x".into()));
+    assert_eq!(hover_text("ftp://files.a.com/pub/x"), (Some("ftp://files.a.com".into()), "/pub/x".into()));
+    assert_eq!(hover_text("file://server/share/x"), (Some("file://server".into()), "/share/x".into()));
+    assert_eq!(hover_text("file:///etc/hosts"), (None, "file:///etc/hosts".into()));
 }
