@@ -763,6 +763,9 @@ impl<H: WebHost> Browser<H> {
         if matches!(event, PageEvent::UrlChanged(_)) {
             self.swipe_landed(id, cx);
         }
+        if matches!(event, PageEvent::UrlChanged(_) | PageEvent::LoadingChanged(true)) {
+            self.clear_hover_url(id, cx)
+        }
         let private = self.session.space(space).is_some_and(|s| s.ephemeral);
         let tab = self.session.tab_mut(id).expect("looked up above");
         match event {
@@ -770,9 +773,6 @@ impl<H: WebHost> Browser<H> {
             PageEvent::UrlChanged(new) if url.strip_prefix("view-source:") == Some(new.as_str()) => return,
             PageEvent::UrlChanged(new) => {
                 tab.url = new.clone();
-                if self.hover_url.as_ref().is_some_and(|(t, _)| *t == id) {
-                    self.hover_url = None;
-                }
                 if !private {
                     // The title arrives after the address; this one is the old page's.
                     if let Some(Err(e)) = self.store.as_ref().map(|s| s.record_visit(new, "", now() as i64)) {
@@ -803,12 +803,7 @@ impl<H: WebHost> Browser<H> {
                 self.favicons.insert(url.clone(), std::sync::Arc::new(image));
                 return cx.notify();
             }
-            PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => {
-                if *event == PageEvent::LoadingChanged(true) {
-                    self.clear_hover_url(id, cx);
-                }
-                return cx.notify();
-            }
+            PageEvent::LoadingChanged(_) | PageEvent::HistoryChanged { .. } => return cx.notify(),
             PageEvent::OpenRequested {
                 url, background, ..
             } => {
