@@ -3,12 +3,13 @@
 
 use baa_model::{Settings, SpaceId};
 use baa_web::ProfileId;
-use baa_web::{ExtensionChange, ExtensionInfo, SiteAccess, WebHost};
+use baa_web::{ExtensionChange, ExtensionCommand, ExtensionInfo, SiteAccess, WebHost};
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString, Window};
 
 use super::{Item, SettingsView};
 use crate::{
-    browser::Browser,
+    browser::{ext_actions::{baa_binding, chrome_key, command_keystroke}, plain_text, Browser},
+    command_bar::stroke_chips,
     icons::icon,
     theme::{r, surface},
 };
@@ -27,6 +28,12 @@ pub(crate) struct ExtensionsPage {
     pub confirm_remove: Option<String>,
     /// Why the last "Load unpacked" failed.
     pub error: Option<String>,
+    /// The Space's `chrome.commands`, read with the list.
+    pub commands: Vec<ExtensionCommand>,
+    /// (extension, command) whose shortcut the next key press sets.
+    pub recording: Option<(String, String)>,
+    /// (extension, command) whose last new shortcut the engine refused.
+    pub refused: Option<(String, String)>,
 }
 
 impl<H: WebHost> Browser<H> {
@@ -38,6 +45,7 @@ impl<H: WebHost> Browser<H> {
         }
         self.extensions_page.space = Some(space);
         self.extensions_page.loading = true;
+        self.extensions_page.commands = self.host.extension_commands(profile);
         let this = cx.weak_entity();
         self.host.extension_details(
             profile,
@@ -150,6 +158,21 @@ impl<H: WebHost> Browser<H> {
                 })
             }),
         );
+        cx.notify();
+    }
+
+    /// `key` `None` clears the shortcut.
+    pub(crate) fn set_extension_shortcut(&mut self, space: SpaceId, ext: &str, command: &str, key: Option<&gpui::Keystroke>, cx: &mut Context<Self>) {
+        let Some(profile) = self.session.space(space).map(|s| s.profile) else { return };
+        let (token, modifiers) = match key {
+            Some(k) => (chrome_key(&k.key), k.modifiers),
+            None => (Some(String::new()), gpui::Modifiers::default()),
+        };
+        let ok = token.is_some_and(|t| self.host.set_extension_shortcut(profile, ext, command, &t, modifiers));
+        let page = &mut self.extensions_page;
+        page.recording = None;
+        page.refused = (!ok).then(|| (ext.to_string(), command.to_string()));
+        page.commands = self.host.extension_commands(profile);
         cx.notify();
     }
 
@@ -417,6 +440,9 @@ impl<H: WebHost> SettingsView<H> {
             );
             div().flex().flex_col().gap(px(6.)).child(heading("Site Access")).child(segments)
         });
+        let shortcuts = self
+            .render_shortcuts(e, space, cx)
+            .map(|rows| div().flex().flex_col().gap(px(8.)).child(heading("Keyboard Shortcuts")).children(rows));
         div()
             .pt(px(12.))
             .border_t_1()
@@ -426,6 +452,7 @@ impl<H: WebHost> SettingsView<H> {
             .gap(px(14.))
             .child(div().flex().flex_col().gap(px(6.)).child(heading("Permissions")).children(permissions))
             .children(access)
+            .children(shortcuts)
             .child(
                 div()
                     .flex()
@@ -435,5 +462,94 @@ impl<H: WebHost> SettingsView<H> {
                     .child(div().text_size(px(12.)).font_family(crate::theme::MONO).child(SharedString::from(e.id.clone()))),
             )
             .into_any_element()
+    }
+
+    /// One row per `chrome.commands` entry: what it does, its shortcut, Change and Clear.
+    fn render_shortcuts(&self, e: &ExtensionInfo, space: SpaceId, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
+        let page = &self.browser.read(cx).extensions_page;
+        let commands: Vec<ExtensionCommand> = page.commands.iter().filter(|c| c.extension_id == e.id).cloned().collect();
+        if commands.is_empty() {
+            return None;
+        }
+        let (recording, refused) = (page.recording.clone(), page.refused.clone());
+        let rows = commands.into_iter().enumerate().map(|(i, c)| {
+            let me = Some((c.extension_id.clone(), c.name.clone()));
+            let stroke = command_keystroke(&c);
+            let label = match plain_text(&c.description) {
+                d if d.is_empty() && c.action => "Activate the extension".to_string(),
+                d if d.is_empty() => plain_text(&c.name),
+                d => d,
+            };
+            let current = if recording == me {
+                div().text_size(px(12.5)).text_color(self.theme.accent).child("Press a shortcut…").into_any_element()
+            } else if let Some(k) = &stroke {
+                let chip = |text: SharedString| {
+                    div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(text)
+                };
+                div().flex().gap(px(4.)).children(stroke_chips(k).into_iter().map(chip)).into_any_element()
+            } else {
+                div().text_size(px(12.5)).text_color(surface::muted()).child("Not set").into_any_element()
+            };
+            let note = if refused == me {
+                Some("Chrome can't use that shortcut. Use ⌘ or ⌃ with a letter, number or arrow.".to_string())
+            } else {
+                stroke.as_ref().and_then(|k| baa_binding(k, cx)).map(|action| format!("In conflict with baa: {action}. It does nothing until you change it."))
+            };
+            let target = (c.extension_id.clone(), c.name.clone());
+            let change = self.button("cmd-change", if recording == me { "Cancel" } else { "Change" }, false, cx).on_click(cx.listener(move |this, _, _, cx| {
+                let target = target.clone();
+                this.browser.update(cx, |b, cx| {
+                    let page = &mut b.extensions_page;
+                    page.refused = None;
+                    page.recording = (page.recording.as_ref() != Some(&target)).then_some(target);
+                    cx.notify();
+                })
+            }));
+            let (ext, name) = (c.extension_id.clone(), c.name.clone());
+            let clear = stroke.is_some().then(|| {
+                self.button("cmd-clear", "Clear", false, cx).on_click(cx.listener(move |this, _, _, cx| {
+                    let (ext, name) = (ext.clone(), name.clone());
+                    this.browser.update(cx, |b, cx| b.set_extension_shortcut(space, &ext, &name, None, cx))
+                }))
+            });
+            div()
+                .id(("ext-command", i))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(div().flex_1().min_w_0().text_size(px(13.)).child(SharedString::from(label)))
+                        .child(current)
+                        .child(change)
+                        .children(clear),
+                )
+                .children(note.map(|n| div().debug_selector(|| "cmd-note".into()).text_size(px(12.)).text_color(surface::warn()).child(SharedString::from(n))))
+                .into_any_element()
+        });
+        Some(rows.collect())
+    }
+
+    /// While a row waits for a shortcut, the key pressed is it; Esc alone gives up.
+    pub(super) fn record_shortcut(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some((ext, name)) = self.browser.read(cx).extensions_page.recording.clone() else { return false };
+        let space = self.space;
+        let cancel = keystroke.key == "escape" && !keystroke.modifiers.modified();
+        // A plain key is typing (the search field takes it); no shortcut is one.
+        if !cancel && !keystroke.modifiers.modified() {
+            return false;
+        }
+        self.browser.update(cx, |b, cx| {
+            if cancel {
+                b.extensions_page.recording = None;
+                cx.notify();
+            } else {
+                b.set_extension_shortcut(space, &ext, &name, Some(keystroke), cx);
+            }
+        });
+        true
     }
 }

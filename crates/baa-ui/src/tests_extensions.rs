@@ -191,3 +191,82 @@ fn a_popup_the_extension_opened_never_covers_a_prompt(cx: &mut TestAppContext) {
     assert!(popups(&b, cx).is_empty());
     b.read_with(cx, |b, _| assert!(b.peek.is_none()));
 }
+
+fn settings_on_ubo(cx: &mut TestAppContext, commands: Vec<ExtensionCommand>) -> (Entity<Browser<MockHost>>, VisualTestContext) {
+    let (b, vcx) = browser(cx);
+    let info = baa_web::ExtensionInfo { id: "ubo".into(), name: "uBO".into(), enabled: true, ..Default::default() };
+    b.update(vcx, |b, _| {
+        *b.host.extension_details.borrow_mut() = vec![info];
+        *b.host.commands.borrow_mut() = commands;
+    });
+    b.update_in(vcx, |b, window, cx| b.open_url("chrome://extensions/?id=ubo", window, cx));
+    vcx.run_until_parked();
+    let h = b.read_with(vcx, |b, _| b.settings_window).unwrap();
+    let s = VisualTestContext::from_window(h.into(), cx);
+    s.simulate_resize(gpui::size(gpui::px(900.), gpui::px(4000.)));
+    s.run_until_parked();
+    (b, s)
+}
+
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds(selector).unwrap_or_else(|| panic!("nothing is drawn as {selector}"));
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    cx.run_until_parked();
+}
+
+fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    cx.run_until_parked();
+    cx.debug_bounds(selector).is_some()
+}
+
+fn shortcuts(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Vec<(String, String, String, Modifiers)> {
+    b.read_with(cx, |b, _| b.host.shortcuts.borrow().clone())
+}
+
+#[gpui::test]
+fn a_command_is_listed_then_recorded_and_cleared(cx: &mut TestAppContext) {
+    let (b, mut s) = settings_on_ubo(cx, vec![ExtensionCommand { description: "Toggle it".into(), ..command("", Modifiers::none(), false) }]);
+    assert!(drawn(&mut s, "cmd-change"), "listed in the details");
+    assert!(!drawn(&mut s, "cmd-clear"), "nothing to clear: Not set");
+    click(&mut s, "cmd-change");
+    b.read_with(&s, |b, _| assert!(b.extensions_page.recording.is_some()));
+    s.simulate_keystrokes("cmd-shift-k");
+    let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
+    assert_eq!(shortcuts(&b, &mut s), [("ubo".into(), "toggle".into(), "K".into(), cmd_shift)]);
+    b.read_with(&s, |b, _| assert!(b.extensions_page.recording.is_none()));
+    click(&mut s, "cmd-clear");
+    assert_eq!(shortcuts(&b, &mut s).last().unwrap(), &("ubo".into(), "toggle".into(), String::new(), Modifiers::none()));
+    assert!(!drawn(&mut s, "cmd-clear"));
+}
+
+#[gpui::test]
+fn escape_stops_recording_without_a_change(cx: &mut TestAppContext) {
+    let (b, mut s) = settings_on_ubo(cx, vec![command("", Modifiers::none(), false)]);
+    click(&mut s, "cmd-change");
+    s.simulate_keystrokes("escape");
+    b.read_with(&s, |b, _| assert!(b.extensions_page.recording.is_none()));
+    assert!(shortcuts(&b, &mut s).is_empty());
+}
+
+#[gpui::test]
+fn a_shortcut_that_is_baas_shows_in_conflict_until_rebound(cx: &mut TestAppContext) {
+    let (b, mut s) = settings_on_ubo(cx, vec![command("T", Modifiers::command(), true)]);
+    let named = s.update(|_, cx| crate::browser::ext_actions::baa_binding(&gpui::Keystroke::parse("cmd-t").unwrap(), cx));
+    assert_eq!(named.as_deref(), Some("New tab or search"));
+    assert!(drawn(&mut s, "cmd-note"), "in conflict");
+    click(&mut s, "cmd-change");
+    s.simulate_keystrokes("cmd-shift-y");
+    assert_eq!(shortcuts(&b, &mut s).len(), 1);
+    assert!(!drawn(&mut s, "cmd-note"), "rebound away from baa's");
+}
+
+#[gpui::test]
+fn a_shortcut_the_engine_refuses_says_so(cx: &mut TestAppContext) {
+    let (b, mut s) = settings_on_ubo(cx, vec![command("", Modifiers::none(), false)]);
+    b.update(&mut s, |b, _| b.host.refuse_shortcuts.set(true));
+    click(&mut s, "cmd-change");
+    s.simulate_keystrokes("cmd-alt-k");
+    b.read_with(&s, |b, _| assert_eq!(b.extensions_page.refused, Some(("ubo".into(), "toggle".into()))));
+    assert!(drawn(&mut s, "cmd-note"));
+}

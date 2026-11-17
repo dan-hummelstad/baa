@@ -425,6 +425,9 @@ impl<H: WebHost> SettingsView<H> {
     // Keys: the search field has focus on open; clicking another field moves it.
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
+        if self.record_shortcut(ks, cx) {
+            return cx.stop_propagation();
+        }
         let m = &ks.modifiers;
         if m.secondary() && ks.key == "w" {
             return self.close(window, cx);

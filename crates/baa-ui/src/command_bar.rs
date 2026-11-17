@@ -584,33 +584,33 @@ impl<H: WebHost> Browser<H> {
 
 /// A shortcut as the mock draws it: one chip per modifier, then the key.
 pub(crate) fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
-    let mut out = Vec::new();
-    for stroke in binding.keystrokes() {
-        let k = stroke.inner();
-        let m = &k.modifiers;
-        let mac = cfg!(target_os = "macos");
-        for (on, mac_label, other) in [
-            (m.control, "⌃", "Ctrl"),
-            (m.alt, "⌥", "Alt"),
-            (m.shift, "⇧", "Shift"),
-            (m.platform, "⌘", "Win"),
-        ] {
-            if on {
-                out.push(if mac { mac_label } else { other }.into());
-            }
-        }
-        let key = match k.key.as_str() {
-            "enter" => "↩".to_string(),
-            "left" => "←".into(),
-            "right" => "→".into(),
-            "up" => "↑".into(),
-            "down" => "↓".into(),
-            "tab" => "⇥".into(),
-            "escape" => "esc".into(),
-            other => other.to_uppercase(),
-        };
-        out.push(key.into());
-    }
+    binding.keystrokes().iter().flat_map(|s| stroke_chips(s.inner())).collect()
+}
+
+pub(crate) fn stroke_chips(k: &gpui::Keystroke) -> Vec<SharedString> {
+    let m = &k.modifiers;
+    let mac = cfg!(target_os = "macos");
+    let mut out: Vec<SharedString> = [
+        (m.control, "⌃", "Ctrl"),
+        (m.alt, "⌥", "Alt"),
+        (m.shift, "⇧", "Shift"),
+        (m.platform, "⌘", "Win"),
+    ]
+    .into_iter()
+    .filter(|(on, ..)| *on)
+    .map(|(_, mac_label, other)| if mac { mac_label } else { other }.into())
+    .collect();
+    let key = match k.key.as_str() {
+        "enter" => "↩".to_string(),
+        "left" => "←".into(),
+        "right" => "→".into(),
+        "up" => "↑".into(),
+        "down" => "↓".into(),
+        "tab" => "⇥".into(),
+        "escape" => "esc".into(),
+        other => other.to_uppercase(),
+    };
+    out.push(key.into());
     out
 }
 
