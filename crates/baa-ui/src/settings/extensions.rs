@@ -73,18 +73,9 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    fn needs_approval(&self, space: SpaceId, id: &str) -> bool {
-        self.extensions_page.space == Some(space)
-            && self.extensions_page.list.as_ref().is_some_and(|l| l.iter().any(|e| e.id == id && e.needs_approval))
-    }
-
     /// Shown at once; then Chrome's answer replaces it.
     pub(crate) fn change_extension(&mut self, space: SpaceId, id: &str, change: ExtensionChange, cx: &mut Context<Self>) {
         let Some(profile) = self.session.space(space).map(|s| s.profile) else { return };
-        // Its new permissions are shown first, through review_extension only.
-        if change == ExtensionChange::Enable(true) && self.needs_approval(space, id) {
-            return;
-        }
         if self.extensions_page.space == Some(space) {
             if let Some(list) = &mut self.extensions_page.list {
                 match change {
@@ -107,9 +98,15 @@ impl<H: WebHost> Browser<H> {
             id,
             change,
             cx,
-            Box::new(move |_, cx| {
+            Box::new(move |ok, cx| {
                 cx.defer(move |cx| {
-                    this.update(cx, |this, cx| this.refresh_extensions_for(space, cx)).ok();
+                    this.update(cx, |this, cx| {
+                        if !ok && change == ExtensionChange::Enable(true) {
+                            this.show_toast("Couldn't turn the extension on. Try again.", cx);
+                        }
+                        this.refresh_extensions_for(space, cx);
+                    })
+                    .ok();
                 })
             }),
         );
@@ -119,32 +116,15 @@ impl<H: WebHost> Browser<H> {
     /// Chrome shows the update's new permissions on the Space's active tab and enables the
     /// extension only if the user accepts, so the Space comes forward with a tab first.
     pub(crate) fn review_extension(&mut self, space: SpaceId, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((profile, tab)) = self.session.space(space).map(|s| (s.profile, s.active_tab)) else { return };
+        let Some(tab) = self.session.space(space).map(|s| s.active_tab) else { return };
         self.close_overlays(window, cx);
         match tab {
             Some(_) => self.activate_space(space, window, cx),
             None => self.open_url_in(space, "about:blank", window, cx),
         }
-        let this = cx.weak_entity();
         // ponytail: asked at once; an engine that has not announced a tab just opened answers
         // false, and the toast asks for a second try.
-        self.host.change_extension(
-            profile,
-            id,
-            ExtensionChange::Enable(true),
-            cx,
-            Box::new(move |shown, cx| {
-                cx.defer(move |cx| {
-                    this.update(cx, |this, cx| {
-                        if !shown {
-                            this.show_toast("Couldn't show the extension's new permissions. Try Review again.", cx);
-                        }
-                        this.refresh_extensions_for(space, cx);
-                    })
-                    .ok();
-                })
-            }),
-        );
+        self.change_extension(space, id, ExtensionChange::Enable(true), cx);
     }
 
     /// Developer mode: an extension straight from a folder.

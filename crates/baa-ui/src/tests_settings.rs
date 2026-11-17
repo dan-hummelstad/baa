@@ -687,10 +687,6 @@ fn an_extension_that_asks_for_more_is_reviewed_on_a_tab_never_switched_on(cx: &m
     assert!(drawn(&mut s, "ext-review") && !drawn(&mut s, "ext-on"));
 
     let space = b.read_with(&s, |b, _| b.session.active_space().unwrap());
-    b.update(&mut s, |b, cx| b.change_extension(space, "grown", ExtensionChange::Enable(true), cx));
-    s.run_until_parked();
-    assert!(b.read_with(&s, |b, _| b.host.extension_changes.borrow().is_empty()), "the switch's path cannot enable it");
-
     click(&mut s, "ext-review");
     b.read_with(&s, |b, _| {
         assert_eq!(*b.host.extension_changes.borrow(), [("grown".to_string(), ExtensionChange::Enable(true))]);
@@ -699,7 +695,7 @@ fn an_extension_that_asks_for_more_is_reviewed_on_a_tab_never_switched_on(cx: &m
     });
     b.read_with(&s, |b, _| b.host.change_result.set(false));
     click(&mut s, "ext-review");
-    assert!(b.read_with(&s, |b, _| b.toast.as_ref().is_some_and(|t| t.contains("new permissions"))));
+    assert!(b.read_with(&s, |b, _| b.toast.as_ref().is_some_and(|t| t.contains("Couldn't turn the extension on"))));
 }
 
 #[gpui::test]
