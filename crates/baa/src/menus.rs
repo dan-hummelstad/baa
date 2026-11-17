@@ -49,7 +49,9 @@ fn menus() -> Vec<Menu> {
     // ponytail: the Edit items carry no ⌘C/⌘V glyph. A key equivalent would let
     // the menu take ⌘V before baa's text fields see it; the page and the fields
     // already handle the keys, and a click still reaches the page via the
-    // responder chain. Undo/Redo are left out: gpui does not send `undo:`.
+    // responder chain. Undo/Redo are gpui actions (gpui sends no `undo:`) that only
+    // baa's focused text fields handle, so on a page they are disabled and the page's
+    // own undo stays on ⌘Z.
     // `EditOs` is never bound, so no glyph; with no native view first, nothing handles it.
     // Full Screen is not listed: AppKit adds it to a menu titled View.
     let edit = |name: &str, os| MenuItem::os_action(name.to_string(), EditOs, os);
@@ -81,6 +83,9 @@ fn menus() -> Vec<Menu> {
             a("Print…", Print),
         ]),
         Menu::new("Edit").items([
+            MenuItem::os_action("Undo", Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", Redo, OsAction::Redo),
+            Sep,
             edit("Cut", OsAction::Cut),
             edit("Copy", OsAction::Copy),
             edit("Paste", OsAction::Paste),
