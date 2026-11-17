@@ -7,5 +7,11 @@
   "optional_permissions": ["bookmarks"],
   "host_permissions": ["https://*/*"],
   "background": { "service_worker": "sw.js" },
-  "action": { "default_popup": "popup.html" }
+  "action": { "default_popup": "popup.html" },
+  "commands": {
+    "probe-command": {
+      "suggested_key": { "default": "Alt+Shift+Y" },
+      "description": "Probe command"
+    }
+  }
 }

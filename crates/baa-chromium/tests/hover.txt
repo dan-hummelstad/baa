@@ -1,0 +1,11 @@
+# ABI 16 target_url (hover.expect): the pointer over a link, then off it
+load https://example.com/
+waitload 20000
+activate
+eval document.body.innerHTML='<a href="https://example.org/hovered" style="position:fixed;left:0;top:0;width:400px;height:200px;background:#ccf;display:block">link</a>'
+sleep 500
+hover 100 100
+sleep 1000
+hover 100 400
+sleep 1000
+quit

@@ -1,0 +1,22 @@
+# extension badges (pulled and pushed), chrome.commands list / set / clear / run, and openPopup
+script: commands.txt
+ext: yes
+# the badge the worker set at start, read by baa_profile_extension_actions
+must: baa: action ext=\w{32} badge="on" title="baa probe" badge_rgba=[0-9a-f]{8} text_rgba=[0-9a-f]{8} enabled=1 popup=1
+# the manifest's Alt+Shift+Y is ⌥⇧Y (BAA_MOD_ALT|SHIFT = 12); MV3's action command has no key
+must: baa: command ext=\w{32} name="probe-command" key="Y" mods=12 action=0 global=0
+must: baa: command ext=\w{32} name="_execute_action" key="" mods=0 action=1 global=0
+must: baa: shortcut \w{32} probe-command 8 K -> false
+must: baa: shortcut \w{32} probe-command 9 K -> true
+must: baa: command ext=\w{32} name="probe-command" key="K" mods=9 action=0
+must: baa: shortcut \w{32} probe-command 0 -> true
+must: baa: command ext=\w{32} name="probe-command" key="" mods=0 action=0
+must: baa: runcmd \w{32} _execute_action -> false
+must: baa: runcmd \w{32} probe-command -> true
+# onCommand ran: the badge it set is pushed (the default, tab 0) and read back in red
+must: baa: extension_action ext=\w{32} tab=0
+must: baa: action ext=\w{32} badge="cmd" title="baa probe" badge_rgba=ff0000ff
+# and its chrome.action.openPopup opened the popup over the active tab
+must: baa: extension_popup_opened ext=\w{32} popup=1
+must: title="active:https://example.com/"
+mustnot: title="openPopup:

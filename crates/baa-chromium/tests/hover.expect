@@ -1,0 +1,4 @@
+# the hovered link's URL reaches the app for the page's tab, then "" when the pointer leaves it
+script: hover.txt
+must: baa: target_url tab=0 url="https://example.org/hovered"
+must: url="https://example.org/hovered"[\s\S]*baa: target_url tab=0 url=""$

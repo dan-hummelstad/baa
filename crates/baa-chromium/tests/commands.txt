@@ -1,0 +1,20 @@
+# ABI 16 (commands.expect): test-ext's badge as read, its chrome.commands listed, shortcuts set and
+# cleared, its command run (which sets a badge and calls chrome.action.openPopup)
+load https://example.com/
+waitload 20000
+activate
+sleep 1000
+actions
+commands
+# ⇧ alone is refused; ⌘⇧K is accepted; no key clears
+shortcut {EXT_ID} probe-command 8 K
+shortcut {EXT_ID} probe-command 9 K
+commands
+shortcut {EXT_ID} probe-command 0
+commands
+# an action's command is a click on the action, not run_command's
+runcmd {EXT_ID} _execute_action
+runcmd {EXT_ID} probe-command
+sleep 3500
+actions
+quit
