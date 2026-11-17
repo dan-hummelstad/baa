@@ -256,7 +256,7 @@ impl<H: WebHost> SettingsView<H> {
             return;
         }
         for f in [Field::EngineName, Field::EngineUrl] {
-            self.field_mut(f).text.clear();
+            *self.field_mut(f) = Default::default();
         }
         self.change(cx, |s| {
             s.search_engines.retain(|e| e.name != name);

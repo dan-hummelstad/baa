@@ -190,8 +190,9 @@ impl TextField {
         if k == ime::EDITED {
             return Key::Edited;
         }
-        if let Some(r) = self.marked() {
-            self.marked = None;
+        let was = self.marked();
+        self.marked = None;
+        if let Some(r) = was {
             match k {
                 // Enter and Esc end the composition; they never submit or close past it.
                 "enter" => return Key::Edited,
@@ -621,6 +622,24 @@ mod tests {
             assert_eq!(f.text, "");
             key(&mut f, "cmd-z", cx);
             assert_eq!((f.text.as_str(), f.ends()), ("cut me", (6, 0)));
+        });
+    }
+
+    #[gpui::test]
+    fn an_owner_reset_leaves_no_undo_and_no_composition(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut f = TextField::default();
+            typed(&mut f, "draft", cx);
+            f = TextField::default();
+            assert_eq!(key(&mut f, "cmd-z", cx), Key::Ignored);
+            assert_eq!(f.text, "");
+
+            f.replace_and_mark_text_in_range(None, "abc", None);
+            f.text.clear();
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("xyz".into()));
+            key(&mut f, "cmd-v", cx);
+            assert_eq!((f.text.as_str(), f.marked_text_range()), ("xyz", None));
+            assert_eq!(key(&mut f, "enter", cx), Key::Submit);
         });
     }
 

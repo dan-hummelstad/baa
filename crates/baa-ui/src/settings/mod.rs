@@ -245,10 +245,10 @@ impl<H: WebHost> SettingsView<H> {
     /// Text boxes that mirror a setting start with its value.
     pub(super) fn seed_fields(&mut self, cx: &mut Context<Self>) {
         let s = self.browser.read(cx).settings.clone();
-        self.field_mut(Field::Languages).text = s.web.languages.unwrap_or_default();
-        self.field_mut(Field::ClaudePath).text = s.claude.claude_path.clone().unwrap_or_default();
+        *self.field_mut(Field::Languages) = TextField { text: s.web.languages.unwrap_or_default(), ..Default::default() };
+        *self.field_mut(Field::ClaudePath) = TextField { text: s.claude.claude_path.clone().unwrap_or_default(), ..Default::default() };
         if let baa_model::SecureDns::Custom(t) = &s.web.secure_dns {
-            self.field_mut(Field::DnsTemplate).text = t.clone();
+            *self.field_mut(Field::DnsTemplate) = TextField { text: t.clone(), ..Default::default() };
         }
     }
 
@@ -277,7 +277,7 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     pub(crate) fn go_to(&mut self, tab: Option<Tab>, row: Option<&'static str>, cx: &mut Context<Self>) {
-        self.field_mut(Field::Search).text.clear();
+        *self.field_mut(Field::Search) = TextField::default();
         self.selected = 0;
         if let Some(tab) = tab {
             self.select_tab(tab, cx);
@@ -341,7 +341,7 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     pub(crate) fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        self.field_mut(Field::Search).text.clear();
+        *self.field_mut(Field::Search) = TextField::default();
         self.search_open = false;
         self.focus_field(Field::Search, cx);
         self.add_error = None;
@@ -453,7 +453,7 @@ impl<H: WebHost> SettingsView<H> {
             return;
         }
         if self.searching() {
-            self.field_mut(Field::Search).text.clear();
+            *self.field_mut(Field::Search) = TextField::default();
             self.search_open = false;
             return;
         }

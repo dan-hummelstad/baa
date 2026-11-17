@@ -393,7 +393,7 @@ impl<H: WebHost> Browser<H> {
         if text.is_empty() || p.busy || !self.settings.claude.enabled {
             return;
         }
-        p.field.text.clear();
+        p.field = TextField::default();
         p.busy = true;
         p.quip = quip();
         p.not_logged_in = false;
@@ -450,7 +450,7 @@ impl<H: WebHost> Browser<H> {
             p.not_found = true;
             p.busy = false;
             if let Some(Entry::User(t)) = p.chat.transcript.pop() {
-                p.field.text = t;
+                p.field = TextField { text: t, ..Default::default() };
             }
             return cx.notify();
         };

@@ -100,7 +100,7 @@ impl<H: WebHost> SettingsView<H> {
             return cx.notify();
         };
         for f in [Field::EnvLabel, Field::EnvOrigin] {
-            self.field_mut(f).text.clear();
+            *self.field_mut(f) = Default::default();
         }
         self.change(cx, |s| add_env(s, name, Env { label, origin }));
     }

@@ -319,7 +319,7 @@ impl<H: WebHost> SettingsView<H> {
                         return;
                     }
                     if this.set_rule(kind, &pattern, Some(st), cx) {
-                        this.field_mut(Field::SitePattern).text.clear();
+                        *this.field_mut(Field::SitePattern) = Default::default();
                         this.adding = None;
                         this.add_error = None;
                     } else {
