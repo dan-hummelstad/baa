@@ -251,8 +251,9 @@ fn the_input_method_reaches_no_risky_dialog_and_no_password(cx: &mut TestAppCont
     cx.simulate_input("pw");
     cx.update(|window, cx| {
         assert!(!ime.accepts_text_input(window, cx), "a password is typed without the input method");
-        ime.replace_and_mark_text_in_range(None, "ö", None, window, cx);
+        ime.replace_and_mark_text_in_range(None, "¨", None, window, cx);
         assert_eq!(ime.marked_text_range(window, cx), None, "never shown composing in the clear");
+        ime.replace_text_in_range(None, "ö", window, cx);
         assert_eq!(ime.text_for_range(0..3, &mut None, window, cx), None);
         assert_eq!(b.read(cx).active_dialog().unwrap().password.text, "pwö");
     });

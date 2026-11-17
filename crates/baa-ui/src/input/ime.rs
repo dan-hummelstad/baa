@@ -88,10 +88,11 @@ impl TextField {
     }
 
     /// Composition text, shown underlined until committed; `sel16` is within `text`.
-    /// A masked field takes it as committed text, so nothing secret is ever marked.
+    /// A masked field ignores it and takes only the commit, so nothing secret is ever
+    /// marked and an interim string (a dead key's `¨`, dictation's guesses) never types.
     pub(crate) fn replace_and_mark_text_in_range(&mut self, r16: Option<Range<usize>>, text: &str, sel16: Option<Range<usize>>) {
         if self.masked {
-            return self.replace_text_in_range(r16, text);
+            return;
         }
         let text = one_line(text);
         let r = self.target(r16);
@@ -320,7 +321,8 @@ mod tests {
     fn a_masked_field_types_directly_and_never_gives_its_text_away(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut f = TextField { masked: true, ..Default::default() };
-            f.replace_and_mark_text_in_range(None, "ä", Some(1..1));
+            f.replace_and_mark_text_in_range(None, "¨", Some(1..1));
+            f.replace_text_in_range(None, "ä");
             assert_eq!((f.text.as_str(), f.marked_text_range()), ("ä", None));
             assert_eq!(key(&mut f, "b", cx), Key::Edited);
             assert_eq!(f.text, "äb");

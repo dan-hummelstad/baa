@@ -271,6 +271,8 @@ impl TextField {
             }
             _ if m.platform || m.control => Key::Ignored,
             // A secret never reaches the input method: its keys type directly.
+            // ponytail: so dead keys and press-and-hold accents do not compose in a
+            // password field; a password that needs them is pasted.
             _ => match &ks.key_char {
                 Some(c) if self.masked => {
                     let c = c.clone();
