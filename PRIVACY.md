@@ -17,12 +17,12 @@ Settings › Search › Suggestions while typing. With suggestions off, typing c
 
 **Extension updates (Google).** In builds that have the setting, baa checks Google's Chrome Web
 Store update server about every five hours for new versions of your extensions. The check sends
-the ids and versions of the extensions you installed. Turn it off: Settings › Privacy. Builds
+the ids and versions of the extensions you installed. Turn it off: Settings › Privacy › Update extensions automatically. Builds
 without the setting never update extensions.
 
 **Certificate revocation list (Google).** In builds that have the setting, baa downloads
 Chromium's list of revoked certificates (CRLSet) from Google's update server. Turn it off:
-Settings › Privacy (applies after a restart).
+Settings › Privacy › Update certificate revocation list (applies after a restart).
 
 **DRM video (Google).** Only when "Play DRM-protected content" is on (it is off by default), baa
 downloads the Widevine module from Google's update server. Turn it off: Settings › Privacy ›
