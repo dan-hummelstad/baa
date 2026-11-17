@@ -514,10 +514,11 @@ class ActionWatch final : public extensions::ExtensionActionDispatcher::Observer
     }
     // The default for every tab: each Space of the profile hears it, the incognito ones too.
     Profile* original = Profile::FromBrowserContext(context)->GetOriginalProfile();
+    std::vector<Profile*> profiles = original->GetAllOffTheRecordProfiles();
+    profiles.push_back(original);
     std::vector<BaaProfile*> owners;
-    for (const auto& [owner, watch] : ExtensionsWatches()) {
-      Profile* profile = ChromeProfileOf(owner);
-      if (profile && profile->GetOriginalProfile() == original) {
+    for (Profile* profile : profiles) {
+      if (BaaProfile* owner = ProfileFor(profile)) {
         owners.push_back(owner);
       }
     }
