@@ -212,6 +212,9 @@ mod app {
         swipe: on_swipe,
         signed_in: on_signed_in,
         extensions_changed: on_extensions_changed,
+        target_url: on_target_url,
+        extension_action: on_extension_action,
+        extension_popup_opened: on_extension_popup_opened,
     };
 
     thread_local! {
@@ -267,11 +270,7 @@ mod app {
         background: bool,
         gesture: bool,
     ) {
-        let index = TABS.with(|t| {
-            let mut t = t.borrow_mut();
-            t.push(tab);
-            t.len() - 1
-        });
+        let index = push_tab(tab);
         let which = PROFILES.with(|p| p.borrow().iter().position(|x| *x == profile));
         eprintln!(
             "baa: tab_created tab={index} opener={} profile={} url={} background={background} gesture={gesture}",
@@ -467,6 +466,25 @@ mod app {
         eprintln!("baa: extensions_changed");
     }
 
+    extern "C" fn on_target_url(_: *mut c_void, tab: ffi::TabId, url: *const c_char) {
+        eprintln!("baa: target_url tab={} url=\"{}\"", tab_index(tab), text(url));
+    }
+    extern "C" fn on_extension_action(_: *mut c_void, _: *mut ffi::Profile, id: *const c_char, tab: ffi::TabId) {
+        eprintln!("baa: extension_action ext={} tab={}", text(id), if tab == 0 { "0".into() } else { tab_index(tab) });
+    }
+    extern "C" fn on_extension_popup_opened(_: *mut c_void, _: *mut ffi::Profile, id: *const c_char, popup: ffi::TabId) {
+        let index = push_tab(popup);
+        eprintln!("baa: extension_popup_opened ext={} popup={index}", text(id));
+    }
+
+    fn push_tab(tab: ffi::TabId) -> usize {
+        TABS.with(|t| {
+            let mut t = t.borrow_mut();
+            t.push(tab);
+            t.len() - 1
+        })
+    }
+
     extern "C" fn on_media(_: *mut c_void, tab: ffi::TabId, m: *const ffi::Media) {
         let m = unsafe { &*m };
         eprintln!(
@@ -609,22 +627,14 @@ mod app {
                         let at = rest.strip_prefix("inspect ").map(|a| a.split_once(' ').unwrap());
                         let (inspect, x, y) = at.map_or((false, 0, 0), |(x, y)| (true, x.parse().unwrap(), y.parse().unwrap()));
                         let front = (core.tab_open_devtools)(tab, inspect, x, y, side);
-                        let index = TABS.with(|t| {
-                            let mut t = t.borrow_mut();
-                            t.push(front);
-                            t.len() - 1
-                        });
+                        let index = push_tab(front);
                         eprintln!("baa: devtools {current} -> {} ({front:?})", if front == 0 { "NULL".into() } else { index.to_string() });
                     }
                     "devtools-window" => (core.tab_show_devtools_window)(tab, false, 0, 0),
                     "popup" => {
                         let id = CString::new(arg).unwrap();
                         let popup = (core.extension_popup)(profile_for("1"), id.as_ptr());
-                        let index = TABS.with(|t| {
-                            let mut t = t.borrow_mut();
-                            t.push(popup);
-                            t.len() - 1
-                        });
+                        let index = push_tab(popup);
                         eprintln!("baa: popup {arg} -> {} ({popup:?})", if popup == 0 { "NULL".into() } else { index.to_string() });
                     }
                     "extensions" => {
@@ -778,11 +788,7 @@ mod app {
                     "tab" => {
                         let (which, url) = arg.split_once(' ').unwrap_or((arg, "about:blank"));
                         let new = (core.tab_create)(profile_for(which), c(url).as_ptr());
-                        let index = TABS.with(|t| {
-                            let mut t = t.borrow_mut();
-                            t.push(new);
-                            t.len() - 1
-                        });
+                        let index = push_tab(new);
                         eprintln!("script: tab {index} = {new:?}");
                     }
                     "closeprofile" => {
@@ -795,11 +801,7 @@ mod app {
                         let (which, url) = arg.split_once(' ').unwrap();
                         (core.tab_close)(tab);
                         let new = (core.tab_create)(profile_for(which), c(url).as_ptr());
-                        let index = TABS.with(|t| {
-                            let mut t = t.borrow_mut();
-                            t.push(new);
-                            t.len() - 1
-                        });
+                        let index = push_tab(new);
                         eprintln!("script: tab {index} = {new:?}");
                     }
                     "answer" => {

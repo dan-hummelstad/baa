@@ -170,6 +170,10 @@ pub enum PageEvent {
     /// keeps changing while the swipe settles after the fingers lift. The
     /// engine checked the tab can go that way, and navigates itself after `Done`.
     Swipe { phase: SwipePhase, forward: bool, amount: f32 },
+    /// Where the link under the pointer goes, "" when it left the link. The
+    /// page chooses it: display only, never load it. Not cleared on a tab
+    /// switch, a navigation or the page closing: the UI clears it then.
+    TargetUrl(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -256,6 +260,34 @@ pub struct SignIns(pub Vec<(ProfileId, Account)>);
 pub struct ExtensionsChanged;
 
 impl EventEmitter<ProfileId> for ExtensionsChanged {}
+
+/// Emits [`ExtensionActionChanged`]: read the action again with [`WebHost::extension_actions`].
+/// The engine may report it inside any call into it; it reaches the UI on a later turn.
+pub struct ExtensionActionsChanged;
+
+impl EventEmitter<ExtensionActionChanged> for ExtensionActionsChanged {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionActionChanged {
+    pub profile: ProfileId,
+    pub extension_id: String,
+    /// The page whose action changed; `None`: the default of every page of the profile.
+    pub page: Option<gpui::EntityId>,
+}
+
+/// The engine opened an extension's popup itself (`chrome.action.openPopup`). Show it
+/// as a click on the action would, with [`WebHost::create_popup`] for that extension,
+/// while handling the event: the popup is closed once the event was not taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionPopupOpened {
+    pub profile: ProfileId,
+    pub extension_id: String,
+}
+
+/// Emits [`ExtensionPopupOpened`].
+pub struct ExtensionPopups;
+
+impl EventEmitter<ExtensionPopupOpened> for ExtensionPopups {}
 
 /// Every download any page started this session, oldest first.
 #[derive(Default)]
@@ -374,7 +406,8 @@ pub trait WebHost: 'static {
     /// only an `http(s)` URL is opened, anything else shows `about:blank`. A
     /// page-supplied URL is never re-issued as a browser load, so pass `false`.
     fn create_page(&self, profile: ProfileId, url: &str, user_initiated: bool, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
-    /// An extension's toolbar popup, acting on the profile's active tab.
+    /// An extension's toolbar popup, acting on the profile's active tab; or, after
+    /// [`ExtensionPopupOpened`], the one the engine opened.
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
     /// In-memory profile; nothing persisted (incognito Space).
     fn ephemeral_profile(&self) -> ProfileId;
@@ -406,6 +439,26 @@ pub trait WebHost: 'static {
     /// Observe it and take them.
     fn sign_ins(&self) -> Entity<SignIns>;
     fn extensions_changed(&self) -> Entity<ExtensionsChanged>;
+    /// The toolbar actions of `profile`'s extensions on `page`, or their defaults for
+    /// every page (`None`). Empty for a gone profile or a page that is closed or of
+    /// another profile.
+    fn extension_actions(&self, profile: ProfileId, page: Option<&Self::Page>) -> Vec<ExtensionAction>;
+    fn extension_actions_changed(&self) -> Entity<ExtensionActionsChanged>;
+    /// Every `chrome.commands` entry of `profile`'s extensions, enabled or not.
+    /// A named command's shortcut is run by the engine itself, after baa's keymap
+    /// declined the key. An `action` one is not: the UI must match it against its
+    /// own keys and open the extension's popup with [`WebHost::create_popup`], as a
+    /// click would (one without ⌘ or ⌃ never gets past the page).
+    fn extension_commands(&self, profile: ProfileId) -> Vec<ExtensionCommand>;
+    /// As its shortcut would, on the profile's active tab. False, and nothing happens,
+    /// for an `action` command, an unknown or disabled extension or command, or a
+    /// Space with no window yet.
+    fn run_extension_command(&self, profile: ProfileId, extension_id: &str, command: &str) -> bool;
+    /// Takes the shortcut from any other command that had it; an empty `key` clears it.
+    /// False, and nothing changes, for a combination Chrome refuses (no modifier, ⇧
+    /// alone, ⌥ with ⌘ or ⌃, an unknown key, a media key).
+    fn set_extension_shortcut(&self, profile: ProfileId, extension_id: &str, command: &str, key: &str, modifiers: gpui::Modifiers) -> bool;
+    fn extension_popups(&self) -> Entity<ExtensionPopups>;
     /// From now on each of `accounts` is signed in (or out) alike in every Space but
     /// incognito ones, including Spaces opened later; the rest go their own way. Where
     /// Spaces differ now, `from`'s sign-in wins, else the newest.
@@ -524,6 +577,42 @@ pub struct Extension {
     pub popup: Option<String>,
     /// Its settings page, if it has one.
     pub options: Option<String>,
+}
+
+/// An extension's toolbar action as Chrome would draw it on one page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionAction {
+    pub extension_id: String,
+    /// Empty: no badge.
+    pub badge_text: String,
+    /// The tooltip; the extension's name unless it set one.
+    pub title: String,
+    /// 0xRRGGBBAA; `None` when the extension set none (draw the default; for the
+    /// text, a colour that contrasts with the badge).
+    pub badge_rgba: Option<u32>,
+    pub text_rgba: Option<u32>,
+    /// False: draw it greyed.
+    pub enabled: bool,
+    /// [`WebHost::create_popup`] opens a popup; otherwise the click only fires the extension's handler.
+    pub has_popup: bool,
+}
+
+/// One `chrome.commands` entry of an extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionCommand {
+    pub extension_id: String,
+    pub name: String,
+    pub description: String,
+    /// Chrome's key name ("A".."Z", "0".."9", "Comma", "Period", "Up", "Space", "PageUp",
+    /// "MediaPlayPause", ...); empty when no shortcut is assigned.
+    pub key: String,
+    /// As a gpui keystroke's: `platform` is ⌘ and `control` is ⌃. The engine already
+    /// mapped a manifest's "Ctrl" to ⌘ and its "MacCtrl" to ⌃. `function` is never set.
+    pub modifiers: gpui::Modifiers,
+    /// The action's command (`_execute_action`): its shortcut is a click on the action.
+    pub action: bool,
+    /// System-wide; Chrome's global registry owns it.
+    pub global: bool,
 }
 
 #[cfg(test)]

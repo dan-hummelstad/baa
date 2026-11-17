@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 15;
+pub const ABI_VERSION: c_int = 16;
 
 #[repr(C)]
 pub struct Profile {
@@ -205,6 +205,39 @@ pub struct Extension {
 
 pub type ExtensionVisitor = extern "C" fn(ctx: *mut c_void, extension: *const Extension);
 
+/// `BaaAction`: colours are 0xRRGGBBAA, alpha 0 for none set.
+#[repr(C)]
+pub struct Action {
+    pub extension_id: *const c_char,
+    pub badge_text: *const c_char,
+    pub title: *const c_char,
+    pub badge_rgba: u32,
+    pub text_rgba: u32,
+    pub enabled: bool,
+    pub has_popup: bool,
+}
+
+pub type ActionVisitor = extern "C" fn(ctx: *mut c_void, action: *const Action);
+
+pub const MOD_CMD: u32 = 1 << 0;
+pub const MOD_CTRL: u32 = 1 << 1;
+pub const MOD_ALT: u32 = 1 << 2;
+pub const MOD_SHIFT: u32 = 1 << 3;
+
+/// `BaaCommand`.
+#[repr(C)]
+pub struct Command {
+    pub extension_id: *const c_char,
+    pub name: *const c_char,
+    pub description: *const c_char,
+    pub key: *const c_char,
+    pub modifiers: u32,
+    pub action: bool,
+    pub global: bool,
+}
+
+pub type CommandVisitor = extern "C" fn(ctx: *mut c_void, command: *const Command);
+
 pub type SiteRuleVisitor = extern "C" fn(ctx: *mut c_void, pattern: *const c_char, state: c_int);
 
 pub type HistoryVisitor = extern "C" fn(ctx: *mut c_void, title: *const c_char, url: *const c_char);
@@ -262,6 +295,10 @@ pub struct Callbacks {
     ),
     pub signed_in: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, account: u32),
     pub extensions_changed: extern "C" fn(ctx: *mut c_void, profile: *mut Profile),
+    pub target_url: extern "C" fn(ctx: *mut c_void, tab: TabId, url: *const c_char),
+    /// May come inside a `baa_*` call.
+    pub extension_action: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, tab: TabId),
+    pub extension_popup_opened: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, popup: TabId),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -298,6 +335,10 @@ pub struct Core {
     pub profile_extension_change: extern "C" fn(*mut Profile, *const c_char, c_int, c_int) -> bool,
     pub profile_load_unpacked: extern "C" fn(*mut Profile, u64, *const c_char),
     pub profile_copy_extension: extern "C" fn(*mut Profile, u64, *mut Profile, *const c_char),
+    pub profile_extension_actions: extern "C" fn(*mut Profile, TabId, ActionVisitor, *mut c_void) -> c_int,
+    pub profile_extension_commands: extern "C" fn(*mut Profile, CommandVisitor, *mut c_void) -> c_int,
+    pub extension_run_command: extern "C" fn(*mut Profile, *const c_char, *const c_char) -> bool,
+    pub extension_set_shortcut: extern "C" fn(*mut Profile, *const c_char, *const c_char, *const c_char, u32) -> bool,
     /// `ACCOUNT_*` bits shared from now on; where profiles differ the given one wins.
     pub accounts_share: extern "C" fn(u32, *mut Profile),
     pub extension_popup: extern "C" fn(*mut Profile, *const c_char) -> TabId,
@@ -400,6 +441,10 @@ pub fn load() -> &'static Core {
             profile_extension_change,
             profile_load_unpacked,
             profile_copy_extension,
+            profile_extension_actions,
+            profile_extension_commands,
+            extension_run_command,
+            extension_set_shortcut,
             accounts_share,
             extension_popup,
             tab_create,
@@ -573,6 +618,10 @@ mod tests {
             ("BAA_ACCOUNT_GOOGLE", ACCOUNT_GOOGLE as i64),
             ("BAA_ACCOUNT_MICROSOFT", ACCOUNT_MICROSOFT as i64),
             ("BAA_ACCOUNT_GITHUB", ACCOUNT_GITHUB as i64),
+            ("BAA_MOD_CMD", MOD_CMD as i64),
+            ("BAA_MOD_CTRL", MOD_CTRL as i64),
+            ("BAA_MOD_ALT", MOD_ALT as i64),
+            ("BAA_MOD_SHIFT", MOD_SHIFT as i64),
         ];
         let theirs = header_constants(header);
         // A constant added to the header without a mirror here fails the test.

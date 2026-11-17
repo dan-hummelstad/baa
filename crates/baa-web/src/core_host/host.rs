@@ -19,8 +19,9 @@ use super::{
     skin, Core, PageKind,
 };
 use crate::{
-    Account, Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionChange, ExtensionInfo, MenuDone, MenuItem,
-    PageHandle, Permission, PermissionState, ProfileId, SignIns, ExtensionsChanged, WebHost,
+    Account, Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionAction, ExtensionActionsChanged, ExtensionChange,
+    ExtensionCommand, ExtensionInfo, ExtensionPopups, MenuDone, MenuItem, PageHandle, Permission, PermissionState, ProfileId,
+    SignIns, ExtensionsChanged, WebHost,
 };
 
 /// `BAA_PERMISSION_*` bits, in bit order.
@@ -80,6 +81,8 @@ pub struct CoreWebHost {
     chrome_tabs: Entity<ChromeTabs>,
     sign_ins: Entity<SignIns>,
     extensions_changed: Entity<ExtensionsChanged>,
+    extension_actions_changed: Entity<ExtensionActionsChanged>,
+    extension_popups: Entity<ExtensionPopups>,
     /// What `apply_settings` last sent; none before the first call.
     applied: RefCell<Option<Writes>>,
     /// Kept as the user chose it until it is sent to the engine.
@@ -98,6 +101,10 @@ impl CoreWebHost {
         *dispatch.sign_ins.borrow_mut() = Some(sign_ins.downgrade());
         let extensions_changed = cx.new(|_| ExtensionsChanged);
         *dispatch.extensions_changed.borrow_mut() = Some(extensions_changed.downgrade());
+        let extension_actions_changed = cx.new(|_| ExtensionActionsChanged);
+        *dispatch.extension_actions_changed.borrow_mut() = Some(extension_actions_changed.downgrade());
+        let extension_popups = cx.new(|_| ExtensionPopups);
+        *dispatch.extension_popups.borrow_mut() = Some(extension_popups.downgrade());
         *dispatch.app.borrow_mut() = Some(cx.to_async());
         Self {
             core,
@@ -109,6 +116,8 @@ impl CoreWebHost {
             chrome_tabs,
             sign_ins,
             extensions_changed,
+            extension_actions_changed,
+            extension_popups,
             applied: RefCell::default(),
             page_scheme: Cell::default(),
             skins: RefCell::default(),
@@ -235,7 +244,9 @@ impl WebHost for CoreWebHost {
         let handle = self.profile_handle(profile);
         let id = extensions::id_of(url).filter(|_| !handle.is_null());
         // NULL: no popup (the click was all the action did); the Peek card closes.
-        let tab = id.map_or(0, |id| (self.core.extension_popup)(handle, c_string(id).as_ptr()));
+        let tab = id.map_or(0, |id| {
+            self.dispatch.take_popup(handle, id).unwrap_or_else(|| (self.core.extension_popup)(handle, c_string(id).as_ptr()))
+        });
         let dispatch = self.dispatch;
         cx.new(|cx| {
             let page = CorePage::new(dispatch, profile, handle, tab, PageKind::Popup, window, cx);
@@ -309,6 +320,44 @@ impl WebHost for CoreWebHost {
 
     fn extensions_changed(&self) -> Entity<ExtensionsChanged> {
         self.extensions_changed.clone()
+    }
+
+    fn extension_actions(&self, profile: ProfileId, page: Option<&CorePage>) -> Vec<ExtensionAction> {
+        let handle = self.profile_handle(profile);
+        let tab = page.map_or(0, |page| page.shared.tab.get());
+        // A closed page's tab is 0, which would read the defaults.
+        if handle.is_null() || (page.is_some() && tab == 0) {
+            return Vec::new();
+        }
+        extensions::actions(self.core, handle, tab)
+    }
+
+    fn extension_actions_changed(&self) -> Entity<ExtensionActionsChanged> {
+        self.extension_actions_changed.clone()
+    }
+
+    fn extension_commands(&self, profile: ProfileId) -> Vec<ExtensionCommand> {
+        let handle = self.profile_handle(profile);
+        if handle.is_null() {
+            return Vec::new();
+        }
+        extensions::commands(self.core, handle)
+    }
+
+    fn run_extension_command(&self, profile: ProfileId, extension_id: &str, command: &str) -> bool {
+        let handle = self.profile_handle(profile);
+        !handle.is_null() && (self.core.extension_run_command)(handle, c_string(extension_id).as_ptr(), c_string(command).as_ptr())
+    }
+
+    fn set_extension_shortcut(&self, profile: ProfileId, extension_id: &str, command: &str, key: &str, modifiers: gpui::Modifiers) -> bool {
+        let handle = self.profile_handle(profile);
+        let bits = if key.is_empty() { 0 } else { extensions::modifier_bits(modifiers) };
+        let (id, command, key) = (c_string(extension_id), c_string(command), c_string(key));
+        !handle.is_null() && (self.core.extension_set_shortcut)(handle, id.as_ptr(), command.as_ptr(), key.as_ptr(), bits)
+    }
+
+    fn extension_popups(&self) -> Entity<ExtensionPopups> {
+        self.extension_popups.clone()
     }
 
     fn share_accounts(&self, accounts: &[Account], from: Option<ProfileId>) {

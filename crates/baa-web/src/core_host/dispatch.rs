@@ -25,7 +25,8 @@ use super::{
 };
 use crate::{
     Account, Callback, ChromeTabs, DangerKind, DialogKind, DownloadState, Downloads, ExclusiveKind, MediaAction, PageEvent, SuggestUpdate, SwipePhase,
-    SignIns, Suggestion, ProfileId, ExtensionsChanged,
+    SignIns, Suggestion, ProfileId, ExtensionsChanged, ExtensionActionChanged, ExtensionActionsChanged, ExtensionPopupOpened,
+    ExtensionPopups,
 };
 
 fn tell<T: 'static>(slot: &RefCell<Option<WeakEntity<T>>>, cx: &mut AsyncApp, f: impl FnOnce(&mut T, &mut Context<T>)) {
@@ -109,10 +110,16 @@ pub(super) struct Dispatch {
     pub(super) app: RefCell<Option<AsyncApp>>,
     pub(super) tabs: RefCell<HashMap<TabId, Live>>,
     pending: RefCell<Vec<Pending>>,
+    /// Popups the engine opened itself, until the UI takes them; `url` is the extension id.
+    popups: RefCell<Vec<Pending>>,
+    /// A popup's size reported before its page exists, for the page to start with.
+    pub(super) early_sizes: RefCell<HashMap<TabId, gpui::Size<gpui::Pixels>>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) sign_ins: RefCell<Option<WeakEntity<SignIns>>>,
     pub(super) extensions_changed: RefCell<Option<WeakEntity<ExtensionsChanged>>>,
+    pub(super) extension_actions_changed: RefCell<Option<WeakEntity<ExtensionActionsChanged>>>,
+    pub(super) extension_popups: RefCell<Option<WeakEntity<ExtensionPopups>>>,
     /// The open profiles, for callbacks that name one by handle.
     pub(super) profile_ids: RefCell<HashMap<*mut Profile, ProfileId>>,
     pub(super) clears: Waiting<Callback<()>>,
@@ -131,10 +138,14 @@ impl Dispatch {
             app: RefCell::default(),
             tabs: RefCell::default(),
             pending: RefCell::default(),
+            popups: RefCell::default(),
+            early_sizes: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
             sign_ins: RefCell::default(),
             extensions_changed: RefCell::default(),
+            extension_actions_changed: RefCell::default(),
+            extension_popups: RefCell::default(),
             profile_ids: RefCell::default(),
             clears: Waiting::new(),
             unpacked: Waiting::new(),
@@ -249,14 +260,16 @@ impl Dispatch {
         .detach();
     }
 
-    /// Closes the pending tab unless it was adopted meanwhile; ids are never
-    /// reused, so a late timer cannot hit a later tab.
+    /// Closes the pending tab or popup unless it was adopted meanwhile; ids are
+    /// never reused, so a late timer cannot hit a later tab.
     fn expire(&self, tab: TabId) {
-        let mut pending = self.pending.borrow_mut();
-        if let Some(at) = pending.iter().position(|p| p.tab == tab) {
-            let expired = pending.remove(at);
-            drop(pending);
-            (self.core.tab_close)(expired.tab);
+        for list in [&self.pending, &self.popups] {
+            let mut list = list.borrow_mut();
+            if let Some(at) = list.iter().position(|p| p.tab == tab) {
+                list.remove(at);
+                drop(list);
+                return (self.core.tab_close)(tab);
+            }
         }
     }
 
@@ -318,6 +331,41 @@ impl Dispatch {
         self.queue(move |cx| tell(&self.extensions_changed, cx, |_, cx| cx.emit(id)));
     }
 
+    /// May come inside a `baa_*` call, whose caller may hold any of these cells:
+    /// nothing is looked up until the next turn.
+    fn extension_action(&'static self, profile: *mut Profile, extension_id: String, tab: TabId) {
+        self.queue(move |cx| {
+            let Some(profile) = self.profile_ids.borrow().get(&profile).copied() else { return };
+            let page = match tab {
+                0 => None,
+                // A tab that closed since, or one baa does not show.
+                tab => match self.page_of(tab) {
+                    Some(page) => Some(page.entity_id()),
+                    None => return,
+                },
+            };
+            let changed = ExtensionActionChanged { profile, extension_id, page };
+            tell(&self.extension_actions_changed, cx, |_, cx| cx.emit(changed));
+        });
+    }
+
+    /// The UI takes it (`create_popup`) while handling the event, or it is closed.
+    fn extension_popup_opened(&'static self, profile: *mut Profile, extension_id: String, tab: TabId) {
+        let Some(id) = self.profile_ids.borrow().get(&profile).copied() else {
+            return self.queue(move |_| (self.core.tab_close)(tab));
+        };
+        self.popups.borrow_mut().push(Pending { tab, profile, url: extension_id.clone() });
+        self.queue(move |cx| {
+            // It closed meanwhile: a create_popup now would open a new one.
+            if !self.popups.borrow().iter().any(|p| p.tab == tab) {
+                return;
+            }
+            let opened = ExtensionPopupOpened { profile: id, extension_id };
+            tell(&self.extension_popups, cx, |_, cx| cx.emit(opened));
+            cx.update(|cx| cx.defer(move |_| self.expire(tab)));
+        });
+    }
+
     /// A menu is open in the page; a page that is gone gets it closed.
     fn context_menu(&'static self, tab: TabId, id: u64, x: f32, y: f32, rows: Vec<Row>) {
         let live = self.tabs.borrow().get(&tab).map(|l| (l.shared.clone(), l.page.clone()));
@@ -335,13 +383,17 @@ impl Dispatch {
     }
 
     pub(super) fn take_pending(&self, profile: *mut Profile, url: &str) -> Option<TabId> {
-        let mut pending = self.pending.borrow_mut();
-        let at = pending.iter().position(|p| p.profile == profile && p.url == url)?;
-        Some(pending.remove(at).tab)
+        take(&self.pending, profile, url)
+    }
+
+    pub(super) fn take_popup(&self, profile: *mut Profile, extension_id: &str) -> Option<TabId> {
+        take(&self.popups, profile, extension_id)
     }
 
     fn tab_closed(&self, tab: TabId, reason: c_int) {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
+        self.popups.borrow_mut().retain(|p| p.tab != tab);
+        self.early_sizes.borrow_mut().remove(&tab);
         let Some(live) = self.tabs.borrow_mut().remove(&tab) else { return };
         // Now, not next turn: its view is freed once this callback returns.
         live.shared.release();
@@ -355,6 +407,12 @@ impl Dispatch {
             page.update(cx, |_, cx| cx.emit(PageEvent::Closed)).ok();
         });
     }
+}
+
+fn take(list: &RefCell<Vec<Pending>>, profile: *mut Profile, key: &str) -> Option<TabId> {
+    let mut list = list.borrow_mut();
+    let at = list.iter().position(|p| p.profile == profile && p.url == key)?;
+    Some(list.remove(at).tab)
 }
 
 pub(super) fn callbacks() -> Callbacks {
@@ -468,7 +526,13 @@ pub(super) fn callbacks() -> Callbacks {
     }
     extern "C" fn resized(ctx: *mut c_void, tab: TabId, width: c_int, height: c_int) {
         let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::PreferredSize(size)));
+        let d = unsafe { dispatch(ctx) };
+        // An engine-opened popup reports its size before the UI has taken it.
+        if !d.tabs.borrow().contains_key(&tab) {
+            d.early_sizes.borrow_mut().insert(tab, size);
+            return;
+        }
+        d.on_page(tab, move |_, cx| cx.emit(PageEvent::PreferredSize(size)));
     }
     extern "C" fn devtools_dock(ctx: *mut c_void, front: TabId, side: c_int) {
         let side = match side {
@@ -559,6 +623,18 @@ pub(super) fn callbacks() -> Callbacks {
     extern "C" fn extensions_changed(ctx: *mut c_void, profile: *mut Profile) {
         unsafe { dispatch(ctx) }.extensions_changed(profile);
     }
+    extern "C" fn target_url(ctx: *mut c_void, tab: TabId, url: *const c_char) {
+        let url = super::skin::to_baa(unsafe { from_c(url) });
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::TargetUrl(url)));
+    }
+    extern "C" fn extension_action(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, tab: TabId) {
+        let extension_id = unsafe { from_c(extension_id) };
+        unsafe { dispatch(ctx) }.extension_action(profile, extension_id, tab);
+    }
+    extern "C" fn extension_popup_opened(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, popup: TabId) {
+        let extension_id = unsafe { from_c(extension_id) };
+        unsafe { dispatch(ctx) }.extension_popup_opened(profile, extension_id, popup);
+    }
     Callbacks {
         key,
         tab_created,
@@ -585,6 +661,9 @@ pub(super) fn callbacks() -> Callbacks {
         swipe,
         signed_in,
         extensions_changed,
+        target_url,
+        extension_action,
+        extension_popup_opened,
     }
 }
 

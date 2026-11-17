@@ -3,11 +3,13 @@
 
 use std::{ffi::c_void, path::PathBuf};
 
+use gpui::Modifiers;
+
 use super::{
-    ffi::{self, Core, Profile},
+    ffi::{self, Core, Profile, TabId},
     from_c,
 };
-use crate::{Extension, ExtensionChange, ExtensionInfo, SiteAccess};
+use crate::{Extension, ExtensionAction, ExtensionChange, ExtensionCommand, ExtensionInfo, SiteAccess};
 
 /// Every user-visible extension of `profile`, in Chrome's order.
 pub fn read(core: &Core, profile: *mut Profile) -> Vec<(Extension, ExtensionInfo)> {
@@ -51,6 +53,66 @@ fn convert(raw: &ffi::Extension) -> (Extension, ExtensionInfo) {
             needs_approval: raw.needs_approval,
         },
     )
+}
+
+/// Tab 0: the defaults.
+pub fn actions(core: &Core, profile: *mut Profile, tab: TabId) -> Vec<ExtensionAction> {
+    extern "C" fn visit(out: *mut c_void, action: *const ffi::Action) {
+        let (out, raw) = unsafe { (&mut *out.cast::<Vec<ExtensionAction>>(), &*action) };
+        let colour = |rgba: u32| (rgba & 0xff != 0).then_some(rgba);
+        out.push(unsafe {
+            ExtensionAction {
+                extension_id: from_c(raw.extension_id),
+                badge_text: from_c(raw.badge_text),
+                title: from_c(raw.title),
+                badge_rgba: colour(raw.badge_rgba),
+                text_rgba: colour(raw.text_rgba),
+                enabled: raw.enabled,
+                has_popup: raw.has_popup,
+            }
+        });
+    }
+    let mut out = Vec::new();
+    (core.profile_extension_actions)(profile, tab, visit, (&mut out as *mut Vec<_>).cast());
+    out
+}
+
+pub fn commands(core: &Core, profile: *mut Profile) -> Vec<ExtensionCommand> {
+    extern "C" fn visit(out: *mut c_void, command: *const ffi::Command) {
+        let (out, raw) = unsafe { (&mut *out.cast::<Vec<ExtensionCommand>>(), &*command) };
+        out.push(unsafe {
+            ExtensionCommand {
+                extension_id: from_c(raw.extension_id),
+                name: from_c(raw.name),
+                description: from_c(raw.description),
+                key: from_c(raw.key),
+                modifiers: modifiers_of(raw.modifiers),
+                action: raw.action,
+                global: raw.global,
+            }
+        });
+    }
+    let mut out = Vec::new();
+    (core.profile_extension_commands)(profile, visit, (&mut out as *mut Vec<_>).cast());
+    out
+}
+
+pub fn modifiers_of(bits: u32) -> Modifiers {
+    Modifiers {
+        platform: bits & ffi::MOD_CMD != 0,
+        control: bits & ffi::MOD_CTRL != 0,
+        alt: bits & ffi::MOD_ALT != 0,
+        shift: bits & ffi::MOD_SHIFT != 0,
+        function: false,
+    }
+}
+
+/// Fn has no `BAA_MOD_*` bit and is dropped.
+pub fn modifier_bits(modifiers: Modifiers) -> u32 {
+    [(modifiers.platform, ffi::MOD_CMD), (modifiers.control, ffi::MOD_CTRL), (modifiers.alt, ffi::MOD_ALT), (modifiers.shift, ffi::MOD_SHIFT)]
+        .iter()
+        .filter(|(on, _)| *on)
+        .fold(0, |bits, (_, bit)| bits | bit)
 }
 
 /// `BAA_EXTENSION_*` change kind and value.

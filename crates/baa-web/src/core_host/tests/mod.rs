@@ -45,6 +45,11 @@ thread_local! {
     static POPUP_NULL: Cell<bool> = const { Cell::new(false) };
     /// What the fake `baa_profile_extensions` lists.
     static EXTENSIONS: RefCell<Vec<FakeExtension>> = const { RefCell::new(Vec::new()) };
+    /// What the fake `baa_profile_extension_actions` and `_commands` visit; strings are `c"..."` literals.
+    static ACTIONS: RefCell<Vec<ffi::Action>> = const { RefCell::new(Vec::new()) };
+    static COMMANDS: RefCell<Vec<ffi::Command>> = const { RefCell::new(Vec::new()) };
+    /// Set: the fake `baa_profile_extension_actions` sends `extension_action` to this ctx from inside.
+    static ACTION_INSIDE: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 fn log(call: String) {
@@ -157,6 +162,36 @@ extern "C" fn profile_extensions(_: *mut Profile, visit: ffi::ExtensionVisitor, 
 }
 extern "C" fn profile_extension_change(_: *mut Profile, id: *const c_char, change: c_int, value: c_int) -> bool {
     log(format!("profile_extension_change {} {change} {value}", arg(id)));
+    true
+}
+extern "C" fn profile_extension_actions(profile: *mut Profile, tab: TabId, visit: ffi::ActionVisitor, ctx: *mut c_void) -> c_int {
+    log(format!("profile_extension_actions {tab}"));
+    let inside = ACTION_INSIDE.with(Cell::get);
+    if !inside.is_null() {
+        (callbacks().extension_action)(inside, profile, c"aaa".as_ptr(), tab);
+        log("profile_extension_actions returns".into());
+    }
+    ACTIONS.with(|list| {
+        for action in list.borrow().iter() {
+            visit(ctx, action);
+        }
+        list.borrow().len() as c_int
+    })
+}
+extern "C" fn profile_extension_commands(_: *mut Profile, visit: ffi::CommandVisitor, ctx: *mut c_void) -> c_int {
+    COMMANDS.with(|list| {
+        for command in list.borrow().iter() {
+            visit(ctx, command);
+        }
+        list.borrow().len() as c_int
+    })
+}
+extern "C" fn extension_run_command(_: *mut Profile, id: *const c_char, command: *const c_char) -> bool {
+    log(format!("extension_run_command {} {}", arg(id), arg(command)));
+    true
+}
+extern "C" fn extension_set_shortcut(_: *mut Profile, id: *const c_char, command: *const c_char, key: *const c_char, modifiers: u32) -> bool {
+    log(format!("extension_set_shortcut {} {} {:?} {modifiers}", arg(id), arg(command), arg(key)));
     true
 }
 extern "C" fn extension_popup(_: *mut Profile, id: *const c_char) -> TabId {
@@ -296,6 +331,10 @@ fn fake_core() -> &'static Core {
         profile_extension_change,
         profile_load_unpacked,
         profile_copy_extension,
+        profile_extension_actions,
+        profile_extension_commands,
+        extension_run_command,
+        extension_set_shortcut,
         accounts_share,
         extension_popup,
         tab_create,
@@ -397,6 +436,9 @@ impl Env {
         DEFAULT_BROWSER.with(|d| d.set(false));
         SITE_RULES.with(|r| r.borrow_mut().clear());
         EXTENSIONS.with(|e| e.borrow_mut().clear());
+        ACTIONS.with(|a| a.borrow_mut().clear());
+        COMMANDS.with(|c| c.borrow_mut().clear());
+        ACTION_INSIDE.with(|a| a.set(std::ptr::null_mut()));
         let core = fake_core();
         let dispatch: &'static Dispatch = Box::leak(Box::new(Dispatch::new(core)));
         let host = cx.update(|cx| CoreWebHost::new(core, dispatch, std::env::temp_dir().join("baa-core-host-test"), cx));

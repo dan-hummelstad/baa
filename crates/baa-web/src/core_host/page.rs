@@ -82,8 +82,15 @@ impl CorePage {
             // An adopted tab already has a url and title: the UI hears them
             // once it has subscribed, which is after this constructor.
             let first = state.clone();
+            let size = dispatch.early_sizes.borrow_mut().remove(&tab);
             cx.spawn(async move |page, cx| {
-                page.update(cx, |page, cx| page.emit_changes(&Snapshot::default(), &first, cx)).ok();
+                page.update(cx, |page, cx| {
+                    page.emit_changes(&Snapshot::default(), &first, cx);
+                    if let Some(size) = size {
+                        cx.emit(PageEvent::PreferredSize(size));
+                    }
+                })
+                .ok();
             })
             .detach();
         }

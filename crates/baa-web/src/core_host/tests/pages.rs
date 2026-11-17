@@ -323,3 +323,23 @@ fn a_swipe_picture_is_copied_before_the_engine_frees_it(cx: &mut TestAppContext)
     let picture = SwipePicture { width: 2, height: 1, bgra: Arc::new(vec![7; 8]) };
     assert_eq!(*seen.borrow(), [PageEvent::Swipe { phase: SwipePhase::Began(Some(picture)), forward: false, amount: 0.0 }]);
 }
+
+#[gpui::test]
+fn a_hovered_links_url_reaches_its_page_with_chrome_pages_as_baa(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    let (one, two) = (env.page(1, "https://a.test", cx), env.page(1, "https://b.test", cx));
+    let (seen_one, seen_two) = (events(&one, cx), events(&two, cx));
+    cx.run_until_parked();
+    seen_one.borrow_mut().clear();
+    seen_two.borrow_mut().clear();
+    for url in [c"chrome://settings/?u=chrome://x", c""] {
+        (env.callbacks.target_url)(env.ctx(), env.tab_of(&two, cx), url.as_ptr());
+    }
+    (env.callbacks.target_url)(env.ctx(), 9999, c"https://unknown.test".as_ptr());
+    cx.run_until_parked();
+    assert!(seen_one.borrow().is_empty());
+    assert_eq!(
+        *seen_two.borrow(),
+        [PageEvent::TargetUrl("baa://settings/?u=chrome://x".into()), PageEvent::TargetUrl(String::new())]
+    );
+}
