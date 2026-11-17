@@ -57,6 +57,8 @@ gpui::actions!(
         ManageExtensions,
         KeyboardShortcuts,
         ReportProblem,
+        Undo,
+        Redo,
     ]
 );
 

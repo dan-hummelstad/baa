@@ -20,7 +20,7 @@ use crate::{
     actions::*,
     command_bar::{self, Bar, Mode},
     icons::icon,
-    input::{Key, TextField},
+    input::{self, Key, TextField},
     lil_baa::LilBaa,
     motion::{self, Feel, Motion, Spring},
     theme::{fade, lerp_oklch, mid_of, mix, space_gradient, surface, Stops, Theme},
@@ -1087,21 +1087,24 @@ impl<H: WebHost> Browser<H> {
         cx: &mut Context<Self>,
     ) {
         let shift = event.keystroke.modifiers.shift;
+        let mut key = Key::Ignored;
         if !self.agent.asks.is_empty() {
             self.on_agent_ask_key(event, window, cx);
         } else if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() && self.active_dialog().is_some() {
-            self.on_dialog_key(event, window, cx);
+            key = self.on_dialog_key(event, window, cx);
         } else if let Some(field) = &mut self.renaming {
-            match field.handle(&event.keystroke, cx) {
+            key = field.handle(&event.keystroke, cx);
+            match key {
                 Key::Submit => self.commit_rename(window, cx),
                 Key::Cancel => self.close_overlays(window, cx),
                 _ => {}
             }
         } else if let Some(bar) = &mut self.bar {
-            let key = bar.field.handle(&event.keystroke, cx);
+            key = bar.field.handle(&event.keystroke, cx);
             command_bar::on_key(self, key, window, cx);
         } else if let Some(field) = &mut self.find {
-            match field.handle(&event.keystroke, cx) {
+            key = field.handle(&event.keystroke, cx);
+            match key {
                 Key::Submit => {
                     let text = field.text.clone();
                     self.with_page(cx, |p| p.find(&text, !shift));
@@ -1110,8 +1113,27 @@ impl<H: WebHost> Browser<H> {
                 _ => {}
             }
         }
-        cx.stop_propagation();
+        if key != Key::Text {
+            cx.stop_propagation();
+        }
         cx.notify();
+    }
+
+    /// The field `on_input_key` sends keys to.
+    pub(crate) fn input_field(&mut self) -> Option<&mut TextField> {
+        if !self.agent.asks.is_empty() {
+            return None;
+        }
+        if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() {
+            return self.dialog_field();
+        }
+        if self.renaming.is_some() {
+            return self.renaming.as_mut();
+        }
+        match &mut self.bar {
+            Some(bar) => Some(&mut bar.field),
+            None => self.find.as_mut(),
+        }
     }
 
     /// `step` moves along the ladder; `0` resets to 100%.
@@ -1459,6 +1481,8 @@ impl<H: WebHost> Render for Browser<H> {
             .children(self.space_picker.as_ref().map(|p| p.render()))
             .children(self.render_agent_ask(&theme, cx))
             .children(self.render_tosses(&theme, cx));
+        let root = input::wire(root, &self.input_focus, window, cx, Self::input_field, Self::on_input_key);
+        let root = input::wire(root, &self.library_focus, window, cx, |b| b.library.as_mut().map(|l| &mut l.search), Self::on_library_key);
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {

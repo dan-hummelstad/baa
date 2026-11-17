@@ -208,12 +208,15 @@ impl<H: WebHost> Browser<H> {
 
     pub(crate) fn on_library_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(library) = &mut self.library else { return };
-        match library.search.handle(&event.keystroke, cx) {
+        let key = library.search.handle(&event.keystroke, cx);
+        match key {
             Key::Cancel if library.search.text.is_empty() => self.close_library(window, cx),
             Key::Cancel => library.search = TextField::default(),
             _ => {}
         }
-        cx.stop_propagation();
+        if key != Key::Text {
+            cx.stop_propagation();
+        }
         cx.notify();
     }
 

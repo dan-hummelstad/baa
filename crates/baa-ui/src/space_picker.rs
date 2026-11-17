@@ -18,7 +18,7 @@ use gpui::{
 use crate::{
     browser::{drop_in, shadow, Browser, PALETTE},
     icons::icon,
-    input::{Key, TextField},
+    input::{self, Key, TextField},
     theme::{from_oklch, r, surface, to_oklch},
 };
 
@@ -728,7 +728,7 @@ impl<H: WebHost> EmojiPicker<H> {
 }
 
 impl<H: WebHost> Render for EmojiPicker<H> {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let search = div()
             .h(px(30.))
             .px(px(10.))
@@ -767,35 +767,43 @@ impl<H: WebHost> Render for EmojiPicker<H> {
             .gap(px(8.))
             .child(div().text_size(px(18.)).child(SharedString::from(glyph)))
             .child(div().truncate().text_color(surface::muted()).child(SharedString::from(name)));
-        card("emoji-picker")
+        let picker = card("emoji-picker")
             .w(px(COLS as f32 * CELL + 24.))
             .gap(px(8.))
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                match this.query.handle(&e.keystroke, cx) {
-                    Key::Edited => {
-                        this.rows = rows(&this.query.text);
-                        this.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    }
-                    Key::Submit => {
-                        let first = this.rows.iter().find_map(|r| match r {
-                            Row::Cells(list) => list.first().map(|e| e.glyph),
-                            Row::Heading(_) => None,
-                        });
-                        if let Some(glyph) = first {
-                            this.pick(glyph, cx);
-                        }
-                    }
-                    Key::Cancel => dismiss(&this.browser, cx),
-                    _ => {}
-                }
-                cx.stop_propagation();
-                cx.notify();
-            }))
+            .on_key_down(cx.listener(Self::on_key))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| dismiss(&this.browser, cx)))
             .child(search)
             .child(grid)
-            .child(footer)
+            .child(footer);
+        input::wire(picker, &self.focus, window, cx, |p| Some(&mut p.query), Self::on_key)
+    }
+}
+
+impl<H: WebHost> EmojiPicker<H> {
+    fn on_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let key = self.query.handle(&e.keystroke, cx);
+        match key {
+            Key::Edited => {
+                self.rows = rows(&self.query.text);
+                self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+            }
+            Key::Submit => {
+                let first = self.rows.iter().find_map(|r| match r {
+                    Row::Cells(list) => list.first().map(|e| e.glyph),
+                    Row::Heading(_) => None,
+                });
+                if let Some(glyph) = first {
+                    self.pick(glyph, cx);
+                }
+            }
+            Key::Cancel => dismiss(&self.browser, cx),
+            _ => {}
+        }
+        if key != Key::Text {
+            cx.stop_propagation();
+        }
+        cx.notify();
     }
 }
 

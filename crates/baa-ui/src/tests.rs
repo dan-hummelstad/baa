@@ -81,6 +81,39 @@ fn command_bar_opens_tabs_and_creates_pages(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn enter_while_composing_in_the_command_bar_commits_and_stays(cx: &mut TestAppContext) {
+    use gpui::InputHandler;
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("wiki ");
+    let mut ime = crate::input::handler(&b, Browser::input_field, Browser::on_input_key);
+    cx.update(|window, cx| ime.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx));
+    cx.simulate_keystrokes("enter");
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().map(|b| b.field.text.as_str()), Some("wiki にほん")));
+    assert!(urls(&b, Zone::Today, cx).is_empty());
+    cx.simulate_keystrokes("enter");
+    assert_eq!(urls(&b, Zone::Today, cx), ["https://www.google.com/search?q=wiki+%E3%81%AB%E3%81%BB%E3%82%93"]);
+}
+
+#[gpui::test]
+fn edit_menu_undo_reaches_the_focused_field_and_not_the_page(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("abc");
+    cx.dispatch_action(Undo);
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().field.text, ""));
+    cx.dispatch_action(Redo);
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().field.text, "abc"));
+    cx.simulate_keystrokes("secondary-z");
+    b.read_with(cx, |b, _| assert_eq!(b.bar.as_ref().unwrap().field.text, ""));
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| {
+        assert!(!window.is_action_available(&Undo, cx), "the page keeps ⌘Z and its own undo");
+    });
+}
+
+#[gpui::test]
 fn address_mode_navigates_in_place(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");

@@ -455,7 +455,7 @@ pub(crate) fn on_key<H: WebHost>(
         Key::Down => bar.selected = (bar.selected + 1).min(count.saturating_sub(1)),
         Key::Cancel => this.close_overlays(window, cx),
         Key::Submit => submit(this, None, window, cx),
-        Key::Ignored => {}
+        Key::Ignored | Key::Text => {}
     }
 }
 

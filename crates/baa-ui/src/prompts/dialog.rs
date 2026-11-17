@@ -79,37 +79,48 @@ impl<H: WebHost> Browser<H> {
         self.asks.get(&self.active_tab()?)?.dialog.as_ref()
     }
 
-    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    /// The text box keys type into: the prompt's answer, or the focused auth field.
+    pub(crate) fn dialog_field(&mut self) -> Option<&mut TextField> {
+        let ask = self.active_tab().and_then(|id| self.asks.get_mut(&id))?.dialog.as_mut()?;
+        match ask.dialog.kind {
+            DialogKind::Auth if ask.on_password => Some(&mut ask.password),
+            DialogKind::Auth | DialogKind::Prompt => Some(&mut ask.field),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> Key {
         let Some(ask) = self
             .active_tab()
             .and_then(|id| self.asks.get_mut(&id))
             .and_then(|a| a.dialog.as_mut())
         else {
-            return;
+            return Key::Ignored;
         };
         let kind = ask.dialog.kind;
         let auth = kind == DialogKind::Auth;
         if event.keystroke.key == "space" && !event.is_held && kind != DialogKind::Prompt && !auth && !ask.dialog.check_label.is_empty() {
             ask.checked = !ask.checked;
             cx.notify();
-            return;
+            return Key::Ignored;
         }
         // Tab (not → at the end, which the field also reports as Complete) moves between auth fields.
         if auth && (event.keystroke.key == "tab" || matches!(event.keystroke.key.as_str(), "up" | "down")) {
             ask.on_password = !ask.on_password;
             cx.notify();
-            return;
+            return Key::Ignored;
         }
-        let mut scratch = TextField::default();
-        let field = match kind {
-            DialogKind::Auth if ask.on_password => &mut ask.password,
-            DialogKind::Auth | DialogKind::Prompt => &mut ask.field,
-            _ => &mut scratch,
+        let key = match self.dialog_field() {
+            Some(field) => field.handle(&event.keystroke, cx),
+            None => match TextField::default().handle(&event.keystroke, cx) {
+                Key::Text => Key::Ignored,
+                k => k,
+            },
         };
         // A held key repeats into whatever appears next, and a risky dialog (open an
         // app, install an extension) is never accepted from the keyboard.
         let risky = matches!(kind, DialogKind::ExternalProtocol | DialogKind::ExtensionInstall);
-        match field.handle(&event.keystroke, cx) {
+        match key {
             Key::Submit | Key::Cancel if event.is_held => {}
             Key::Submit if risky => {}
             Key::Submit => self.answer_dialog(true, window, cx),
@@ -117,6 +128,7 @@ impl<H: WebHost> Browser<H> {
             Key::Edited => cx.notify(),
             _ => {}
         }
+        key
     }
 
     pub(crate) fn toggle_dialog_check(&mut self, cx: &mut Context<Self>) {

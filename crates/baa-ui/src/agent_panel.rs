@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::{
     browser::{cut_left, host_of, shadow, tab_title, Browser},
     icons::icon,
-    input::{Key, TextField},
+    input::{self, Key, TextField},
     library::{ink_mid, ink_soft, raised, Section},
     markdown,
     settings::Tab,
@@ -977,24 +977,22 @@ impl<H: WebHost> Browser<H> {
                 )
         };
 
-        Some(
-            div()
-                .id("agent-panel")
-                .debug_selector(|| "agent-panel-body".into())
-                .relative()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_col()
-                .track_focus(&focus)
-                .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| this.on_panel_key(e, window, cx)))
-                .child(header)
-                .child(transcript)
-                .child(foot)
-                .children(switcher)
-                .into_any_element(),
-        )
+        let panel = div()
+            .id("agent-panel")
+            .debug_selector(|| "agent-panel-body".into())
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .track_focus(&focus)
+            .on_key_down(cx.listener(Self::on_panel_key))
+            .child(header)
+            .child(transcript)
+            .child(foot)
+            .children(switcher);
+        Some(input::wire(panel, &focus, window, cx, |b| Some(&mut b.agent.panel.field), Self::on_panel_key).into_any_element())
     }
 }
 

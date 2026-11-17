@@ -1,16 +1,27 @@
 //! Single-line text field for every text box in the UI. gpui ships no text
-//! input, so keys are applied by hand.
-// ponytail: no IME or undo here. Upgrade to an `EntityInputHandler` when CJK input matters.
+//! input, so command keys are applied by hand; typed text comes in through the
+//! platform's input method (`ime`).
 
-use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
+mod ime;
+
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+    rc::Rc,
+    time::Duration,
+};
 
 use gpui::{
     canvas, div, fill, prelude::*, pulsating_between, px, size, Animation, AnimationExt, App, Bounds,
     DispatchPhase, HighlightStyle, Hsla, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, SharedString, StyledText, TextLayout, Window,
+    Pixels, Point, SharedString, StyledText, TextLayout, UnderlineStyle, Window,
 };
 
-#[derive(Debug, PartialEq)]
+#[cfg(test)]
+pub(crate) use ime::handler;
+pub(crate) use ime::wire;
+
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Key {
     Edited,
     Submit,
@@ -20,6 +31,33 @@ pub enum Key {
     /// Tab, or → at the end: take the suggestion.
     Complete,
     Ignored,
+    /// A key that types. Its text comes back through the input method, which may
+    /// compose it with the next key, so the owner lets the key propagate.
+    Text,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Edit {
+    Typing,
+    Deleting,
+    Other,
+}
+
+struct Snap {
+    text: String,
+    caret: usize,
+    anchor: usize,
+}
+
+const UNDO_LIMIT: usize = 100;
+
+#[derive(Default)]
+pub(crate) struct History {
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    /// The last edit's kind, text length and caret: the next edit merges into its
+    /// step only if nothing moved in between.
+    run: Option<(Edit, usize, usize)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -52,8 +90,13 @@ pub struct TextField {
     pub text: String,
     /// Shared with the drawn field, so a click or drag moves it whoever owns the field.
     pub(crate) sel: Rc<Cell<Sel>>,
-    /// Draws bullets for the text (passwords).
+    /// Draws bullets for the text (passwords), and keeps it from the input method.
     pub masked: bool,
+    /// The text as last painted; the input method places its candidate window from it.
+    pub(crate) drawn: Rc<RefCell<Option<TextLayout>>>,
+    /// The input method's uncommitted text, as bytes of `text`.
+    pub(crate) marked: Option<Range<usize>>,
+    pub(crate) history: History,
 }
 
 impl TextField {
@@ -72,17 +115,97 @@ impl TextField {
         put(&self.sel, self.text.len(), caret, anchor);
     }
 
+    fn selection(&self) -> Range<usize> {
+        let (caret, anchor) = self.ends();
+        caret.min(anchor)..caret.max(anchor)
+    }
+
+    /// Valid only while the text is the one it was marked in.
+    fn marked(&self) -> Option<Range<usize>> {
+        let t = &self.text;
+        self.marked.clone().filter(|r| {
+            self.sel.get().len == t.len() && r.end <= t.len() && t.is_char_boundary(r.start) && t.is_char_boundary(r.end)
+        })
+    }
+
+    /// A byte index into the text as drawn: a bullet is 3 bytes.
+    fn shown(&self, i: usize) -> usize {
+        if self.masked { self.text[..i].chars().count() * 3 } else { i }
+    }
+
     fn replace(&mut self, r: Range<usize>, with: &str) {
         self.text.replace_range(r.clone(), with);
         let at = r.start + with.len();
         self.set(at, at);
     }
 
+    /// `replace` as an undo step; typing and single deletes join the step before.
+    fn edit(&mut self, kind: Edit, r: Range<usize>, with: &str) {
+        let (caret, anchor) = self.ends();
+        let merge = kind != Edit::Other && caret == anchor && self.history.run == Some((kind, self.text.len(), caret));
+        if !merge {
+            self.checkpoint();
+        }
+        self.replace(r, with);
+        self.history.run = Some((kind, self.text.len(), self.ends().0));
+    }
+
+    fn checkpoint(&mut self) {
+        let (caret, anchor) = self.ends();
+        let h = &mut self.history;
+        h.redo.clear();
+        if h.undo.last().is_some_and(|s| s.text == self.text) {
+            h.undo.pop();
+        }
+        h.undo.push(Snap { text: self.text.clone(), caret, anchor });
+        if h.undo.len() > UNDO_LIMIT {
+            h.undo.remove(0);
+        }
+    }
+
+    /// A composition that ended where it began leaves no step behind.
+    fn drop_empty_step(&mut self) {
+        if self.history.undo.last().is_some_and(|s| s.text == self.text) {
+            self.history.undo.pop();
+        }
+    }
+
+    fn step(&mut self, back: bool) -> bool {
+        if self.marked().is_some() {
+            return false;
+        }
+        let (caret, anchor) = self.ends();
+        let h = &mut self.history;
+        let (from, to) = if back { (&mut h.undo, &mut h.redo) } else { (&mut h.redo, &mut h.undo) };
+        let Some(s) = from.pop() else { return false };
+        to.push(Snap { text: std::mem::replace(&mut self.text, s.text), caret, anchor });
+        h.run = None;
+        self.set(s.caret, s.anchor);
+        true
+    }
+
     pub fn handle(&mut self, ks: &Keystroke, cx: &App) -> Key {
         let m = &ks.modifiers;
+        let k = ks.key.as_str();
+        if k == ime::EDITED {
+            return Key::Edited;
+        }
+        if let Some(r) = self.marked() {
+            self.marked = None;
+            match k {
+                // Enter and Esc end the composition; they never submit or close past it.
+                "enter" => return Key::Edited,
+                "escape" => {
+                    self.replace(r, "");
+                    self.drop_empty_step();
+                    return Key::Edited;
+                }
+                _ => {}
+            }
+        }
         let (caret, anchor) = self.ends();
         let sel = caret.min(anchor)..caret.max(anchor);
-        let (s, len, k) = (self.text.as_str(), self.text.len(), ks.key.as_str());
+        let (s, len) = (self.text.as_str(), self.text.len());
         match k {
             "enter" => Key::Submit,
             "escape" => Key::Cancel,
@@ -112,6 +235,7 @@ impl TextField {
                 Key::Edited
             }
             "backspace" | "delete" => {
+                let one = sel.is_empty() && !m.secondary() && !m.alt;
                 let r = if !sel.is_empty() {
                     sel
                 } else if k == "backspace" {
@@ -119,8 +243,11 @@ impl TextField {
                 } else {
                     caret..if m.alt { word_right(s, caret) } else { next(s, caret) }
                 };
-                self.replace(r, "");
+                self.edit(if one { Edit::Deleting } else { Edit::Other }, r, "");
                 Key::Edited
+            }
+            "z" if m.secondary() => {
+                if self.step(!m.shift) { Key::Edited } else { Key::Ignored }
             }
             "a" if m.secondary() => {
                 self.set(len, 0);
@@ -131,22 +258,25 @@ impl TextField {
                 if k == "c" {
                     return Key::Ignored;
                 }
-                self.replace(sel, "");
+                self.edit(Edit::Other, sel, "");
                 Key::Edited
             }
             "v" if m.secondary() => {
                 let Some(paste) = cx.read_from_clipboard().and_then(|c| c.text()) else {
                     return Key::Ignored;
                 };
-                self.replace(sel, paste.lines().next().unwrap_or_default());
+                self.edit(Edit::Other, sel, paste.lines().next().unwrap_or_default());
                 Key::Edited
             }
             _ if m.platform || m.control => Key::Ignored,
-            _ => match ks.key_char.clone() {
-                Some(c) => {
-                    self.replace(sel, &c);
+            // A secret never reaches the input method: its keys type directly.
+            _ => match &ks.key_char {
+                Some(c) if self.masked => {
+                    let c = c.clone();
+                    self.edit(Edit::Typing, sel, &c);
                     Key::Edited
                 }
+                Some(_) => Key::Text,
                 None => Key::Ignored,
             },
         }
@@ -187,8 +317,6 @@ impl TextField {
     ) -> impl IntoElement {
         let empty = self.text.is_empty();
         let (caret, anchor) = self.ends();
-        // A bullet is 3 bytes in the drawn string.
-        let shown_ix = |i: usize| if self.masked { self.text[..i].chars().count() * 3 } else { i };
         let shown: SharedString = if empty {
             placeholder.into()
         } else if self.masked {
@@ -196,12 +324,22 @@ impl TextField {
         } else {
             self.text.clone().into()
         };
-        let (c, a) = (shown_ix(caret), shown_ix(anchor));
-        let pick = HighlightStyle { background_color: Some(selection), ..Default::default() };
-        let styled = StyledText::new(shown).with_highlights((c != a).then(|| (c.min(a)..c.max(a), pick)));
+        let (c, a) = (self.shown(caret), self.shown(anchor));
+        let highlight = match self.marked() {
+            Some(r) => {
+                let line = UnderlineStyle { thickness: px(1.), color: Some(text), wavy: false };
+                Some((r, HighlightStyle { underline: Some(line), ..Default::default() }))
+            }
+            None => {
+                let pick = HighlightStyle { background_color: Some(selection), ..Default::default() };
+                (c != a).then(|| (c.min(a)..c.max(a), pick))
+            }
+        };
+        let styled = StyledText::new(shown).with_highlights(highlight);
         let hit = Hit {
             layout: styled.layout().clone(),
             state: self.sel.clone(),
+            drawn: self.drawn.clone(),
             src: self.text.clone().into(),
             masked: self.masked,
         };
@@ -244,6 +382,7 @@ impl TextField {
 struct Hit {
     layout: TextLayout,
     state: Rc<Cell<Sel>>,
+    drawn: Rc<RefCell<Option<TextLayout>>>,
     src: SharedString,
     masked: bool,
 }
@@ -283,6 +422,8 @@ impl Hit {
         let hit = self.clone();
         canvas(|_, _, _| {}, move |bounds: Bounds<Pixels>, _, window, cx| {
             let layout = &hit.layout;
+            // Stored only once painted: an unmeasured layout panics when asked for positions.
+            *hit.drawn.borrow_mut() = Some(layout.clone());
             let mut p = layout.position_for_index(caret);
             if let (false, Some(p)) = (wrap, p.as_mut()) {
                 // ponytail: the text follows the caret a frame late; the caret itself is on time.
@@ -364,10 +505,8 @@ mod tests {
         field.handle(&Keystroke::parse(s).unwrap(), cx)
     }
 
-    fn typed(field: &mut TextField, c: &str, cx: &App) {
-        let mut ks = Keystroke::parse("b").unwrap();
-        ks.key_char = Some(c.into());
-        field.handle(&ks, cx);
+    fn typed(field: &mut TextField, c: &str, _: &App) {
+        field.replace_text_in_range(None, c);
     }
 
     #[gpui::test]
@@ -440,6 +579,48 @@ mod tests {
             key(&mut f, "shift-home", cx);
             key(&mut f, "backspace", cx);
             assert_eq!(f.text, "");
+        });
+    }
+
+    #[gpui::test]
+    fn undo_takes_back_a_typed_run_a_paste_and_a_run_of_deletes(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut f = TextField::default();
+            for c in ["a", "b", "c"] {
+                typed(&mut f, c, cx);
+            }
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("XY".into()));
+            key(&mut f, "cmd-v", cx);
+            key(&mut f, "backspace", cx);
+            key(&mut f, "backspace", cx);
+            assert_eq!(f.text, "abc");
+            key(&mut f, "cmd-z", cx);
+            assert_eq!(f.text, "abcXY");
+            key(&mut f, "cmd-z", cx);
+            assert_eq!(f.text, "abc");
+            key(&mut f, "cmd-z", cx);
+            assert_eq!(f.text, "");
+            assert_eq!(key(&mut f, "cmd-z", cx), Key::Ignored);
+            key(&mut f, "shift-cmd-z", cx);
+            assert_eq!((f.text.as_str(), f.ends()), ("abc", (3, 3)));
+            key(&mut f, "left", cx);
+            typed(&mut f, "!", cx);
+            assert_eq!(f.text, "ab!c");
+            assert_eq!(key(&mut f, "shift-cmd-z", cx), Key::Ignored, "an edit drops what was undone");
+            typed(&mut f, "?", cx);
+            key(&mut f, "cmd-z", cx);
+            assert_eq!(f.text, "abc", "typing after moving the caret is its own step");
+        });
+    }
+
+    #[gpui::test]
+    fn a_cut_is_one_step(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut f = TextField::selected("cut me".into());
+            key(&mut f, "cmd-x", cx);
+            assert_eq!(f.text, "");
+            key(&mut f, "cmd-z", cx);
+            assert_eq!((f.text.as_str(), f.ends()), ("cut me", (6, 0)));
         });
     }
 

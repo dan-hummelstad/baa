@@ -2,7 +2,7 @@
 
 use baa_model::Store;
 use baa_web::{Dialog, DialogAnswer, DialogKind, PageEvent};
-use gpui::{Entity, Keystroke, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{Entity, InputHandler, Keystroke, Modifiers, TestAppContext, VisualTestContext};
 
 use crate::{mock::{MockHost, MockPage}, prompts::{wording, ACTIVATION_DELAY}, Browser};
 
@@ -196,4 +196,64 @@ fn prompts_stay_legible_in_every_look() {
             assert!(contrast(WARN[look], under[look]) > 4.5, "a warning, look {look}");
         }
     }
+}
+
+fn ime(b: &Entity<Browser<MockHost>>) -> impl InputHandler {
+    crate::input::handler(b, Browser::input_field, Browser::on_input_key)
+}
+
+#[gpui::test]
+fn enter_while_composing_a_prompt_answer_commits_it_and_does_not_answer(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(30, DialogKind::Prompt))));
+    cx.run_until_parked();
+    let mut ime = ime(&b);
+    cx.update(|window, cx| {
+        ime.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx);
+        assert_eq!(ime.marked_text_range(window, cx), Some(0..3));
+    });
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| {
+        let b = b.read(cx);
+        assert_eq!(b.active_dialog().unwrap().field.text, "にほん");
+        assert!(b.input_focus.is_focused(window), "the prompt keeps the keyboard");
+        assert_eq!(ime.marked_text_range(window, cx), None);
+    });
+    cx.simulate_keystrokes("enter");
+    assert!(answered(&p, cx).is_empty(), "OK still waits out the activation delay");
+    cx.executor().advance_clock(ACTIVATION_DELAY);
+    cx.update(|window, cx| ime.replace_and_mark_text_in_range(None, "ご", None, window, cx));
+    cx.simulate_keystrokes("enter");
+    assert!(answered(&p, cx).is_empty());
+    cx.simulate_keystrokes("enter");
+    let want = DialogAnswer { ok: true, text: "にほんご".into(), ..Default::default() };
+    assert_eq!(answered(&p, cx), [(30, want)]);
+}
+
+#[gpui::test]
+fn the_input_method_reaches_no_risky_dialog_and_no_password(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(31, DialogKind::ExternalProtocol))));
+    cx.run_until_parked();
+    cx.executor().advance_clock(ACTIVATION_DELAY);
+    let mut ime = ime(&b);
+    cx.update(|window, cx| {
+        assert!(!ime.accepts_text_input(window, cx));
+        ime.replace_and_mark_text_in_range(None, "x", None, window, cx);
+        ime.replace_text_in_range(None, "\n", window, cx);
+    });
+    assert!(answered(&p, cx).is_empty());
+    cx.simulate_keystrokes("escape");
+
+    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(32, DialogKind::Auth))));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("pw");
+    cx.update(|window, cx| {
+        assert!(!ime.accepts_text_input(window, cx), "a password is typed without the input method");
+        ime.replace_and_mark_text_in_range(None, "ö", None, window, cx);
+        assert_eq!(ime.marked_text_range(window, cx), None, "never shown composing in the clear");
+        assert_eq!(ime.text_for_range(0..3, &mut None, window, cx), None);
+        assert_eq!(b.read(cx).active_dialog().unwrap().password.text, "pwö");
+    });
 }

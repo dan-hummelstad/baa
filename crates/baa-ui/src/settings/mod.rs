@@ -32,7 +32,7 @@ pub(crate) use rows::{Row, Tab};
 use crate::{
     browser::{shadow, Browser},
     icons::icon,
-    input::{Key, TextField},
+    input::{self, Key, TextField},
     motion::{Feel, Motion},
     theme::{ascii, fade, mix, r, surface, Theme},
 };
@@ -960,7 +960,7 @@ impl<H: WebHost> Render for SettingsView<H> {
             .flex_col()
             .child(div().pt(px(16.)).pb(px(4.)).px(px(10.)).flex_none().text_size(px(20.)).font_weight(gpui::FontWeight::SEMIBOLD).child(title))
             .children(items.into_iter().map(|(_, el)| el));
-        div()
+        let root = div()
             .key_context("Settings")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -975,6 +975,8 @@ impl<H: WebHost> Render for SettingsView<H> {
             .child(self.toolbar(cx))
             .child(body)
             .children(sheet)
-            .children(self.picker.as_ref().map(|p| p.render()))
+            .children(self.picker.as_ref().map(|p| p.render()));
+        let focus = self.focus.clone();
+        input::wire(root, &focus, window, cx, |s| Some(s.field_mut(s.active)), Self::on_key)
     }
 }
