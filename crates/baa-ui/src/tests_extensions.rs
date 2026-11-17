@@ -116,11 +116,17 @@ fn popups(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Vec<Stri
     b.read_with(cx, |b, _| b.host.popups.borrow().clone())
 }
 
+fn listed(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) {
+    set_actions(b, None, "", cx);
+    changed(b, None, cx);
+}
+
 #[gpui::test]
 fn the_activate_shortcut_opens_the_popup(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
     b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", cmd_shift, true), command("U", cmd_shift, false)]);
+    listed(&b, cx);
     cx.simulate_keystrokes("cmd-shift-u");
     assert!(popups(&b, cx).is_empty(), "a named command is the engine's");
     cx.simulate_keystrokes("cmd-shift-y");
@@ -138,14 +144,34 @@ fn a_shifted_digit_shortcut_fires(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
     b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("1", cmd_shift, true)]);
+    listed(&b, cx);
     cx.simulate_keystrokes("cmd-!");
     assert_eq!(popups(&b, cx), [POPUP]);
+}
+
+#[gpui::test]
+fn the_activate_shortcut_ignores_key_repeat(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", Modifiers::command(), true)]);
+    listed(&b, cx);
+    let keystroke = gpui::Keystroke::parse("cmd-y").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent { keystroke, is_held: true, prefer_character_input: false });
+    assert!(popups(&b, cx).is_empty());
+}
+
+#[gpui::test]
+fn the_activate_shortcut_of_an_extension_without_an_action_does_nothing(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", Modifiers::command(), true)]);
+    cx.simulate_keystrokes("cmd-y");
+    assert!(popups(&b, cx).is_empty(), "the engine lists no action for a disabled extension");
 }
 
 #[gpui::test]
 fn an_activate_shortcut_that_is_baas_does_nothing(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("T", Modifiers::command(), true)]);
+    listed(&b, cx);
     cx.simulate_keystrokes("cmd-t");
     assert!(popups(&b, cx).is_empty());
     b.read_with(cx, |b, _| assert!(b.bar.is_some(), "baa's own binding ran"));
@@ -155,6 +181,7 @@ fn an_activate_shortcut_that_is_baas_does_nothing(cx: &mut TestAppContext) {
 fn the_activate_shortcut_waits_for_a_prompt(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("Y", Modifiers::command(), true)]);
+    listed(&b, cx);
     let page = b.read_with(cx, |b, _| b.active_page().unwrap().clone());
     page.update(cx, |_, cx| {
         cx.emit(PageEvent::PermissionRequested { id: 1, origin: "https://a.example".into(), kinds: vec![baa_web::Permission::Camera] })

@@ -138,14 +138,14 @@ impl<H: WebHost> Browser<H> {
     /// click on its action. One that is also baa's never fires.
     pub(super) fn on_extension_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
-        if !(ks.modifiers.platform || ks.modifiers.control) || self.prompt_shown() {
+        if event.is_held || !(ks.modifiers.platform || ks.modifiers.control) || self.prompt_shown() {
             return;
         }
         let Some(profile) = self.active_space().map(|s| s.profile) else { return };
         let id = self.host.extension_commands(profile).into_iter().find_map(|c| {
             let stroke = command_keystroke(&c).filter(|s| c.action && s.modifiers == ks.modifiers && s.key == ks.key)?;
-            let enabled = self.extensions.iter().any(|e| e.id == c.extension_id) && self.extension_enabled(&c.extension_id);
-            (enabled && baa_binding(&stroke, cx).is_none()).then_some(c.extension_id)
+            // The engine lists only enabled extensions' actions.
+            (self.actions.contains_key(&c.extension_id) && baa_binding(&stroke, cx).is_none()).then_some(c.extension_id)
         });
         if let Some(id) = id {
             cx.stop_propagation();
