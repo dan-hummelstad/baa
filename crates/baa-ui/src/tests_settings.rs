@@ -712,16 +712,12 @@ fn extensions_changed_rereads_that_spaces_list(cx: &mut TestAppContext) {
 
     // An update disabled it for more permissions.
     let grown = ExtensionInfo { id: "grown".into(), name: "Grown".into(), needs_approval: true, ..Default::default() };
-    let (list, profile) = b.read_with(&s, |b, _| {
+    let (source, profile) = b.read_with(&s, |b, _| {
         *b.host.extension_details.borrow_mut() = vec![grown];
         (b.host.extensions_changed.clone(), b.active_space().unwrap().profile)
     });
-    list.update(&mut s, |list, cx| {
-        list.0.push(profile);
-        cx.notify();
-    });
+    source.update(&mut s, |_, cx| cx.emit(profile));
     s.run_until_parked();
     assert!(b.read_with(&s, |b, _| b.extensions_page.list.as_ref().is_some_and(|l| l.len() == 1 && l[0].needs_approval)));
-    assert!(list.read_with(&s, |list, _| list.0.is_empty()), "cleared once seen");
     assert!(drawn(&mut s, "ext-review"));
 }

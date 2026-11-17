@@ -250,11 +250,12 @@ pub struct ChromeTabs(pub Vec<String>);
 #[derive(Default)]
 pub struct SignIns(pub Vec<(ProfileId, Account)>);
 
-/// Spaces whose extensions changed (installed, removed, enabled, disabled, updated, or
-/// disabled by an update that asks for more), oldest first, each once. Never an
-/// incognito profile. List them again with [`WebHost::extension_details`].
-#[derive(Default)]
-pub struct ExtensionsChanged(pub Vec<ProfileId>);
+/// Emits the profile whose extensions changed (installed, removed, enabled, disabled,
+/// updated, or disabled by an update that asks for more). Never an incognito profile.
+/// List them again with [`WebHost::extension_details`].
+pub struct ExtensionsChanged;
+
+impl EventEmitter<ProfileId> for ExtensionsChanged {}
 
 /// Every download any page started this session, oldest first.
 #[derive(Default)]
@@ -408,7 +409,7 @@ pub trait WebHost: 'static {
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
     /// Observe it and take them.
     fn sign_ins(&self) -> Entity<SignIns>;
-    /// Observe it and take them.
+    /// Subscribe to it.
     fn extensions_changed(&self) -> Entity<ExtensionsChanged>;
     /// From now on each of `accounts` is signed in (or out) alike in every Space but
     /// incognito ones, including Spaces opened later; the rest go their own way. Where

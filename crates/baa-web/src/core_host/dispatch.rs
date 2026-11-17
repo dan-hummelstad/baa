@@ -315,13 +315,7 @@ impl Dispatch {
         if super::profiles::is_ephemeral(id) {
             return;
         }
-        self.queue(move |cx| {
-            tell(&self.extensions_changed, cx, |list, _| {
-                if !list.0.contains(&id) {
-                    list.0.push(id);
-                }
-            })
-        });
+        self.queue(move |cx| tell(&self.extensions_changed, cx, |_, cx| cx.emit(id)));
     }
 
     /// A menu is open in the page; a page that is gone gets it closed.

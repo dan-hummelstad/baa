@@ -250,7 +250,7 @@ impl MockHost {
             copies: RefCell::default(),
             chrome_tabs: cx.new(|_| baa_web::ChromeTabs::default()),
             sign_ins: cx.new(|_| baa_web::SignIns::default()),
-            extensions_changed: cx.new(|_| baa_web::ExtensionsChanged::default()),
+            extensions_changed: cx.new(|_| baa_web::ExtensionsChanged),
             shares: RefCell::default(),
             extension_details: RefCell::default(),
             extension_changes: RefCell::default(),

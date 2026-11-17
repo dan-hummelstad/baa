@@ -62,12 +62,12 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    pub(crate) fn extensions_changed(&mut self, profiles: &[ProfileId], cx: &mut Context<Self>) {
-        let named = |b: &Self, space: SpaceId| b.session.space(space).is_some_and(|s| profiles.contains(&s.profile));
+    pub(crate) fn extensions_changed(&mut self, profile: ProfileId, cx: &mut Context<Self>) {
+        let named = |b: &Self, space: SpaceId| b.session.space(space).is_some_and(|s| s.profile == profile);
         if let Some(space) = self.extensions_page.space.filter(|s| named(self, *s)) {
             self.refresh_extensions_for(space, cx);
         }
-        if let Some(active) = self.active_space().filter(|s| profiles.contains(&s.profile)) {
+        if let Some(active) = self.active_space().filter(|s| s.profile == profile) {
             self.extensions = self.host.extensions(active.profile);
             cx.notify();
         }

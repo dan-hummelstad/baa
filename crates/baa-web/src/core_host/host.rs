@@ -96,7 +96,7 @@ impl CoreWebHost {
         *dispatch.downloads.borrow_mut() = Some(downloads.downgrade());
         let sign_ins = cx.new(|_| SignIns::default());
         *dispatch.sign_ins.borrow_mut() = Some(sign_ins.downgrade());
-        let extensions_changed = cx.new(|_| ExtensionsChanged::default());
+        let extensions_changed = cx.new(|_| ExtensionsChanged);
         *dispatch.extensions_changed.borrow_mut() = Some(extensions_changed.downgrade());
         *dispatch.app.borrow_mut() = Some(cx.to_async());
         Self {

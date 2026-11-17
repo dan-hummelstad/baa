@@ -402,15 +402,9 @@ impl<H: WebHost> Browser<H> {
                 this.signed_in(sign_ins, cx);
             }
         }));
-        // Read, not taken: each window keeps its own copy of a Space's extensions. Cleared once
-        // every window has seen it.
-        let extensions_changed = (!private).then(|| cx.observe(&host.extensions_changed(), |this: &mut Self, list, cx| {
-            let profiles = list.read(cx).0.clone();
-            if !profiles.is_empty() {
-                cx.defer(move |cx| list.update(cx, |list, _| list.0.clear()));
-                this.extensions_changed(&profiles, cx);
-            }
-        }));
+        let extensions_changed = (!private).then(|| {
+            cx.subscribe(&host.extensions_changed(), |this: &mut Self, _, profile: &baa_model::ProfileId, cx| this.extensions_changed(*profile, cx))
+        });
         let saved_downloads = store.as_ref().and_then(|s| s.downloads().ok()).unwrap_or_default();
         let sidebar_open = !session.sidebar_collapsed;        let mut this = Self {
             host,

@@ -52,24 +52,26 @@ fn extension_changes_are_forwarded_with_their_codes(cx: &mut TestAppContext) {
     );
 }
 
-fn changed(env: &Env, cx: &mut TestAppContext) -> Vec<ProfileId> {
-    let list = env.host.extensions_changed();
-    cx.run_until_parked();
-    list.update(cx, |list, _| std::mem::take(&mut list.0))
+fn changes(env: &Env, cx: &mut TestAppContext) -> Rc<RefCell<Vec<ProfileId>>> {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let source = env.host.extensions_changed();
+    cx.update(|cx| cx.subscribe(&source, move |_, profile: &ProfileId, _| sink.borrow_mut().push(*profile)).detach());
+    seen
 }
 
 #[gpui::test]
-fn a_change_of_a_spaces_extensions_reaches_the_ui_once_per_space(cx: &mut TestAppContext) {
+fn a_change_of_a_spaces_extensions_reaches_the_ui_with_its_profile(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     env.page(1, "https://a.test", cx);
     env.page(2, "https://b.test", cx);
+    let seen = changes(&env, cx);
     let (one, two) = (env.host.profile_handle(ProfileId(1)), env.host.profile_handle(ProfileId(2)));
-    for handle in [two, one, two] {
+    for handle in [two, one] {
         (env.callbacks.extensions_changed)(env.ctx(), handle);
     }
-    assert_eq!(changed(&env, cx), [ProfileId(2), ProfileId(1)]);
-    (env.callbacks.extensions_changed)(env.ctx(), one);
-    assert_eq!(changed(&env, cx), [ProfileId(1)], "taken ones come again");
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [ProfileId(2), ProfileId(1)]);
 }
 
 #[gpui::test]
@@ -77,9 +79,11 @@ fn incognito_and_unknown_profiles_report_no_extension_change(cx: &mut TestAppCon
     let env = Env::new(cx);
     let private = env.host.ephemeral_profile();
     env.page(private.0, "https://a.test", cx);
+    let seen = changes(&env, cx);
     (env.callbacks.extensions_changed)(env.ctx(), env.host.profile_handle(private));
     (env.callbacks.extensions_changed)(env.ctx(), fresh());
-    assert_eq!(changed(&env, cx), []);
+    cx.run_until_parked();
+    assert!(seen.borrow().is_empty());
 }
 
 #[gpui::test]
