@@ -73,7 +73,6 @@ fn the_committed_origin_is_its_own(cx: &mut TestAppContext) {
     let origin = |cx: &mut TestAppContext| page.read_with(cx, |page, _| page.committed_origin());
     assert_eq!(origin(cx), None, "nothing committed yet");
 
-    // A blank popup's opener wrote into it: the visible URL is the pending target's.
     let pending = State { url: "https://b.test/", origin: "null", ..Default::default() };
     env.state(tab, &pending);
     cx.run_until_parked();

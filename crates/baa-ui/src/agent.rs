@@ -827,7 +827,6 @@ impl<H: WebHost> Browser<H> {
         self.settings.claude.allowed_spaces.contains(&space) && self.session.space(space).is_some_and(|s| !s.ephemeral)
     }
 
-    /// The tab `args` names (or the active one) and its [`Self::tab_origin`].
     fn agent_tab(&self, args: &Value, cx: &App) -> Result<(TabId, String), String> {
         let id = match args.get("tab").and_then(Value::as_u64) {
             Some(n) => TabId(n),
@@ -836,8 +835,6 @@ impl<H: WebHost> Browser<H> {
         Ok((id, self.tab_origin(id, cx)?))
     }
 
-    /// If Claude may see the tab: its committed document's origin when that is usable, else
-    /// the origin of the address it would load.
     fn tab_origin(&self, id: TabId, cx: &App) -> Result<String, String> {
         let tab = self.session.tab(id).filter(|t| self.space_visible(t.space)).ok_or(NO_TAB)?;
         let saved = web_origin(&tab.url).ok_or(NOT_WEB)?;

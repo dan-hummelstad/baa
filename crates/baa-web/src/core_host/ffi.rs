@@ -26,7 +26,6 @@ pub struct TabState {
     pub muted: bool,
     pub secure: bool,
     pub crashed: bool,
-    /// Serialized; "null" when opaque. Can differ from `url`'s origin.
     pub committed_origin: *const c_char,
 }
 

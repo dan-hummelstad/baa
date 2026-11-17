@@ -63,7 +63,6 @@ pub struct MockHost {
 
 pub struct MockPage {
     pub url: RefCell<String>,
-    /// Set to split the committed document from `url`, as a pending load does; unset, it is `url`'s.
     pub committed: RefCell<Option<Option<String>>>,
     pub loading: Cell<bool>,
     pub visible: Cell<bool>,

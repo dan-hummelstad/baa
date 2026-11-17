@@ -706,7 +706,6 @@ fn extensions_changed_rereads_that_spaces_list(cx: &mut TestAppContext) {
     click(&mut s, "tab:Extensions");
     assert!(b.read_with(&s, |b, _| b.extensions_page.list.as_ref().is_some_and(|l| l.is_empty())));
 
-    // An update disabled it for more permissions.
     let grown = ExtensionInfo { id: "grown".into(), name: "Grown".into(), needs_approval: true, ..Default::default() };
     let (source, profile) = b.read_with(&s, |b, _| {
         *b.host.extension_details.borrow_mut() = vec![grown];

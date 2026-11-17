@@ -888,7 +888,6 @@ fn terminal_auto_lets_an_allowed_terminal_client_approve_its_own_acts(cx: &mut T
     assert!(b.read_with(cx, |b, _| b.agent.terminal.is_empty()));
 }
 
-/// The engine's committed document, apart from the visible URL: a load still waiting for its response.
 fn committed(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, origin: Option<&str>) {
     b.read_with(cx, |b, cx| *b.pages[&tab].0.read(cx).committed.borrow_mut() = Some(origin.map(str::to_string)));
 }
@@ -918,7 +917,6 @@ fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
         ("evaluate", json!({"script": "1"})),
     ];
 
-    // The bank is still committed while the tab already shows approved.example's pending URL.
     moved(&b, cx, tab, "https://approved.example/slow");
     loading(&b, cx, tab, true);
     for origin in [Some("https://bank.example"), None] {
@@ -934,7 +932,6 @@ fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
     assert_eq!(asks(&b, cx), 0);
     assert_eq!(evals(&b, cx, tab), 0);
 
-    // A commit elsewhere while a check runs: the act it was checking is dropped.
     for (tool, args) in &acts[..4] {
         committed(&b, cx, tab, Some("https://approved.example"));
         let rx = call(&b, cx, tool, args.clone());
@@ -945,7 +942,6 @@ fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
     }
     assert_eq!(cdp(&b, cx, tab), ["press_key a"], "no input reached the bank");
 
-    // evaluate: the commit lands while its sheet is up.
     committed(&b, cx, tab, Some("https://approved.example"));
     let rx = call(&b, cx, "evaluate", json!({"script": "document.cookie"}));
     assert_eq!(asks(&b, cx), 1);
@@ -972,7 +968,6 @@ fn navigating_away_needs_the_page_being_left_approved(cx: &mut TestAppContext) {
     let loads = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId| b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).loads.borrow().clone());
     let ask_origin = |b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext| b.read_with(cx, |b, _| b.agent.asks[0].origin.clone());
 
-    // The destination is approved; the bank the tab shows is not.
     let bank = open(&b, cx, "https://bank.example/");
     let rx = call(&b, cx, "navigate", json!({"tab": bank.0, "url": "https://approved.example/x"}));
     assert_eq!(asks(&b, cx), 1);
@@ -984,7 +979,6 @@ fn navigating_away_needs_the_page_being_left_approved(cx: &mut TestAppContext) {
     assert!(answer(&rx).unwrap().0);
     assert!(loads(&b, cx, bank).is_empty());
 
-    // Allowed on the page being left, then the destination asks for itself.
     let shop = open(&b, cx, "https://shop.example/");
     let rx = call(&b, cx, "navigate", json!({"tab": shop.0, "url": "https://new.example/"}));
     assert_eq!(ask_origin(&b, cx), "https://shop.example");
@@ -996,7 +990,6 @@ fn navigating_away_needs_the_page_being_left_approved(cx: &mut TestAppContext) {
     assert!(!answer(&rx).unwrap().0);
     assert_eq!(loads(&b, cx, shop), ["https://new.example/"]);
 
-    // A tab mid-navigation is not navigated again.
     committed(&b, cx, target, Some("https://bank.example"));
     let (refused, text) = answer(&call(&b, cx, "navigate", json!({"tab": target.0, "url": "https://approved.example/"}))).unwrap();
     assert!(refused && text.contains("loading"), "{text}");

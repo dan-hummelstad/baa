@@ -405,7 +405,6 @@ pub trait WebHost: 'static {
     fn chrome_tabs(&self) -> Entity<ChromeTabs>;
     /// Observe it and take them.
     fn sign_ins(&self) -> Entity<SignIns>;
-    /// Subscribe to it.
     fn extensions_changed(&self) -> Entity<ExtensionsChanged>;
     /// From now on each of `accounts` is signed in (or out) alike in every Space but
     /// incognito ones, including Spaces opened later; the rest go their own way. Where
@@ -496,8 +495,6 @@ pub struct ExtensionInfo {
     pub options: Option<String>,
     /// Loaded from a folder (developer mode); only these reload.
     pub unpacked: bool,
-    /// Disabled because it asks for more than the user approved (an update with new
-    /// permissions): [`ExtensionChange::Enable`]`(true)` shows the new permissions first.
     pub needs_approval: bool,
 }
 
