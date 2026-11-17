@@ -93,6 +93,16 @@ pub fn post_key(window_number: isize, key_code: u16, chars: &str, command: bool)
 
 /// Queues a left click (with ⌘ held when `command`) at (`x`, `y`) points from `view`'s top left.
 pub fn post_click(view: *mut AnyObject, x: f64, y: f64, command: bool, right: bool) {
+    // NSEventTypeLeftMouseDown/Up, or the right ones (3, 4).
+    post_mouse(view, x, y, if right { &[3, 4] } else { &[1, 2] }, if command { 1 << 20 } else { 0 });
+}
+
+/// Queues a mouse move (NSEventTypeMouseMoved) to (`x`, `y`) points from `view`'s top left.
+pub fn post_move(view: *mut AnyObject, x: f64, y: f64) {
+    post_mouse(view, x, y, &[5], 0);
+}
+
+fn post_mouse(view: *mut AnyObject, x: f64, y: f64, kinds: &[usize], flags: usize) {
     unsafe {
         let bounds: CGRect = msg_send![view, bounds];
         let flipped: Bool = msg_send![view, isFlipped];
@@ -103,13 +113,12 @@ pub fn post_click(view: *mut AnyObject, x: f64, y: f64, command: bool, right: bo
         let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
         let now: f64 = msg_send![info, systemUptime];
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        // NSEventTypeLeftMouseDown/Up, or the right ones (3, 4).
-        for kind in if right { [3usize, 4] } else { [1, 2] } {
+        for &kind in kinds {
             let event: *mut AnyObject = msg_send![
                 class!(NSEvent),
                 mouseEventWithType: kind,
                 location: point,
-                modifierFlags: if command { 1usize << 20 } else { 0 },
+                modifierFlags: flags,
                 timestamp: now,
                 windowNumber: number,
                 context: std::ptr::null_mut::<AnyObject>(),

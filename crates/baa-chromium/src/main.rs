@@ -516,6 +516,33 @@ mod app {
         );
     }
 
+    extern "C" fn visit_action(_: *mut c_void, a: *const ffi::Action) {
+        let a = unsafe { &*a };
+        eprintln!(
+            "baa: action ext={} badge=\"{}\" title=\"{}\" badge_rgba={:08x} text_rgba={:08x} enabled={} popup={}",
+            text(a.extension_id),
+            text(a.badge_text),
+            text(a.title),
+            a.badge_rgba,
+            a.text_rgba,
+            a.enabled as u8,
+            a.has_popup as u8
+        );
+    }
+
+    extern "C" fn visit_command(_: *mut c_void, c: *const ffi::Command) {
+        let c = unsafe { &*c };
+        eprintln!(
+            "baa: command ext={} name=\"{}\" key=\"{}\" mods={} action={} global={}",
+            text(c.extension_id),
+            text(c.name),
+            text(c.key),
+            c.modifiers,
+            c.action as u8,
+            c.global as u8
+        );
+    }
+
     extern "C" fn visit_rule(ctx: *mut c_void, pattern: *const c_char, state: c_int) {
         let state = ["ask", "allow", "block", "session"].get(state as usize).copied().unwrap_or("?");
         // SAFETY: ctx is the Vec the `rules` step passes.
@@ -540,7 +567,8 @@ mod app {
     ///   eval <js> | geval <js> (with a user gesture) | find <text> | zoom <f>
     ///   cdpeval <js> (Runtime.evaluate through baa_tab_cdp) | media <BAA_MEDIA_* bit>
     ///   mute | unmute | print | activate | focus | close | escape | screenshot | sleep <ms> | quit
-    ///   click | cmdclick | rclick <x> <y> (real NSEvents at points from the tab's top left)
+    ///   click | cmdclick | rclick | hover <x> <y> (real NSEvents at points from the tab's top left)
+    ///   actions (of the current tab) | commands | shortcut <id> <name> <mods> [<key>] | runcmd <id> <name>
     ///   tab <1|2|e> <url> (new tab in space-1, space-2, an ephemeral profile)
     ///   menu <x> <y> | devtools <side 0-2> [inspect <x> <y>] | devtools-window | popup <ext-id> | extensions
     ///   ext <id> enable|disable|remove|access <n> | site <kind> <url> [ask|allow|block]
@@ -640,6 +668,27 @@ mod app {
                     "extensions" => {
                         let n = (core.profile_extensions)(profile_for("1"), visit_extension, std::ptr::null_mut());
                         eprintln!("baa: extensions count={n}");
+                    }
+                    "actions" => {
+                        let n = (core.profile_extension_actions)(profile_for("1"), tab, visit_action, std::ptr::null_mut());
+                        eprintln!("baa: actions count={n}");
+                    }
+                    "commands" => {
+                        let n = (core.profile_extension_commands)(profile_for("1"), visit_command, std::ptr::null_mut());
+                        eprintln!("baa: commands count={n}");
+                    }
+                    // shortcut <id> <name> <BAA_MOD_* bits> [<key>]; no key clears it
+                    "shortcut" => {
+                        let mut p = arg.splitn(4, ' ');
+                        let (id, name, mods) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
+                        let key = c(p.next().unwrap_or(""));
+                        let ok = (core.extension_set_shortcut)(profile_for("1"), c(id).as_ptr(), c(name).as_ptr(), key.as_ptr(), mods.parse().unwrap());
+                        eprintln!("baa: shortcut {arg} -> {ok}");
+                    }
+                    "runcmd" => {
+                        let (id, name) = arg.split_once(' ').unwrap();
+                        let ok = (core.extension_run_command)(profile_for("1"), c(id).as_ptr(), c(name).as_ptr());
+                        eprintln!("baa: runcmd {arg} -> {ok}");
                     }
                     // ext <id> enable|disable|remove|access <n>
                     "ext" => {
@@ -778,11 +827,16 @@ mod app {
                         let _ = std::process::Command::new("screencapture").args(["-x", &file]).status();
                         eprintln!("script: screenshot {file}");
                     }
-                    "click" | "cmdclick" | "rclick" => {
+                    "click" | "cmdclick" | "rclick" | "hover" => {
                         let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
                             let (x, y) = arg.split_once(' ').unwrap();
-                            harness::post_click(s.view.cast(), x.parse().unwrap(), y.parse().unwrap(), verb == "cmdclick", verb == "rclick");
+                            let (x, y) = (x.parse().unwrap(), y.parse().unwrap());
+                            if verb == "hover" {
+                                harness::post_move(s.view.cast(), x, y);
+                            } else {
+                                harness::post_click(s.view.cast(), x, y, verb == "cmdclick", verb == "rclick");
+                            }
                         }
                     }
                     "tab" => {
