@@ -634,6 +634,7 @@ BAA_EXPORT int baa_profile_extension_commands(BaaProfile* profile,
 // profile with no window yet, an extension that is not enabled (or not
 // allowed in this incognito profile), a command it does not declare, or an
 // action's command (use baa_extension_popup).
+// For the test harness (its runcmd verb); the app never calls it.
 BAA_EXPORT bool baa_extension_run_command(BaaProfile* profile,
                                           const char* extension_id,
                                           const char* command);

@@ -32,7 +32,6 @@ fn action(badge: &str) -> ExtensionAction {
         badge_rgba: Some(0xFF0000FF),
         text_rgba: None,
         enabled: true,
-        has_popup: true,
     }
 }
 
@@ -109,7 +108,7 @@ fn a_disabled_action_is_still_listed_greyed(cx: &mut TestAppContext) {
 
 fn command(key: &str, modifiers: Modifiers, action: bool) -> ExtensionCommand {
     let name = if action { "_execute_action" } else { "toggle" };
-    ExtensionCommand { extension_id: "ubo".into(), name: name.into(), description: String::new(), key: key.into(), modifiers, action, global: false }
+    ExtensionCommand { extension_id: "ubo".into(), name: name.into(), description: String::new(), key: key.into(), modifiers, action }
 }
 
 fn popups(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) -> Vec<String> {

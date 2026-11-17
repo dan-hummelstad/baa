@@ -158,7 +158,7 @@ mod app {
             harness::post_click(view, 200., 140., false, false);
             wait(500).await;
             for &(code, chars, command) in PAGE {
-                harness::post_key(window_number, code, chars, command);
+                harness::post_key(window_number, code, chars, if command { 1 << 20 } else { 0 });
                 wait(150).await;
             }
             wait(500).await;
@@ -818,7 +818,16 @@ mod app {
                     "escape" => {
                         let mut s = empty_state();
                         if (core.tab_get_state)(tab, &mut s) {
-                            harness::post_key(harness::window_number(s.view.cast()), 53, "\u{1b}", false);
+                            harness::post_key(harness::window_number(s.view.cast()), 53, "\u{1b}", 0);
+                        }
+                    }
+                    // key <key code> <characters> <NSEvent modifier flags>, to the tab's window
+                    "key" => {
+                        let mut s = empty_state();
+                        if (core.tab_get_state)(tab, &mut s) {
+                            let mut p = arg.splitn(3, ' ');
+                            let (code, chars, flags) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
+                            harness::post_key(harness::window_number(s.view.cast()), code.parse().unwrap(), chars, flags.parse().unwrap());
                         }
                     }
                     "screenshot" => {

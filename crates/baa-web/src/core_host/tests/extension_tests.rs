@@ -140,7 +140,6 @@ fn actions_are_read_per_page_or_as_defaults_with_alpha_0_as_no_colour(cx: &mut T
             badge_rgba: Some(0xff0000ff),
             text_rgba: None,
             enabled: true,
-            has_popup: false,
         }
     );
     assert_eq!((defaults[1].badge_rgba, defaults[1].text_rgba), (None, Some(0xffffff80)));
@@ -184,7 +183,7 @@ fn an_action_change_inside_an_engine_call_reaches_the_ui_later_without_reenterin
 }
 
 #[gpui::test]
-fn commands_are_listed_run_and_rebound_with_mac_modifiers(cx: &mut TestAppContext) {
+fn commands_are_listed_and_rebound_with_mac_modifiers(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     COMMANDS.with(|list| {
         list.borrow_mut().push(ffi::Command {
@@ -208,15 +207,12 @@ fn commands_are_listed_run_and_rebound_with_mac_modifiers(cx: &mut TestAppContex
             key: "Comma".into(),
             modifiers: cmd_shift,
             action: false,
-            global: true,
         }]
     );
 
-    assert!(env.host.run_extension_command(ProfileId(1), "aaa", "toggle"));
     let ctrl_alt_fn = gpui::Modifiers { control: true, alt: true, function: true, ..Default::default() };
     assert!(env.host.set_extension_shortcut(ProfileId(1), "aaa", "toggle", "K", ctrl_alt_fn));
     assert!(env.host.set_extension_shortcut(ProfileId(1), "aaa", "toggle", "", cmd_shift));
-    assert_eq!(calls("extension_run_command"), ["extension_run_command aaa toggle"]);
     assert_eq!(calls("extension_set_shortcut"), ["extension_set_shortcut aaa toggle \"K\" 6", "extension_set_shortcut aaa toggle \"\" 0"]);
 }
 

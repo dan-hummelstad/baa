@@ -337,6 +337,7 @@ pub struct Core {
     pub profile_copy_extension: extern "C" fn(*mut Profile, u64, *mut Profile, *const c_char),
     pub profile_extension_actions: extern "C" fn(*mut Profile, TabId, ActionVisitor, *mut c_void) -> c_int,
     pub profile_extension_commands: extern "C" fn(*mut Profile, CommandVisitor, *mut c_void) -> c_int,
+    #[allow(dead_code)] // the harness's; the app never runs a command
     pub extension_run_command: extern "C" fn(*mut Profile, *const c_char, *const c_char) -> bool,
     pub extension_set_shortcut: extern "C" fn(*mut Profile, *const c_char, *const c_char, *const c_char, u32) -> bool,
     /// `ACCOUNT_*` bits shared from now on; where profiles differ the given one wins.

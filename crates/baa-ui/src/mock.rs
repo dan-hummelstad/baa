@@ -65,8 +65,6 @@ pub struct MockHost {
     /// its own entry gets the defaults.
     pub actions: RefCell<std::collections::HashMap<Option<gpui::EntityId>, Vec<baa_web::ExtensionAction>>>,
     pub commands: RefCell<Vec<baa_web::ExtensionCommand>>,
-    /// (extension, command) of each `run_extension_command`.
-    pub ran: RefCell<Vec<(String, String)>>,
     /// (extension, command, key, modifiers) of each `set_extension_shortcut` it accepted.
     pub shortcuts: RefCell<Vec<(String, String, String, gpui::Modifiers)>>,
     /// The engine refuses every shortcut.
@@ -283,7 +281,6 @@ impl MockHost {
             extension_popups: cx.new(|_| baa_web::ExtensionPopups),
             actions: RefCell::default(),
             commands: RefCell::default(),
-            ran: RefCell::default(),
             shortcuts: RefCell::default(),
             refuse_shortcuts: Cell::default(),
         }
@@ -485,10 +482,6 @@ impl WebHost for MockHost {
     }
     fn extension_commands(&self, _: ProfileId) -> Vec<baa_web::ExtensionCommand> {
         self.commands.borrow().clone()
-    }
-    fn run_extension_command(&self, _: ProfileId, extension_id: &str, command: &str) -> bool {
-        self.ran.borrow_mut().push((extension_id.into(), command.into()));
-        true
     }
     fn set_extension_shortcut(&self, _: ProfileId, extension_id: &str, command: &str, key: &str, modifiers: gpui::Modifiers) -> bool {
         if self.refuse_shortcuts.get() {

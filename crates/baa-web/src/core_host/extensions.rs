@@ -68,7 +68,6 @@ pub fn actions(core: &Core, profile: *mut Profile, tab: TabId) -> Vec<ExtensionA
                 badge_rgba: colour(raw.badge_rgba),
                 text_rgba: colour(raw.text_rgba),
                 enabled: raw.enabled,
-                has_popup: raw.has_popup,
             }
         });
     }
@@ -88,7 +87,6 @@ pub fn commands(core: &Core, profile: *mut Profile) -> Vec<ExtensionCommand> {
                 key: from_c(raw.key),
                 modifiers: modifiers_of(raw.modifiers),
                 action: raw.action,
-                global: raw.global,
             }
         });
     }

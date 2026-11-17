@@ -1,11 +1,17 @@
-# ABI 16 (commands.expect): test-ext's badge as read, its chrome.commands listed, shortcuts set and
-# cleared, its command run (which sets a badge and calls chrome.action.openPopup)
+# ABI 16 (commands.expect): test-ext's badge as read, its chrome.commands listed, its shortcut
+# pressed, shortcuts set and cleared, its command run (which sets a badge and calls
+# chrome.action.openPopup)
 load https://example.com/
 waitload 20000
 activate
 sleep 1000
 actions
 commands
+# the manifest's ⌥⇧Y (key code 16; ⌥ 1 << 19 | ⇧ 1 << 17), pressed on the page
+focus
+key 16 Y 655360
+sleep 2000
+actions
 # ⇧ alone is refused; ⌘⇧K is accepted; no key clears
 shortcut {EXT_ID} probe-command 8 K
 shortcut {EXT_ID} probe-command 9 K

@@ -450,10 +450,6 @@ pub trait WebHost: 'static {
     /// own keys and open the extension's popup with [`WebHost::create_popup`], as a
     /// click would (one without ⌘ or ⌃ never gets past the page).
     fn extension_commands(&self, profile: ProfileId) -> Vec<ExtensionCommand>;
-    /// As its shortcut would, on the profile's active tab. False, and nothing happens,
-    /// for an `action` command, an unknown or disabled extension or command, or a
-    /// Space with no window yet.
-    fn run_extension_command(&self, profile: ProfileId, extension_id: &str, command: &str) -> bool;
     /// Takes the shortcut from any other command that had it; an empty `key` clears it.
     /// False, and nothing changes, for a combination Chrome refuses (no modifier, ⇧
     /// alone, ⌥ with ⌘ or ⌃, an unknown key, a media key).
@@ -593,8 +589,6 @@ pub struct ExtensionAction {
     pub text_rgba: Option<u32>,
     /// False: draw it greyed.
     pub enabled: bool,
-    /// [`WebHost::create_popup`] opens a popup; otherwise the click only fires the extension's handler.
-    pub has_popup: bool,
 }
 
 /// One `chrome.commands` entry of an extension.
@@ -611,8 +605,6 @@ pub struct ExtensionCommand {
     pub modifiers: gpui::Modifiers,
     /// The action's command (`_execute_action`): its shortcut is a click on the action.
     pub action: bool,
-    /// System-wide; Chrome's global registry owns it.
-    pub global: bool,
 }
 
 #[cfg(test)]

@@ -63,12 +63,12 @@ pub fn send_edit_action(command: std::ffi::c_int) {
 }
 
 /// Queues a key press (down and up) for the window numbered `window_number`,
-/// through the same `-[NSApp sendEvent:]` path as a real keystroke.
-pub fn post_key(window_number: isize, key_code: u16, chars: &str, command: bool) {
+/// through the same `-[NSApp sendEvent:]` path as a real keystroke. `flags` are NSEvent's
+/// modifier flags (⌘ 1 << 20, ⌥ 1 << 19, ⌃ 1 << 18, ⇧ 1 << 17).
+pub fn post_key(window_number: isize, key_code: u16, chars: &str, flags: usize) {
     unsafe {
         let chars = std::ffi::CString::new(chars).unwrap();
         let chars: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: chars.as_ptr()];
-        let flags: usize = if command { 1 << 20 } else { 0 };
         let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
         let now: f64 = msg_send![info, systemUptime];
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];

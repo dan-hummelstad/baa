@@ -344,11 +344,6 @@ impl WebHost for CoreWebHost {
         extensions::commands(self.core, handle)
     }
 
-    fn run_extension_command(&self, profile: ProfileId, extension_id: &str, command: &str) -> bool {
-        let handle = self.profile_handle(profile);
-        !handle.is_null() && (self.core.extension_run_command)(handle, c_string(extension_id).as_ptr(), c_string(command).as_ptr())
-    }
-
     fn set_extension_shortcut(&self, profile: ProfileId, extension_id: &str, command: &str, key: &str, modifiers: gpui::Modifiers) -> bool {
         let handle = self.profile_handle(profile);
         let bits = if key.is_empty() { 0 } else { extensions::modifier_bits(modifiers) };

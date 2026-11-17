@@ -13,9 +13,10 @@ must: baa: shortcut \w{32} probe-command 0 -> true
 must: baa: command ext=\w{32} name="probe-command" key="" mods=0 action=0
 must: baa: runcmd \w{32} _execute_action -> false
 must: baa: runcmd \w{32} probe-command -> true
-# onCommand ran: the badge it set is pushed (the default, tab 0) and read back in red
+# onCommand ran, once for the key and once for runcmd: the badge it set is pushed (the default,
+# tab 0) and read back in red after each
 must: baa: extension_action ext=\w{32} tab=0
-must: baa: action ext=\w{32} badge="cmd" title="baa probe" badge_rgba=ff0000ff
+count: 2 baa: action ext=\w{32} badge="cmd" title="baa probe" badge_rgba=ff0000ff
 # and its chrome.action.openPopup opened the popup over the active tab
 must: baa: extension_popup_opened ext=\w{32} popup=1
 must: title="active:https://example.com/"
