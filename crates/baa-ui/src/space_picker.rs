@@ -776,7 +776,7 @@ impl<H: WebHost> Render for EmojiPicker<H> {
             .child(search)
             .child(grid)
             .child(footer);
-        input::wire(picker, &self.focus, window, cx, |p| Some(&mut p.query), Self::on_key)
+        input::wire(picker, &self.focus, true, window, cx, |p| Some(&mut p.query), Self::on_key)
     }
 }
 

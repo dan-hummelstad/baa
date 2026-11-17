@@ -132,10 +132,6 @@ impl TextField {
     }
 }
 
-fn press(keys: &str) -> KeyDownEvent {
-    KeyDownEvent { keystroke: Keystroke::parse(keys).unwrap_or_default(), is_held: false, prefer_character_input: false }
-}
-
 /// The key the owner's handler gets after the input method changed the text, which
 /// `TextField::handle` answers with `Key::Edited`. A `-` in a key name never comes from
 /// a keyboard: `Keystroke::parse` reads it as a modifier separator.
@@ -224,9 +220,11 @@ impl<V: 'static> InputHandler for Ime<V> {
 /// While `focus` is focused, the input method types into the field `field` picks and
 /// the Edit menu's Undo and Redo reach it. `field` must pick the field `on_key` routes
 /// keys to, and `on_key` hears of every edit the input method makes (`edited`).
+/// Without a field (`has_field` false, as under an alert) Undo and Redo stay disabled.
 pub(crate) fn wire<V: 'static, E: ParentElement + InteractiveElement>(
     el: E,
     focus: &FocusHandle,
+    has_field: bool,
     window: &Window,
     cx: &mut Context<V>,
     field: FieldFn<V>,
@@ -237,9 +235,18 @@ pub(crate) fn wire<V: 'static, E: ParentElement + InteractiveElement>(
     }
     let ime = Ime { owner: cx.entity().downgrade(), field, on_key };
     let focus = focus.clone();
-    el.child(canvas(|_, _, _| {}, move |_, _, window, cx| window.handle_input(&focus, ime, cx)).absolute().size_0())
-        .on_action(cx.listener(move |v, _: &Undo, window, cx| on_key(v, &press("secondary-z"), window, cx)))
-        .on_action(cx.listener(move |v, _: &Redo, window, cx| on_key(v, &press("secondary-shift-z"), window, cx)))
+    let el = el.child(canvas(|_, _, _| {}, move |_, _, window, cx| window.handle_input(&focus, ime, cx)).absolute().size_0());
+    if !has_field {
+        return el;
+    }
+    let step = move |v: &mut V, back: bool, window: &mut Window, cx: &mut Context<V>| {
+        if field(v).is_some_and(|f| f.step(back)) {
+            on_key(v, &edited(), window, cx);
+            cx.notify();
+        }
+    };
+    el.on_action(cx.listener(move |v, _: &Undo, window, cx| step(v, true, window, cx)))
+        .on_action(cx.listener(move |v, _: &Redo, window, cx| step(v, false, window, cx)))
 }
 
 /// The handler `wire` installs, for tests to play an input method through.

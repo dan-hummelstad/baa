@@ -209,6 +209,7 @@ fn enter_while_composing_a_prompt_answer_commits_it_and_does_not_answer(cx: &mut
     cx.run_until_parked();
     let mut ime = ime(&b);
     cx.update(|window, cx| {
+        assert!(window.is_action_available(&crate::actions::Undo, cx), "a prompt's answer field has Undo");
         ime.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx);
         assert_eq!(ime.marked_text_range(window, cx), Some(0..3));
     });
@@ -238,6 +239,7 @@ fn the_input_method_reaches_no_risky_dialog_and_no_password(cx: &mut TestAppCont
     cx.executor().advance_clock(ACTIVATION_DELAY);
     let mut ime = ime(&b);
     cx.update(|window, cx| {
+        assert!(!window.is_action_available(&crate::actions::Undo, cx), "a field-less prompt gets no Undo");
         assert!(!ime.accepts_text_input(window, cx));
         ime.replace_and_mark_text_in_range(None, "x", None, window, cx);
         ime.replace_text_in_range(None, "\n", window, cx);

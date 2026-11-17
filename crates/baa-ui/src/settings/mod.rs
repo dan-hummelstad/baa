@@ -977,6 +977,6 @@ impl<H: WebHost> Render for SettingsView<H> {
             .children(sheet)
             .children(self.picker.as_ref().map(|p| p.render()));
         let focus = self.focus.clone();
-        input::wire(root, &focus, window, cx, |s| Some(s.field_mut(s.active)), Self::on_key)
+        input::wire(root, &focus, true, window, cx, |s| Some(s.field_mut(s.active)), Self::on_key)
     }
 }

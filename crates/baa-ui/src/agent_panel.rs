@@ -992,7 +992,7 @@ impl<H: WebHost> Browser<H> {
             .child(transcript)
             .child(foot)
             .children(switcher);
-        Some(input::wire(panel, &focus, window, cx, |b| Some(&mut b.agent.panel.field), Self::on_panel_key).into_any_element())
+        Some(input::wire(panel, &focus, true, window, cx, |b| Some(&mut b.agent.panel.field), Self::on_panel_key).into_any_element())
     }
 }
 

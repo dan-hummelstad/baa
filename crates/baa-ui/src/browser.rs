@@ -1497,8 +1497,10 @@ impl<H: WebHost> Render for Browser<H> {
             .children(self.space_picker.as_ref().map(|p| p.render()))
             .children(self.render_agent_ask(&theme, cx))
             .children(self.render_tosses(&theme, cx));
-        let root = input::wire(root, &self.input_focus, window, cx, Self::input_field, Self::on_input_key);
-        let root = input::wire(root, &self.library_focus, window, cx, |b| b.library.as_mut().map(|l| &mut l.search), Self::on_library_key);
+        let has_field = self.input_field().is_some();
+        let root = input::wire(root, &self.input_focus, has_field, window, cx, Self::input_field, Self::on_input_key);
+        let has_field = self.library.is_some();
+        let root = input::wire(root, &self.library_focus, has_field, window, cx, |b| b.library.as_mut().map(|l| &mut l.search), Self::on_library_key);
         let root = self.register_actions(root, cx);
         if self.peek.is_some() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {
