@@ -36,6 +36,16 @@ pub enum Key {
     Text,
 }
 
+impl Key {
+    /// Stops the key at its owner unless it types: macOS hands a typing key on to
+    /// the input method, and an owner that stops it loses the typing without a sign.
+    pub fn stop_unless_typed(self, cx: &mut App) {
+        if self != Key::Text {
+            cx.stop_propagation();
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Edit {
     Typing,

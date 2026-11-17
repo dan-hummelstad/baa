@@ -800,9 +800,7 @@ impl<H: WebHost> EmojiPicker<H> {
             Key::Cancel => dismiss(&self.browser, cx),
             _ => {}
         }
-        if key != Key::Text {
-            cx.stop_propagation();
-        }
+        key.stop_unless_typed(cx);
         cx.notify();
     }
 }

@@ -214,9 +214,7 @@ impl<H: WebHost> Browser<H> {
             Key::Cancel => library.search = TextField::default(),
             _ => {}
         }
-        if key != Key::Text {
-            cx.stop_propagation();
-        }
+        key.stop_unless_typed(cx);
         cx.notify();
     }
 

@@ -112,9 +112,10 @@ impl<H: WebHost> Browser<H> {
         }
         let key = match self.dialog_field() {
             Some(field) => field.handle(&event.keystroke, cx),
-            None => match TextField::default().handle(&event.keystroke, cx) {
-                Key::Text => Key::Ignored,
-                k => k,
+            None => match event.keystroke.key.as_str() {
+                "enter" => Key::Submit,
+                "escape" => Key::Cancel,
+                _ => Key::Ignored,
             },
         };
         // A held key repeats into whatever appears next, and a risky dialog (open an

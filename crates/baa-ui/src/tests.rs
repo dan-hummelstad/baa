@@ -980,6 +980,17 @@ fn finished_downloads_are_kept_in_the_library(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn typing_reaches_the_library_search(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    cx.dispatch_action(ShowDownloads);
+    b.update_in(cx, |b, window, cx| window.focus(&b.library_focus, cx));
+    cx.simulate_keystrokes("z i p");
+    b.read_with(cx, |b, _| assert_eq!(b.library.as_ref().unwrap().search.text, "zip"));
+    cx.simulate_keystrokes("escape");
+    b.read_with(cx, |b, _| assert_eq!(b.library.as_ref().unwrap().search.text, ""));
+}
+
+#[gpui::test]
 fn an_opening_folder_pushes_today_down_with_it(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     for url in ["a.example", "b.example", "c.example"] {

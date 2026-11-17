@@ -1109,9 +1109,7 @@ impl<H: WebHost> Browser<H> {
                 key
             }
         };
-        if key != Key::Text {
-            cx.stop_propagation();
-        }
+        key.stop_unless_typed(cx);
         cx.notify();
     }
 

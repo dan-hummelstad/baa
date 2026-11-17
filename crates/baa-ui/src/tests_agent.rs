@@ -692,6 +692,15 @@ fn bad_hellos_and_deny_shut_the_socket(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn typing_reaches_the_chat_field(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    b.update(cx, |b, cx| b.set_claude_enabled(true, cx));
+    b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
+    cx.simulate_keystrokes("h i");
+    b.read_with(cx, |b, _| assert_eq!(b.agent.panel.field.text, "hi"));
+}
+
+#[gpui::test]
 /// The transcript and the field being typed in both wrap; the field once cut long text off.
 fn long_chat_messages_wrap_inside_the_panel(cx: &mut TestAppContext) {
     use crate::agent_panel::Entry;
