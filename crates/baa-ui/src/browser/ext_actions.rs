@@ -121,28 +121,35 @@ impl<H: WebHost> Browser<H> {
         if !ours || self.prompt_shown() {
             return;
         }
-        let Some(ext) = self.extensions.iter().find(|e| e.id == opened.extension_id && e.popup.is_some()).cloned() else {
-            return;
-        };
-        self.open_extension(&ext, window, cx);
+        self.click_action(&opened.extension_id, window, cx);
     }
 
-    /// A key baa's own keymap left alone: an enabled extension's "activate" shortcut opens
-    /// its popup as a click would. One that is also baa's never fires.
+    /// As a click on `id`'s action: the engine shows the popup it has for the active tab
+    /// (which `chrome.action.setPopup` may have set) or runs the extension's `onClicked`.
+    fn click_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = self.session.active_space() else { return };
+        let popup = self.extensions.iter().find(|e| e.id == id).and_then(|e| e.popup.clone());
+        // The host reads only the id from the URL.
+        let url = popup.unwrap_or_else(|| format!("chrome-extension://{id}/"));
+        self.open_preview(space, &url, true, window, cx);
+    }
+
+    /// A key baa's own keymap left alone: an enabled extension's "activate" shortcut is a
+    /// click on its action. One that is also baa's never fires.
     pub(super) fn on_extension_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         if !(ks.modifiers.platform || ks.modifiers.control) || self.prompt_shown() {
             return;
         }
         let Some(profile) = self.active_space().map(|s| s.profile) else { return };
-        let ext = self.host.extension_commands(profile).into_iter().find_map(|c| {
+        let id = self.host.extension_commands(profile).into_iter().find_map(|c| {
             let stroke = command_keystroke(&c).filter(|s| c.action && s.modifiers == ks.modifiers && s.key == ks.key)?;
-            let ext = self.extensions.iter().find(|e| e.id == c.extension_id && self.extension_enabled(&e.id))?;
-            baa_binding(&stroke, cx).is_none().then(|| ext.clone())
+            let enabled = self.extensions.iter().any(|e| e.id == c.extension_id) && self.extension_enabled(&c.extension_id);
+            (enabled && baa_binding(&stroke, cx).is_none()).then_some(c.extension_id)
         });
-        if let Some(ext) = ext {
+        if let Some(id) = id {
             cx.stop_propagation();
-            self.open_extension(&ext, window, cx);
+            self.click_action(&id, window, cx);
         }
     }
 }

@@ -126,6 +126,11 @@ fn the_activate_shortcut_opens_the_popup(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-y");
     assert_eq!(popups(&b, cx), [POPUP]);
     b.read_with(cx, |b, _| assert!(b.peek.as_ref().is_some_and(|p| p.popup)));
+
+    no_manifest_popup(&b, cx);
+    cx.simulate_keystrokes("cmd-shift-y");
+    assert_eq!(popups(&b, cx).last().map(String::as_str), Some("chrome-extension://ubo/"), "a click, not Settings");
+    b.read_with(cx, |b, _| assert!(b.settings_window.is_none()));
 }
 
 #[gpui::test]
@@ -177,6 +182,14 @@ fn a_popup_the_extension_opened_shows_as_its_click_would(cx: &mut TestAppContext
     popup_opened(&b, profile, cx);
     assert_eq!(popups(&b, cx), [POPUP]);
     b.read_with(cx, |b, _| assert!(b.peek.as_ref().is_some_and(|p| p.popup)));
+
+    no_manifest_popup(&b, cx);
+    popup_opened(&b, profile, cx);
+    assert_eq!(popups(&b, cx).last().map(String::as_str), Some("chrome-extension://ubo/"), "one set by setPopup");
+}
+
+fn no_manifest_popup(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext) {
+    b.update(cx, |b, _| b.extensions.iter_mut().for_each(|e| e.popup = None));
 }
 
 #[gpui::test]
