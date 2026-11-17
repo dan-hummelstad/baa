@@ -287,14 +287,21 @@ fn web_origin(url: &str) -> Option<String> {
 /// The origin CDP input and scripts reach: the committed document's. The visible URL leads a
 /// browser-initiated load, so an approval keyed on it could cover the previous site's document,
 /// still committed while the load waits; until the two agree the page is not used at all.
+/// An opaque origin is also where an error page or a sandboxed document settles, so it means
+/// "still loading" only while the page loads.
 fn page_origin<P: PageHandle>(page: &P) -> Result<String, &'static str> {
     let visible = web_origin(&page.url()).ok_or(NOT_WEB)?;
-    let committed = page.committed_origin().as_deref().and_then(web_origin).ok_or(LOADING)?;
-    if committed == visible { Ok(committed) } else { Err(LOADING) }
+    match page.committed_origin().map(|c| web_origin(&c)) {
+        Some(Some(committed)) if committed == visible => Ok(committed),
+        None if !page.is_loading() => Err(OPAQUE),
+        _ => Err(LOADING),
+    }
 }
 
 const NOT_WEB: &str = "Claude can only use http and https pages.";
 const LOADING: &str = "The page is still loading; try again.";
+const OPAQUE: &str = "This tab shows an error page or a sandboxed document; Claude cannot read or act on it. Navigate it or close it.";
+const DOCUMENT_TOOLS: &[&str] = &["click", "type", "press_key", "evaluate"];
 const NO_TAB: &str = "No such tab (or it is in a Space Claude cannot see).";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -821,17 +828,17 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The tab `args` names (or the active one), if Claude may see it, and its origin: the
-    /// committed document's when it has a page, else the address it would load.
+    /// committed document's when it has a usable one, else the address it would load.
     fn agent_tab(&self, args: &Value, cx: &App) -> Result<(TabId, String), String> {
         let id = match args.get("tab").and_then(Value::as_u64) {
             Some(n) => TabId(n),
             None => self.active_tab().ok_or(NO_TAB)?,
         };
         let tab = self.session.tab(id).filter(|t| self.space_visible(t.space)).ok_or(NO_TAB)?;
-        let unloaded = web_origin(&tab.url).ok_or(NOT_WEB)?;
-        let origin = match self.pages.get(&id) {
-            Some((p, _)) => page_origin(p.read(cx))?,
-            None => unloaded,
+        let saved = web_origin(&tab.url).ok_or(NOT_WEB)?;
+        let origin = match self.pages.get(&id).map(|(p, _)| page_origin(p.read(cx))) {
+            None | Some(Err(OPAQUE)) => saved,
+            Some(page) => page?,
         };
         Ok((id, origin))
     }
@@ -987,7 +994,11 @@ impl<H: WebHost> Browser<H> {
     }
 
     fn read_tool(&mut self, tool: &'static str, args: &Value, reply: Reply, cx: &mut Context<Self>) {
-        let checked = self.agent_tab(args, cx).and_then(|(id, origin)| Ok((id, origin, self.agent_page(id)?)));
+        let checked = self.agent_tab(args, cx).and_then(|(id, _)| {
+            let page = self.agent_page(id)?;
+            let origin = page_origin(page.read(cx))?;
+            Ok((id, origin, page))
+        });
         let (id, origin, page) = match checked {
             Ok(x) => x,
             Err(e) => {
@@ -1053,7 +1064,11 @@ impl<H: WebHost> Browser<H> {
 
     /// Tools that change a tab or the sidebar: each asks for the tab's origin first.
     fn act_tool(&mut self, conn: u64, tool: &'static str, args: Value, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
-        let (id, origin) = match self.agent_tab(&args, cx) {
+        let checked = self.agent_tab(&args, cx).and_then(|(id, origin)| match self.pages.get(&id) {
+            Some((p, _)) if DOCUMENT_TOOLS.contains(&tool) => Ok((id, page_origin(p.read(cx))?)),
+            _ => Ok((id, origin)),
+        });
+        let (id, origin) = match checked {
             Ok(x) => x,
             Err(e) => {
                 self.log(tool, Kind::Act, "", true);
@@ -1111,6 +1126,12 @@ impl<H: WebHost> Browser<H> {
                     Ok(p) => p,
                     Err(e) => return reply.refuse(e),
                 };
+                // The tab's origin survives the document turning opaque; the document's must not.
+                match page_origin(page.read(cx)) {
+                    Ok(now) if now == origin => {}
+                    Ok(_) => return reply.refuse("The page changed while waiting for approval; try again."),
+                    Err(e) => return reply.refuse(e),
+                }
                 self.page_act(tool, page, origin, args, reply, cx);
             }
             _ => reply.error(-32602, "unknown tool"),

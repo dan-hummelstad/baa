@@ -66,6 +66,7 @@ pub struct MockPage {
     pub url: RefCell<String>,
     /// Set to split the committed document from `url`, as a pending load does; unset, it is `url`'s.
     pub committed: RefCell<Option<Option<String>>>,
+    pub loading: Cell<bool>,
     pub visible: Cell<bool>,
     /// When it was last shown, counting every page's `set_visible(true)`: Chromium's active tab is the last.
     pub shown_at: Cell<u64>,
@@ -119,7 +120,7 @@ impl PageHandle for MockPage {
         String::new()
     }
     fn is_loading(&self) -> bool {
-        false
+        self.loading.get()
     }
     fn can_go_back(&self) -> bool {
         false
@@ -297,6 +298,7 @@ impl WebHost for MockHost {
         cx.new(|cx| MockPage {
             url: RefCell::new(url.into()),
             committed: RefCell::default(),
+            loading: Cell::default(),
             visible: Cell::new(true),
             shown_at: Cell::new(0),
             zoom: Cell::new(1.0),

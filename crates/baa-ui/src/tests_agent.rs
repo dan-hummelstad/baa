@@ -893,6 +893,10 @@ fn committed(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: Tab
     b.read_with(cx, |b, cx| *b.pages[&tab].0.read(cx).committed.borrow_mut() = Some(origin.map(str::to_string)));
 }
 
+fn loading(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId, on: bool) {
+    b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).loading.set(on));
+}
+
 fn evals(b: &Entity<Browser<MockHost>>, cx: &mut VisualTestContext, tab: TabId) -> usize {
     b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).evals.borrow().len())
 }
@@ -916,6 +920,7 @@ fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
 
     // The bank is still committed while the tab already shows approved.example's pending URL.
     moved(&b, cx, tab, "https://approved.example/slow");
+    loading(&b, cx, tab, true);
     for origin in [Some("https://bank.example"), None] {
         committed(&b, cx, tab, origin);
         for (tool, args) in &acts {
@@ -925,6 +930,7 @@ fn acts_reach_only_the_committed_document(cx: &mut TestAppContext) {
         let (refused, _) = answer(&call(&b, cx, "read_page", json!({}))).unwrap();
         assert!(refused, "a page mid-navigation is not read");
     }
+    loading(&b, cx, tab, false);
     assert_eq!(asks(&b, cx), 0);
     assert_eq!(evals(&b, cx, tab), 0);
 
@@ -1010,4 +1016,41 @@ fn an_unloaded_tab_is_neither_read_nor_acted_on(cx: &mut TestAppContext) {
     decide(&b, cx, Answer::Once);
     let (refused, text) = answer(&rx).unwrap();
     assert!(refused && text.contains("not loaded"), "{text}");
+}
+
+#[gpui::test]
+fn an_error_page_is_neither_read_nor_acted_on_but_can_be_left_or_closed(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tab = enabled_with(&b, cx, "https://down.example/");
+    committed(&b, cx, tab, None);
+    let final_message = |text: &str| text.contains("error page") && !text.contains("try again");
+
+    let (refused, text) = answer(&call(&b, cx, "read_page", json!({"tab": tab.0}))).unwrap();
+    assert!(refused && final_message(&text), "{text}");
+    let (refused, text) = answer(&call(&b, cx, "type", json!({"tab": tab.0, "text": "x"}))).unwrap();
+    assert!(refused && final_message(&text), "{text}");
+    assert_eq!(asks(&b, cx), 0);
+    assert_eq!(evals(&b, cx, tab), 0);
+
+    let rx = call(&b, cx, "navigate", json!({"tab": tab.0, "url": "https://down.example/retry"}));
+    assert_eq!(b.read_with(cx, |b, _| b.agent.asks[0].origin.clone()), "https://down.example");
+    decide(&b, cx, Answer::Session);
+    assert!(!answer(&rx).unwrap().0);
+    assert_eq!(b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).loads.borrow().clone()), ["https://down.example/retry"]);
+
+    let (refused, _) = answer(&call(&b, cx, "close_tab", json!({"tab": tab.0}))).unwrap();
+    assert!(!refused);
+    assert!(b.read_with(cx, |b, _| b.session.tab(tab).is_none()));
+}
+
+#[gpui::test]
+fn an_opaque_page_that_is_loading_is_still_loading(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let tab = enabled_with(&b, cx, "https://slow.example/");
+    committed(&b, cx, tab, None);
+    loading(&b, cx, tab, true);
+    for tool in ["read_page", "navigate"] {
+        let (refused, text) = answer(&call(&b, cx, tool, json!({"tab": tab.0, "url": "https://slow.example/"}))).unwrap();
+        assert!(refused && text.contains("loading"), "{tool}: {text}");
+    }
 }
