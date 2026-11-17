@@ -353,7 +353,7 @@ typedef struct {
   // The profile's extensions changed (installed, uninstalled, enabled,
   // disabled, updated, or disabled by an update that asks for more): list them
   // again with baa_profile_extensions. Coalesced: at most one per turn of the
-  // run loop, never inside a baa_* call.
+  // run loop, never inside a baa_* call. Never for an ephemeral profile.
   void (*extensions_changed)(void* ctx, BaaProfile* profile);
 } BaaCallbacks;
 

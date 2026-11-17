@@ -309,7 +309,8 @@ bool StartReenable(BaaProfile* owner, Profile* chrome_profile, const std::string
   if (registry->enabled_extensions().Contains(id)) {
     return true;
   }
-  // The flow never calls back for an extension that is not disabled (terminated, gone).
+  // Only a disabled extension starts the flow: it would reload a terminated one, and never call
+  // back for one that is gone.
   if (!registry->disabled_extensions().GetByID(id)) {
     return false;
   }
@@ -427,6 +428,9 @@ void DestroyAllPopups() {
 }
 
 void WatchExtensions(BaaProfile* owner, Profile* profile) {
+  if (profile->IsOffTheRecord()) {
+    return;
+  }
   ExtensionsWatches()[owner] = std::make_unique<ExtensionsWatch>(owner, profile);
 }
 
