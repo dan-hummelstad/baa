@@ -129,6 +129,15 @@ fn the_activate_shortcut_opens_the_popup(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_shifted_digit_shortcut_fires(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
+    b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("1", cmd_shift, true)]);
+    cx.simulate_keystrokes("cmd-!");
+    assert_eq!(popups(&b, cx), [POPUP]);
+}
+
+#[gpui::test]
 fn an_activate_shortcut_that_is_baas_does_nothing(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     b.update(cx, |b, _| *b.host.commands.borrow_mut() = vec![command("T", Modifiers::command(), true)]);
@@ -238,6 +247,15 @@ fn a_command_is_listed_then_recorded_and_cleared(cx: &mut TestAppContext) {
     click(&mut s, "cmd-clear");
     assert_eq!(shortcuts(&b, &mut s).last().unwrap(), &("ubo".into(), "toggle".into(), String::new(), Modifiers::none()));
     assert!(!drawn(&mut s, "cmd-clear"));
+}
+
+#[gpui::test]
+fn a_shifted_digit_is_recorded_as_digit_and_shift(cx: &mut TestAppContext) {
+    let (b, mut s) = settings_on_ubo(cx, vec![command("", Modifiers::none(), false)]);
+    click(&mut s, "cmd-change");
+    s.simulate_keystrokes("cmd-!");
+    let cmd_shift = Modifiers { platform: true, shift: true, ..Default::default() };
+    assert_eq!(shortcuts(&b, &mut s), [("ubo".into(), "toggle".into(), "1".into(), cmd_shift)]);
 }
 
 #[gpui::test]

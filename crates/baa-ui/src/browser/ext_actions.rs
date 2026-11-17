@@ -12,19 +12,45 @@ pub(crate) fn badge_text(text: &str) -> String {
     plain_text(text).chars().take(BADGE_CHARS).collect()
 }
 
-/// Chrome's key token for gpui's key name, and back. The tokens the engine takes and
-/// reports: "A".."Z", "0".."9", and the named keys below.
-pub(crate) fn chrome_key(gpui_key: &str) -> Option<String> {
-    key_pair(|(_, g)| *g == gpui_key)
+/// Chrome's key token and modifiers for a gpui keystroke, and back. The tokens the engine
+/// takes and reports: "A".."Z", "0".."9", and the named keys below.
+pub(crate) fn chrome_key(keystroke: &gpui::Keystroke) -> Option<(String, gpui::Modifiers)> {
+    if let Some((chrome, _)) = SHIFTED.into_iter().find(|(_, g)| *g == keystroke.key) {
+        return Some((chrome.to_string(), gpui::Modifiers { shift: true, ..keystroke.modifiers }));
+    }
+    let key = key_pair(|(_, g)| *g == keystroke.key)
         .map(|(c, _)| c.to_string())
-        .or_else(|| one_alnum(gpui_key).map(|c| c.to_ascii_uppercase().to_string()))
+        .or_else(|| one_alnum(&keystroke.key).map(|c| c.to_ascii_uppercase().to_string()))?;
+    Some((key, keystroke.modifiers))
 }
 
-pub(crate) fn gpui_key(chrome: &str) -> Option<String> {
-    key_pair(|(c, _)| *c == chrome)
+pub(crate) fn gpui_keystroke(chrome: &str, modifiers: gpui::Modifiers) -> Option<gpui::Keystroke> {
+    if let Some((_, shifted)) = SHIFTED.into_iter().find(|(c, _)| modifiers.shift && *c == chrome) {
+        let modifiers = gpui::Modifiers { shift: false, ..modifiers };
+        return Some(gpui::Keystroke { modifiers, key: shifted.to_string(), key_char: None });
+    }
+    let key = key_pair(|(c, _)| *c == chrome)
         .map(|(_, g)| g.to_string())
-        .or_else(|| one_alnum(chrome).map(|c| c.to_ascii_lowercase().to_string()))
+        .or_else(|| one_alnum(chrome).map(|c| c.to_ascii_lowercase().to_string()))?;
+    Some(gpui::Keystroke { modifiers, key, key_char: None })
 }
+
+// ponytail: gpui folds Shift into the key for anything but a..z, so ⌘⇧1 arrives as ⌘"!".
+// US layout only: on others these shortcuts never fire and cannot be recorded.
+const SHIFTED: [(&str, &str); 12] = [
+    ("1", "!"),
+    ("2", "@"),
+    ("3", "#"),
+    ("4", "$"),
+    ("5", "%"),
+    ("6", "^"),
+    ("7", "&"),
+    ("8", "*"),
+    ("9", "("),
+    ("0", ")"),
+    ("Comma", "<"),
+    ("Period", ">"),
+];
 
 fn one_alnum(key: &str) -> Option<char> {
     let mut chars = key.chars();
@@ -32,7 +58,7 @@ fn one_alnum(key: &str) -> Option<char> {
 }
 
 fn key_pair(pick: impl Fn(&(&str, &str)) -> bool) -> Option<(&'static str, &'static str)> {
-    const KEYS: [(&str, &str); 15] = [
+    const KEYS: [(&str, &str); 14] = [
         ("Comma", ","),
         ("Period", "."),
         ("Space", "space"),
@@ -47,15 +73,13 @@ fn key_pair(pick: impl Fn(&(&str, &str)) -> bool) -> Option<(&'static str, &'sta
         ("Left", "left"),
         ("Right", "right"),
         ("Tab", "tab"),
-        ("Backspace", "backspace"),
     ];
     KEYS.into_iter().find(|k| pick(k))
 }
 
 /// The keystroke a command's shortcut is, `None` when it has none or gpui has no name for it.
 pub(crate) fn command_keystroke(command: &baa_web::ExtensionCommand) -> Option<gpui::Keystroke> {
-    let key = gpui_key(&command.key).filter(|_| !command.key.is_empty())?;
-    Some(gpui::Keystroke { modifiers: command.modifiers, key, key_char: None })
+    gpui_keystroke(&command.key, command.modifiers)
 }
 
 /// The name of baa's own action bound to `keystroke` in the browser window (the default
@@ -126,14 +150,30 @@ impl<H: WebHost> Browser<H> {
 #[cfg(test)]
 #[test]
 fn keys_map_both_ways_between_chrome_and_gpui() {
-    for (chrome, gpui) in [("K", "k"), ("7", "7"), ("Comma", ","), ("Up", "up"), ("Space", "space"), ("PageDown", "pagedown")] {
-        assert_eq!(gpui_key(chrome).as_deref(), Some(gpui), "{chrome}");
-        assert_eq!(chrome_key(gpui).as_deref(), Some(chrome), "{gpui}");
+    let ks = |s: &str| gpui::Keystroke::parse(s).unwrap();
+    for (chrome, shift, gpui) in [
+        ("K", false, "cmd-k"),
+        ("K", true, "cmd-shift-k"),
+        ("7", false, "cmd-7"),
+        ("1", true, "cmd-!"),
+        ("0", true, "ctrl-)"),
+        ("Comma", false, "cmd-,"),
+        ("Comma", true, "cmd-<"),
+        ("Period", true, "cmd->"),
+        ("Up", true, "cmd-shift-up"),
+        ("Space", false, "cmd-space"),
+        ("PageDown", false, "cmd-pagedown"),
+    ] {
+        let stroke = ks(gpui);
+        let modifiers = gpui::Modifiers { shift, ..stroke.modifiers };
+        assert_eq!(gpui_keystroke(chrome, modifiers), Some(stroke.clone()), "{chrome}");
+        assert_eq!(chrome_key(&stroke), Some((chrome.to_string(), modifiers)), "{gpui}");
     }
-    for unknown in ["", "MediaPlayPause", "KK", "f13"] {
-        assert_eq!(gpui_key(unknown), None, "{unknown}");
+    for unknown in ["", "MediaPlayPause", "KK", "f13", "Backspace"] {
+        assert_eq!(gpui_keystroke(unknown, gpui::Modifiers::command()), None, "{unknown}");
     }
-    assert_eq!(chrome_key("escape"), None);
+    assert_eq!(chrome_key(&ks("cmd-escape")), None);
+    assert_eq!(chrome_key(&ks("cmd-backspace")), None);
 }
 
 #[cfg(test)]

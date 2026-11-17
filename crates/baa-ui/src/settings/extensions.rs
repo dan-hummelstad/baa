@@ -164,11 +164,11 @@ impl<H: WebHost> Browser<H> {
     /// `key` `None` clears the shortcut.
     pub(crate) fn set_extension_shortcut(&mut self, space: SpaceId, ext: &str, command: &str, key: Option<&gpui::Keystroke>, cx: &mut Context<Self>) {
         let Some(profile) = self.session.space(space).map(|s| s.profile) else { return };
-        let (token, modifiers) = match key {
-            Some(k) => (chrome_key(&k.key), k.modifiers),
-            None => (Some(String::new()), gpui::Modifiers::default()),
+        let shortcut = match key {
+            Some(k) => chrome_key(k),
+            None => Some((String::new(), gpui::Modifiers::default())),
         };
-        let ok = token.is_some_and(|t| self.host.set_extension_shortcut(profile, ext, command, &t, modifiers));
+        let ok = shortcut.is_some_and(|(t, modifiers)| self.host.set_extension_shortcut(profile, ext, command, &t, modifiers));
         let page = &mut self.extensions_page;
         page.recording = None;
         page.refused = (!ok).then(|| (ext.to_string(), command.to_string()));
