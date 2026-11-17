@@ -58,10 +58,7 @@ impl<H: WebHost> Browser<H> {
                             this.extensions_page.list = list;
                             this.extensions_page.loading = false;
                         }
-                        if let Some(active) = this.active_space() {
-                            this.extensions = this.host.extensions(active.profile);
-                        }
-                        this.refresh_actions(cx);
+                        this.refresh_extensions(cx);
                         cx.notify();
                     })
                     .ok();
@@ -76,9 +73,8 @@ impl<H: WebHost> Browser<H> {
         if let Some(space) = self.extensions_page.space.filter(|s| named(self, *s)) {
             self.refresh_extensions_for(space, cx);
         }
-        if let Some(active) = self.active_space().filter(|s| s.profile == profile) {
-            self.extensions = self.host.extensions(active.profile);
-            self.refresh_actions(cx);
+        if self.active_space().is_some_and(|s| s.profile == profile) {
+            self.refresh_extensions(cx);
         }
     }
 

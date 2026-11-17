@@ -680,11 +680,7 @@ impl<H: WebHost> Browser<H> {
         }
         // ponytail: re-read on every session change; an install shows up at
         // the next tab or Space switch.
-        self.extensions = self
-            .active_space()
-            .map(|s| self.host.extensions(s.profile))
-            .unwrap_or_default();
-        self.refresh_actions(cx);
+        self.refresh_extensions(cx);
         self.share_extensions_if_new_profiles(cx);
         self.sync_groups(cx);
         self.save();

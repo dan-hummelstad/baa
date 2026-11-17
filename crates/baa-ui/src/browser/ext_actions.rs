@@ -94,6 +94,12 @@ pub(crate) fn baa_binding(keystroke: &gpui::Keystroke, cx: &gpui::App) -> Option
 }
 
 impl<H: WebHost> Browser<H> {
+    /// Re-reads the active Space's extensions and their actions.
+    pub(crate) fn refresh_extensions(&mut self, cx: &mut Context<Self>) {
+        self.extensions = self.active_space().map(|s| self.host.extensions(s.profile)).unwrap_or_default();
+        self.refresh_actions(cx);
+    }
+
     /// Re-reads the active Space's actions as they are on its active tab.
     pub(crate) fn refresh_actions(&mut self, cx: &mut Context<Self>) {
         let Some(profile) = self.active_space().map(|s| s.profile) else {
