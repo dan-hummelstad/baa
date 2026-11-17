@@ -677,7 +677,6 @@ mod app {
                         let n = (core.profile_extension_commands)(profile_for("1"), visit_command, std::ptr::null_mut());
                         eprintln!("baa: commands count={n}");
                     }
-                    // shortcut <id> <name> <BAA_MOD_* bits> [<key>]; no key clears it
                     "shortcut" => {
                         let mut p = arg.splitn(4, ' ');
                         let (id, name, mods) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());

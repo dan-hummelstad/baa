@@ -170,7 +170,6 @@ fn an_action_change_inside_an_engine_call_reaches_the_ui_later_without_reenterin
     assert_eq!(engine, ["profile_extension_actions 0", "profile_extension_actions returns"]);
     assert!(seen.borrow().is_empty());
 
-    // The caller may hold the cells it reads.
     {
         let _held = (env.dispatch.tabs.borrow_mut(), env.dispatch.profile_ids.borrow_mut());
         (env.callbacks.extension_action)(env.ctx(), env.host.profile_handle(ProfileId(1)), c"bbb".as_ptr(), tab);

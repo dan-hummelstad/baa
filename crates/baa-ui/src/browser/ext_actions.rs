@@ -7,12 +7,10 @@ use baa_web::{ExtensionActionChanged, ExtensionPopupOpened};
 /// Chrome shows no more of a badge than this.
 const BADGE_CHARS: usize = 4;
 
-/// What the badge says on screen: one line, no control characters, at most four characters.
 pub(crate) fn badge_text(text: &str) -> String {
     plain_text(text).chars().take(BADGE_CHARS).collect()
 }
 
-/// The badge's text colour: the extension's, else black or white, whichever reads on `badge`.
 pub(crate) fn badge_ink(badge: gpui::Hsla, text_rgba: Option<u32>) -> gpui::Hsla {
     let c = badge.to_rgb();
     let light = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 0.5;
@@ -84,13 +82,10 @@ fn key_pair(pick: impl Fn(&(&str, &str)) -> bool) -> Option<(&'static str, &'sta
     KEYS.into_iter().find(|k| pick(k))
 }
 
-/// The keystroke a command's shortcut is, `None` when it has none or gpui has no name for it.
 pub(crate) fn command_keystroke(command: &baa_web::ExtensionCommand) -> Option<gpui::Keystroke> {
     gpui_keystroke(&command.key, command.modifiers)
 }
 
-/// The name of baa's own action bound to `keystroke` in the browser window (the default
-/// keymap with the user's `keymap.json` over it), if any.
 pub(crate) fn baa_binding(keystroke: &gpui::Keystroke, cx: &gpui::App) -> Option<String> {
     let context = gpui::KeyContext::parse("Browser").ok()?;
     let map = cx.key_bindings();
@@ -101,13 +96,11 @@ pub(crate) fn baa_binding(keystroke: &gpui::Keystroke, cx: &gpui::App) -> Option
 }
 
 impl<H: WebHost> Browser<H> {
-    /// Re-reads the active Space's extensions and their actions.
     pub(crate) fn refresh_extensions(&mut self, cx: &mut Context<Self>) {
         self.extensions = self.active_space().map(|s| self.host.extensions(s.profile)).unwrap_or_default();
         self.refresh_actions(cx);
     }
 
-    /// Re-reads the active Space's actions as they are on its active tab.
     pub(crate) fn refresh_actions(&mut self, cx: &mut Context<Self>) {
         let Some(profile) = self.active_space().map(|s| s.profile) else {
             self.actions.clear();

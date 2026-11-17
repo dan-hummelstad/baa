@@ -40,8 +40,10 @@ pages (`baa://flags` and the like) open as tabs in baa's skin. DevTools dock bes
 prompts (HTTP auth, external-protocol links, hung or crashed pages, extension install) are drawn by
 baa on the tab, page fullscreen fills the window, find shows `3/12`, tabs in a folder are a Chrome
 tab group (an extension's `chrome.tabs.group` fills a folder), and the command bar ranks with
-Chrome's omnibox. Not yet (M4): `chrome.commands` shortcuts, `chrome.action.openPopup`,
-action badges, the screen-share picker. Password managers
+Chrome's omnibox. Extensions' keyboard shortcuts (`chrome.commands`,
+rebound in Settings › Extensions), action badges and `chrome.action.openPopup` work, and a link's
+address shows at the bottom of the page while the pointer is on it. Not yet: the screen-share picker.
+Password managers
 work through their Chrome extensions; Apple's iCloud Passwords cannot (macOS only lets Chrome and
 Edge start its helper). The UI follows the pen.dev mocks. Split view shows tabs of one Space side
 by side.

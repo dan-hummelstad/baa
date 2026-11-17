@@ -554,7 +554,6 @@ pub(crate) fn ensure_keymap(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(path, "[]\n")
 }
 
-/// The Keyboard tab's name for one of baa's actions (`"baa::CloseTab"`).
 pub(crate) fn shortcut_label(action: &str) -> Option<&'static str> {
     shortcuts().into_iter().find(|(_, a)| a.name() == action).map(|(label, _)| label)
 }

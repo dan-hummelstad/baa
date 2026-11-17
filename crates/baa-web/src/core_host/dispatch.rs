@@ -112,7 +112,6 @@ pub(super) struct Dispatch {
     pending: RefCell<Vec<Pending>>,
     /// Popups the engine opened itself, until the UI takes them; `url` is the extension id.
     popups: RefCell<Vec<Pending>>,
-    /// A popup's size reported before its page exists, for the page to start with.
     pub(super) early_sizes: RefCell<HashMap<TabId, gpui::Size<gpui::Pixels>>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
@@ -338,7 +337,6 @@ impl Dispatch {
             let Some(profile) = self.profile_ids.borrow().get(&profile).copied() else { return };
             let page = match tab {
                 0 => None,
-                // A tab that closed since, or one baa does not show.
                 tab => match self.page_of(tab) {
                     Some(page) => Some(page.entity_id()),
                     None => return,

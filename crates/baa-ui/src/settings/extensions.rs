@@ -28,11 +28,8 @@ pub(crate) struct ExtensionsPage {
     pub confirm_remove: Option<String>,
     /// Why the last "Load unpacked" failed.
     pub error: Option<String>,
-    /// The Space's `chrome.commands`, read with the list.
     pub commands: Vec<ExtensionCommand>,
-    /// (extension, command) whose shortcut the next key press sets.
     pub recording: Option<(String, String)>,
-    /// (extension, command) whose last new shortcut the engine refused.
     pub refused: Option<(String, String)>,
 }
 
@@ -460,7 +457,6 @@ impl<H: WebHost> SettingsView<H> {
             .into_any_element()
     }
 
-    /// One row per `chrome.commands` entry: what it does, its shortcut, Change and Clear.
     fn render_shortcuts(&self, e: &ExtensionInfo, space: SpaceId, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let page = &self.browser.read(cx).extensions_page;
         let commands: Vec<ExtensionCommand> = page.commands.iter().filter(|c| c.extension_id == e.id).cloned().collect();
@@ -526,7 +522,6 @@ impl<H: WebHost> SettingsView<H> {
         Some(rows.collect())
     }
 
-    /// While a row waits for a shortcut, the key pressed is it; Esc alone gives up.
     pub(super) fn record_shortcut(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
         let Some((ext, name)) = self.browser.read(cx).extensions_page.recording.clone() else { return false };
         let space = self.space;

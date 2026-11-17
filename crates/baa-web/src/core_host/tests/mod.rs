@@ -45,7 +45,6 @@ thread_local! {
     static POPUP_NULL: Cell<bool> = const { Cell::new(false) };
     /// What the fake `baa_profile_extensions` lists.
     static EXTENSIONS: RefCell<Vec<FakeExtension>> = const { RefCell::new(Vec::new()) };
-    /// What the fake `baa_profile_extension_actions` and `_commands` visit; strings are `c"..."` literals.
     static ACTIONS: RefCell<Vec<ffi::Action>> = const { RefCell::new(Vec::new()) };
     static COMMANDS: RefCell<Vec<ffi::Command>> = const { RefCell::new(Vec::new()) };
     /// Set: the fake `baa_profile_extension_actions` sends `extension_action` to this ctx from inside.

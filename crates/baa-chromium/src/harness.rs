@@ -97,7 +97,6 @@ pub fn post_click(view: *mut AnyObject, x: f64, y: f64, command: bool, right: bo
     post_mouse(view, x, y, if right { &[3, 4] } else { &[1, 2] }, if command { 1 << 20 } else { 0 });
 }
 
-/// Queues a mouse move (NSEventTypeMouseMoved) to (`x`, `y`) points from `view`'s top left.
 pub fn post_move(view: *mut AnyObject, x: f64, y: f64) {
     post_mouse(view, x, y, &[5], 0);
 }

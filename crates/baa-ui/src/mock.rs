@@ -61,13 +61,9 @@ pub struct MockHost {
     pub change_result: Cell<bool>,
     pub extension_actions_changed: Entity<baa_web::ExtensionActionsChanged>,
     pub extension_popups: Entity<baa_web::ExtensionPopups>,
-    /// What `extension_actions` answers per page (`None`: the defaults); a page without
-    /// its own entry gets the defaults.
     pub actions: RefCell<std::collections::HashMap<Option<gpui::EntityId>, Vec<baa_web::ExtensionAction>>>,
     pub commands: RefCell<Vec<baa_web::ExtensionCommand>>,
-    /// (extension, command, key, modifiers) of each `set_extension_shortcut` it accepted.
     pub shortcuts: RefCell<Vec<(String, String, String, gpui::Modifiers)>>,
-    /// The engine refuses every shortcut.
     pub refuse_shortcuts: Cell<bool>,
 }
 

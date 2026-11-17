@@ -39,8 +39,6 @@ impl<H: WebHost> Browser<H> {
         !self.agent.asks.is_empty() || !self.account_asks.is_empty() || self.shown_panes().iter().any(tab_ask)
     }
 
-    /// `content`, a tab's page, with the pill over its bottom-left corner; the pointer
-    /// leaving the page clears it.
     pub(super) fn with_hover_url(&self, tab: TabId, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id(("page-hover", tab.0))

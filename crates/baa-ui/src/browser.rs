@@ -298,9 +298,7 @@ pub struct Browser<H: WebHost> {
     last_frame: Instant,
     /// Claude's tool server: clients, approvals, the chat panel (PLAN-m4-features D).
     pub(crate) agent: crate::agent::Agent<H>,
-    /// The tab whose page has the pointer on a link, and where that link goes.
     pub(crate) hover_url: Option<(TabId, String)>,
-    /// The active Space's toolbar actions on its active tab, by extension id.
     pub(crate) actions: HashMap<String, baa_web::ExtensionAction>,
     _actions_changed: Subscription,
     _popups: Subscription,

@@ -284,7 +284,6 @@ pub struct ExtensionPopupOpened {
     pub extension_id: String,
 }
 
-/// Emits [`ExtensionPopupOpened`].
 pub struct ExtensionPopups;
 
 impl EventEmitter<ExtensionPopupOpened> for ExtensionPopups {}
@@ -575,7 +574,6 @@ pub struct Extension {
     pub options: Option<String>,
 }
 
-/// An extension's toolbar action as Chrome would draw it on one page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionAction {
     pub extension_id: String,
@@ -591,7 +589,6 @@ pub struct ExtensionAction {
     pub enabled: bool,
 }
 
-/// One `chrome.commands` entry of an extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionCommand {
     pub extension_id: String,

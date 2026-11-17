@@ -224,7 +224,6 @@ pub const MOD_CTRL: u32 = 1 << 1;
 pub const MOD_ALT: u32 = 1 << 2;
 pub const MOD_SHIFT: u32 = 1 << 3;
 
-/// `BaaCommand`.
 #[repr(C)]
 pub struct Command {
     pub extension_id: *const c_char,
