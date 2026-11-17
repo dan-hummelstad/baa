@@ -162,22 +162,27 @@ impl TextField {
 
     fn checkpoint(&mut self) {
         let (caret, anchor) = self.ends();
+        self.drop_empty_step();
         let h = &mut self.history;
         h.redo.clear();
-        if h.undo.last().is_some_and(|s| s.text == self.text) {
-            h.undo.pop();
-        }
         h.undo.push(Snap { text: self.text.clone(), caret, anchor });
         if h.undo.len() > UNDO_LIMIT {
             h.undo.remove(0);
         }
     }
 
-    /// A composition that ended where it began leaves no step behind.
     fn drop_empty_step(&mut self) {
         if self.history.undo.last().is_some_and(|s| s.text == self.text) {
             self.history.undo.pop();
         }
+    }
+
+    /// A composition that ended where it began leaves no step behind.
+    fn end_composition(&mut self, r: Range<usize>, with: &str) {
+        self.replace(r, with);
+        self.marked = None;
+        self.history.run = None;
+        self.drop_empty_step();
     }
 
     fn step(&mut self, back: bool) -> bool {
@@ -211,8 +216,7 @@ impl TextField {
                 // Enter and Esc end the composition; they never submit or close past it.
                 "enter" => return Key::Edited,
                 "escape" => {
-                    self.replace(r, "");
-                    self.drop_empty_step();
+                    self.end_composition(r, "");
                     return Key::Edited;
                 }
                 _ => {}

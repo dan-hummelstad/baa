@@ -77,12 +77,10 @@ impl TextField {
             return;
         }
         let r = self.target(r16);
-        self.marked = None;
         if composing {
-            self.replace(r, &line);
-            self.history.run = None;
-            self.drop_empty_step();
+            self.end_composition(r, &line);
         } else {
+            self.marked = None;
             self.edit(Edit::Typing, r, &line);
         }
     }
@@ -99,14 +97,14 @@ impl TextField {
         if self.marked().is_none() {
             self.checkpoint();
         }
+        if text.is_empty() {
+            return self.end_composition(r, "");
+        }
         self.text.replace_range(r.clone(), &text);
-        self.marked = (!text.is_empty()).then(|| r.start..r.start + text.len());
+        self.marked = Some(r.start..r.start + text.len());
         let (a, b) = sel16.map_or((text.len(), text.len()), |s| (from16(&text, s.start), from16(&text, s.end)));
         self.set(r.start + b, r.start + a);
         self.history.run = None;
-        if text.is_empty() {
-            self.drop_empty_step();
-        }
     }
 
     /// From the last painted text, which an edit the input method just made has not
