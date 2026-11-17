@@ -96,6 +96,29 @@ fn enter_while_composing_in_the_command_bar_commits_and_stays(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn the_input_method_types_into_the_rename_and_find_fields(cx: &mut TestAppContext) {
+    use gpui::InputHandler;
+    let (b, cx) = browser(cx);
+    cx.simulate_keystrokes("secondary-t");
+    cx.simulate_input("a.example");
+    cx.simulate_keystrokes("enter");
+    let mut ime = crate::input::handler(&b, Browser::input_field, Browser::on_input_key);
+    b.update_in(cx, |b, window, cx| b.start_rename(window, cx));
+    cx.update(|window, cx| ime.replace_text_in_range(None, "日本", window, cx));
+    b.read_with(cx, |b, _| assert_eq!(b.renaming.as_ref().unwrap().text, "日本"));
+    cx.simulate_keystrokes("escape");
+    cx.dispatch_action(Find);
+    cx.update(|window, cx| {
+        ime.replace_and_mark_text_in_range(None, "に", None, window, cx);
+        ime.replace_text_in_range(None, "日", window, cx);
+    });
+    b.read_with(cx, |b, _| {
+        assert!(b.renaming.is_none());
+        assert_eq!(b.find.as_ref().unwrap().text, "日");
+    });
+}
+
+#[gpui::test]
 fn edit_menu_undo_reaches_the_focused_field_and_not_the_page(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     cx.simulate_keystrokes("secondary-t");

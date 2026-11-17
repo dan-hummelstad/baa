@@ -1086,33 +1086,29 @@ impl<H: WebHost> Browser<H> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let shift = event.keystroke.modifiers.shift;
-        let mut key = Key::Ignored;
-        if !self.agent.asks.is_empty() {
-            self.on_agent_ask_key(event, window, cx);
-        } else if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() && self.active_dialog().is_some() {
-            key = self.on_dialog_key(event, window, cx);
-        } else if let Some(field) = &mut self.renaming {
-            key = field.handle(&event.keystroke, cx);
-            match key {
-                Key::Submit => self.commit_rename(window, cx),
-                Key::Cancel => self.close_overlays(window, cx),
-                _ => {}
+        let key = match self.input_target() {
+            None => Key::Ignored,
+            Some(InputTarget::Asks) => {
+                self.on_agent_ask_key(event, window, cx);
+                Key::Ignored
             }
-        } else if let Some(bar) = &mut self.bar {
-            key = bar.field.handle(&event.keystroke, cx);
-            command_bar::on_key(self, key, window, cx);
-        } else if let Some(field) = &mut self.find {
-            key = field.handle(&event.keystroke, cx);
-            match key {
-                Key::Submit => {
-                    let text = field.text.clone();
-                    self.with_page(cx, |p| p.find(&text, !shift));
+            Some(InputTarget::Dialog) => self.on_dialog_key(event, window, cx),
+            Some(target) => {
+                let key = self.input_field().map_or(Key::Ignored, |f| f.handle(&event.keystroke, cx));
+                match (target, key) {
+                    (InputTarget::Rename, Key::Submit) => self.commit_rename(window, cx),
+                    (InputTarget::Rename | InputTarget::Find, Key::Cancel) => self.close_overlays(window, cx),
+                    (InputTarget::Bar, key) => command_bar::on_key(self, key, window, cx),
+                    (InputTarget::Find, Key::Submit) => {
+                        let text = self.find.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+                        let forward = !event.keystroke.modifiers.shift;
+                        self.with_page(cx, |p| p.find(&text, forward));
+                    }
+                    _ => {}
                 }
-                Key::Cancel => self.close_overlays(window, cx),
-                _ => {}
+                key
             }
-        }
+        };
         if key != Key::Text {
             cx.stop_propagation();
         }
@@ -1121,19 +1117,30 @@ impl<H: WebHost> Browser<H> {
 
     /// The field `on_input_key` sends keys to.
     pub(crate) fn input_field(&mut self) -> Option<&mut TextField> {
-        if !self.agent.asks.is_empty() {
+        match self.input_target()? {
+            InputTarget::Asks => None,
+            InputTarget::Dialog => self.dialog_field(),
+            InputTarget::Rename => self.renaming.as_mut(),
+            InputTarget::Bar => self.bar.as_mut().map(|b| &mut b.field),
+            InputTarget::Find => self.find.as_mut(),
+        }
+    }
+
+    /// Who gets the window's typing: keys and input-method text both follow it.
+    fn input_target(&self) -> Option<InputTarget> {
+        Some(if !self.agent.asks.is_empty() {
+            InputTarget::Asks
+        } else if self.renaming.is_some() {
+            InputTarget::Rename
+        } else if self.bar.is_some() {
+            InputTarget::Bar
+        } else if self.find.is_some() {
+            InputTarget::Find
+        } else if self.active_dialog().is_some() {
+            InputTarget::Dialog
+        } else {
             return None;
-        }
-        if self.bar.is_none() && self.renaming.is_none() && self.find.is_none() {
-            return self.dialog_field();
-        }
-        if self.renaming.is_some() {
-            return self.renaming.as_mut();
-        }
-        match &mut self.bar {
-            Some(bar) => Some(&mut bar.field),
-            None => self.find.as_mut(),
-        }
+        })
     }
 
     /// `step` moves along the ladder; `0` resets to 100%.
@@ -1176,6 +1183,15 @@ pub(crate) type List = (SpaceId, Zone, Option<FolderId>);
 pub(crate) const FAVORITES: List = (SpaceId(0), Zone::Favorite, None);
 /// Width of a Space's emoji button in the bottom bar; the pill slides by it.
 pub(crate) const SPACE_DOT: f32 = 30.0;
+
+#[derive(Clone, Copy)]
+enum InputTarget {
+    Asks,
+    Dialog,
+    Rename,
+    Bar,
+    Find,
+}
 
 struct Placement {
     list: List,
