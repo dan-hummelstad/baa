@@ -638,11 +638,13 @@ void InstallOpenPopupHook() {
 }
 
 void WatchExtensions(BaaProfile* owner, Profile* profile) {
+  // Before the incognito return: an incognito profile shares its parent's action dispatcher, and
+  // the parent may have no BaaProfile of its own to start the watch.
+  WatchActions(profile);
   if (profile->IsOffTheRecord()) {
     return;
   }
   ExtensionsWatches()[owner] = std::make_unique<ExtensionsWatch>(owner, profile);
-  WatchActions(profile);
 }
 
 void UnwatchExtensions(BaaProfile* owner) {
