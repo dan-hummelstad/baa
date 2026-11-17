@@ -58,7 +58,6 @@ pub struct MockHost {
     pub made_default: Cell<u32>,
     /// (profile, css, dark) of each `set_webui_skin`.
     pub skins: RefCell<Vec<(ProfileId, String, bool)>>,
-    /// What `change_extension` answers.
     pub change_result: Cell<bool>,
 }
 
