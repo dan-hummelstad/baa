@@ -6,7 +6,7 @@ use baa_web::ProfileId;
 use baa_web::{ExtensionChange, ExtensionCommand, ExtensionInfo, SiteAccess, WebHost};
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString, Window};
 
-use super::{Item, SettingsView};
+use super::{key_chips, Item, SettingsView};
 use crate::{
     browser::{ext_actions::{baa_binding, chrome_key, command_keystroke}, plain_text, Browser},
     command_bar::stroke_chips,
@@ -479,10 +479,7 @@ impl<H: WebHost> SettingsView<H> {
             let current = if recording == me {
                 div().text_size(px(12.5)).text_color(self.theme.accent).child("Press a shortcut…").into_any_element()
             } else if let Some(k) = &stroke {
-                let chip = |text: SharedString| {
-                    div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(text)
-                };
-                div().flex().gap(px(4.)).children(stroke_chips(k).into_iter().map(chip)).into_any_element()
+                key_chips(stroke_chips(k))
             } else {
                 div().text_size(px(12.5)).text_color(surface::muted()).child("Not set").into_any_element()
             };

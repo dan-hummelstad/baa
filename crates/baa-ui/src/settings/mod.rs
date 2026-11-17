@@ -100,6 +100,11 @@ pub(crate) struct SettingsView<H: WebHost> {
     _activation: Subscription,
 }
 
+fn key_chips(keys: Vec<SharedString>) -> AnyElement {
+    let chip = |k| div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(k);
+    div().flex().gap(px(4.)).children(keys.into_iter().map(chip)).into_any_element()
+}
+
 pub(crate) fn window_options(cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(900.), px(640.)), cx))),

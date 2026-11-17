@@ -6,7 +6,7 @@ use baa_model::{
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString};
 
-use super::{Field, Item, SettingsView};
+use super::{key_chips, Field, Item, SettingsView};
 use crate::{
     actions,
     icons::icon,
@@ -424,10 +424,7 @@ impl<H: WebHost> SettingsView<H> {
         let map = map.borrow();
         for (label, action) in shortcuts() {
             let keys: Vec<SharedString> = map.bindings_for_action(&*action).next_back().map(crate::command_bar::chips).unwrap_or_default();
-            let chips = keys.into_iter().map(|k| {
-                div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(k)
-            });
-            out.push(self.sub_row(format!("shortcut:{label}"), SharedString::from(label).into_any_element(), div().flex().gap(px(4.)).children(chips).into_any_element()));
+            out.push(self.sub_row(format!("shortcut:{label}"), SharedString::from(label).into_any_element(), key_chips(keys)));
         }
         drop(map);
         out.push(self.section("Customise"));
