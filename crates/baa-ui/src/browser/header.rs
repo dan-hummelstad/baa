@@ -4,13 +4,17 @@
 use super::*;
 use ext_actions::badge_text;
 
-/// A toolbar button's tooltip.
+/// A toolbar button's tooltip, one line: an extension chooses the text.
 struct Tip(SharedString);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .debug_selector(|| "tip".into())
             .max_w(px(280.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
             .px(px(8.))
             .py(px(4.))
             .rounded(r(6.))
@@ -114,7 +118,7 @@ impl<H: WebHost> Browser<H> {
                     .child(text)
             });
             let dim = action.is_some_and(|a| !a.enabled);
-            let title = action.map(|a| SharedString::from(plain_text(&a.title))).filter(|t| !t.is_empty());
+            let title = action.map(|a| SharedString::from(plain_text(&a.title))).filter(|t| !t.is_empty() && !self.prompt_shown());
             let el = div()
                 .id(("extension", i))
                 .relative()

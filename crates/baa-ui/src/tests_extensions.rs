@@ -69,6 +69,31 @@ fn a_badge_is_drawn_over_its_icon_and_follows_changes(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_title_tooltip_is_one_line_and_never_over_a_prompt(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let title = "blocked ".repeat(200);
+    b.update(cx, |b, _| b.host.actions.borrow_mut().insert(None, vec![ExtensionAction { title, ..action("3") }]));
+    changed(&b, None, cx);
+    let tip = |cx: &mut VisualTestContext| {
+        let at = cx.debug_bounds("badge:ubo").unwrap().center();
+        cx.simulate_mouse_move(gpui::point(gpui::px(0.), gpui::px(0.)), None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor().advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        cx.debug_bounds("tip")
+    };
+    let shown = tip(cx).expect("the tooltip shows");
+    assert!(shown.size.height < gpui::px(30.), "one line: {shown:?}");
+
+    let page = b.read_with(cx, |b, _| b.active_page().unwrap().clone());
+    page.update(cx, |_, cx| {
+        cx.emit(PageEvent::PermissionRequested { id: 1, origin: "https://a.example".into(), kinds: vec![baa_web::Permission::Camera] })
+    });
+    cx.run_until_parked();
+    assert!(tip(cx).is_none(), "not beside a prompt");
+}
+
+#[gpui::test]
 fn a_page_change_counts_only_for_the_active_page(cx: &mut TestAppContext) {
     let (b, cx) = browser(cx);
     let first = b.read_with(cx, |b, _| b.active_page().unwrap().entity_id());
