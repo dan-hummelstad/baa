@@ -16,6 +16,7 @@
 #include "base/files/file_path.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/baa_hooks.h"
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
@@ -151,8 +152,11 @@ void DestroyPopup(Popup* popup);
 class Popup : public extensions::ExtensionView,
               public extensions::ExtensionRegistryObserver {
  public:
-  Popup(Profile* profile, BrowserWindowInterface* browser, std::unique_ptr<extensions::ExtensionViewHost> host)
-      : profile_(profile), host_(std::move(host)) {
+  // `shown` (chrome.action.openPopup's) runs exactly once: with the host when the page has
+  // loaded, null when the popup closes first.
+  Popup(Profile* profile, BrowserWindowInterface* browser, std::unique_ptr<extensions::ExtensionViewHost> host,
+        ShowPopupCallback shown = {})
+      : profile_(profile), host_(std::move(host)), shown_(std::move(shown)) {
     registry_.Observe(extensions::ExtensionRegistry::Get(profile));
     Popups().push_back(this);
     // The host's delegate holds the Browser: when it goes, so does the popup,
@@ -163,6 +167,7 @@ class Popup : public extensions::ExtensionView,
 
   ~Popup() override {
     std::erase(Popups(), this);
+    Shown(nullptr);
     host_.reset();
   }
 
@@ -192,7 +197,11 @@ class Popup : public extensions::ExtensionView,
   bool HandleKeyboardEvent(content::WebContents*, const input::NativeWebKeyboardEvent& event) override {
     return OfferKey(event, true);
   }
-  void OnLoaded() override { SendTabState(tab_); }
+  void OnLoaded() override {
+    SendTabState(tab_);
+    // openPopup's caller CHECKs that the host has a document.
+    Shown(host_->document_element_available() ? host_.get() : nullptr);
+  }
 
   // extensions::ExtensionRegistryObserver:
   void OnExtensionUnloaded(content::BrowserContext*, const extensions::Extension* extension,
@@ -205,12 +214,19 @@ class Popup : public extensions::ExtensionView,
  private:
   void OnHostClose(extensions::ExtensionHost*) { Closed(); }
 
+  void Shown(extensions::ExtensionHost* host) {
+    if (shown_) {
+      std::move(shown_).Run(host);
+    }
+  }
+
   // Chrome (the page, or its extension going away) closed the popup.
   void Closed() {
     if (closed_) {
       return;
     }
     closed_ = true;
+    Shown(nullptr);
     BaaTab* tab = tab_;
     tab_ = nullptr;
     BareTabClosedByChrome(tab);
@@ -223,6 +239,7 @@ class Popup : public extensions::ExtensionView,
 
   raw_ptr<Profile> profile_;
   std::unique_ptr<extensions::ExtensionViewHost> host_;
+  ShowPopupCallback shown_;
   raw_ptr<BaaTab> tab_ = nullptr;
   bool closed_ = false;
   base::CallbackListSubscription browser_closed_;
@@ -233,6 +250,62 @@ void DestroyPopup(Popup* popup) {
   if (std::find(Popups().begin(), Popups().end(), popup) != Popups().end()) {
     delete popup;
   }
+}
+
+// The extension's popup page for `active`, as its action would show it there; null if it has
+// none.
+std::unique_ptr<extensions::ExtensionViewHost> PopupHost(Profile* profile, BrowserWindowInterface* browser,
+                                                         const extensions::Extension& ext,
+                                                         content::WebContents* active) {
+  extensions::ExtensionAction* action = extensions::ExtensionActionManager::Get(profile)->GetExtensionAction(ext);
+  if (!action) {
+    return nullptr;
+  }
+  GURL url = action->GetPopupUrl(sessions::SessionTabHelper::IdForTab(active).id());
+  return extensions::ExtensionViewHostFactory::CreatePopupHost(ext, url, browser);
+}
+
+// Shows `host` as a popup page of the app; its tab, which lives until Chrome or the app closes it.
+BaaTab* OpenPopup(Profile* profile, BrowserWindowInterface* browser,
+                  std::unique_ptr<extensions::ExtensionViewHost> host, ShowPopupCallback shown = {}) {
+  auto* popup = new Popup(profile, browser, std::move(host), std::move(shown));
+  popup->Start();
+  return popup->tab();
+}
+
+// chrome.action.openPopup on a baa window (patches/baa/open-popup-hook.patch). The app learns the
+// page from extension_popup_opened.
+bool OpenPopupForApi(BrowserWindowInterface& browser, const extensions::Extension& ext,
+                     ShowPopupCallback& shown, bool* opened) {
+  if (!IsOurBrowser(&browser)) {
+    return false;
+  }
+  *opened = false;
+  Profile* profile = browser.GetProfile();
+  BaaProfile* owner = ProfileFor(profile);
+  content::WebContents* active = browser.GetTabStripModel()->GetActiveWebContents();
+  // Not over a fullscreen page: Chrome's toolbar, which anchors its popup, is hidden then, and a
+  // page could cover itself with an extension's UI.
+  if (!owner || !active || !TabAnnounced(TabFor(active)) || baa_is_quitting() ||
+      browser.GetWindow()->IsFullscreen()) {
+    return true;
+  }
+  std::unique_ptr<extensions::ExtensionViewHost> host = PopupHost(profile, &browser, ext, active);
+  if (!host) {
+    return true;
+  }
+  BaaTab* tab = OpenPopup(profile, &browser, std::move(host), std::move(shown));
+  *opened = true;
+  // Never inside the extension's call; skipped if the popup is already gone.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](BaaProfile* owner, const std::string& extension_id, uint64_t popup) {
+                       if (ChromeProfileOf(owner) && TabFromId(popup)) {
+                         Callbacks().extension_popup_opened(CallbackContext(), owner, extension_id.c_str(), popup);
+                       }
+                     },
+                     owner, ext.id(), IdOf(tab)));
+  return true;
 }
 
 // ---- Re-enable -----------------------------------------------------------------
@@ -560,6 +633,10 @@ void DestroyAllPopups() {
   }
 }
 
+void InstallOpenPopupHook() {
+  g_baa_open_popup = &OpenPopupForApi;
+}
+
 void WatchExtensions(BaaProfile* owner, Profile* profile) {
   if (profile->IsOffTheRecord()) {
     return;
@@ -819,20 +896,8 @@ BaaTabId baa_extension_popup(BaaProfile* profile, const char* extension_id) {
   if (runner->RunAction(ext, /*grant_tab_permissions=*/true) != extensions::ExtensionAction::ShowAction::kShowPopup) {
     return 0;
   }
-  extensions::ExtensionAction* action =
-      extensions::ExtensionActionManager::Get(chrome_profile)->GetExtensionAction(*ext);
-  if (!action) {
-    return 0;
-  }
-  GURL url = action->GetPopupUrl(sessions::SessionTabHelper::IdForTab(active).id());
-  std::unique_ptr<extensions::ExtensionViewHost> host =
-      extensions::ExtensionViewHostFactory::CreatePopupHost(*ext, url, browser);
-  if (!host) {
-    return 0;
-  }
-  auto* popup = new baa::Popup(chrome_profile, browser, std::move(host));
-  popup->Start();
-  return baa::IdOf(popup->tab());
+  std::unique_ptr<extensions::ExtensionViewHost> host = baa::PopupHost(chrome_profile, browser, *ext, active);
+  return host ? baa::IdOf(baa::OpenPopup(chrome_profile, browser, std::move(host))) : 0;
 }
 
 namespace {

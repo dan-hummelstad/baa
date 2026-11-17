@@ -1,0 +1,79 @@
+--- a/chrome/browser/baa_hooks.h
++++ b/chrome/browser/baa_hooks.h
+@@ -7,6 +7,7 @@
+ #include <optional>
+ #include <string>
+ 
++#include "base/functional/callback_forward.h"
+ #include "chrome/browser/extensions/extension_install_prompt.h"
+ #include "content/public/browser/login_delegate.h"
+ #include "content/public/browser/weak_document_ptr.h"
+@@ -14,6 +15,7 @@
+ #include "url/gurl.h"
+ #include "url/origin.h"
+ 
++class BrowserWindowInterface;
+ class ExtensionInstallPromptShowParams;
+ class LoginHandler;
+ 
+@@ -23,6 +25,8 @@
+ }  // namespace content
+ 
+ namespace extensions {
++class Extension;
++class ExtensionHost;
+ class InstallPromptData;
+ }  // namespace extensions
+ 
+@@ -58,4 +62,15 @@
+     std::unique_ptr<extensions::InstallPromptData>& prompt);
+ extern BaaInstallDialogFn g_baa_install_dialog;
+ 
++// chrome.action.openPopup: //baa hosts the popups of its windows, which have no toolbar. Returns
++// false to leave `browser` to Chrome. Otherwise `*opened` says whether the popup is opening:
++// then the hook took `callback` and runs it once (with the host when the popup has loaded, null
++// if it closed first); if not, `callback` is left untouched.
++using BaaOpenPopupFn = bool (*)(
++    BrowserWindowInterface& browser,
++    const extensions::Extension& extension,
++    base::OnceCallback<void(extensions::ExtensionHost*)>& callback,
++    bool* opened);
++extern BaaOpenPopupFn g_baa_open_popup;
++
+ #endif  // CHROME_BROWSER_BAA_HOOKS_H_
+--- a/chrome/browser/extensions/api/extension_action/extension_action_api.cc
++++ b/chrome/browser/extensions/api/extension_action/extension_action_api.cc
+@@ -18,6 +18,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/stringprintf.h"
++#include "chrome/browser/baa_hooks.h"
+ #include "chrome/browser/extensions/browser_window_util.h"
+ #include "chrome/browser/extensions/extension_action_dispatcher.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+@@ -60,6 +61,8 @@
+ using content::WebContents;
+ using extensions::browser_window_util::GetLastActiveBrowserWithProfile;
+ 
++BaaOpenPopupFn g_baa_open_popup = nullptr;
++
+ namespace extensions {
+ 
+ namespace {
+@@ -140,6 +143,16 @@
+                         const Extension& extension,
+                         std::string* error,
+                         ShowPopupCallback callback) {
++  // baa: the embedding app hosts the popup when the window is its own.
++  bool baa_opened = false;
++  if (g_baa_open_popup &&
++      g_baa_open_popup(browser, extension, callback, &baa_opened)) {
++    if (!baa_opened) {
++      *error = kFailedToOpenPopupGenericError;
++    }
++    return baa_opened;
++  }
++
+ #if !BUILDFLAG(IS_ANDROID)
+   // On Android, the extension toolbar exists if and only if ExtensionsContainer
+   // exists, so the check below is sufficient.

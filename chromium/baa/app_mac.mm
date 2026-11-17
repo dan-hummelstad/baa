@@ -57,6 +57,7 @@ void EnsureStarted() {
   InstallDialogHooks();
   InstallSwipeHook();
   InstallTargetUrlHook();
+  InstallOpenPopupHook();
   // Once Chrome starts terminating, no new Browsers or tabs are made: Browsers
   // close through BrowserCloseManager (our windows' Close), and later calls from
   // the UI on a gone handle do nothing.
@@ -159,6 +160,7 @@ void baa_install_app(int argc,
   REQUIRE(extensions_changed);
   REQUIRE(target_url);
   REQUIRE(extension_action);
+  REQUIRE(extension_popup_opened);
 #undef REQUIRE
   g_argv = new std::vector<const char*>(argv, argv + argc);
   g_callbacks = *callbacks;

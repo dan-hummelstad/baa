@@ -373,6 +373,16 @@ typedef struct {
   // extensions_changed.
   void (*extension_action)(void* ctx, BaaProfile* profile,
                            const char* extension_id, BaaTabId tab);
+
+  // The extension opened its popup itself (chrome.action.openPopup) over the
+  // active tab of the profile's window: `popup` is the page, as
+  // baa_extension_popup would have returned it (it reports tab_state/resized,
+  // and tab_closed when it closes; the app may get those for it before this).
+  // Never inside a baa_* call; not sent if the popup closed meanwhile. The
+  // engine refuses openPopup while the window is fullscreen, its active tab is
+  // unknown to the app, or the app is quitting.
+  void (*extension_popup_opened)(void* ctx, BaaProfile* profile,
+                                 const char* extension_id, BaaTabId popup);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
