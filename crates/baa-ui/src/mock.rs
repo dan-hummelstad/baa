@@ -59,6 +59,18 @@ pub struct MockHost {
     /// (profile, css, dark) of each `set_webui_skin`.
     pub skins: RefCell<Vec<(ProfileId, String, bool)>>,
     pub change_result: Cell<bool>,
+    pub extension_actions_changed: Entity<baa_web::ExtensionActionsChanged>,
+    pub extension_popups: Entity<baa_web::ExtensionPopups>,
+    /// What `extension_actions` answers per page (`None`: the defaults); a page without
+    /// its own entry gets the defaults.
+    pub actions: RefCell<std::collections::HashMap<Option<gpui::EntityId>, Vec<baa_web::ExtensionAction>>>,
+    pub commands: RefCell<Vec<baa_web::ExtensionCommand>>,
+    /// (extension, command) of each `run_extension_command`.
+    pub ran: RefCell<Vec<(String, String)>>,
+    /// (extension, command, key, modifiers) of each `set_extension_shortcut` it accepted.
+    pub shortcuts: RefCell<Vec<(String, String, String, gpui::Modifiers)>>,
+    /// The engine refuses every shortcut.
+    pub refuse_shortcuts: Cell<bool>,
 }
 
 pub struct MockPage {
@@ -90,6 +102,7 @@ pub struct MockPage {
     /// The other CDP-backed calls, in order: "click 1 2", "insert_text hi",
     /// "press_key Enter", "emulation Some(Phone)", "media Pause", "watch_console".
     pub cdp: RefCell<Vec<String>>,
+    pub id: Cell<Option<gpui::EntityId>>,
 }
 
 impl EventEmitter<PageEvent> for MockPage {}
@@ -266,7 +279,22 @@ impl MockHost {
             made_default: Cell::default(),
             skins: RefCell::default(),
             change_result: Cell::new(true),
+            extension_actions_changed: cx.new(|_| baa_web::ExtensionActionsChanged),
+            extension_popups: cx.new(|_| baa_web::ExtensionPopups),
+            actions: RefCell::default(),
+            commands: RefCell::default(),
+            ran: RefCell::default(),
+            shortcuts: RefCell::default(),
+            refuse_shortcuts: Cell::default(),
         }
+    }
+
+    pub fn emit_action_changed(&self, change: baa_web::ExtensionActionChanged, cx: &mut App) {
+        self.extension_actions_changed.update(cx, |_, cx| cx.emit(change));
+    }
+
+    pub fn emit_popup_opened(&self, opened: baa_web::ExtensionPopupOpened, cx: &mut App) {
+        self.extension_popups.update(cx, |_, cx| cx.emit(opened));
     }
 }
 
@@ -293,7 +321,7 @@ impl WebHost for MockHost {
         if !user_initiated {
             self.supplied.borrow_mut().push(url.into());
         }
-        cx.new(|cx| MockPage {
+        let page = cx.new(|cx| MockPage {
             url: RefCell::new(url.into()),
             committed: RefCell::default(),
             loading: Cell::default(),
@@ -316,7 +344,10 @@ impl WebHost for MockHost {
             evals: RefCell::default(),
             screenshots: RefCell::default(),
             cdp: RefCell::default(),
-        })
+            id: Cell::default(),
+        });
+        page.read(cx).id.set(Some(page.entity_id()));
+        page
     }
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
         self.popups.borrow_mut().push(url.into());
@@ -443,5 +474,40 @@ impl WebHost for MockHost {
     }
     fn set_webui_skin(&self, profile: ProfileId, css: String, dark: bool) {
         self.skins.borrow_mut().push((profile, css, dark));
+    }
+    fn extension_actions(&self, _: ProfileId, page: Option<&MockPage>) -> Vec<baa_web::ExtensionAction> {
+        let actions = self.actions.borrow();
+        let own = page.and_then(|p| actions.get(&Some(p.id.get()?)));
+        own.or_else(|| actions.get(&None)).cloned().unwrap_or_default()
+    }
+    fn extension_actions_changed(&self) -> Entity<baa_web::ExtensionActionsChanged> {
+        self.extension_actions_changed.clone()
+    }
+    fn extension_commands(&self, _: ProfileId) -> Vec<baa_web::ExtensionCommand> {
+        self.commands.borrow().clone()
+    }
+    fn run_extension_command(&self, _: ProfileId, extension_id: &str, command: &str) -> bool {
+        self.ran.borrow_mut().push((extension_id.into(), command.into()));
+        true
+    }
+    fn set_extension_shortcut(&self, _: ProfileId, extension_id: &str, command: &str, key: &str, modifiers: gpui::Modifiers) -> bool {
+        if self.refuse_shortcuts.get() {
+            return false;
+        }
+        self.shortcuts.borrow_mut().push((extension_id.into(), command.into(), key.into(), modifiers));
+        for c in self.commands.borrow_mut().iter_mut() {
+            if !key.is_empty() && c.key == key && c.modifiers == modifiers {
+                c.key.clear();
+                c.modifiers = gpui::Modifiers::default();
+            }
+            if c.extension_id == extension_id && c.name == command {
+                c.key = key.into();
+                c.modifiers = if key.is_empty() { gpui::Modifiers::default() } else { modifiers };
+            }
+        }
+        true
+    }
+    fn extension_popups(&self) -> Entity<baa_web::ExtensionPopups> {
+        self.extension_popups.clone()
     }
 }

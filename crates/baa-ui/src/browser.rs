@@ -806,6 +806,7 @@ impl<H: WebHost> Browser<H> {
             PageEvent::Closed => self.session.close_tab(id, now()),
             // Only extension popups send it.
             PageEvent::PreferredSize(_) => return,
+            PageEvent::TargetUrl(_) => return,
             // Only docked DevTools sends it, to its own subscription.
             PageEvent::DevToolsDock(_) => return,
             PageEvent::Focused => return self.on_page_focused(id, window, cx),
