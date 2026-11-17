@@ -283,9 +283,8 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     /// The origin of the document the page shows now, serialized (`"https://x.com"`).
     /// It can differ from [`Self::url`]'s origin: a pending navigation, or a blank popup
     /// its opener writes into. `None` while it is opaque (an error page, `data:`, a
-    /// sandboxed page, a first navigation that has not committed). A change of it alone
-    /// emits [`PageEvent::HistoryChanged`]. The default knows none, so whoever acts on
-    /// the page for the user refuses.
+    /// sandboxed page, a first navigation that has not committed). The default knows
+    /// none, so whoever acts on the page for the user refuses.
     fn committed_origin(&self) -> Option<String> {
         None
     }

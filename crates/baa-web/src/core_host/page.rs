@@ -131,10 +131,7 @@ impl CorePage {
         if new.loading != old.loading {
             cx.emit(PageEvent::LoadingChanged(new.loading));
         }
-        // UrlChanged would record a visit; HistoryChanged only redraws. Its values may repeat.
-        if (new.can_go_back, new.can_go_forward) != (old.can_go_back, old.can_go_forward)
-            || new.committed_origin != old.committed_origin
-        {
+        if (new.can_go_back, new.can_go_forward) != (old.can_go_back, old.can_go_forward) {
             cx.emit(PageEvent::HistoryChanged { can_go_back: new.can_go_back, can_go_forward: new.can_go_forward });
         }
         if new.audible != old.audible {
