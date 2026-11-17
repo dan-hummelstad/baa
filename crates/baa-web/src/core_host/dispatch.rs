@@ -28,6 +28,18 @@ use crate::{
     SignIns, Suggestion, ProfileId, ExtensionsChanged,
 };
 
+fn tell<T: 'static>(slot: &RefCell<Option<WeakEntity<T>>>, cx: &mut AsyncApp, f: impl FnOnce(&mut T, &mut Context<T>)) {
+    let entity = slot.borrow().clone();
+    if let Some(entity) = entity {
+        entity
+            .update(cx, |entity, cx| {
+                f(entity, cx);
+                cx.notify();
+            })
+            .ok();
+    }
+}
+
 /// `BAA_ACCOUNT_*` bits.
 pub(super) const ACCOUNTS: [(u32, Account); 3] = [
     (ffi::ACCOUNT_GOOGLE, Account::Google),
@@ -196,14 +208,7 @@ impl Dispatch {
     }
 
     fn chrome_tab(&self, url: String, cx: &mut AsyncApp) {
-        let tabs = self.chrome_tabs.borrow().clone();
-        if let Some(tabs) = tabs {
-            tabs.update(cx, |tabs, cx| {
-                tabs.0.push(url);
-                cx.notify();
-            })
-            .ok();
-        }
+        tell(&self.chrome_tabs, cx, |tabs, _| tabs.0.push(url));
     }
 
     fn tab_created(
@@ -301,16 +306,7 @@ impl Dispatch {
         if super::profiles::is_ephemeral(id) {
             return;
         }
-        self.queue(move |cx| {
-            let list = self.sign_ins.borrow().clone();
-            if let Some(list) = list {
-                list.update(cx, |list, cx| {
-                    list.0.push((id, account));
-                    cx.notify();
-                })
-                .ok();
-            }
-        });
+        self.queue(move |cx| tell(&self.sign_ins, cx, |list, _| list.0.push((id, account))));
     }
 
     /// Like [`Self::signed_in`]: an incognito profile has no extensions of its own to list.
@@ -320,16 +316,11 @@ impl Dispatch {
             return;
         }
         self.queue(move |cx| {
-            let list = self.extensions_changed.borrow().clone();
-            if let Some(list) = list {
-                list.update(cx, |list, cx| {
-                    if !list.0.contains(&id) {
-                        list.0.push(id);
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }
+            tell(&self.extensions_changed, cx, |list, _| {
+                if !list.0.contains(&id) {
+                    list.0.push(id);
+                }
+            })
         });
     }
 
