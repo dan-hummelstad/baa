@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 15
+#define BAA_ABI_VERSION 16
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -609,7 +609,8 @@ typedef struct {
   uint32_t modifiers;  // BAA_MOD_* bits; 0 when `key` is ""
   // The action's command ("_execute_action" and the MV2 kinds): its shortcut
   // is a click on the action (baa_extension_popup), which the engine does not
-  // dispatch; the receiver matches it against its own keys.
+  // dispatch; the receiver matches it against its own keys (one without ⌘ or
+  // ⌃ never reaches the `key` callback).
   bool action;
   // A system-wide shortcut, also when the app is not in front: Chrome's global
   // registry owns it, the window's key handling does not dispatch it.
