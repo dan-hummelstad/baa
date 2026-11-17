@@ -66,6 +66,12 @@ fn a_badge_is_drawn_over_its_icon_and_follows_changes(cx: &mut TestAppContext) {
     set_actions(&b, None, "", cx);
     changed(&b, None, cx);
     assert!(cx.debug_bounds("badge:ubo").is_none(), "an empty badge is none");
+
+    use crate::browser::ext_actions::badge_ink;
+    let (yellow, red) = (gpui::rgba(0xFFD700FF).into(), gpui::rgba(0xB00020FF).into());
+    assert_eq!(badge_ink(yellow, None), gpui::black(), "the default contrasts with the badge");
+    assert_eq!(badge_ink(red, None), gpui::white());
+    assert_eq!(badge_ink(red, Some(0x00FF00FF)), gpui::rgba(0x00FF00FF).into(), "the extension's own wins");
 }
 
 #[gpui::test]

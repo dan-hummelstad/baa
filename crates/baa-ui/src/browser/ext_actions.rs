@@ -12,6 +12,13 @@ pub(crate) fn badge_text(text: &str) -> String {
     plain_text(text).chars().take(BADGE_CHARS).collect()
 }
 
+/// The badge's text colour: the extension's, else black or white, whichever reads on `badge`.
+pub(crate) fn badge_ink(badge: gpui::Hsla, text_rgba: Option<u32>) -> gpui::Hsla {
+    let c = badge.to_rgb();
+    let light = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 0.5;
+    text_rgba.map_or(if light { gpui::black() } else { gpui::white() }, |c| gpui::rgba(c).into())
+}
+
 /// Chrome's key token and modifiers for a gpui keystroke, and back. The tokens the engine
 /// takes and reports: "A".."Z", "0".."9", and the named keys below.
 pub(crate) fn chrome_key(keystroke: &gpui::Keystroke) -> Option<(String, gpui::Modifiers)> {

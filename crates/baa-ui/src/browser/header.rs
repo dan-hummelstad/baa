@@ -2,7 +2,7 @@
 //! it), and the traffic lights' row at the top of a left-hand sidebar.
 
 use super::*;
-use ext_actions::badge_text;
+use ext_actions::{badge_ink, badge_text};
 
 /// A toolbar button's tooltip, one line: an extension chooses the text.
 struct Tip(SharedString);
@@ -97,6 +97,7 @@ impl<H: WebHost> Browser<H> {
             let action = self.actions.get(&ext.id);
             let badge = action.map(|a| (badge_text(&a.badge_text), a)).filter(|(t, _)| !t.is_empty()).map(|(text, a)| {
                 let id = ext.id.clone();
+                let bg: gpui::Hsla = a.badge_rgba.map_or(theme.accent, |c| gpui::rgba(c).into());
                 div()
                     .debug_selector(move || format!("badge:{id}"))
                     .absolute()
@@ -109,8 +110,8 @@ impl<H: WebHost> Browser<H> {
                     .items_center()
                     .justify_center()
                     .rounded(r(3.))
-                    .bg(a.badge_rgba.map_or(theme.accent, |c| gpui::rgba(c).into()))
-                    .text_color(a.text_rgba.map_or(gpui::white(), |c| gpui::rgba(c).into()))
+                    .bg(bg)
+                    .text_color(badge_ink(bg, a.text_rgba))
                     .text_size(px(9.))
                     .line_height(px(12.))
                     .font_weight(gpui::FontWeight::BOLD)
