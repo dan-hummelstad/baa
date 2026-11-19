@@ -404,3 +404,50 @@ fn an_app_link_in_a_peek_asks_on_the_card_and_the_empty_card_goes(cx: &mut TestA
     b.read_with(cx, |b, _| assert!(b.peek.is_some(), "a Peek of a site stays"));
     assert!(answered(&p, cx).is_empty(), "the page under the Peek was asked nothing");
 }
+
+#[gpui::test]
+fn a_dialog_moved_out_of_a_peek_waits_out_the_delay_again(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    p.update(cx, |_, cx| cx.emit(PageEvent::OpenRequested { url: "https://peek.example".into(), from_user_gesture: true, background: false }));
+    cx.run_until_parked();
+    let peek = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+    peek.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(60, DialogKind::Confirm))));
+    cx.run_until_parked();
+    cx.executor().advance_clock(std::time::Duration::from_millis(600));
+    b.update_in(cx, |b, window, cx| b.expand_peek(window, cx));
+    cx.run_until_parked();
+    let ok = cx.debug_bounds("dialog-ok").expect("the dialog came along").center();
+    cx.simulate_click(ok, Modifiers::none());
+    assert!(answered(&peek, cx).is_empty(), "a click aimed at the Peek's controls");
+    cx.executor().advance_clock(ACTIVATION_DELAY);
+    cx.simulate_click(ok, Modifiers::none());
+    assert_eq!(answered(&peek, cx), [(60, DialogAnswer { ok: true, ..Default::default() })]);
+}
+
+#[gpui::test]
+fn a_dialog_moved_out_of_lil_baa_waits_out_the_delay_again_over_an_open_peek(cx: &mut TestAppContext) {
+    let (lil, p, window) = lil_baa(cx);
+    let main = cx.windows().into_iter().find_map(|w| w.downcast::<Browser<MockHost>>()).expect("the browser window");
+    let b = main.entity(cx).unwrap();
+    let main = &mut VisualTestContext::from_window(main.into(), cx);
+    b.update_in(main, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        b.open_peek(space, "https://peek.example", window, cx);
+    });
+    main.run_until_parked();
+    p.update(main, |_, cx| cx.emit(PageEvent::Dialog(dialog(61, DialogKind::Confirm))));
+    main.run_until_parked();
+    main.executor().advance_clock(std::time::Duration::from_millis(600));
+    window.update(main, |_, window, cx| lil.update(cx, |lil, cx| lil.open_in_browser(window, cx))).unwrap();
+    main.run_until_parked();
+    main.update(|window, cx| {
+        assert!(b.read(cx).peek.is_none(), "the Peek would cover the moved dialog");
+        assert!(b.read(cx).input_focus.is_focused(window), "the dialog has the keyboard");
+    });
+    let ok = main.debug_bounds("dialog-ok").expect("the dialog came along").center();
+    main.simulate_click(ok, Modifiers::none());
+    assert!(answered(&p, main).is_empty(), "a click aimed at the Open in button");
+    main.executor().advance_clock(ACTIVATION_DELAY);
+    main.simulate_click(ok, Modifiers::none());
+    assert_eq!(answered(&p, main), [(61, DialogAnswer { ok: true, ..Default::default() })]);
+}

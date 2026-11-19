@@ -884,24 +884,31 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// Makes `page` (from Peek or lil-baa) a tab in `space` of this window.
+    /// Makes `page` (from Peek or lil-baa) a tab in `space` of this window, with the
+    /// prompts it has up.
     pub(crate) fn adopt_page(
         &mut self,
         page: Entity<H::Page>,
         space: SpaceId,
         url: &str,
+        mut asks: crate::prompts::Asks,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // An open Peek would cover the tab and take the keyboard from its prompt.
+        self.close_peek(window, cx);
         self.session.set_active_space(space);
         let id = self.session.open_tab(space, url, now());
         let title = page.read(cx).title();
         if let Some(tab) = self.session.tab_mut(id) {
             tab.title = title;
         }
+        asks.moved(cx.background_executor().now());
+        self.asks.insert(id, asks);
         self.attach_page(id, page, window, cx);
         self.watch_if_local(id, url, cx);
         self.sync(window, cx);
+        self.focus_page(window, cx);
     }
 
     /// A live page from another window becomes `id`'s here.

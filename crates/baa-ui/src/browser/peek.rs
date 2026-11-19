@@ -182,11 +182,7 @@ impl<H: WebHost> Browser<H> {
     /// Peek → a real tab, keeping the live page.
     pub(crate) fn expand_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(peek) = self.peek.take() else { return };
-        self.adopt_page(peek.page, peek.space, &peek.url, window, cx);
-        if let Some(tab) = self.active_tab() {
-            self.asks.insert(tab, peek.asks);
-        }
-        self.focus_page(window, cx);
+        self.adopt_page(peek.page, peek.space, &peek.url, peek.asks, window, cx);
     }
 
     pub(crate) fn open_extension(

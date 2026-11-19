@@ -45,6 +45,14 @@ impl Asks {
         }
     }
 
+    /// Shown somewhere new: a click there waits out [`ACTIVATION_DELAY`] again.
+    pub(crate) fn moved(&mut self, now: Instant) {
+        if let Some(dialog) = &mut self.dialog {
+            dialog.shown_at = now;
+        }
+        self.reveal(now);
+    }
+
     pub(crate) fn any(&self) -> bool {
         self.dialog.is_some() || !self.permissions.is_empty()
     }

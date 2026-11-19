@@ -147,11 +147,7 @@ impl<H: WebHost> LilBaa<H> {
         let moved = main.update(cx, |_, main_window, cx| {
             browser.update(cx, |browser, cx| {
                 if same_profile {
-                    browser.adopt_page(page, space, &url, main_window, cx);
-                    if let Some(tab) = browser.active_tab() {
-                        browser.asks.insert(tab, asks);
-                    }
-                    browser.focus_page(main_window, cx);
+                    browser.adopt_page(page, space, &url, asks, main_window, cx);
                 } else {
                     // Another Space's storage: the page starts over there.
                     browser.open_url_in(space, &url, main_window, cx);
