@@ -979,6 +979,60 @@
     "message": "Warn about insecure public sites"
   },
   {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_WEB_PUSH",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Toggle for receiving web push notifications",
+    "message": "Allow receiving push notifications"
+  },
+  {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_WEB_PUSH_DESCRIPTION",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Description of the toggle for receiving web push notifications",
+    "message": "Websites you allow to send notifications can deliver them through a push server, even when they aren't open. Helium only connects to the push server while at least one website is subscribed. Push messages are end-to-end encrypted. When disabled, websites can't subscribe to push notifications."
+  },
+  {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_PUSH_SERVER_HELIUM",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Radio button for using the default Helium push server",
+    "message": "Helium push server"
+  },
+  {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_PUSH_SERVER_CUSTOM",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Radio button for using a custom push server",
+    "message": "Other"
+  },
+  {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_PUSH_SERVER_ARIA_LABEL",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "ARIA label of the text input for a custom push server",
+    "message": "Custom push server URL"
+  },
+  {
+    "name": "IDS_SETTINGS_HELIUM_SERVICES_PUSH_SERVER_INVALID",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Validation error shown when the custom push server URL is invalid.",
+    "message": "Invalid push server URL"
+  },
+  {
+    "name": "IDS_SETTINGS_UI_DENSITY",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Label for the dropdown that controls the density of the browser UI, such as the size of tabs, toolbar buttons and the address bar.",
+    "message": "Interface density"
+  },
+  {
+    "name": "IDS_SETTINGS_UI_DENSITY_DEFAULT",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Default option in the interface density dropdown, which uses the default compact sizes.",
+    "message": "Default"
+  },
+  {
+    "name": "IDS_SETTINGS_UI_DENSITY_SPACIOUS",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Spacious option in the interface density dropdown, which makes tabs, toolbar buttons and the address bar larger.",
+    "message": "Spacious"
+  },
+  {
     "name": "IDS_SETTINGS_HIBERNATED_APPEARANCE_LABEL",
     "source": "chrome/app/settings_strings.grdp",
     "context": "Label for a performance setting that controls whether hibernated tabs are visually differentiated.",
@@ -1001,6 +1055,30 @@
     "source": "chrome/app/settings_strings.grdp",
     "context": "Label for the toggle which enables or disables a rounded frame around web contents.",
     "message": "Show a rounded frame around web contents"
+  },
+  {
+    "name": "IDS_SETTINGS_LANGUAGES_OFFER_TO_ENABLE_TRANSLATE",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "The label of the check-box that enables the prompt to translate a page.",
+    "message": "Offer to translate pages"
+  },
+  {
+    "name": "IDS_SETTINGS_LANGUAGES_OFFER_TO_ENABLE_TRANSLATE_SUBLABEL",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "The sublabel of the check-box that enables the prompt to translate a page.",
+    "message": "When on, Helium will offer to translate sites into your preferred language. It can also automatically translate sites."
+  },
+  {
+    "name": "IDS_SETTINGS_LANGUAGES_OFFER_TO_ENABLE_TRANSLATE_SUBLABEL_WITH_PDF",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "The sublabel of the check-box that enables the prompt to translate a page or PDF.",
+    "message": "When on, Helium will offer to translate sites and PDFs into your preferred language. It can also automatically translate sites."
+  },
+  {
+    "name": "IDS_SETTINGS_TRANSLATE_PAGE_TITLE",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Name of the settings page which displays translate preferences.",
+    "message": "Translate"
   },
   {
     "name": "IDS_DOWNLOAD_BUBBLE_INTERRUPTED_SUBPAGE_SUMMARY_HELIUM_SERVICES_DISABLED",
