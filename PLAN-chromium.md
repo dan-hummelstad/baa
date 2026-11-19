@@ -182,7 +182,7 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
     `utils/clone.py` (`gclient sync` at the version's tag; dependencies and toolchains from Google).
     `.git` directories are removed after the sync, as in imputnet's tarballs. `chromium-next.sh`
     asks for the tag, not for a tarball. `downloads.ini` and `downloads.arm64.ini` are unused.
-  - uBlock Origin is Helium's 1.75.4 build, kept as `chromium/vendor/ublock-origin-1.75.4.zip` and
+  - uBlock Origin is Helium's 1.76.4 build, kept as `chromium/vendor/ublock-origin-1.76.4.zip` and
     checked against `deps.ini`'s `sha256` (`fetch_sources` puts `chromium/vendor/*` in the download
     cache). Its version and bundled filter lists change only when that file does; a new one must be
     Helium's build (its patches expect the fork: DNS uncloaking, Helium's `assets.json`) and needs
