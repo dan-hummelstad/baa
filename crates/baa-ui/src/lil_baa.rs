@@ -7,7 +7,7 @@ use baa_model::{ProfileId, SpaceId};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, point, prelude::*, px, size, App, Bounds, Context, Entity,
-    FocusHandle, Hsla, SharedString, Subscription, TitlebarOptions, WeakEntity, Window,
+    Div, FocusHandle, Hsla, KeyDownEvent, SharedString, Stateful, Subscription, TitlebarOptions, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 
@@ -15,6 +15,8 @@ use crate::{
     actions::OpenInBrowser,
     browser::{cut_left, gradient_fill, host_of, mid_stop, shadow, Browser, PAGE_RADIUS},
     icons::icon,
+    input,
+    prompts::{ask_layer, button_look, page_asks, Asks, Prompter},
     theme::{surface, Theme},
 };
 
@@ -31,6 +33,8 @@ pub fn window_options(cx: &App) -> WindowOptions {
             traffic_light_position: Some(point(px(14.), px(16.))),
         }),
         window_background: WindowBackgroundAppearance::Transparent,
+        // The smallest that still fits a prompt's sheet over the page.
+        window_min_size: Some(size(px(400.), px(320.))),
         ..Default::default()
     }
 }
@@ -50,6 +54,8 @@ pub struct LilBaa<H: WebHost> {
     spaces: Vec<SpaceChoice>,
     choosing_space: bool,
     focus: FocusHandle,
+    pub(crate) asks: Asks,
+    pub(crate) ask_focus: FocusHandle,
 }
 
 #[derive(Clone)]
@@ -88,6 +94,8 @@ impl<H: WebHost> LilBaa<H> {
             spaces,
             choosing_space: false,
             focus: cx.focus_handle(),
+            asks: Asks::default(),
+            ask_focus: cx.focus_handle(),
         }
     }
 
@@ -105,21 +113,23 @@ impl<H: WebHost> LilBaa<H> {
                 .ok();
             }
             PageEvent::Closed => window.remove_window(),
-            // ponytail: the small window has no room for prompts, and an
-            // unanswered one would freeze the page; "Open in" gets them.
-            PageEvent::Dialog(d) => {
-                if let Some(page) = &self.page {
-                    page.read(cx).answer_dialog(d.id, Default::default());
+            PageEvent::Dialog(_) | PageEvent::PermissionRequested { .. } | PageEvent::AskClosed(_) => {
+                if self.asks.on_event(event, cx.background_executor().now()) {
+                    self.focus_page(window, cx);
                 }
             }
-            PageEvent::PermissionRequested { id, .. } => {
-                if let Some(page) = &self.page {
-                    page.read(cx).answer_permission(*id, false);
-                }
-            }
+            PageEvent::Focused if self.asks.dialog.is_some() => self.focus_page(window, cx),
             _ => {}
         }
         cx.notify();
+    }
+
+    /// The page, unless a dialog is up: it keeps the keyboard.
+    fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.page {
+            Some(page) if self.asks.dialog.is_none() => window.focus(&page.read(cx).focus_handle(cx), cx),
+            _ => window.focus(&self.ask_focus, cx),
+        }
     }
 
     pub(crate) fn open_in_browser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -133,10 +143,15 @@ impl<H: WebHost> LilBaa<H> {
             .space(space)
             .is_some_and(|s| s.profile == self.profile);
         let main = browser.read(cx).window_handle();
+        let asks = std::mem::take(&mut self.asks);
         let moved = main.update(cx, |_, main_window, cx| {
             browser.update(cx, |browser, cx| {
                 if same_profile {
                     browser.adopt_page(page, space, &url, main_window, cx);
+                    if let Some(tab) = browser.active_tab() {
+                        browser.asks.insert(tab, asks);
+                    }
+                    browser.focus_page(main_window, cx);
                 } else {
                     // Another Space's storage: the page starts over there.
                     browser.open_url_in(space, &url, main_window, cx);
@@ -207,8 +222,9 @@ impl<H: WebHost> Render for LilBaa<H> {
             .map(|page| page.update(cx, |p, cx| p.render(window, cx)));
         let host = SharedString::from(host_of(&self.url));
         let menu = self.render_space_menu(&theme, cx);
+        let asks = page_asks(self, &self.asks, &self.url, &theme, &self.ask_focus, 1., None, cx);
 
-        div()
+        let root = div()
             .key_context("LilBaa")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &OpenInBrowser, window, cx| this.open_in_browser(window, cx)))
@@ -301,8 +317,52 @@ impl<H: WebHost> Render for LilBaa<H> {
                     .overflow_hidden()
                     .bg(gpui::white())
                     .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
-                    .children(content),
-            )
+                    .relative()
+                    .children(content)
+                    .when(!asks.is_empty(), |d| d.child(ask_layer().children(asks))),
+            );
+        let has_field = self.asks.dialog.as_mut().and_then(|d| d.field()).is_some();
+        input::wire(root, &self.ask_focus, has_field, window, cx, |l| l.asks.dialog.as_mut()?.field(), Self::key)
+    }
+}
+
+impl<H: WebHost> Prompter for LilBaa<H> {
+    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ask) = self.asks.take_dialog(ok, cx.background_executor().now()) else { return };
+        if let Some(page) = &self.page {
+            page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
+        }
+        self.focus_page(window, cx);
+        cx.notify();
+    }
+
+    fn allow(&mut self, allow: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.asks.take_permission(allow, cx.background_executor().now()) else { return };
+        if let Some(page) = &self.page {
+            page.read(cx).answer_permission(id, allow);
+        }
+        cx.notify();
+    }
+
+    fn toggle_check(&mut self, cx: &mut Context<Self>) {
+        if let Some(d) = self.asks.dialog.as_mut() {
+            d.checked = !d.checked;
+            cx.notify();
+        }
+    }
+
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ask) = self.asks.dialog.as_mut() else { return };
+        let (key, answer) = ask.on_key(event, cx);
+        if let Some(ok) = answer {
+            self.answer(ok, window, cx);
+        }
+        key.stop_unless_typed(cx);
+        cx.notify();
+    }
+
+    fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, _: &mut Context<Self>) -> Stateful<Div> {
+        button_look(key, label, primary, theme, 0., 0.)
     }
 }
 

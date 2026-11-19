@@ -35,8 +35,11 @@ impl<H: WebHost> Browser<H> {
     /// A permission, dialog, sign-in question or Claude approval is on screen: nothing
     /// a page or an extension chose may show beside it.
     pub(crate) fn prompt_shown(&self) -> bool {
-        let tab_ask = |t: &TabId| self.asks.get(t).is_some_and(|a| a.dialog.is_some() || !a.permissions.is_empty());
-        !self.agent.asks.is_empty() || !self.account_asks.is_empty() || self.shown_panes().iter().any(tab_ask)
+        let tab_ask = |t: &TabId| self.asks.get(t).is_some_and(|a| a.any());
+        !self.agent.asks.is_empty()
+            || !self.account_asks.is_empty()
+            || self.shown_panes().iter().any(tab_ask)
+            || self.peek.as_ref().is_some_and(|p| p.asks.any())
     }
 
     pub(super) fn with_hover_url(&self, tab: TabId, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {

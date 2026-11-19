@@ -3,10 +3,11 @@
 
 use crate::theme::r;
 
+use baa_model::SpaceId;
 use baa_web::{Dialog, DialogAnswer, DialogKind, PageHandle, WebHost};
-use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, KeyDownEvent, SharedString, Window};
+use gpui::{div, prelude::*, px, relative, AnyElement, App, Context, Div, Entity, FocusHandle, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
-use super::{button, site_name, ACTIVATION_DELAY};
+use super::{button, site_name, Asks, Prompter};
 use crate::{
     browser::{cut_left, drop_in, shadow, Browser, InstallTarget},
     icons::icon,
@@ -32,7 +33,7 @@ pub(crate) struct DialogAsk {
 /// the extension where it is).
 // ponytail: told apart by Chrome's button label ("Add extension"); a translated label
 // hides the Space picker. Pass the prompt type through the ABI if that matters.
-fn is_install(d: &Dialog) -> bool {
+pub(super) fn is_install(d: &Dialog) -> bool {
     d.kind == DialogKind::ExtensionInstall && (d.ok_label.is_empty() || d.ok_label.starts_with("Add"))
 }
 
@@ -72,44 +73,30 @@ impl DialogAsk {
             shown_at,
         }
     }
-}
 
-impl<H: WebHost> Browser<H> {
-    pub(crate) fn active_dialog(&self) -> Option<&DialogAsk> {
-        self.asks.get(&self.active_tab()?)?.dialog.as_ref()
-    }
-
-    pub(crate) fn dialog_field(&mut self) -> Option<&mut TextField> {
-        let ask = self.active_tab().and_then(|id| self.asks.get_mut(&id))?.dialog.as_mut()?;
-        match ask.dialog.kind {
-            DialogKind::Auth if ask.on_password => Some(&mut ask.password),
-            DialogKind::Auth | DialogKind::Prompt => Some(&mut ask.field),
+    /// The field the keyboard types into, if the dialog has one.
+    pub(crate) fn field(&mut self) -> Option<&mut TextField> {
+        match self.dialog.kind {
+            DialogKind::Auth if self.on_password => Some(&mut self.password),
+            DialogKind::Auth | DialogKind::Prompt => Some(&mut self.field),
             _ => None,
         }
     }
 
-    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> Key {
-        let Some(ask) = self
-            .active_tab()
-            .and_then(|id| self.asks.get_mut(&id))
-            .and_then(|a| a.dialog.as_mut())
-        else {
-            return Key::Ignored;
-        };
-        let kind = ask.dialog.kind;
+    /// The key as the dialog took it, and the answer it gives (OK or Cancel), if any.
+    pub(crate) fn on_key(&mut self, event: &KeyDownEvent, cx: &App) -> (Key, Option<bool>) {
+        let kind = self.dialog.kind;
         let auth = kind == DialogKind::Auth;
-        if event.keystroke.key == "space" && !event.is_held && kind != DialogKind::Prompt && !auth && !ask.dialog.check_label.is_empty() {
-            ask.checked = !ask.checked;
-            cx.notify();
-            return Key::Ignored;
+        if event.keystroke.key == "space" && !event.is_held && kind != DialogKind::Prompt && !auth && !self.dialog.check_label.is_empty() {
+            self.checked = !self.checked;
+            return (Key::Ignored, None);
         }
         // Tab (not → at the end, which the field also reports as Complete) moves between auth fields.
         if auth && (event.keystroke.key == "tab" || matches!(event.keystroke.key.as_str(), "up" | "down")) {
-            ask.on_password = !ask.on_password;
-            cx.notify();
-            return Key::Ignored;
+            self.on_password = !self.on_password;
+            return (Key::Ignored, None);
         }
-        let key = match self.dialog_field() {
+        let key = match self.field() {
             Some(field) => field.handle(&event.keystroke, cx),
             None => match event.keystroke.key.as_str() {
                 "enter" => Key::Submit,
@@ -120,55 +107,108 @@ impl<H: WebHost> Browser<H> {
         // A held key repeats into whatever appears next, and a risky dialog (open an
         // app, install an extension) is never accepted from the keyboard.
         let risky = matches!(kind, DialogKind::ExternalProtocol | DialogKind::ExtensionInstall);
-        match key {
-            Key::Submit | Key::Cancel if event.is_held => {}
-            Key::Submit if risky => {}
-            Key::Submit => self.answer_dialog(true, window, cx),
-            Key::Cancel => self.answer_dialog(false, window, cx),
-            Key::Edited => cx.notify(),
-            _ => {}
+        let answer = match key {
+            Key::Submit | Key::Cancel if event.is_held => None,
+            Key::Submit if risky => None,
+            Key::Submit => Some(true),
+            Key::Cancel => Some(false),
+            _ => None,
+        };
+        (key, answer)
+    }
+
+    pub(crate) fn answer(self, ok: bool) -> DialogAnswer {
+        DialogAnswer { ok, text: self.field.text, password: self.password.text, checked: self.checked }
+    }
+}
+
+impl<H: WebHost> Browser<H> {
+    /// A Peek of a link, which covers the tab and holds its own asks.
+    pub(crate) fn peek_shows_page(&self) -> bool {
+        self.peek.as_ref().is_some_and(|p| !p.popup)
+    }
+
+    /// The asks on screen: the Peek's while one is open, else the active tab's.
+    fn shown_asks(&self) -> Option<&Asks> {
+        match &self.peek {
+            Some(peek) if !peek.popup => Some(&peek.asks),
+            _ => self.asks.get(&self.active_tab()?),
+        }
+    }
+
+    pub(crate) fn shown_asks_mut(&mut self) -> Option<&mut Asks> {
+        if self.peek_shows_page() {
+            return self.peek.as_mut().map(|p| &mut p.asks);
+        }
+        let tab = self.active_tab()?;
+        self.asks.get_mut(&tab)
+    }
+
+    /// The page the shown asks answer to, and its Space.
+    pub(crate) fn shown_page(&self) -> Option<(Entity<H::Page>, SpaceId)> {
+        match &self.peek {
+            Some(peek) if !peek.popup => Some((peek.page.clone(), peek.space)),
+            _ => {
+                let tab = self.active_tab()?;
+                Some((self.pages.get(&tab)?.0.clone(), self.session.tab(tab)?.space))
+            }
+        }
+    }
+
+    pub(crate) fn active_dialog(&self) -> Option<&DialogAsk> {
+        self.shown_asks()?.dialog.as_ref()
+    }
+
+    pub(crate) fn dialog_field(&mut self) -> Option<&mut TextField> {
+        self.shown_asks_mut()?.dialog.as_mut()?.field()
+    }
+
+    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> Key {
+        let Some(ask) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) else {
+            return Key::Ignored;
+        };
+        let (key, answer) = ask.on_key(event, cx);
+        if let Some(ok) = answer {
+            self.answer_dialog(ok, window, cx);
         }
         key
     }
 
     pub(crate) fn toggle_dialog_check(&mut self, cx: &mut Context<Self>) {
-        if let Some(d) = self.active_tab().and_then(|t| self.asks.get_mut(&t)).and_then(|a| a.dialog.as_mut()) {
+        if let Some(d) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) {
             d.checked = !d.checked;
             cx.notify();
         }
     }
 
     pub(crate) fn answer_dialog(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab() else { return };
         let now = cx.background_executor().now();
-        let Some(asks) = self.asks.get_mut(&tab) else { return };
-        if ok && asks.dialog.as_ref().is_some_and(|a| now < a.shown_at + ACTIVATION_DELAY) {
-            return;
-        }
-        let Some(ask) = asks.dialog.take() else { return };
-        asks.reveal(now);
-        if ok && is_install(&ask.dialog) {
-            if let Some(space) = self.session.tab(tab).map(|t| t.space) {
+        let Some(ask) = self.shown_asks_mut().and_then(|a| a.take_dialog(ok, now)) else { return };
+        let external = ask.dialog.kind == DialogKind::ExternalProtocol;
+        if let Some((page, space)) = self.shown_page() {
+            if ok && is_install(&ask.dialog) {
                 self.install_accepted(space, ask.target, &ask.dialog.title, cx);
             }
+            page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
         }
-        if let Some((page, _)) = self.pages.get(&tab) {
-            let answer = DialogAnswer { ok, text: ask.field.text, password: ask.password.text, checked: ask.checked };
-            page.read(cx).answer_dialog(ask.dialog.id, answer);
+        // Chrome closes a tab opened only for an app link once the app opens; a Peek of
+        // one has nothing to show either way.
+        if external && self.peek.as_ref().is_some_and(|p| !p.popup && !is_web(&p.url)) {
+            self.close_peek(window, cx);
         }
         self.close_overlays(window, cx);
     }
 
     pub(crate) fn set_install_target(&mut self, target: InstallTarget, cx: &mut Context<Self>) {
-        if let Some(d) = self.active_tab().and_then(|t| self.asks.get_mut(&t)).and_then(|a| a.dialog.as_mut()) {
+        if let Some(d) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) {
             d.target = target;
             cx.notify();
         }
     }
 
     /// "Add to": this Space, another one, or all of them.
-    fn render_install_target(&self, ask: &DialogAsk, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let here = self.active_space().map(|s| s.id);
+    pub(super) fn render_install_target(&self, ask: &DialogAsk, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let here = self.shown_page().map(|(_, space)| space);
         let mut choices: Vec<(InstallTarget, String)> = self
             .session
             .spaces()
@@ -204,129 +244,167 @@ impl<H: WebHost> Browser<H> {
             .child(div().flex().flex_wrap().gap(px(6.)).children(chips))
             .into_any_element()
     }
+}
 
-    /// The scrim and the sheet over the page.
-    pub(super) fn render_dialog(&self, ask: &DialogAsk, url: &str, theme: &Theme, cx: &mut Context<Self>) -> [AnyElement; 2] {
-        let d = &ask.dialog;
-        let (title, message, ok, cancel) = wording(d, url);
-        let field_box = |f: &TextField, focused: bool, placeholder: &'static str| {
-            div()
-                .h(px(32.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .rounded(r(7.))
-                .border_1()
-                .border_color(if focused { theme.accent } else { surface::border().into() })
-                .bg(surface::raised())
-                .text_size(px(13.))
-                .child(f.render(focused, placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..theme.accent }))
-        };
-        let fields = match d.kind {
-            DialogKind::Prompt => vec![field_box(&ask.field, true, "")],
-            DialogKind::Auth => vec![
-                field_box(&ask.field, !ask.on_password, "Username"),
-                field_box(&ask.password, ask.on_password, "Password"),
-            ],
-            _ => vec![],
-        };
-        let list = d.kind == DialogKind::ExtensionInstall;
-        let checkbox = (!d.check_label.is_empty()).then(|| {
-            let on = ask.checked;
-            div()
-                .id(("dialog-check", d.id))
-                .debug_selector(|| "dialog-check".into())
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .text_size(px(13.))
-                .text_color(surface::ink())
-                .child(
-                    div()
-                        .size(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(r(4.))
-                        .border_1()
-                        .border_color(if on { theme.accent } else { surface::border().into() })
-                        .bg(if on { theme.accent } else { surface::raised().into() })
-                        .when(on, |d| d.child(icon("check", 11., gpui::white()))),
-                )
-                .child(SharedString::from(d.check_label.clone()))
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_dialog_check(cx)))
-        });
-        let card = div()
-            .id("page-dialog")
-            .occlude()
-            .mt(px(16.))
-            .w(px(420.))
-            .max_w(relative(0.9))
-            .p(px(18.))
+fn is_web(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+}
+
+impl<H: WebHost> Prompter for Browser<H> {
+    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_dialog(ok, window, cx)
+    }
+    fn allow(&mut self, allow: bool, cx: &mut Context<Self>) {
+        self.answer_permission(allow, cx)
+    }
+    fn toggle_check(&mut self, cx: &mut Context<Self>) {
+        self.toggle_dialog_check(cx)
+    }
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.on_input_key(event, window, cx)
+    }
+    fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        button(key, label, primary, theme, self, cx)
+    }
+}
+
+/// The scrim and the sheet over the page. The sheet holds `focus` and gives it the keys.
+pub(super) fn render_dialog<V: Prompter>(
+    view: &V,
+    ask: &DialogAsk,
+    url: &str,
+    theme: &Theme,
+    focus: &FocusHandle,
+    extra: Option<AnyElement>,
+    cx: &mut Context<V>,
+) -> [AnyElement; 2] {
+    let d = &ask.dialog;
+    let (title, message, ok, cancel) = wording(d, url);
+    let field_box = |f: &TextField, focused: bool, placeholder: &'static str| {
+        div()
+            .h(px(32.))
+            .flex_shrink_0()
+            .px(px(10.))
             .flex()
-            .flex_col()
-            .gap(px(12.))
-            .rounded(r(12.))
-            .bg(surface::bg())
+            .items_center()
+            .rounded(r(7.))
             .border_1()
-            .border_color(surface::border())
-            .shadow(vec![
-                shadow(gpui::rgba(0x0A08143D).into(), 16., 40.),
-                shadow(gpui::rgba(0x0A08141F).into(), 2., 8.),
-            ])
-            .track_focus(&self.input_focus)
-            .on_key_down(cx.listener(Self::on_input_key))
-            .child(
-                cut_left(div())
-                    .text_size(px(14.))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(surface::ink())
-                    .child(SharedString::from(title)),
-            )
-            .when(!message.is_empty(), |d| {
-                d.child(
-                    div()
-                        .id("page-dialog-message")
-                        .max_h(px(240.))
-                        .overflow_y_scroll()
-                        .text_size(px(13.))
-                        .text_color(surface::ink())
-                        .when(!list, |d| d.child(SharedString::from(message.clone())))
-                        .when(list, |d| {
-                            d.flex().flex_col().gap(px(4.)).children(message.lines().map(|l| {
-                                div().flex().gap(px(6.)).child("\u{2022}").child(SharedString::from(l.to_string()))
-                            }))
-                        }),
-                )
-            })
-            .children(fields)
-            .children(checkbox)
-            .children(is_install(d).then(|| self.render_install_target(ask, theme, cx)))
+            .border_color(if focused { theme.accent } else { surface::border().into() })
+            .bg(surface::raised())
+            .text_size(px(13.))
+            .child(f.render(focused, placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..theme.accent }))
+    };
+    let fields = match d.kind {
+        DialogKind::Prompt => vec![field_box(&ask.field, true, "")],
+        DialogKind::Auth => vec![
+            field_box(&ask.field, !ask.on_password, "Username"),
+            field_box(&ask.password, ask.on_password, "Password"),
+        ],
+        _ => vec![],
+    };
+    let list = d.kind == DialogKind::ExtensionInstall;
+    let checkbox = (!d.check_label.is_empty()).then(|| {
+        let on = ask.checked;
+        div()
+            .id(("dialog-check", d.id))
+            .debug_selector(|| "dialog-check".into())
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(13.))
+            .text_color(surface::ink())
             .child(
                 div()
+                    .size(px(16.))
                     .flex()
-                    .justify_end()
-                    .gap(px(8.))
-                    .children(cancel.map(|label| {
-                        button(("dialog-cancel", d.id), label, false, theme, self, cx)
-                            .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(false, window, cx)))
-                    }))
-                    .child(
-                        button(("dialog-ok", d.id), ok, true, theme, self, cx)
-                            .debug_selector(|| "dialog-ok".into())
-                            .on_click(cx.listener(|this, _, window, cx| this.answer_dialog(true, window, cx))),
-                    ),
-            );
-        [
+                    .items_center()
+                    .justify_center()
+                    .rounded(r(4.))
+                    .border_1()
+                    .border_color(if on { theme.accent } else { surface::border().into() })
+                    .bg(if on { theme.accent } else { surface::raised().into() })
+                    .when(on, |d| d.child(icon("check", 11., gpui::white()))),
+            )
+            .child(SharedString::from(d.check_label.clone()))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_check(cx)))
+    });
+    let card = div()
+        .id("page-dialog")
+        .debug_selector(|| "page-dialog".into())
+        .occlude()
+        .mt(px(16.))
+        .w(px(420.))
+        .max_w(relative(0.9))
+        // A small window shrinks the message, which scrolls, before the sheet runs off it.
+        .max_h(relative(0.9))
+        .p(px(18.))
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .rounded(r(12.))
+        .bg(surface::bg())
+        .border_1()
+        .border_color(surface::border())
+        .shadow(vec![
+            shadow(gpui::rgba(0x0A08143D).into(), 16., 40.),
+            shadow(gpui::rgba(0x0A08141F).into(), 2., 8.),
+        ])
+        .track_focus(focus)
+        .on_key_down(cx.listener(V::key))
+        .child(
+            cut_left(div())
+                .flex_shrink_0()
+                .text_size(px(14.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(surface::ink())
+                .child(SharedString::from(title)),
+        )
+        .when(!message.is_empty(), |d| {
+            d.child(
+                div()
+                    .id("page-dialog-message")
+                    .min_h_0()
+                    .max_h(px(240.))
+                    .overflow_y_scroll()
+                    .text_size(px(13.))
+                    .text_color(surface::ink())
+                    .when(!list, |d| d.child(SharedString::from(message.clone())))
+                    .when(list, |d| {
+                        d.flex().flex_col().gap(px(4.)).children(message.lines().map(|l| {
+                            div().flex().gap(px(6.)).child("\u{2022}").child(SharedString::from(l.to_string()))
+                        }))
+                    }),
+            )
+        })
+        .children(fields)
+        .children(checkbox)
+        .children(extra)
+        .child(
             div()
-                .id("page-dialog-scrim")
-                .absolute()
-                .inset_0()
-                .occlude()
-                .rounded(r(crate::browser::PAGE_RADIUS))
-                .bg(surface::scrim())
-                .into_any_element(),
-            drop_in(card, "page-dialog").into_any_element(),
-        ]
-    }
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .gap(px(8.))
+                .children(cancel.map(|label| {
+                    view.button(("dialog-cancel", d.id), label.into(), false, theme, cx)
+                        .debug_selector(|| "dialog-cancel".into())
+                        .on_click(cx.listener(|this, _, window, cx| this.answer(false, window, cx)))
+                }))
+                .child(
+                    view.button(("dialog-ok", d.id), ok.into(), true, theme, cx)
+                        .debug_selector(|| "dialog-ok".into())
+                        .on_click(cx.listener(|this, _, window, cx| this.answer(true, window, cx))),
+                ),
+        );
+    [
+        div()
+            .id("page-dialog-scrim")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .rounded(r(crate::browser::PAGE_RADIUS))
+            .bg(surface::scrim())
+            .into_any_element(),
+        drop_in(card, "page-dialog").into_any_element(),
+    ]
 }

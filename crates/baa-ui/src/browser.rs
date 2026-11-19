@@ -1095,8 +1095,8 @@ impl<H: WebHost> Browser<H> {
         self.motion.forget("bar-row");
         self.motion.forget("bar-sel");
         match &self.peek {
-            Some(peek) => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
-            None => self.focus_page(window, cx),
+            Some(peek) if self.active_dialog().is_none() => window.focus(&peek.page.read(cx).focus_handle(cx), cx),
+            _ => self.focus_page(window, cx),
         }
         cx.notify();
     }
@@ -1528,7 +1528,7 @@ impl<H: WebHost> Render for Browser<H> {
         let has_field = self.library.is_some();
         let root = input::wire(root, &self.library_focus, has_field, window, cx, |b| b.library.as_mut().map(|l| &mut l.search), Self::on_library_key);
         let root = self.register_actions(root, cx);
-        if self.peek.is_some() {
+        if self.peek.is_some() && self.active_dialog().is_none() {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {
                 if this.bar.is_none() {
                     this.close_peek(window, cx)

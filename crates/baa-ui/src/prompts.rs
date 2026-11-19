@@ -16,7 +16,7 @@ pub(crate) use dialog::wording;
 
 use baa_model::TabId;
 use baa_web::{DangerKind, Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
-use gpui::{div, prelude::*, px, relative, AnyElement, Context, Hsla, SharedString, Window};
+use gpui::{div, prelude::*, px, relative, AnyElement, Context, Div, FocusHandle, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
 use crate::{
     browser::{cut_left, drop_in, feel, host_of, shadow, Browser, HEADER_H, INSET},
@@ -44,6 +44,142 @@ impl Asks {
             next.shown_at = now;
         }
     }
+
+    pub(crate) fn any(&self) -> bool {
+        self.dialog.is_some() || !self.permissions.is_empty()
+    }
+
+    /// True when the dialog came or went.
+    pub(crate) fn on_event(&mut self, event: &PageEvent, now: Instant) -> bool {
+        match event {
+            PageEvent::PermissionRequested { id, origin, kinds } => {
+                self.permissions.push(PermissionAsk { id: *id, origin: origin.clone(), kinds: kinds.clone(), shown_at: now });
+                false
+            }
+            PageEvent::Dialog(d) => {
+                self.dialog = Some(DialogAsk::new(d, now));
+                true
+            }
+            PageEvent::AskClosed(id) => {
+                if self.permissions.first().is_some_and(|a| a.id == *id) {
+                    self.permissions.remove(0);
+                    self.reveal(now);
+                }
+                self.permissions.retain(|a| a.id != *id);
+                let dialog = self.dialog.as_ref().is_some_and(|a| a.dialog.id == *id);
+                if dialog {
+                    self.dialog = None;
+                    self.reveal(now);
+                }
+                dialog
+            }
+            _ => false,
+        }
+    }
+
+    /// The dialog, once it may be answered: OK waits out [`ACTIVATION_DELAY`].
+    pub(crate) fn take_dialog(&mut self, ok: bool, now: Instant) -> Option<DialogAsk> {
+        if ok && self.dialog.as_ref().is_some_and(|a| now < a.shown_at + ACTIVATION_DELAY) {
+            return None;
+        }
+        let ask = self.dialog.take()?;
+        self.reveal(now);
+        Some(ask)
+    }
+
+    /// The first permission's id, once it may be answered: Allow waits out [`ACTIVATION_DELAY`].
+    pub(crate) fn take_permission(&mut self, allow: bool, now: Instant) -> Option<u64> {
+        let first = self.permissions.first()?;
+        if allow && now < first.shown_at + ACTIVATION_DELAY {
+            return None;
+        }
+        let ask = self.permissions.remove(0);
+        self.reveal(now);
+        Some(ask.id)
+    }
+}
+
+/// A view that draws a page's asks with [`page_asks`]: the browser window (a tab or
+/// Peek) and lil-baa.
+pub(crate) trait Prompter: Sized + 'static {
+    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>);
+    fn allow(&mut self, allow: bool, cx: &mut Context<Self>);
+    fn toggle_check(&mut self, cx: &mut Context<Self>);
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>);
+    fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div>;
+}
+
+/// Where a page's asks are drawn: over the page, centred.
+pub(crate) fn ask_layer() -> Div {
+    div().absolute().inset_0().flex().flex_col().items_center()
+}
+
+/// The dialog as a sheet with the page dimmed behind it, else the first permission
+/// as a banner under the top edge; `extra` goes in the sheet.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn page_asks<V: Prompter>(
+    view: &V,
+    asks: &Asks,
+    url: &str,
+    theme: &Theme,
+    focus: &FocusHandle,
+    banner_in: f32,
+    extra: Option<AnyElement>,
+    cx: &mut Context<V>,
+) -> Vec<AnyElement> {
+    if let Some(dialog) = &asks.dialog {
+        return dialog::render_dialog(view, dialog, url, theme, focus, extra, cx).into();
+    }
+    let Some(ask) = asks.permissions.first() else { return Vec::new() };
+    let host = site_name(&ask.origin);
+    let icons = ask.kinds.iter().map(|k| icon(permission_icon(*k), 16., theme.accent));
+    let banner = div()
+        .id("permission")
+        .occlude()
+        .mt(px(10. - 14. * (1. - banner_in)))
+        .opacity(banner_in.clamp(0., 1.))
+        .max_w(relative(0.94))
+        .pl(px(14.))
+        .pr(px(8.))
+        .py(px(8.))
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .rounded(r(12.))
+        .bg(surface::bg())
+        .border_1()
+        .border_color(surface::border())
+        .shadow(vec![shadow(gpui::rgba(0x0A08142E).into(), 8., 24.)])
+        .child(div().flex().gap(px(4.)).children(icons))
+        .child(
+            div()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(surface::ink())
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(SharedString::from(host)))
+                        .child(SharedString::from(format!("wants to {}", permission_sentence(&ask.kinds)))),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(
+                    view.button(("perm-deny", ask.id), "Don't Allow".into(), false, theme, cx)
+                        .debug_selector(|| "perm-deny".into())
+                        .on_click(cx.listener(|this, _, _, cx| this.allow(false, cx))),
+                )
+                .child(
+                    view.button(("perm-allow", ask.id), "Allow".into(), true, theme, cx)
+                        .debug_selector(|| "perm-allow".into())
+                        .on_click(cx.listener(|this, _, _, cx| this.allow(true, cx))),
+                ),
+        );
+    vec![banner.into_any_element()]
 }
 
 pub(crate) struct PermissionAsk {
@@ -166,12 +302,24 @@ pub(crate) fn button<H: WebHost>(
     cx: &mut Context<Browser<H>>,
 ) -> gpui::Stateful<gpui::Div> {
     let (h, p) = (browser.motion.get(key, Feel::Hover), browser.motion.get(key, Feel::Press));
+    feel(button_look(key, label, primary, theme, h, p), key, cx)
+}
+
+/// [`button`] at hover `h` and press `p`, without the springs that move them.
+pub(crate) fn button_look(
+    key: (&'static str, u64),
+    label: impl Into<SharedString>,
+    primary: bool,
+    theme: &Theme,
+    h: f32,
+    p: f32,
+) -> Stateful<Div> {
     let bg: Hsla = if primary {
         mix(theme.accent, gpui::black(), 0.12 * h)
     } else {
         mix(surface::key().into(), surface::line().into(), h)
     };
-    let el = div()
+    div()
         .id(key)
         .h(px(28.))
         .px(px(12.))
@@ -183,69 +331,45 @@ pub(crate) fn button<H: WebHost>(
         .text_size(px(13.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(if primary { gpui::white() } else { surface::ink().into() })
-        .child(label.into() as SharedString);
-    feel(el, key, cx)
+        .child(label.into() as SharedString)
 }
 
 impl<H: WebHost> Browser<H> {
     pub(crate) fn on_ask(&mut self, tab: TabId, event: &PageEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let PageEvent::AudibleChanged(on) = event {
+            if *on {
+                self.audible.insert(tab);
+            } else {
+                self.audible.remove(&tab);
+            }
+            self.retarget_mini_player();
+            return cx.notify();
+        }
         let now = cx.background_executor().now();
-        let asks = self.asks.entry(tab).or_default();
-        match event {
-            PageEvent::PermissionRequested { id, origin, kinds } => {
-                asks.permissions.push(PermissionAsk {
-                    id: *id,
-                    origin: origin.clone(),
-                    kinds: kinds.clone(),
-                    shown_at: now,
-                });
-                self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
-            }
-            PageEvent::Dialog(d) => {
-                asks.dialog = Some(DialogAsk::new(d, now));
-                if Some(tab) == self.active_tab() && self.bar.is_none() {
-                    window.focus(&self.input_focus, cx);
-                }
-            }
-            PageEvent::AskClosed(id) => {
-                if asks.permissions.first().is_some_and(|a| a.id == *id) {
-                    asks.permissions.remove(0);
-                    asks.reveal(now);
-                }
-                asks.permissions.retain(|a| a.id != *id);
-                if asks.dialog.as_ref().is_some_and(|a| a.dialog.id == *id) {
-                    asks.dialog = None;
-                    asks.reveal(now);
-                    if Some(tab) == self.active_tab() {
-                        self.close_overlays(window, cx);
-                    }
-                }
-            }
-            PageEvent::AudibleChanged(on) => {
-                if *on {
-                    self.audible.insert(tab);
-                } else {
-                    self.audible.remove(&tab);
-                }
-                self.retarget_mini_player();
-            }
-            _ => {}
+        let changed = self.asks.entry(tab).or_default().on_event(event, now);
+        let shown = Some(tab) == self.active_tab() && !self.peek_shows_page();
+        self.asks_changed(event, changed && shown, window, cx);
+    }
+
+    /// After the asks took `event`: a permission slides in, and the keyboard follows a
+    /// dialog on screen that came or went (`dialog`).
+    pub(crate) fn asks_changed(&mut self, event: &PageEvent, dialog: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(event, PageEvent::PermissionRequested { .. }) {
+            self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
+        }
+        if dialog && self.active_dialog().is_none() {
+            self.close_overlays(window, cx);
+        } else if dialog && self.bar.is_none() {
+            window.focus(&self.input_focus, cx);
         }
         cx.notify();
     }
 
     pub(crate) fn answer_permission(&mut self, allow: bool, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab() else { return };
-        let Some(asks) = self.asks.get_mut(&tab) else { return };
         let now = cx.background_executor().now();
-        let Some(first) = asks.permissions.first() else { return };
-        if allow && now < first.shown_at + ACTIVATION_DELAY {
-            return;
-        }
-        let ask = asks.permissions.remove(0);
-        asks.reveal(now);
-        if let Some((page, _)) = self.pages.get(&tab) {
-            page.read(cx).answer_permission(ask.id, allow);
+        let Some(id) = self.shown_asks_mut().and_then(|a| a.take_permission(allow, now)) else { return };
+        if let Some((page, _)) = self.shown_page() {
+            page.read(cx).answer_permission(id, allow);
         }
         cx.notify();
     }
@@ -484,74 +608,21 @@ impl<H: WebHost> Browser<H> {
         Some(feel(el, key, cx).into_any_element())
     }
 
-    /// Over the page: the first permission request as a banner under the top
-    /// edge, and the page's dialog as a sheet with the page dimmed behind it.
+    /// Over the active tab's page: the account question and the tab's asks.
     pub(crate) fn render_asks(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let layer = div().absolute().inset_0().flex().flex_col().items_center();
         let account = self.render_account_ask(theme, cx);
-        let tab_asks = self.active_tab().and_then(|tab| Some((tab, self.asks.get(&tab)?)));
-        let Some((tab, asks)) = tab_asks else {
-            return account.map(|banner| layer.child(banner).into_any_element());
-        };
-        let url = self.session.tab(tab).map(|t| t.url.clone()).unwrap_or_default();
-        let mut any = account.is_some();
-        let mut layer = layer.children(account);
-        if let Some(dialog) = &asks.dialog {
-            any = true;
-            layer = layer.children(self.render_dialog(dialog, &url, theme, cx));
+        let tab = self.active_tab();
+        let url = tab.and_then(|t| self.session.tab(t)).map(|t| t.url.clone()).unwrap_or_default();
+        let asks = tab.and_then(|t| self.asks.get(&t)).map(|asks| self.render_page_asks(asks, &url, theme, cx)).unwrap_or_default();
+        if account.is_none() && asks.is_empty() {
+            return None;
         }
-        if let Some(ask) = asks.permissions.first().filter(|_| asks.dialog.is_none()) {
-            any = true;
-            let t = self.motion.get(("ask-in", 0), Feel::Glide);
-            let host = site_name(&ask.origin);
-            let icons = ask.kinds.iter().map(|k| icon(permission_icon(*k), 16., theme.accent));
-            let banner = div()
-                .id("permission")
-                .occlude()
-                .mt(px(10. - 14. * (1. - t)))
-                .opacity(t.clamp(0., 1.))
-                .max_w(relative(0.94))
-                .pl(px(14.))
-                .pr(px(8.))
-                .py(px(8.))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .rounded(r(12.))
-                .bg(surface::bg())
-                .border_1()
-                .border_color(surface::border())
-                .shadow(vec![shadow(gpui::rgba(0x0A08142E).into(), 8., 24.)])
-                .child(div().flex().gap(px(4.)).children(icons))
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_size(px(13.))
-                        .text_color(surface::ink())
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(4.))
-                                .child(cut_left(div().min_w_0()).font_weight(gpui::FontWeight::SEMIBOLD).child(SharedString::from(host)))
-                                .child(SharedString::from(format!("wants to {}", permission_sentence(&ask.kinds)))),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(6.))
-                        .child(
-                            button(("perm-deny", ask.id), "Don't Allow", false, theme, self, cx)
-                                .on_click(cx.listener(|this, _, _, cx| this.answer_permission(false, cx))),
-                        )
-                        .child(
-                            button(("perm-allow", ask.id), "Allow", true, theme, self, cx)
-                                .on_click(cx.listener(|this, _, _, cx| this.answer_permission(true, cx))),
-                        ),
-                );
-            layer = layer.child(banner);
-        }
-        any.then(|| layer.into_any_element())
+        Some(ask_layer().children(account).children(asks).into_any_element())
+    }
+
+    pub(crate) fn render_page_asks(&self, asks: &Asks, url: &str, theme: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let extra = asks.dialog.as_ref().filter(|d| dialog::is_install(&d.dialog)).map(|d| self.render_install_target(d, theme, cx));
+        page_asks(self, asks, url, theme, &self.input_focus, self.motion.get(("ask-in", 0), Feel::Glide), extra, cx)
     }
 
     /// The open header popover, if any, with a backdrop that closes it.

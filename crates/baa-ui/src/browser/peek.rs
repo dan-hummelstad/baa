@@ -18,6 +18,7 @@ pub(crate) struct PeekPage<P> {
     pub(crate) shown: bool,
     /// Bumped by each size a waiting popup reports; only the last one reveals it.
     pub(super) settle: u64,
+    pub(crate) asks: crate::prompts::Asks,
 }
 
 /// How long a popup's size has to hold before it shows. Popups report a few
@@ -82,6 +83,7 @@ impl<H: WebHost> Browser<H> {
             size: None,
             shown: !popup,
             settle: 0,
+            asks: Default::default(),
         });
         // ponytail: a popup that never reports a size still shows, at Chrome's default-ish one.
         if popup {
@@ -123,10 +125,15 @@ impl<H: WebHost> Browser<H> {
             }
             PageEvent::Closed => return self.close_peek(window, cx),
             PageEvent::PreferredSize(size) => return self.fit_popup(*size, cx),
-            // ponytail: Peek has no room for prompts and an unanswered one
-            // freezes the page; opening it as a tab gets them.
-            PageEvent::Dialog(d) => peek.page.read(cx).answer_dialog(d.id, Default::default()),
-            PageEvent::PermissionRequested { id, .. } => peek.page.read(cx).answer_permission(*id, false),
+            // ponytail: an extension popup's card is too small for a prompt, and an
+            // unanswered one freezes the popup; it gets none.
+            PageEvent::Dialog(d) if peek.popup => peek.page.read(cx).answer_dialog(d.id, Default::default()),
+            PageEvent::PermissionRequested { id, .. } if peek.popup => peek.page.read(cx).answer_permission(*id, false),
+            PageEvent::Dialog(_) | PageEvent::PermissionRequested { .. } | PageEvent::AskClosed(_) => {
+                let changed = peek.asks.on_event(event, cx.background_executor().now());
+                return self.asks_changed(event, changed, window, cx);
+            }
+            PageEvent::Focused if self.active_dialog().is_some() => return self.focus_page(window, cx),
             _ => {}
         }
         cx.notify();
@@ -176,6 +183,10 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn expand_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(peek) = self.peek.take() else { return };
         self.adopt_page(peek.page, peek.space, &peek.url, window, cx);
+        if let Some(tab) = self.active_tab() {
+            self.asks.insert(tab, peek.asks);
+        }
+        self.focus_page(window, cx);
     }
 
     pub(crate) fn open_extension(
@@ -367,7 +378,12 @@ impl<H: WebHost> Browser<H> {
                         shadow(gpui::rgba(0x0A081461).into(), 40., 100.),
                         shadow(gpui::rgba(0x0A08142E).into(), 8., 24.),
                     ])
-                    .child(content),
+                    .relative()
+                    .child(content)
+                    .when(peek.asks.any(), |d| {
+                        let theme = self.theme();
+                        d.child(crate::prompts::ask_layer().children(self.render_page_asks(&peek.asks, &peek.url, &theme, cx)))
+                    }),
             );
         Some(
             div()
