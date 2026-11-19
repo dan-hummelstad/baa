@@ -31,7 +31,7 @@
      return std::unique_ptr<BrowserWindow, BrowserWindowDeleter>(
 --- a/chrome/browser/ui/views/frame/BUILD.gn
 +++ b/chrome/browser/ui/views/frame/BUILD.gn
-@@ -966,7 +966,10 @@
+@@ -1347,7 +1347,10 @@
  }
  
  source_set("browser_window_factory") {
@@ -41,8 +41,8 @@
 +    "browser_window_factory.cc",
 +  ]
  
-   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
- 
+   deps = [
+     ":browser_native_widget_factory",
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/baa_browser_window_hook.h
 @@ -0,0 +1,13 @@
