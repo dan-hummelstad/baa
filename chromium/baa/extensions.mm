@@ -64,6 +64,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/command.h"
+#include "ui/base/base_window.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
