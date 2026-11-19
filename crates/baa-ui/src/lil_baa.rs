@@ -7,7 +7,7 @@ use baa_model::{ProfileId, SpaceId};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, point, prelude::*, px, size, App, Bounds, Context, Entity,
-    Div, FocusHandle, Hsla, KeyDownEvent, SharedString, Stateful, Subscription, TitlebarOptions, WeakEntity, Window,
+    Div, FocusHandle, Hsla, SharedString, Stateful, Subscription, TitlebarOptions, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 
@@ -16,7 +16,7 @@ use crate::{
     browser::{cut_left, gradient_fill, host_of, mid_stop, shadow, Browser, PAGE_RADIUS},
     icons::icon,
     input,
-    prompts::{ask_layer, button_look, page_asks, Asks, Prompter},
+    prompts::{ask_layer, button_look, page_asks, Asks, DialogAsk, Prompter},
     theme::{surface, Theme},
 };
 
@@ -323,37 +323,18 @@ impl<H: WebHost> Render for LilBaa<H> {
 }
 
 impl<H: WebHost> Prompter for LilBaa<H> {
-    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ask) = self.asks.take_dialog(ok, cx.background_executor().now()) else { return };
-        if let Some(page) = &self.page {
-            page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
-        }
+    type Page = H::Page;
+
+    fn shown_asks_mut(&mut self) -> Option<&mut Asks> {
+        Some(&mut self.asks)
+    }
+
+    fn prompt_page(&self) -> Option<Entity<H::Page>> {
+        self.page.clone()
+    }
+
+    fn answered(&mut self, _: &DialogAsk, _: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_page(window, cx);
-        cx.notify();
-    }
-
-    fn allow(&mut self, allow: bool, cx: &mut Context<Self>) {
-        let Some(id) = self.asks.take_permission(allow, cx.background_executor().now()) else { return };
-        if let Some(page) = &self.page {
-            page.read(cx).answer_permission(id, allow);
-        }
-        cx.notify();
-    }
-
-    fn toggle_check(&mut self, cx: &mut Context<Self>) {
-        if let Some(d) = self.asks.dialog.as_mut() {
-            d.checked = !d.checked;
-            cx.notify();
-        }
-    }
-
-    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ask) = self.asks.dialog.as_mut() else { return };
-        let (key, answer) = ask.on_key(event, cx);
-        if let Some(ok) = answer {
-            self.answer(ok, window, cx);
-        }
-        key.stop_unless_typed(cx);
         cx.notify();
     }
 

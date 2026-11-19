@@ -1120,7 +1120,7 @@ impl<H: WebHost> Browser<H> {
                 self.on_agent_ask_key(event, window, cx);
                 Key::Ignored
             }
-            Some(InputTarget::Dialog) => self.on_dialog_key(event, window, cx),
+            Some(InputTarget::Dialog) => crate::prompts::Prompter::dialog_key(self, event, window, cx),
             Some(target) => {
                 let key = self.input_field().map_or(Key::Ignored, |f| f.handle(&event.keystroke, cx));
                 match (target, key) {

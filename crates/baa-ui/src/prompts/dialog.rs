@@ -4,7 +4,7 @@
 use crate::theme::r;
 
 use baa_model::SpaceId;
-use baa_web::{Dialog, DialogAnswer, DialogKind, PageHandle, WebHost};
+use baa_web::{Dialog, DialogAnswer, DialogKind, WebHost};
 use gpui::{div, prelude::*, px, relative, AnyElement, App, Context, Div, Entity, FocusHandle, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
 use super::{button, site_name, Asks, Prompter};
@@ -117,8 +117,8 @@ impl DialogAsk {
         (key, answer)
     }
 
-    pub(crate) fn answer(self, ok: bool) -> DialogAnswer {
-        DialogAnswer { ok, text: self.field.text, password: self.password.text, checked: self.checked }
+    pub(crate) fn answer(&self, ok: bool) -> DialogAnswer {
+        DialogAnswer { ok, text: self.field.text.clone(), password: self.password.text.clone(), checked: self.checked }
     }
 }
 
@@ -128,13 +128,6 @@ impl<H: WebHost> Browser<H> {
         match self.shown()? {
             Shown::Peek => self.peek.as_ref().map(|p| &p.asks),
             Shown::Tab(tab) => self.asks.get(&tab),
-        }
-    }
-
-    pub(crate) fn shown_asks_mut(&mut self) -> Option<&mut Asks> {
-        match self.shown()? {
-            Shown::Peek => self.peek.as_mut().map(|p| &mut p.asks),
-            Shown::Tab(tab) => self.asks.get_mut(&tab),
         }
     }
 
@@ -152,42 +145,6 @@ impl<H: WebHost> Browser<H> {
 
     pub(crate) fn dialog_field(&mut self) -> Option<&mut TextField> {
         self.shown_asks_mut()?.dialog.as_mut()?.field()
-    }
-
-    pub(crate) fn on_dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> Key {
-        let Some(ask) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) else {
-            return Key::Ignored;
-        };
-        let (key, answer) = ask.on_key(event, cx);
-        if let Some(ok) = answer {
-            self.answer_dialog(ok, window, cx);
-        }
-        key
-    }
-
-    pub(crate) fn toggle_dialog_check(&mut self, cx: &mut Context<Self>) {
-        if let Some(d) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) {
-            d.checked = !d.checked;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn answer_dialog(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        let Some(ask) = self.shown_asks_mut().and_then(|a| a.take_dialog(ok, now)) else { return };
-        let cancelled_app = !ok && ask.dialog.kind == DialogKind::ExternalProtocol;
-        if let Some((page, space)) = self.shown_page() {
-            if ok && is_install(&ask.dialog) {
-                self.install_accepted(space, ask.target, &ask.dialog.title, cx);
-            }
-            page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
-        }
-        // Chrome closes a tab opened only for an app link once the app opens; cancelled,
-        // its Peek has nothing to show.
-        if cancelled_app && self.peek.as_ref().is_some_and(|p| p.app_link) {
-            self.close_peek(window, cx);
-        }
-        self.close_overlays(window, cx);
     }
 
     pub(crate) fn set_install_target(&mut self, target: InstallTarget, cx: &mut Context<Self>) {
@@ -238,18 +195,39 @@ impl<H: WebHost> Browser<H> {
 }
 
 impl<H: WebHost> Prompter for Browser<H> {
-    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.answer_dialog(ok, window, cx)
+    type Page = H::Page;
+
+    fn shown_asks_mut(&mut self) -> Option<&mut Asks> {
+        match self.shown()? {
+            Shown::Peek => self.peek.as_mut().map(|p| &mut p.asks),
+            Shown::Tab(tab) => self.asks.get_mut(&tab),
+        }
     }
-    fn allow(&mut self, allow: bool, cx: &mut Context<Self>) {
-        self.answer_permission(allow, cx)
+
+    fn prompt_page(&self) -> Option<Entity<H::Page>> {
+        self.shown_page().map(|(page, _)| page)
     }
-    fn toggle_check(&mut self, cx: &mut Context<Self>) {
-        self.toggle_dialog_check(cx)
+
+    fn answered(&mut self, ask: &DialogAsk, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if ok && is_install(&ask.dialog) {
+            if let Some((_, space)) = self.shown_page() {
+                self.install_accepted(space, ask.target, &ask.dialog.title, cx);
+            }
+        }
+        // Chrome closes a tab opened only for an app link once the app opens; cancelled,
+        // its Peek has nothing to show.
+        if !ok && ask.dialog.kind == DialogKind::ExternalProtocol && self.peek.as_ref().is_some_and(|p| p.app_link) {
+            self.close_peek(window, cx);
+        }
+        self.close_overlays(window, cx);
     }
+
+    // The sheet shares the keyboard's focus with the command bar, find and rename,
+    // which take the keys first while open.
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.on_input_key(event, window, cx)
     }
+
     fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
         button(key, label, primary, theme, self, cx)
     }

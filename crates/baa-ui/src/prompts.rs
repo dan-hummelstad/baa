@@ -18,9 +18,10 @@ pub(crate) use dialog::wording;
 
 use baa_model::TabId;
 use baa_web::{DangerKind, Download, DownloadState, PageEvent, PageHandle, Permission, PermissionState, WebHost};
-use gpui::{div, prelude::*, px, relative, AnyElement, Context, Div, Hsla, KeyDownEvent, SharedString, Stateful, Window};
+use gpui::{div, prelude::*, px, relative, AnyElement, Context, Div, Entity, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
 use crate::{
+    input::Key,
     browser::{cut_left, drop_in, feel, host_of, shadow, Browser, Shown, HEADER_H, INSET},
     icons::icon,
     motion::Feel,
@@ -112,11 +113,51 @@ impl Asks {
 /// A view that draws a page's asks with [`page_asks`]: the browser window (a tab or
 /// Peek) and lil-baa.
 pub(crate) trait Prompter: Sized + 'static {
-    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>);
-    fn allow(&mut self, allow: bool, cx: &mut Context<Self>);
-    fn toggle_check(&mut self, cx: &mut Context<Self>);
-    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>);
+    type Page: PageHandle;
+    fn shown_asks_mut(&mut self) -> Option<&mut Asks>;
+    /// The page the shown asks answer to.
+    fn prompt_page(&self) -> Option<Entity<Self::Page>>;
+    fn answered(&mut self, ask: &DialogAsk, ok: bool, window: &mut Window, cx: &mut Context<Self>);
     fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div>;
+
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.dialog_key(event, window, cx).stop_unless_typed(cx);
+        cx.notify();
+    }
+
+    fn dialog_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> Key {
+        let Some(ask) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) else { return Key::Ignored };
+        let (key, answer) = ask.on_key(event, cx);
+        if let Some(ok) = answer {
+            self.answer(ok, window, cx);
+        }
+        key
+    }
+
+    fn answer(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let Some(ask) = self.shown_asks_mut().and_then(|a| a.take_dialog(ok, now)) else { return };
+        if let Some(page) = self.prompt_page() {
+            page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
+        }
+        self.answered(&ask, ok, window, cx);
+    }
+
+    fn allow(&mut self, allow: bool, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let Some(id) = self.shown_asks_mut().and_then(|a| a.take_permission(allow, now)) else { return };
+        if let Some(page) = self.prompt_page() {
+            page.read(cx).answer_permission(id, allow);
+        }
+        cx.notify();
+    }
+
+    fn toggle_check(&mut self, cx: &mut Context<Self>) {
+        if let Some(d) = self.shown_asks_mut().and_then(|a| a.dialog.as_mut()) {
+            d.checked = !d.checked;
+            cx.notify();
+        }
+    }
 }
 
 pub(crate) struct PermissionAsk {
@@ -298,15 +339,6 @@ impl<H: WebHost> Browser<H> {
             self.close_overlays(window, cx);
         } else if dialog && self.bar.is_none() {
             window.focus(&self.input_focus, cx);
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn answer_permission(&mut self, allow: bool, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        let Some(id) = self.shown_asks_mut().and_then(|a| a.take_permission(allow, now)) else { return };
-        if let Some((page, _)) = self.shown_page() {
-            page.read(cx).answer_permission(id, allow);
         }
         cx.notify();
     }
