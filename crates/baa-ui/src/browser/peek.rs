@@ -23,11 +23,26 @@ pub(crate) struct PeekPage<P> {
     pub(crate) app_link: bool,
 }
 
+/// Whose asks are on screen.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Shown {
+    /// A link Peek: it covers the tab and holds its own.
+    Peek,
+    Tab(TabId),
+}
+
 /// How long a popup's size has to hold before it shows. Popups report a few
 /// sizes in quick succession as their content loads.
 const POPUP_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 
 impl<H: WebHost> Browser<H> {
+    pub(crate) fn shown(&self) -> Option<Shown> {
+        match &self.peek {
+            Some(peek) if !peek.popup => Some(Shown::Peek),
+            _ => self.active_tab().map(Shown::Tab),
+        }
+    }
+
     /// A cmd- or middle-clicked link: a tab for later, the current one stays.
     pub(super) fn open_background_tab(&mut self, space: SpaceId, url: &str) {
         let current = self.session.space(space).and_then(|s| s.active_tab);

@@ -60,7 +60,7 @@ mod tests_toss;
 #[cfg(test)]
 mod tests_m3_page;
 pub(crate) use nav::HistoryMenu;
-pub(crate) use peek::PeekPage;
+pub(crate) use peek::{PeekPage, Shown};
 
 /// Arc's sidebar width.
 pub(crate) const SIDEBAR_WIDTH: f32 = 228.0;

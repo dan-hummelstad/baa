@@ -9,7 +9,7 @@ use gpui::{div, prelude::*, px, relative, AnyElement, App, Context, Div, Entity,
 
 use super::{button, site_name, Asks, Prompter};
 use crate::{
-    browser::{cut_left, drop_in, shadow, Browser, InstallTarget},
+    browser::{cut_left, drop_in, shadow, Browser, InstallTarget, Shown},
     icons::icon,
     input::{Key, TextField},
     theme::{surface, Theme},
@@ -123,35 +123,26 @@ impl DialogAsk {
 }
 
 impl<H: WebHost> Browser<H> {
-    /// A Peek of a link, which covers the tab and holds its own asks.
-    pub(crate) fn peek_shows_page(&self) -> bool {
-        self.peek.as_ref().is_some_and(|p| !p.popup)
-    }
-
     /// The asks on screen: the Peek's while one is open, else the active tab's.
     fn shown_asks(&self) -> Option<&Asks> {
-        match &self.peek {
-            Some(peek) if !peek.popup => Some(&peek.asks),
-            _ => self.asks.get(&self.active_tab()?),
+        match self.shown()? {
+            Shown::Peek => self.peek.as_ref().map(|p| &p.asks),
+            Shown::Tab(tab) => self.asks.get(&tab),
         }
     }
 
     pub(crate) fn shown_asks_mut(&mut self) -> Option<&mut Asks> {
-        if self.peek_shows_page() {
-            return self.peek.as_mut().map(|p| &mut p.asks);
+        match self.shown()? {
+            Shown::Peek => self.peek.as_mut().map(|p| &mut p.asks),
+            Shown::Tab(tab) => self.asks.get_mut(&tab),
         }
-        let tab = self.active_tab()?;
-        self.asks.get_mut(&tab)
     }
 
     /// The page the shown asks answer to, and its Space.
     pub(crate) fn shown_page(&self) -> Option<(Entity<H::Page>, SpaceId)> {
-        match &self.peek {
-            Some(peek) if !peek.popup => Some((peek.page.clone(), peek.space)),
-            _ => {
-                let tab = self.active_tab()?;
-                Some((self.pages.get(&tab)?.0.clone(), self.session.tab(tab)?.space))
-            }
+        match self.shown()? {
+            Shown::Peek => self.peek.as_ref().map(|p| (p.page.clone(), p.space)),
+            Shown::Tab(tab) => Some((self.pages.get(&tab)?.0.clone(), self.session.tab(tab)?.space)),
         }
     }
 
