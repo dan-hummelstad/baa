@@ -1535,7 +1535,7 @@ impl<H: WebHost> Render for Browser<H> {
         let has_field = self.library.is_some();
         let root = input::wire(root, &self.library_focus, has_field, window, cx, |b| b.library.as_mut().map(|l| &mut l.search), Self::on_library_key);
         let root = self.register_actions(root, cx);
-        if self.peek.is_some() && self.active_dialog().is_none() {
+        if self.peek.as_ref().is_some_and(|p| p.asks.dialog.is_none()) {
             root.on_action(cx.listener(|this, _: &ClosePeek, window, cx| {
                 if this.bar.is_none() {
                     this.close_peek(window, cx)

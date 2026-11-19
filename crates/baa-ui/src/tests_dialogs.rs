@@ -473,3 +473,17 @@ fn a_peek_is_an_app_links_by_the_url_it_opened_with_not_where_it_went(cx: &mut T
     assert!(cancel_in_peek("https://a.example/", Some("chrome-extension://x/options.html"), 70, cx), "a page stays");
     assert!(!cancel_in_peek("zoommtg://x", None, 71, cx), "an app link's empty card goes");
 }
+
+#[gpui::test]
+fn an_extension_popup_does_not_open_over_a_tabs_dialog(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    p.update(cx, |_, cx| cx.emit(PageEvent::Dialog(dialog(80, DialogKind::Confirm))));
+    cx.run_until_parked();
+    let ext = baa_web::Extension { id: "ubo".into(), name: "uBO".into(), icon: None, popup: Some("chrome-extension://ubo/popup.html".into()), options: None };
+    b.update_in(cx, |b, window, cx| b.open_extension(&ext, window, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(b.read(cx).peek.is_none());
+        assert!(b.read(cx).input_focus.is_focused(window), "the dialog keeps the keyboard");
+    });
+}

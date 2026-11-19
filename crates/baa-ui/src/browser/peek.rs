@@ -136,7 +136,7 @@ impl<H: WebHost> Browser<H> {
                 let changed = peek.asks.on_event(event, cx.background_executor().now());
                 return self.asks_changed(event, changed, window, cx);
             }
-            PageEvent::Focused if self.active_dialog().is_some() => return self.focus_page(window, cx),
+            PageEvent::Focused if peek.asks.dialog.is_some() => return self.focus_page(window, cx),
             _ => {}
         }
         cx.notify();
@@ -198,6 +198,8 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         match &extension.popup {
+            // It would cover the prompt, and its page would take the keyboard from it.
+            Some(_) if self.prompt_shown() => {}
             Some(popup) => self.open_preview(space, popup, true, window, cx),
             None => {
                 self.open_own_page(&format!("baa://extensions/?id={}", extension.id), window, cx);
