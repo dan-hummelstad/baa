@@ -21,8 +21,16 @@ fetch_sources() {
   local downloads=("$_root_dir/downloads.ini" "$_main_repo/deps.ini")
 
   mkdir -p "$_download_cache" || return
+  local try
   if [ "$download" = false ]; then
-    python3 "$_main_repo/utils/clone.py" -o "$_src_dir" || return
+    # baa: chromium.googlesource.com answers 502 now and then. clone.py refuses a non-empty src,
+    # so a failed attempt's src goes; its depot_tools checkout is reused.
+    for try in 1 2 3 4 5; do
+      python3 "$_main_repo/utils/clone.py" -o "$_src_dir" && break
+      [ "$try" -lt 5 ] || return 1
+      rm -rf "$_src_dir"
+      sleep $((try * 60))
+    done
     # baa: imputnet's tarballs carry no .git, and the tree handed from phase to phase drops it
     # too (chromium-phase.yml), so drop it here: every phase then sees the same tree. gclient's
     # hooks have run, so nothing reads it again. From the directory above src, because clone.py
@@ -45,7 +53,6 @@ fetch_sources() {
 
   # baa: GitHub release downloads 504 for minutes at a time; retrieve resumes
   # (curl -C -), so wait and try again instead of failing the build.
-  local try
   for try in 1 2 3 4 5; do
     python3 "$_main_repo/utils/downloads.py" retrieve -i "${downloads[@]}" -c "$_download_cache" && break
     [ "$try" -lt 5 ] || return 1
