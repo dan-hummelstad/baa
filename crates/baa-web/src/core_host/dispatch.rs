@@ -113,6 +113,8 @@ pub(super) struct Dispatch {
     /// Popups the engine opened itself, until the UI takes them; `url` is the extension id.
     popups: RefCell<Vec<Pending>>,
     pub(super) early_sizes: RefCell<HashMap<TabId, gpui::Size<gpui::Pixels>>>,
+    /// A tab Chrome opened for an app link asks to open the app before the UI has taken the tab.
+    pub(super) early_dialogs: RefCell<HashMap<TabId, Vec<crate::Dialog>>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) sign_ins: RefCell<Option<WeakEntity<SignIns>>>,
@@ -139,6 +141,7 @@ impl Dispatch {
             pending: RefCell::default(),
             popups: RefCell::default(),
             early_sizes: RefCell::default(),
+            early_dialogs: RefCell::default(),
             chrome_tabs: RefCell::default(),
             downloads: RefCell::default(),
             sign_ins: RefCell::default(),
@@ -384,6 +387,10 @@ impl Dispatch {
         take(&self.pending, profile, url)
     }
 
+    fn is_pending(&self, tab: TabId) -> bool {
+        self.pending.borrow().iter().chain(self.popups.borrow().iter()).any(|p| p.tab == tab)
+    }
+
     pub(super) fn take_popup(&self, profile: *mut Profile, extension_id: &str) -> Option<TabId> {
         take(&self.popups, profile, extension_id)
     }
@@ -392,6 +399,7 @@ impl Dispatch {
         self.pending.borrow_mut().retain(|p| p.tab != tab);
         self.popups.borrow_mut().retain(|p| p.tab != tab);
         self.early_sizes.borrow_mut().remove(&tab);
+        self.early_dialogs.borrow_mut().remove(&tab);
         let Some(live) = self.tabs.borrow_mut().remove(&tab) else { return };
         // Now, not next turn: its view is freed once this callback returns.
         live.shared.release();
@@ -451,7 +459,8 @@ pub(super) fn callbacks() -> Callbacks {
         let d = unsafe { dispatch(ctx) };
         let kind = dialog_kind(dialog.kind);
         let quitting = matches!(kind, DialogKind::BeforeUnload { .. }) && (d.core.is_quitting)();
-        if quitting || d.page_of(tab).is_none() {
+        let waiting = !quitting && d.page_of(tab).is_none() && d.is_pending(tab);
+        if !waiting && (quitting || d.page_of(tab).is_none()) {
             // ⌘Q waits on a leave-site question nobody would answer for a hidden
             // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
             // ask. Answered next turn: Chrome is inside its dialog code now,
@@ -471,6 +480,10 @@ pub(super) fn callbacks() -> Callbacks {
                 check_label: from_c(dialog.check_label),
             }
         };
+        if waiting {
+            d.early_dialogs.borrow_mut().entry(tab).or_default().push(dialog);
+            return;
+        }
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::Dialog(dialog)));
     }
     extern "C" fn tab_closed(ctx: *mut c_void, tab: TabId, reason: c_int) {
@@ -487,7 +500,11 @@ pub(super) fn callbacks() -> Callbacks {
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::PermissionRequested { id, origin, kinds }));
     }
     extern "C" fn request_closed(ctx: *mut c_void, tab: TabId, id: u64) {
-        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
+        let d = unsafe { dispatch(ctx) };
+        if let Some(waiting) = d.early_dialogs.borrow_mut().get_mut(&tab) {
+            waiting.retain(|dialog| dialog.id != id);
+        }
+        d.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
     }
     extern "C" fn context_menu(
         ctx: *mut c_void,
