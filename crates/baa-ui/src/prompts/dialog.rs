@@ -74,7 +74,6 @@ impl DialogAsk {
         }
     }
 
-    /// The field the keyboard types into, if the dialog has one.
     pub(crate) fn field(&mut self) -> Option<&mut TextField> {
         match self.dialog.kind {
             DialogKind::Auth if self.on_password => Some(&mut self.password),
@@ -123,7 +122,6 @@ impl DialogAsk {
 }
 
 impl<H: WebHost> Browser<H> {
-    /// The asks on screen: the Peek's while one is open, else the active tab's.
     fn shown_asks(&self) -> Option<&Asks> {
         match self.shown()? {
             Shown::Peek => self.peek.as_ref().map(|p| &p.asks),
@@ -131,7 +129,6 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// The page the shown asks answer to, and its Space.
     pub(crate) fn shown_page(&self) -> Option<(Entity<H::Page>, SpaceId)> {
         match self.shown()? {
             Shown::Peek => self.peek.as_ref().map(|p| (p.page.clone(), p.space)),
@@ -233,7 +230,6 @@ impl<H: WebHost> Prompter for Browser<H> {
     }
 }
 
-/// The scrim and the sheet over the page. The sheet holds `focus` and gives it the keys.
 pub(super) fn render_dialog<V: Prompter>(
     view: &V,
     ask: &DialogAsk,

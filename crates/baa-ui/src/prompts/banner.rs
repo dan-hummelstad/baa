@@ -9,7 +9,6 @@ use crate::{
     theme::{r, surface, Theme},
 };
 
-/// Where a page's asks are drawn: over the page, centred.
 pub(crate) fn ask_layer() -> Div {
     div().absolute().inset_0().flex().flex_col().items_center()
 }

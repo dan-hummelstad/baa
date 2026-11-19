@@ -23,7 +23,6 @@ pub(crate) struct PeekPage<P> {
     pub(crate) app_link: bool,
 }
 
-/// Whose asks are on screen.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Shown {
     /// A link Peek: it covers the tab and holds its own.

@@ -124,7 +124,6 @@ impl<H: WebHost> LilBaa<H> {
         cx.notify();
     }
 
-    /// The page, unless a dialog is up: it keeps the keyboard.
     fn focus_page(&self, window: &mut Window, cx: &mut Context<Self>) {
         match &self.page {
             Some(page) if self.asks.dialog.is_none() => window.focus(&page.read(cx).focus_handle(cx), cx),

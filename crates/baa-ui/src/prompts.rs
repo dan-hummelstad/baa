@@ -21,9 +21,9 @@ use baa_web::{DangerKind, Download, DownloadState, PageEvent, PageHandle, Permis
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Div, Entity, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
 use crate::{
-    input::Key,
     browser::{cut_left, drop_in, feel, host_of, shadow, Browser, Shown, HEADER_H, INSET},
     icons::icon,
+    input::Key,
     motion::Feel,
     theme::{fade, mix, surface, Theme},
 };
@@ -110,12 +110,9 @@ impl Asks {
     }
 }
 
-/// A view that draws a page's asks with [`page_asks`]: the browser window (a tab or
-/// Peek) and lil-baa.
 pub(crate) trait Prompter: Sized + 'static {
     type Page: PageHandle;
     fn shown_asks_mut(&mut self) -> Option<&mut Asks>;
-    /// The page the shown asks answer to.
     fn prompt_page(&self) -> Option<Entity<Self::Page>>;
     fn answered(&mut self, ask: &DialogAsk, ok: bool, window: &mut Window, cx: &mut Context<Self>);
     fn button(&self, key: (&'static str, u64), label: SharedString, primary: bool, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div>;
@@ -329,8 +326,6 @@ impl<H: WebHost> Browser<H> {
         self.asks_changed(event, changed && shown, window, cx);
     }
 
-    /// After the asks took `event`: a permission slides in, and the keyboard follows a
-    /// dialog on screen that came or went (`dialog`).
     pub(crate) fn asks_changed(&mut self, event: &PageEvent, dialog: bool, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(event, PageEvent::PermissionRequested { .. }) {
             self.motion.from(("ask-in", 0), Feel::Glide, 0.0, 1.0);
@@ -577,7 +572,6 @@ impl<H: WebHost> Browser<H> {
         Some(feel(el, key, cx).into_any_element())
     }
 
-    /// Over the active tab's page: the account question and the tab's asks.
     pub(crate) fn render_asks(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let account = self.render_account_ask(theme, cx);
         let tab = self.active_tab();
