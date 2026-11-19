@@ -82,7 +82,7 @@
 @@ -87,6 +90,12 @@
      ExtensionInstallPrompt::DoneCallback done_callback,
      std::unique_ptr<InstallPromptData> prompt) {
-   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 +
 +  // baa: the embedding app may draw the dialog itself.
 +  if (g_baa_install_dialog &&
