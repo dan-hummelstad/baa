@@ -455,8 +455,8 @@
        "forward_10_old.icon",
        "forward_arrow_chrome_refresh_old.icon",
        "forward_arrow_old.icon",
-@@ -378,6 +379,7 @@
-       "reload_custom.icon",
+@@ -377,6 +378,7 @@
+       "reload_chrome_refresh_old.icon",
        "replay.icon",
        "replay_10.icon",
 +      "replay_15.icon",

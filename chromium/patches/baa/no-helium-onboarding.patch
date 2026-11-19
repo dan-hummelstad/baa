@@ -19,14 +19,14 @@
 -components/helium_onboarding/helium_onboarding_strings.grdp
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -5486,7 +5486,6 @@
-     "//chrome/browser/ui/webui/user_education_internals:mojo_bindings",
+@@ -2291,7 +2291,6 @@
      "//chrome/browser/web_applications/mojom:mojom_web_apps_enum",
+     "//chrome/common",
      "//chrome/common/request_header_integrity:buildflags",
 -    "//components/helium_onboarding:generated_resources",
      "//components/autofill/core/browser/ml_model/logging:mojo_bindings",
      "//components/enterprise/connectors:mojom",
-     "//components/webui/chrome_urls/mojom:mojo_bindings",
+     "//components/input",
 --- a/chrome/browser/ui/webui/BUILD.gn
 +++ b/chrome/browser/ui/webui/BUILD.gn
 @@ -44,7 +44,6 @@
@@ -37,7 +37,7 @@
      ":signin_internals_ui",
      ":webui",
      "//chrome/browser/actor/ui:actor_overlay",
-@@ -690,36 +689,6 @@
+@@ -705,37 +704,6 @@
        "//ash/webui/vc_background_ui",
      ]
    }
@@ -68,6 +68,7 @@
 -    "//components/helium_onboarding:generated_resources",
 -    "//components/helium_onboarding:localized_strings",
 -    "//components/helium_services",
+-    "//components/push_messaging",
 -    "//extensions/common",
 -    "//ui/webui",
 -  ]
