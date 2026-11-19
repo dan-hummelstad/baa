@@ -162,9 +162,9 @@ fn chromes_own_dialogs_carry_their_wording_and_answers(cx: &mut TestAppContext) 
 fn an_app_links_ask_in_a_tab_not_taken_yet_waits_for_its_page(cx: &mut TestAppContext) {
     let env = Env::new(cx);
     env.created(0x9100, 0, ProfileId(1), "zoommtg://meet");
-    send_dialog(&env, 0x9100, 21, ffi::DIALOG_EXTERNAL_PROTOCOL, c"Open zoom.us?");
     send_dialog(&env, 0x9100, 22, ffi::DIALOG_EXTERNAL_PROTOCOL, c"withdrawn");
     (env.callbacks.request_closed)(env.ctx(), 0x9100, 22);
+    send_dialog(&env, 0x9100, 21, ffi::DIALOG_EXTERNAL_PROTOCOL, c"Open zoom.us?");
     cx.run_until_parked();
     assert_eq!(calls("answer"), Vec::<String>::new(), "not cancelled for want of a page");
 
@@ -177,4 +177,20 @@ fn an_app_links_ask_in_a_tab_not_taken_yet_waits_for_its_page(cx: &mut TestAppCo
     send_dialog(&env, 0x9200, 23, ffi::DIALOG_EXTERNAL_PROTOCOL, c"a tab nobody will take");
     cx.run_until_parked();
     assert_eq!(calls("answer").len(), 1, "a tab Chrome did not open for the UI is still answered");
+}
+
+#[gpui::test]
+fn a_second_ask_in_a_tab_not_taken_yet_cancels_the_first(cx: &mut TestAppContext) {
+    let env = Env::new(cx);
+    env.created(0x9300, 0, ProfileId(1), "zoommtg://meet");
+    send_dialog(&env, 0x9300, 31, ffi::DIALOG_ALERT, c"first");
+    send_dialog(&env, 0x9300, 32, ffi::DIALOG_EXTERNAL_PROTOCOL, c"second");
+    cx.run_until_parked();
+    assert_eq!(calls("answer"), ["answer 31 0   0"], "the UI shows one; the one it never will is not left waiting");
+
+    let page = env.opened(1, "zoommtg://meet", cx);
+    let seen = events(&page, cx);
+    cx.run_until_parked();
+    let asks: Vec<u64> = seen.borrow().iter().filter_map(|e| if let PageEvent::Dialog(d) = e { Some(d.id) } else { None }).collect();
+    assert_eq!(asks, [32]);
 }

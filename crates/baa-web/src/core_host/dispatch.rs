@@ -113,8 +113,9 @@ pub(super) struct Dispatch {
     /// Popups the engine opened itself, until the UI takes them; `url` is the extension id.
     popups: RefCell<Vec<Pending>>,
     pub(super) early_sizes: RefCell<HashMap<TabId, gpui::Size<gpui::Pixels>>>,
-    /// A tab Chrome opened for an app link asks to open the app before the UI has taken the tab.
-    pub(super) early_dialogs: RefCell<HashMap<TabId, Vec<crate::Dialog>>>,
+    /// A pending tab's or popup's dialog, until the UI takes it: a tab Chrome opened for an
+    /// app link asks to open the app before that. One per tab, as the UI shows one.
+    pub(super) early_dialogs: RefCell<HashMap<TabId, crate::Dialog>>,
     pub(super) chrome_tabs: RefCell<Option<WeakEntity<ChromeTabs>>>,
     pub(super) downloads: RefCell<Option<WeakEntity<Downloads>>>,
     pub(super) sign_ins: RefCell<Option<WeakEntity<SignIns>>>,
@@ -462,9 +463,8 @@ pub(super) fn callbacks() -> Callbacks {
         let waiting = !quitting && d.page_of(tab).is_none() && d.is_pending(tab);
         if !waiting && (quitting || d.page_of(tab).is_none()) {
             // ⌘Q waits on a leave-site question nobody would answer for a hidden
-            // tab; a page with no UI (the sheet, a tab not adopted yet) cannot
-            // ask. Answered next turn: Chrome is inside its dialog code now,
-            // and may not have recorded the id yet.
+            // tab; a page with no UI (the sheet) cannot ask. Answered next turn:
+            // Chrome is inside its dialog code now, and may not have recorded the id yet.
             d.queue(move |_| d.core.answer_ok(id, quitting));
             return;
         }
@@ -481,7 +481,9 @@ pub(super) fn callbacks() -> Callbacks {
             }
         };
         if waiting {
-            d.early_dialogs.borrow_mut().entry(tab).or_default().push(dialog);
+            if let Some(old) = d.early_dialogs.borrow_mut().insert(tab, dialog) {
+                d.queue(move |_| d.core.answer_ok(old.id, false));
+            }
             return;
         }
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::Dialog(dialog)));
@@ -501,8 +503,8 @@ pub(super) fn callbacks() -> Callbacks {
     }
     extern "C" fn request_closed(ctx: *mut c_void, tab: TabId, id: u64) {
         let d = unsafe { dispatch(ctx) };
-        if let Some(waiting) = d.early_dialogs.borrow_mut().get_mut(&tab) {
-            waiting.retain(|dialog| dialog.id != id);
+        if d.early_dialogs.borrow().get(&tab).is_some_and(|dialog| dialog.id == id) {
+            d.early_dialogs.borrow_mut().remove(&tab);
         }
         d.on_page(tab, move |_, cx| cx.emit(PageEvent::AskClosed(id)));
     }

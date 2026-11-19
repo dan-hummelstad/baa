@@ -83,14 +83,14 @@ impl CorePage {
             // once it has subscribed, which is after this constructor.
             let first = state.clone();
             let size = dispatch.early_sizes.borrow_mut().remove(&tab);
-            let dialogs = dispatch.early_dialogs.borrow_mut().remove(&tab).unwrap_or_default();
+            let dialog = dispatch.early_dialogs.borrow_mut().remove(&tab);
             cx.spawn(async move |page, cx| {
                 page.update(cx, |page, cx| {
                     page.emit_changes(&Snapshot::default(), &first, cx);
                     if let Some(size) = size {
                         cx.emit(PageEvent::PreferredSize(size));
                     }
-                    for dialog in dialogs {
+                    if let Some(dialog) = dialog {
                         cx.emit(PageEvent::Dialog(dialog));
                     }
                 })
