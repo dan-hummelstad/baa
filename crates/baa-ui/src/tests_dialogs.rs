@@ -393,7 +393,9 @@ fn an_app_link_in_a_peek_asks_on_the_card_and_the_empty_card_goes(cx: &mut TestA
     let ok = cx.debug_bounds("dialog-ok").unwrap().center();
     cx.simulate_click(ok, Modifiers::none());
     assert_eq!(answered(&link, cx), [(51, DialogAnswer { ok: true, ..Default::default() })]);
-    b.read_with(cx, |b, _| assert!(b.peek.is_none()));
+    link.update(cx, |_, cx| cx.emit(PageEvent::Closed));
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert!(b.peek.is_none(), "Chrome closes the tab once the app opens"));
 
     let site = peek("https://zoom.example/j/1", cx);
     site.update(cx, |_, cx| cx.emit(PageEvent::Dialog(app_link(52))));
@@ -450,4 +452,24 @@ fn a_dialog_moved_out_of_lil_baa_waits_out_the_delay_again_over_an_open_peek(cx:
     main.executor().advance_clock(ACTIVATION_DELAY);
     main.simulate_click(ok, Modifiers::none());
     assert_eq!(answered(&p, main), [(61, DialogAnswer { ok: true, ..Default::default() })]);
+}
+
+#[gpui::test]
+fn a_peek_is_an_app_links_by_the_url_it_opened_with_not_where_it_went(cx: &mut TestAppContext) {
+    let (b, p, cx) = page(cx);
+    let cancel_in_peek = |url: &str, went: Option<&str>, id: u64, cx: &mut VisualTestContext| {
+        p.update(cx, |_, cx| cx.emit(PageEvent::OpenRequested { url: url.into(), from_user_gesture: true, background: false }));
+        cx.run_until_parked();
+        let peek = b.read_with(cx, |b, _| b.peek.as_ref().unwrap().page.clone());
+        if let Some(went) = went {
+            peek.update(cx, |_, cx| cx.emit(PageEvent::UrlChanged(went.into())));
+        }
+        peek.update(cx, |_, cx| cx.emit(PageEvent::Dialog(app_link(id))));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        assert_eq!(answered(&peek, cx), [(id, DialogAnswer::default())]);
+        b.read_with(cx, |b, _| b.peek.is_some())
+    };
+    assert!(cancel_in_peek("https://a.example/", Some("chrome-extension://x/options.html"), 70, cx), "a page stays");
+    assert!(!cancel_in_peek("zoommtg://x", None, 71, cx), "an app link's empty card goes");
 }

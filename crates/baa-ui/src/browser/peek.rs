@@ -19,6 +19,8 @@ pub(crate) struct PeekPage<P> {
     /// Bumped by each size a waiting popup reports; only the last one reveals it.
     pub(super) settle: u64,
     pub(crate) asks: crate::prompts::Asks,
+    /// Opened for a link to an app (not http(s)): a card with nothing to show but the ask.
+    pub(crate) app_link: bool,
 }
 
 /// How long a popup's size has to hold before it shows. Popups report a few
@@ -84,6 +86,7 @@ impl<H: WebHost> Browser<H> {
             shown: !popup,
             settle: 0,
             asks: Default::default(),
+            app_link: !popup && url::Url::parse(url).is_ok_and(|u| !matches!(u.scheme(), "http" | "https")),
         });
         // ponytail: a popup that never reports a size still shows, at Chrome's default-ish one.
         if popup {

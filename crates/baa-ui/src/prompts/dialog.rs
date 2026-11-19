@@ -184,16 +184,16 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn answer_dialog(&mut self, ok: bool, window: &mut Window, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let Some(ask) = self.shown_asks_mut().and_then(|a| a.take_dialog(ok, now)) else { return };
-        let external = ask.dialog.kind == DialogKind::ExternalProtocol;
+        let cancelled_app = !ok && ask.dialog.kind == DialogKind::ExternalProtocol;
         if let Some((page, space)) = self.shown_page() {
             if ok && is_install(&ask.dialog) {
                 self.install_accepted(space, ask.target, &ask.dialog.title, cx);
             }
             page.read(cx).answer_dialog(ask.dialog.id, ask.answer(ok));
         }
-        // Chrome closes a tab opened only for an app link once the app opens; a Peek of
-        // one has nothing to show either way.
-        if external && self.peek.as_ref().is_some_and(|p| !p.popup && !is_web(&p.url)) {
+        // Chrome closes a tab opened only for an app link once the app opens; cancelled,
+        // its Peek has nothing to show.
+        if cancelled_app && self.peek.as_ref().is_some_and(|p| p.app_link) {
             self.close_peek(window, cx);
         }
         self.close_overlays(window, cx);
@@ -244,10 +244,6 @@ impl<H: WebHost> Browser<H> {
             .child(div().flex().flex_wrap().gap(px(6.)).children(chips))
             .into_any_element()
     }
-}
-
-fn is_web(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
 }
 
 impl<H: WebHost> Prompter for Browser<H> {
