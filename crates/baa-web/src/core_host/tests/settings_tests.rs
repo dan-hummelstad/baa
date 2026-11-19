@@ -125,6 +125,16 @@ fn color_schemes_go_to_each_profile_when_it_opens_and_when_they_change(cx: &mut 
     assert!(calls("profile_set_color_schemes")[1].ends_with(" 2 0"), "a later profile starts with the setting");
 }
 
+#[test]
+fn the_page_area_is_dark_by_the_setting_and_by_the_system_only_when_it_follows_it() {
+    use super::super::settings::pages_dark;
+    for system_dark in [false, true] {
+        assert_eq!(pages_dark(PageScheme::System, system_dark), system_dark);
+        assert!(!pages_dark(PageScheme::Light, system_dark), "light wins over a dark system");
+        assert!(pages_dark(PageScheme::Dark, system_dark), "dark wins over a light system");
+    }
+}
+
 #[gpui::test]
 fn site_rules_decode_the_visitor_and_unset_is_sent(cx: &mut TestAppContext) {
     let env = Env::new(cx);

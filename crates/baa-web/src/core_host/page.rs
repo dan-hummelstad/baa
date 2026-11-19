@@ -9,7 +9,7 @@ use std::{
 
 use gpui::{
     div, AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Subscription, WeakEntity, Window,
+    ParentElement, Render, Styled, Subscription, WeakEntity, Window, WindowAppearance,
 };
 use objc2::runtime::AnyObject;
 use serde_json::{json, Value};
@@ -20,7 +20,7 @@ use super::{
     dispatch::{Dispatch, Live, MEDIA_ACTIONS},
     from_c,
     menu::{present_menu, Row},
-    native,
+    native, settings,
     skin,
     slot::PageSlot,
     ffi::{self, Profile, TabId},
@@ -283,7 +283,9 @@ impl Focusable for CorePage {
 }
 
 impl Render for CorePage {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let system_dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+        self.shared.container.set_window_dark(settings::pages_dark(self.dispatch.page_scheme.get(), system_dark));
         div().track_focus(&self.focus_handle).key_context("Webview").size_full().child(PageSlot {
             shared: self.shared.clone(),
             focus_handle: self.focus_handle.clone(),

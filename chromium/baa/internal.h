@@ -210,6 +210,9 @@ void AnswerPendingOf(Profile* profile);  // baa_profile_close
 Profile* DefaultsProfile(Profile* profile);
 // profile.mm: installs the colour scheme hook of patches/baa/color-scheme-hook.patch.
 void InstallColorSchemeHook();
+// profile.mm: what the page area shows before the page paints. Chrome's ContentsWebView sets
+// it, and baa has none.
+void PaintPageBackground(content::WebContents* contents);
 // 0 follows the system, 1 light, 2 dark (anything else is the system's).
 enum class ColorScheme { kSystem, kLight, kDark };
 inline ColorScheme ColorSchemeOf(int value) {

@@ -156,6 +156,15 @@ struct BaaTab : content::WebContentsObserver,
     ShowDevtoolsClose();
   }
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override { SendState(); }
+  // A cross-process navigation brings a new view, which starts in Chrome's default white.
+  void RenderFrameHostChanged(content::RenderFrameHost*, content::RenderFrameHost* new_host) override {
+    if (new_host->IsInPrimaryMainFrame()) {
+      baa::PaintPageBackground(web_contents());
+    }
+  }
+  void RenderViewReady() override { baa::PaintPageBackground(web_contents()); }
+  // The system appearance changed.
+  void OnColorProviderChanged() override { baa::PaintPageBackground(web_contents()); }
   void TitleWasSet(content::NavigationEntry*) override { SendState(); }
   void NavigationEntryCommitted(
       const content::LoadCommittedDetails&) override {
@@ -370,6 +379,7 @@ bool TabAlive(BaaTab* tab) {
 
 void BaaTab::Attach(content::WebContents* wc) {
   Observe(wc);
+  baa::PaintPageBackground(wc);
   if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(wc)) {
     driver->AddObserver(this);
   }
@@ -588,6 +598,7 @@ void baa::ReapplyColorSchemes(Profile* chrome_profile) {
     content::WebContents* wc = value->web_contents();
     if (wc && Profile::FromBrowserContext(wc->GetBrowserContext()) == chrome_profile) {
       wc->NotifyPreferencesChanged();
+      baa::PaintPageBackground(wc);
     }
   }
 }

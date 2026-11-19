@@ -116,6 +116,7 @@ pub struct Container {
     floating: Cell<bool>,
     gpui_view: Cell<*mut AnyObject>,
     resized_at: Cell<f64>,
+    window_dark: Cell<Option<bool>>,
 }
 
 impl Container {
@@ -143,6 +144,7 @@ impl Container {
                 floating: Cell::new(false),
                 gpui_view: Cell::new(std::ptr::null_mut()),
                 resized_at: Cell::new(0.),
+                window_dark: Cell::new(None),
             };
             this.move_below(gpui_view);
             this.swap_page(page);
@@ -185,19 +187,33 @@ impl Container {
             return;
         }
         unsafe {
-            // Behind the page holes: white, like a page, rather than the
-            // desktop through gpui's transparent layer while a tab switches.
-            let window: *mut AnyObject = msg_send![gpui_view, window];
-            if !window.is_null() {
-                let white: *mut AnyObject = msg_send![class!(NSColor), whiteColor];
-                let _: () = msg_send![window, setBackgroundColor: white];
-            }
             let content: *mut AnyObject = msg_send![gpui_view, superview];
             let _: () = msg_send![self.view, removeFromSuperview];
             let _: () = msg_send![content, addSubview: self.view, positioned: NS_WINDOW_BELOW, relativeTo: gpui_view];
         }
         self.placed.set(None);
         self.gpui_view.set(gpui_view);
+        self.window_dark.set(None);
+    }
+
+    /// Behind the page holes: the page's light or dark, rather than the desktop
+    /// through gpui's transparent layer while a tab switches.
+    pub fn set_window_dark(&self, dark: bool) {
+        let gpui_view = self.gpui_view.get();
+        if gpui_view.is_null() || self.window_dark.get() == Some(dark) {
+            return;
+        }
+        unsafe {
+            let window: *mut AnyObject = msg_send![gpui_view, window];
+            if window.is_null() {
+                return;
+            }
+            // The engine's colour for a page that has not painted (PaintPageBackground in chromium/baa/profile.mm).
+            let [r, g, b] = if dark { [0x1C, 0x1B, 0x20] } else { [0xFF; 3] }.map(|c: u8| f64::from(c) / 255.);
+            let color: *mut AnyObject = msg_send![class!(NSColor), colorWithSRGBRed: r, green: g, blue: b, alpha: 1.0f64];
+            let _: () = msg_send![window, setBackgroundColor: color];
+        }
+        self.window_dark.set(Some(dark));
     }
 
     pub fn set_floating(&self, floating: bool) {

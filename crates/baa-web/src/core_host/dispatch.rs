@@ -131,6 +131,8 @@ pub(super) struct Dispatch {
     next_autocomplete: Cell<u64>,
     /// `--user-data-dir`.
     pub(super) root: OnceCell<PathBuf>,
+    /// `Settings::page_scheme`, kept as the user chose it until it is sent to the engine.
+    pub(super) page_scheme: Cell<baa_model::PageScheme>,
 }
 
 impl Dispatch {
@@ -155,6 +157,7 @@ impl Dispatch {
             autocomplete: RefCell::default(),
             next_autocomplete: Cell::new(1),
             root: OnceCell::new(),
+            page_scheme: Cell::default(),
         }
     }
 

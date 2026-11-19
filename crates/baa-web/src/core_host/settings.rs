@@ -113,6 +113,15 @@ pub fn scheme_code(dark: bool) -> c_int {
     if dark { 2 } else { 1 }
 }
 
+/// Whether the page area is dark before a page paints; the engine decides the same for its views
+/// (`PaintPageBackground`).
+pub fn pages_dark(scheme: PageScheme, system_dark: bool) -> bool {
+    match scheme {
+        PageScheme::System => system_dark,
+        scheme => scheme == PageScheme::Dark,
+    }
+}
+
 /// prefers-color-scheme that websites see.
 pub fn website_scheme(scheme: PageScheme) -> c_int {
     match scheme {

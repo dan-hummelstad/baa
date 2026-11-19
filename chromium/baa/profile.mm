@@ -23,6 +23,7 @@
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/baa_hooks.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "chrome/browser/profiles/profile_destroyer.h"
@@ -33,6 +34,8 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/color/color_provider_key.h"
 
 struct BaaProfile : ProfileObserver {
   BaaProfile(Profile* profile, bool ephemeral)
@@ -345,6 +348,22 @@ bool PreferredColorScheme(content::WebContents* contents,
 
 void InstallColorSchemeHook() {
   g_baa_preferred_color_scheme = &PreferredColorScheme;
+}
+
+void PaintPageBackground(content::WebContents* contents) {
+  content::RenderWidgetHostView* view = contents->GetRenderWidgetHostView();
+  BaaProfile* profile = ProfileFor(Profile::FromBrowserContext(contents->GetBrowserContext()));
+  if (!view || !profile) {
+    return;
+  }
+  // baa's pages have no BrowserView, so their colour mode is the system's (Chrome's
+  // DefaultColorProviderSource), which is also what prefers-color-scheme follows for kSystem.
+  bool dark = profile->website_scheme == ColorScheme::kSystem
+                  ? contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kDark
+                  : profile->website_scheme == ColorScheme::kDark;
+  // The dark is reader mode's (crates/baa-ui/src/tools.rs) and the window's behind the page
+  // (crates/baa-web/src/core_host/native.rs).
+  view->SetBackgroundColor(dark ? SkColorSetRGB(0x1C, 0x1B, 0x20) : SK_ColorWHITE);
 }
 
 Profile* DefaultsProfile(Profile* profile) {

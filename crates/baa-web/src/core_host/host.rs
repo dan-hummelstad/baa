@@ -85,8 +85,6 @@ pub struct CoreWebHost {
     extension_popups: Entity<ExtensionPopups>,
     /// What `apply_settings` last sent; none before the first call.
     applied: RefCell<Option<Writes>>,
-    /// Kept as the user chose it until it is sent to the engine.
-    page_scheme: Cell<baa_model::PageScheme>,
     /// Per Space, so a profile opened later inherits: the css of its Chrome pages, and whether it is dark.
     skins: RefCell<HashMap<ProfileId, (String, bool)>>,
 }
@@ -119,7 +117,6 @@ impl CoreWebHost {
             extension_actions_changed,
             extension_popups,
             applied: RefCell::default(),
-            page_scheme: Cell::default(),
             skins: RefCell::default(),
         }
     }
@@ -137,7 +134,7 @@ impl CoreWebHost {
     }
 
     fn send_schemes(&self, id: ProfileId, handle: *mut Profile) {
-        let website = settings::website_scheme(self.page_scheme.get());
+        let website = settings::website_scheme(self.dispatch.page_scheme.get());
         // Without a skin Chrome's pages keep their own look, in the system's scheme.
         let webui = self.skins.borrow().get(&id).map_or(0, |(_, dark)| settings::scheme_code(*dark));
         (self.core.profile_set_color_schemes)(handle, website, webui);
@@ -400,7 +397,7 @@ impl WebHost for CoreWebHost {
                 settings::apply(self.core, handle, write);
             }
         }
-        if self.page_scheme.replace(settings.page_scheme) != settings.page_scheme {
+        if self.dispatch.page_scheme.replace(settings.page_scheme) != settings.page_scheme {
             for (&id, &handle) in self.profiles.borrow().iter() {
                 self.send_schemes(id, handle);
             }
