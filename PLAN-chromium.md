@@ -116,6 +116,11 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
   art). The raster product logos (`baa://version`, `product_logo_*.png`) come from
   `helium/resources/branding/app_icon/raw.png`, which is baa's "The leap, solid"; the app icon is set
   by `cargo bundle` from `assets/baa.icns`.
+- **Cookie key:** baa always passes `--user-data-dir`, which is not the engine's default folder, so
+  from Chromium 158 (`KeychainKeyProviderUserDataDirProtection`) its cookies are encrypted with the
+  Keychain key's "v11" form and data written by 157 ("v10") cannot be read: the 158 update signs
+  everyone out once (the user accepted this, 2026-11-20). Making baa's folder the default one
+  (`CrProductDirName`) would switch back to v10 and sign everyone out again.
 - **Dropped:** 9 `helium/ui/*` patches that only touch views code and that nothing else depends on. The
   other 95 UI patches are tangled with prefs, strings and the WebUI pages baa still shows, so they stay.
 - **Dropped too:** `helium/ui/crash-dialog.patch` (offers to send a report; nothing is sent).
@@ -123,10 +128,13 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
   `prepare_sources`), so Helium merges never touch them:
   - `baa/remove-helium-services.patch`: Helium's servers are never contacted. `ShouldAccessServices` is
     false and the default origin is the dummy host, so every service takes its built-in "off" path
-    (component updates, spellcheck dictionaries, bangs list, uBO asset config, browser updates);
+    (component updates, spellcheck dictionaries, bangs list, uBO asset config, browser updates, and
+    since Helium 0.22 web push, whose `ShouldAccessPushService` needs `ShouldAccessServices`);
     extension installs and updates go straight to the Chrome Web Store, as in stock Chromium; the
     settings entry and the services onboarding are gone. When baa runs its own services, point
-    `kHeliumDefaultOrigin`/`ShouldAccessServices` in `components/helium_services` there.
+    `kHeliumDefaultOrigin`/`ShouldAccessServices` in `components/helium_services` there, and
+    `kHeliumDefaultPushServer` too: it is its own constant (`wss://push.helium.computer/`), not
+    derived from the origin.
   - `baa/no-crash-uploads.patch`: no upload URL and uploads forced off; crashpad keeps reports in
     `<user data>/Crashpad/`. The crash-reporting toggle in settings now does nothing (still to remove).
 
