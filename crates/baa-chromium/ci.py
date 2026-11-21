@@ -176,7 +176,7 @@ def run_test(spec, exe, keep):
         # The mock keychain: no "baa Storage Key" prompt on a runner or after a rebuild.
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
                 "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
-                # Where a request waited, for a load that did not finish (chrome://net-export reads it).
+                # Where a request waited, for a load that did not finish (the netlog viewer reads it).
                 f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
