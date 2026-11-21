@@ -466,9 +466,20 @@ class Window::ContentsDialogHost : public web_modal::WebContentsModalDialogHost,
                 usingBlock:^(NSNotification*) {
                   NotifyPositionRequiresUpdate();
                 }];
+    // The dialog is a window of its own, so it does not move with ours by itself.
+    window_watch_ = [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowDidMoveNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* note) {
+                  if (note.object == View().window) {
+                    NotifyPositionRequiresUpdate();
+                  }
+                }];
   }
   ~ContentsDialogHost() override {
     [NSNotificationCenter.defaultCenter removeObserver:frame_watch_];
+    [NSNotificationCenter.defaultCenter removeObserver:window_watch_];
     for (auto& observer : observers_) {
       observer.OnHostDestroying();
     }
@@ -479,6 +490,8 @@ class Window::ContentsDialogHost : public web_modal::WebContentsModalDialogHost,
     return DialogPositionOver(View(), size);
   }
   gfx::Size GetMaximumDialogSize() override { return MaximumDialogSizeIn(View()); }
+  // As in Chrome: a page in a window behind another does not take the keyboard with a dialog.
+  bool ShouldActivateDialog() const override { return View().window.keyWindow; }
   void AddObserver(web_modal::ModalDialogHostObserver* observer) override {
     observers_.AddObserver(observer);
   }
@@ -502,6 +515,7 @@ class Window::ContentsDialogHost : public web_modal::WebContentsModalDialogHost,
 
   const raw_ptr<Window> owner_;  // owns this
   id frame_watch_ = nil;
+  id window_watch_ = nil;
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
 };
 
