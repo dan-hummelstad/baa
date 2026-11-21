@@ -17,9 +17,9 @@ outputs:
   name:
     description: artifact name
     value: ${{ steps.find.outputs.name }}
-  tree:
+  key:
     description: the engine key (engine-key.sh)
-    value: ${{ steps.find.outputs.tree }}
+    value: ${{ steps.find.outputs.key }}
 runs:
   using: composite
   steps:
@@ -51,7 +51,7 @@ runs:
           exit 1
         fi
         {
-          echo "tree=$T"
+          echo "key=$T"
           echo "name=$N"
           echo "run=$run"
         } >> "$GITHUB_OUTPUT"
