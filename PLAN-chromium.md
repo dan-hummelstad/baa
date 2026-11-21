@@ -152,7 +152,7 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
   `baa.app`, `baa Packaging`, `engine.json`; 90 days) and runs the `privacy` job on it. It starts by
   hand or from `helium-bump.yml`, not on every push (decided 2026-11-06). `mode=dev` = component
   build on the `xcode-27` runner with Xcode 27.2 (same as the dev Mac) at `/Users/Shared/hb`, a path that exists on both, since siso keys its records by absolute path; the finished tree is kept
-  7 days to unpack locally (at `/Users/Shared/hb`) and build incrementally (`//baa` edits rebuild in minutes).
+  30 days to unpack locally (at `/Users/Shared/hb`) and build incrementally (`//baa` edits rebuild in minutes).
 - **Local:** `chromium/local-build.sh` syncs the checkout's `chromium/` into `/Users/Shared/hb` by content
   (unchanged files keep their mtimes) and builds `chrome`. Only `//baa` changed: copied straight in. Any
   Helium/patch change: a fresh `prepare_sources` in `/Users/Shared/hb-new` (tarball cached in

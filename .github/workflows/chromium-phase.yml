@@ -1,5 +1,11 @@
 # One phase of chromium.yml: compile for up to ~4.75 h, then hand the tree to
-# the next phase through the run's chromium-tree-xcode<version> artifact.
+# the next phase as an artifact of the run.
+# Compiled hours are never thrown away. Once the Build step has said how it ended (running,
+# finished or failed), the tree is packed and uploaded whatever else in the job goes wrong, and
+# under a name of its own: chromium-tree-xcode<version>-phase<N> while the chain is unfinished,
+# chromium-tree-xcode<version> once it is finished. No upload replaces the tree before it, so
+# the last phase that ended is always there to go on from: "Re-run failed jobs" on a phase that
+# died, or a new run with base_run=<this run> after a fix.
 name: chromium-phase
 
 on:
@@ -44,6 +50,7 @@ env:
   BAA_BASE_RUN: ${{ inputs.base_run }}
   BAA_BUDGET: ${{ inputs.budget_minutes }}
   BAA_RUNNER: ${{ inputs.runner }}
+  BAA_PHASE: ${{ inputs.phase }}
 
 jobs:
   phase:
@@ -64,6 +71,7 @@ jobs:
         run: |
           set -eux
           echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+          echo "PREV_TREE=$TREE-phase$(( BAA_PHASE - 1 ))" >> "$GITHUB_ENV"
           sudo mdutil -a -i off || true
           df -h /
           # Disk is the limit by the last phases (tree + build output + archive): drop what Chromium doesn't use.
@@ -84,7 +92,8 @@ jobs:
       # A dev chain builds on the newest finished dev tree of the same Chromium
       # version, so it only recompiles what changed since. base_run: "" picks one,
       # a run id names one, "none" builds from scratch. A release builds from scratch
-      # unless base_run names an earlier release run, e.g. one that failed mid-chain.
+      # unless base_run names an earlier release run. A named run need not have finished:
+      # the tree of the last phase that ended is what there is to go on from.
       - name: Pick base tree (phase 1)
         id: base
         if: inputs.phase == 1 && inputs.base_run != 'none' && (inputs.mode == 'dev' || inputs.base_run != '')
@@ -97,36 +106,39 @@ jobs:
           # Only a manual dispatch of chromium.yml in this repo (trusted.sh): any PR run can
           # name itself "chromium dev" and upload a tree whose out/ the next build would run.
           # Its tree must carry the checksum Pack tree records; older trees do not.
-          # A release base may be a failed chain: its last phase's tree is what is left to finish.
           usable() {
             local run sha arts
             run=$(gh api "repos/$R/actions/runs/$1") || return 1
             baa/.github/actions/engine/trusted.sh "$R" <<<"$run" || return 1
-            sha=$(jq -r 'select(.display_title == "chromium " + env.BAA_MODE and (.conclusion == "success" or env.BAA_MODE == "release")) | .head_sha' <<<"$run")
+            sha=$(jq -r 'select(.display_title == "chromium " + env.BAA_MODE) | .head_sha' <<<"$run")
             [ -n "$sha" ] || return 1
             arts=$(gh api "repos/$R/actions/runs/$1/artifacts?per_page=100" -q '[.artifacts[] | select(.expired | not)]')
-            jq -e 'any(.name == env.TREE)' <<<"$arts" >/dev/null || return 1
-            if ! jq -e 'any(.name == env.TREE + ".sha256")' <<<"$arts" >/dev/null; then
+            NAME=$(baa/.github/tree-name.sh <<<"$arts")
+            [ -n "$NAME" ] || return 1
+            if ! jq -e 'any(.name == env.NAME + ".sha256")' <<<"$arts" >/dev/null; then
               # Release trees from before the producer checksum (39b112cd) are checked
               # against the sha256 GitHub recorded when the producer uploaded them.
               [ "$BAA_MODE" = release ] || return 1
-              ID=$(jq -r 'map(select(.name == env.TREE))[0].id' <<<"$arts")
-              DIGEST=$(jq -r 'map(select(.name == env.TREE))[0].digest // empty' <<<"$arts")
+              ID=$(jq -r 'map(select(.name == env.NAME))[0].id' <<<"$arts")
+              DIGEST=$(jq -r 'map(select(.name == env.NAME))[0].digest // empty' <<<"$arts")
               case $DIGEST in sha256:?*) ;; *) return 1 ;; esac
             fi
             [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
           }
           ID='' DIGEST=''
+          export NAME=''
           B=$BAA_BASE_RUN
           if [ -n "$B" ]; then
             usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium $want $BAA_MODE tree"; exit 1; }
           else
+            # Only finished chains are picked unasked.
             for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=success&per_page=50" -q '.workflow_runs[].id'); do
               if usable "$r"; then B=$r; break; fi
             done
+            [ -n "$B" ] || NAME=''
           fi
-          { echo "run=$B"; echo "id=$ID"; echo "digest=$DIGEST"; } >> "$GITHUB_OUTPUT"
-          echo "- base tree: ${B:-none, building from scratch}${DIGEST:+ (checked against the GitHub upload digest)}" >> "$GITHUB_STEP_SUMMARY"
+          { echo "run=$B"; echo "name=$NAME"; echo "id=$ID"; echo "digest=$DIGEST"; } >> "$GITHUB_OUTPUT"
+          echo "- base tree: ${B:+$NAME of run }${B:-none, building from scratch}${DIGEST:+ (checked against the GitHub upload digest)}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Restore tree by GitHub's digest
         if: steps.base.outputs.digest != ''
@@ -148,7 +160,7 @@ jobs:
         if: inputs.phase != 1 || (steps.base.outputs.run != '' && steps.base.outputs.digest == '')
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ env.TREE }}
+          name: ${{ steps.base.outputs.name || env.PREV_TREE }}
           run-id: ${{ steps.base.outputs.run || github.run_id }}
           github-token: ${{ github.token }}
           path: /Users/Shared
@@ -157,7 +169,7 @@ jobs:
         if: inputs.phase != 1 || (steps.base.outputs.run != '' && steps.base.outputs.digest == '')
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ${{ env.TREE }}.sha256
+          name: ${{ steps.base.outputs.name || env.PREV_TREE }}.sha256
           run-id: ${{ steps.base.outputs.run || github.run_id }}
           github-token: ${{ github.token }}
           path: /Users/Shared
@@ -245,24 +257,28 @@ jobs:
             # A phase that kept the last one's work ends with far fewer steps left.
             # Without this, a lost hand-off only shows as a chain that never ends.
             read -r done remaining < <(grep -oE '[0-9]+ done, [0-9]+ failed, [0-9]+ remaining' build.log | tail -1 | awk '{print $1, $5}')
-            [ -n "${remaining:-}" ] || { echo "::error::no siso step summary in build.log"; exit 1; }
+            # Either guard below ends the chain with this phase's tree uploaded: it stops the build, not the keeping.
+            [ -n "${remaining:-}" ] || { echo "::error::no siso step summary in build.log"; echo "status=failed" >> "$GITHUB_OUTPUT"; exit 0; }
             echo "remaining_phase${{ inputs.phase }}=$remaining" >> stats.txt
             if [ -f remaining.txt ] && [ "$remaining" -gt $(( $(cat remaining.txt) - done / 2 )) ]; then
-              echo "::error::no progress kept: $remaining steps left after $done done; the last phase left $(cat remaining.txt)"; exit 1
+              echo "::error::no progress kept: $remaining steps left after $done done; the last phase left $(cat remaining.txt)"
+              echo "status=failed" >> "$GITHUB_OUTPUT"; exit 0
             fi
             echo "$remaining" > remaining.txt
             echo "status=running" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ $code -ne 0 ]; then
-            # Keep the hours compiled so far: Pack tree uploads it and a rerun with
-            # base_run=<this run> resumes there. "Fail the build" ends the job red.
+            # Keep the hours compiled so far: Pack tree uploads it and a new run with
+            # base_run=<this run> goes on from there. "Fail the build" ends the job red.
             grep -A12 '^FAILED:' build.log | sed 's/^/::error::/' | head -40 || true
             echo "status=failed" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "status=finished" >> "$GITHUB_OUTPUT"
 
+      # The summary is for reading: a failure here stops nothing after it.
       - name: Report
         if: steps.build.outputs.status == 'finished'
+        continue-on-error: true
         working-directory: /Users/Shared/hb
         env:
           GH_TOKEN: ${{ github.token }}
@@ -316,41 +332,47 @@ jobs:
           path: /Users/Shared/engine.tar.zst.sha256
           retention-days: 90
 
-      # A finished run keeps its tree 14 days: an engine fix then rebuilds with base_run=<this run>
-      # instead of from scratch.
+      # Whatever the Build step ended as, and whatever failed since, the tree is kept.
+      # !cancelled(), not always(): a cancelled job is killed five minutes later, mid-archive.
       - name: Pack tree
-        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        id: pack
+        if: ${{ !cancelled() && steps.build.outputs.status != '' }}
         working-directory: /Users/Shared
+        env:
+          STATUS: ${{ steps.build.outputs.status }}
         run: |
           set -eux
-          # --remove-files: the archive never sits beside the whole tree on disk.
-          # posix (pax) keeps sub-second mtimes, which siso compares; the default format drops them.
-          gtar --format=posix --remove-files --exclude='.git' -cf - hb | zstd -3 -T0 -o tree.tar.zst
+          "$GITHUB_WORKSPACE/baa/.github/pack-tree.sh" hb
           ls -lh tree.tar.zst
-          gsha256sum tree.tar.zst | tee tree.tar.zst.sha256
+          cat tree.tar.zst.sha256
           df -h /
+          name=$TREE; [ "$STATUS" = finished ] || name=$TREE-phase$BAA_PHASE
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      # overwrite only ever meets this phase's own earlier attempt ("Re-run failed jobs").
+      # A finished tree stays 30 days, about a Chromium milestone: an engine fix in that time
+      # builds on it with base_run=<this run>. An unfinished one stays 7, to be gone on from.
       - name: Upload tree
-        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.TREE }}
+          name: ${{ steps.pack.outputs.name }}
           path: /Users/Shared/tree.tar.zst
           overwrite: true
-          retention-days: ${{ steps.build.outputs.status == 'finished' && 14 || 2 }}
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 30 || 7 }}
           compression-level: 0
 
       - name: Upload tree checksum
-        if: steps.build.outputs.status == 'running' || steps.build.outputs.status == 'finished' || (steps.build.outputs.status == 'failed' && inputs.mode == 'release')
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.TREE }}.sha256
+          name: ${{ steps.pack.outputs.name }}.sha256
           path: /Users/Shared/tree.tar.zst.sha256
           overwrite: true
-          retention-days: ${{ steps.build.outputs.status == 'finished' && 14 || 2 }}
+          retention-days: ${{ steps.build.outputs.status == 'finished' && 30 || 7 }}
 
       - name: Fail the build
-        if: steps.build.outputs.status == 'failed'
+        if: ${{ !cancelled() && steps.build.outputs.status == 'failed' }}
         run: |
-          echo "::error::build failed; its tree is uploaded (release): rerun chromium.yml with base_run=$GITHUB_RUN_ID to resume"
+          echo "::error::the build failed and its tree is uploaded: after the fix, gh workflow run chromium.yml -f mode=$BAA_MODE -f base_run=$GITHUB_RUN_ID goes on from it"
           exit 1

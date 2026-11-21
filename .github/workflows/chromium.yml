@@ -3,10 +3,13 @@
 # Helium's building.yml does: one run of chained phases (chromium-phase.yml),
 # each compiling for up to ~4.75 h of its 6 h job limit; a phase only runs if
 # the one before it is still compiling, so the rest show as skipped.
-# One run stays on its commit, and phases share the chromium-tree-xcode<version> artifact.
-# mode=dev is a component build whose finished tree is kept for 7 days, to
-# unpack locally and build incrementally from; it runs on the runner and Xcode
-# matching the local Mac, or the SDK headers' mtimes force a full rebuild.
+# One run stays on its commit. Each phase uploads its tree under its own name
+# (chromium-tree-xcode<version>-phase<N>, 7 days) and the finished tree takes the plain
+# name (30 days): nothing compiled is dropped, and a run that stopped is gone on from with
+# base_run=<its id>. Do not cancel a chain to push a fix: a cancelled phase cannot pack.
+# mode=dev is a component build whose finished tree is there to unpack locally and
+# build incrementally from; it runs on the runner and Xcode matching the local Mac,
+# or the SDK headers' mtimes force a full rebuild.
 name: chromium
 run-name: chromium ${{ inputs.mode }}${{ inputs.budget_minutes && format(' (test, {0} min)', inputs.budget_minutes) || '' }}
 
@@ -25,7 +28,7 @@ on:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""
       base_run:
-        description: "dev: build on this finished run's tree; empty picks the newest, none builds from scratch. release: an earlier release run's tree, else from scratch"
+        description: "build on this run's tree (finished or not). Empty: dev picks the newest finished one, release builds from scratch. none: from scratch"
         default: ""
 
 # actions: read lets phase 1 find and download an earlier run's tree.

@@ -225,9 +225,12 @@ Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch v
 2. Check for an engine: the artifact `baa-engine-$(git rev-parse HEAD:chromium)` must exist in a
    `workflow_dispatch` run of `chromium.yml`. A bump that leaves `chromium/` alone reuses the last one.
 3. If `chromium/` changed since the last release, build one, about an hour with a base run:
-   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id of an earlier successful
-   release run whose chromium-tree artifact has not expired>`. Without `base_run` it takes 1-2 days.
-   Wait for it: `gh run watch <id>`.
+   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id of an earlier release
+   run whose chromium-tree artifact has not expired>`. Without `base_run` it takes 1-2 days.
+   Wait for it: `gh run watch <id>`. A build that fails keeps what it compiled: every phase's
+   tree is uploaded (7 days; a finished one 30), so after the fix start it again with
+   `base_run=<the failed run>`, or use "Re-run failed jobs" when a runner died. Never cancel a
+   chain mid-phase: that phase's hours cannot be packed.
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
    version or `release.yml` stops in its first job.
 5. Approve the `macos` job when `release.yml` asks (the `release` environment), watch it
