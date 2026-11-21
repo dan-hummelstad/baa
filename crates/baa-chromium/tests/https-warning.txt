@@ -1,0 +1,13 @@
+# HTTPS-first (strict) on a host with no HTTPS: {PORT} is tests/download-server.py, plain HTTP, reached as http-only.example.com (https-warning.expect maps the name; a loopback address gets no warning)
+prefb 1 https_only_mode_enabled true
+sleep 500
+load http://http-only.example.com:{PORT}/
+waitload 20000
+sleep 2000
+cdpeval document.querySelector('#proceed-button') ? 'warning' : 'none: ' + document.body.innerText.slice(0, 80)
+sleep 1000
+cdpeval document.querySelector('#proceed-button').click()
+sleep 3000
+cdpeval 'after: ' + document.body.innerText
+sleep 1000
+quit

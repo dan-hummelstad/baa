@@ -12,7 +12,8 @@ Called by ci.sh, which builds and bundles the harness. Each test:
   env: NAME=value                   harness env (BAA_HARNESS_*, BAA_SPIKE_*)
   profile: Default                  page profile (BAA_SPIKE_PROFILE); default space-1
   ext: yes                          load test-ext (into the Default profile)
-  server: yes                       start tests/download-server.py; {SERVER} in the script
+  server: yes                       start tests/download-server.py; {SERVER} in the script, {PORT} its port
+  arg: <switch>                     one more command-line switch for the app (repeatable)
   secs: <n>                         time limit (default 90)
   exit: any                         the app may not exit by itself (killed after kill-after)
   kill-after: <n>                   with `exit: any`, kill the app after n seconds
@@ -79,6 +80,7 @@ class Spec:
         self.script = None
         self.env, self.profile = {}, None
         self.ext = self.server = False
+        self.args = []
         self.secs, self.exit_any, self.kill_after = 90, False, None
         self.cdp_after, self.cdp_settle, self.cdp = None, 1, []
         self.must, self.mustnot, self.count, self.exists = [], [], [], []
@@ -100,6 +102,8 @@ class Spec:
                 self.ext = value == "yes"
             elif key == "server":
                 self.server = value == "yes"
+            elif key == "arg":
+                self.args.append(value)
             elif key == "secs":
                 self.secs = int(value)
             elif key == "exit":
@@ -171,7 +175,7 @@ def run_test(spec, exe, keep):
             sp = free_port()
             server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)],
                                       stderr=subprocess.PIPE, text=True, errors="replace")
-            text = text.replace("{SERVER}", f"http://127.0.0.1:{sp}")
+            text = text.replace("{SERVER}", f"http://127.0.0.1:{sp}").replace("{PORT}", str(sp))
             waited = wait_listening(sp, server)
             if waited > 2:
                 print(f"     {spec.name}: the test server listened after {waited:.1f} s", flush=True)
@@ -191,6 +195,7 @@ def run_test(spec, exe, keep):
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
                 "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
                 f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
+        args += spec.args
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
         if spec.cdp_after is not None:
