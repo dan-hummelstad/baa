@@ -1,7 +1,8 @@
-# PLAN.md §13, PLAN-chromium-phase5.md 6.2-6.3. On a v* tag: take the release
-# engine built from this commit's chromium/ tree (chromium.yml mode=release),
-# add the Rust binary, sign with Chromium's signer, run the privacy test on the
-# signed app, notarise a DMG and publish a GitHub Release.
+# PLAN.md §13, PLAN-chromium-phase5.md 6.2-6.3. On a v* tag: run ci.yml's checks on the
+# tagged commit, take the release engine built from its chromium/ tree (chromium.yml
+# mode=release), and then, once the owner approves the run, add the Rust binary, sign with
+# Chromium's signer, run the privacy test on the signed app, notarise a DMG and publish a
+# GitHub Release. This workflow builds no engine and nothing here starts without the tag.
 #
 # Secrets, by name:
 #   MACOS_CERT_P12_BASE64   "Developer ID Application" certificate + private key (.p12), base64
@@ -60,9 +61,15 @@ jobs:
         with:
           required: true
 
+  # The same checks a push to main gets, on the tagged commit: a tag on a commit that fails
+  # them is not signed. (A tag the land job pushed started no ci.yml run of its own.)
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   macos:
-    needs: [version, engine]
+    needs: [version, engine, checks]
     runs-on: macos-15
+    timeout-minutes: 120
     # The `release` environment has a required reviewer and holds the signing
     # secrets: nothing is signed or published until the owner approves the run.
     environment: release
@@ -86,6 +93,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.engine.outputs.name }}

@@ -1,7 +1,10 @@
-# PLAN.md §13. Test and lint on macOS, then prove the de-Googling holds (§5.3)
-# when a release engine for this commit's chromium/ tree exists. The Chromium
-# engine itself builds in chromium.yml; no tree is needed here, because baa-web
-# loads BaaCore with dlopen at run time.
+# The checks: every push to main, every pull request, and release.yml before it signs anything.
+# Three jobs side by side, none of which depends on timing or on a window:
+#   lint     the scripts' own tests, the security greps, and the workflow files themselves
+#   test     clippy and the unit tests
+#   privacy  PLAN.md §5.3 on the release engine of this commit's chromium/ tree, when one exists
+# The engine itself builds in chromium.yml, and the //baa harness tests run in harness.yml,
+# which nothing waits for.
 name: ci
 
 on:
@@ -9,6 +12,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -23,8 +27,9 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
-  scripts:
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -35,9 +40,27 @@ jobs:
       - run: .github/actions/engine/trusted_test.sh
       - run: .github/chromium-next_test.sh
       - run: .github/security-lint.sh
+      # A mistake in a workflow file otherwise shows when the workflow runs, which for
+      # chromium.yml is hours into a build. Exact versions: a new release cannot fail a push unseen.
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: pipx run zizmor==1.32.0 --offline --min-severity medium .github
 
-  build:
+  test:
     runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  privacy:
+    runs-on: macos-15
+    timeout-minutes: 30
     # actions: read for the engine action and the engine download.
     permissions:
       contents: read
@@ -46,15 +69,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
-      - run: cargo test --release --workspace
-      - run: cargo clippy --release --workspace --all-targets -- -D warnings
       - id: engine
         uses: ./.github/actions/engine
+      - if: steps.engine.outputs.run == ''
+        run: echo "::notice::no release engine for chromium/ tree ${{ steps.engine.outputs.tree }} yet; the privacy test runs in that chromium.yml run"
+      - if: steps.engine.outputs.run != ''
+        uses: ./.github/actions/setup
       - if: steps.engine.outputs.run != ''
         uses: ./.github/actions/privacy
         with:
           run-id: ${{ steps.engine.outputs.run }}
           artifact: ${{ steps.engine.outputs.name }}
-      - if: steps.engine.outputs.run == ''
-        run: echo "::notice::no release engine for chromium/ tree ${{ steps.engine.outputs.tree }} yet; the privacy test runs in that chromium.yml run"
