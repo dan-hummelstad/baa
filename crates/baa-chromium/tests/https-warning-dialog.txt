@@ -1,0 +1,10 @@
+# The page of https-warning.txt with Chrome's default: the warning is a tab-modal dialog (tabs::TabDialogManager) over a blank page
+prefb 1 https_only_mode_enabled true
+sleep 500
+load http://http-only.example.com:{PORT}/
+waitload 20000
+sleep 3000
+cdpeval document.querySelector('#proceed-button') ? 'warning page' : 'blank: ' + document.body.innerText.length
+sleep 1000
+state
+quit

@@ -144,7 +144,14 @@ break baa with no compile error. Between the two tags, read:
   caller of `IsUsingDefaultDataDirectory()`;
 - `DCHECK` → `CHECK` conversions in the files baa's patches touch (`no-views-guards.patch` exists
   for these);
+- new callers of `tab_dialog_manager()` / `CreateAndShowDialog` and features named `*DialogUi`: a
+  warning Chrome moves from a page or a bubble into a tab-modal dialog reaches baa through
+  `tab-dialog-manager-no-widget.patch`, as a window of its own over the page. Decide per dialog
+  whether that is good enough or the feature goes off (`baa_privacy::CORE_DISABLED_FEATURES`);
 - the context lines of Helium's macOS patches: they show what Chromium changed underneath.
+Example, 157: `HttpsFirstDialogUi` became the default, the HTTPS-first warning went through
+`TabDialogManager`, whose `CHECK(host)` wants a views window, and 0.1.8 ended at every link to a
+site with no HTTPS. No compile error and no failed test showed it.
 Example, 158: `kKeychainKeyProviderUserDataDirProtection` (on by default) gives a non-default data
 directory a new keychain key ("v11") and makes the old one unavailable, so every cookie written by
 157 becomes unreadable in baa. Found only by reading the context of
@@ -201,8 +208,10 @@ milestone builds from scratch (leave `base_run` empty: the old milestone's tree 
 one to two days of chained phases. On a compile failure fix on the branch and start again with
 `-f base_run=<failed run id>`: its tree was uploaded. siso stops at the first failed object, so one
 round shows one broken file: fix everything the error class implies, not only the line shown.
-Privacy and harness must pass. A harness job cancelled with no log: re-run it once before blaming
-code. Release-only failures: `baa-release-only-failures`.
+Privacy must pass. The harness tests run in their own workflow (`harness.yml`, started when the
+engine is finished) and stop nothing (user, 2026-11-21), but they are the only test of `//baa` on
+the new engine: read the run, and treat a failure as a code fault until its `harness-logs` say
+otherwise. Release-only failures: `baa-release-only-failures`.
 
 ### 6. Land
 Rebase onto `main`. If `main` changed `chromium/` meanwhile, `git rev-parse HEAD:chromium` changes
