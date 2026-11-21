@@ -1,8 +1,9 @@
-# tab groups: the app groups tab 0 as "Work"; about 12 s later it takes the tab out again
+# tab groups: the app groups tab 0 as "Work"; 25 s later it takes the tab out again. The first probe comes 25 s after
+# launch: uBlock holds the first load back while it reads its lists, 2 to 7 s on a runner, and a probe at 12 s once came before the group
 load https://example.com/
 waitload 20000
 group 0 7 Work
-# ungroup between the first probe (12 s after launch) and the last (about 33 s)
-sleep 12000
+# ungroup between the first probe (25 s after launch) and the last (about 56 s)
+sleep 25000
 group 0 0 -
-sleep 30000
+sleep 40000

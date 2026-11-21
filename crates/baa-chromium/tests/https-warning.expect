@@ -5,4 +5,4 @@ server: yes
 arg: --disable-features=HttpsFirstDialogUi
 must: baa: prefb 1 https_only_mode_enabled true -> 1
 must: cdp tab=0 id=1 .*"value":"warning"
-must: cdp tab=0 id=3 .*"value":"after: ok
+must: cdp tab=0 id=3 .*"value":"after: Example Domain
