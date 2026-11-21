@@ -1,11 +1,7 @@
-# Build environment shared by ci.yml, harness.yml and release.yml: Rust (rust-toolchain.toml),
-# Cargo's downloads and sccache.
+# Build environment shared by ci.yml and harness.yml: Rust (rust-toolchain.toml), Cargo's
+# downloads and sccache. release.yml's signing job does not use it: it takes nothing from a cache.
 name: setup
 description: Rust build environment for baa
-inputs:
-  cache:
-    description: "false compiles everything here: the job that signs a release links nothing a cache handed it"
-    default: "true"
 runs:
   using: composite
   steps:
@@ -13,8 +9,7 @@ runs:
       shell: bash
     # Without it Cargo fetches the whole Zed repository (gpui) on every run, over a minute.
     # Only what Cargo.lock pins by checksum or revision is kept, never unpacked sources.
-    - if: inputs.cache == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/git/db
@@ -22,10 +17,8 @@ runs:
           ~/.cargo/registry/cache
         key: cargo-home-${{ hashFiles('Cargo.lock') }}
         restore-keys: cargo-home-
-    - if: inputs.cache == 'true'
-      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-    - if: inputs.cache == 'true'
-      shell: bash
+    - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+    - shell: bash
       run: |
         echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
         echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
