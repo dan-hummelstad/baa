@@ -884,7 +884,12 @@ mod app {
                         let mut left: u64 = arg.parse().unwrap();
                         loop {
                             let mut s = empty_state();
-                            if !(core.tab_get_state)(tab, &mut s) || !s.loading || left == 0 {
+                            if !(core.tab_get_state)(tab, &mut s) || !s.loading {
+                                break;
+                            }
+                            if left == 0 {
+                                // ci.py fails the test on this line.
+                                eprintln!("script: waitload timed out after {arg} ms");
                                 break;
                             }
                             executor.timer(std::time::Duration::from_millis(100)).await;

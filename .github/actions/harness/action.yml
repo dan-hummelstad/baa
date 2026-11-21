@@ -44,4 +44,5 @@ runs:
         name: harness-logs
         path: |
           ${{ runner.temp }}/baa-ci-*/log
+          ${{ runner.temp }}/baa-ci-*/netlog.json
           ${{ runner.temp }}/baa-ci-crash/

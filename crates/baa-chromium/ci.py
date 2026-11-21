@@ -38,13 +38,15 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 TESTS = os.path.join(HERE, "tests")
 # Whatever a test expects, these are never fine.
-ALWAYS_NOT = r"FATAL|Check failed|panicked|Abort trap|NOTREACHED"
+# A load wait that ran out: the steps after it acted on the page before.
+ALWAYS_NOT = r"FATAL|Check failed|panicked|Abort trap|NOTREACHED|waitload timed out"
 
 
 def free_port():
@@ -155,7 +157,8 @@ def run_test(spec, exe, keep):
         text = text.replace("{EXT_COPY}", copy).replace("{COPY_ID}", ext_id(copy))
         if spec.server:
             sp = free_port()
-            server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)])
+            server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)],
+                                      stderr=subprocess.PIPE, text=True, errors="replace")
             text = text.replace("{SERVER}", f"http://127.0.0.1:{sp}")
             time.sleep(0.5)
         script = os.path.join(tmp, "script.txt")
@@ -172,7 +175,9 @@ def run_test(spec, exe, keep):
             env["BAA_SPIKE_PROFILE"] = spec.profile or "Default"
         # The mock keychain: no "baa Storage Key" prompt on a runner or after a rebuild.
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
-                "--use-fake-device-for-media-stream"]  # runners have no camera; the prompt still shows
+                "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
+                # Where a request waited, for a load that did not finish (chrome://net-export reads it).
+                f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
         if spec.cdp_after is not None:
@@ -184,7 +189,23 @@ def run_test(spec, exe, keep):
 
         with open(log_path, "w") as log:
             started = time.time()
-            proc = subprocess.Popen(args, env=env, stdout=log, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+
+            # Seconds since the launch on every line: without them a wait that ran out and one
+            # that returned at once look the same.
+            def stamp(lines, tag=""):
+                def pump():
+                    try:
+                        for line in lines:
+                            log.write(f"{time.time() - started:7.2f} {tag}{line}")
+                    except ValueError:
+                        pass  # the log is closed: a helper outlived the browser and still holds the pipe
+
+                thread = threading.Thread(target=pump, daemon=True)
+                thread.start()
+                return thread
+
+            pumps = [stamp(proc.stdout)] + ([stamp(server.stderr, "server: ")] if server else [])
             probes = []
             if spec.cdp_after is not None:
                 while time.time() - started < spec.cdp_after and proc.poll() is None:
@@ -203,6 +224,10 @@ def run_test(spec, exe, keep):
                 proc.kill()
             proc.wait()
             code = proc.returncode
+            if server:
+                server.kill()
+            for thread in pumps:
+                thread.join(5)
 
         out = open(log_path, errors="replace").read()
         with open(log_path, "a") as log:
