@@ -1,0 +1,84 @@
+--- a/chrome/browser/ui/tabs/tab_dialog_manager.cc
++++ b/chrome/browser/ui/tabs/tab_dialog_manager.cc
+@@ -118,6 +118,11 @@
+     views::Widget* const host_widget =
+         BrowserElementsViews::From(host_browser_window)
+             ->GetPrimaryWindowWidget();
++    if (!host_widget) {
++      // baa: the window is not a views widget, and its dialog host answers in
++      // screen coordinates already (baa::Window::ContentsDialogHost).
++      return dialog_bounds;
++    }
+     gfx::Rect dialog_screen_bounds =
+         dialog_bounds +
+         host_widget->GetClientAreaBoundsInScreen().OffsetFromOrigin();
+@@ -306,14 +311,28 @@
+   CHECK_EQ(ui::mojom::ModalType::kChild, delegate->GetModalType(),
+            base::NotFatalUntil::M162);
+   views::Widget* host = GetHostWidget();
+-  CHECK(host);
++  // baa: the window is not a views widget, so there is no host widget; this
++  // CHECK ended the app at every dialog shown here (0.1.8, the HTTPS-first
++  // warning). The dialog goes over the tab's own page view instead, where
++  // Chrome's older tab-modal dialogs (constrained_window) already go.
++  gfx::NativeView parent;
++  if (host) {
++    parent = host->GetNativeView();
++  } else {
++    BrowserWindowInterface* const browser_window_interface =
++        tab_interface_->GetBrowserWindowInterface();
++    CHECK(browser_window_interface);
++    parent = browser_window_interface
++                 ->GetWebContentsModalDialogHostForTab(tab_interface_)
++                 ->GetHostView();
++  }
+ 
+   if (base::FeatureList::IsEnabled(features::kTabModalUsesDesktopWidget)) {
+     delegate->set_use_desktop_widget_override(true);
+   }
+ 
+   return base::WrapUnique(views::DialogDelegate::CreateDialogWidget(
+-      delegate, gfx::NativeWindow(), host->GetNativeView()));
++      delegate, gfx::NativeWindow(), parent));
+ }
+ 
+ void TabDialogManager::ShowDialog(views::Widget* widget,
+@@ -360,8 +379,18 @@
+   // window) is painted as active. This prevents a background browser window
+   // from becoming foreground on showing the dialog.
+   views::Widget* const host_widget = GetHostWidget();
+-  if (host_widget && host_widget->ShouldPaintAsActive() &&
+-      !params_->should_show_inactive) {
++  // baa: with no host widget the tab's dialog host says whether the dialog
++  // takes focus, as for the older tab-modal dialogs.
++  bool host_active = host_widget && host_widget->ShouldPaintAsActive();
++  if (!host_widget) {
++    if (auto* const browser_window_interface =
++            tab_interface_->GetBrowserWindowInterface()) {
++      host_active = browser_window_interface
++                        ->GetWebContentsModalDialogHostForTab(tab_interface_)
++                        ->ShouldActivateDialog();
++    }
++  }
++  if (host_active && !params_->should_show_inactive) {
+     widget_->Show();
+   } else {
+     widget->ShowInactive();
+@@ -463,13 +492,15 @@
+   auto* host_widget = GetHostWidget();
+   const gfx::Size size = widget_->GetRootView()->GetPreferredSize({});
+ 
+-  if (!host_widget) {
++  // baa: with no host widget the tab's dialog host still places the dialog
++  // (GetModalDialogBounds), so only a tab outside every window stops here.
++  if (!host_widget && !tab_interface_->GetBrowserWindowInterface()) {
+     widget_->SetSize(size);
+     return;
+   }
+ 
+   // If the host view's widget is minimized, don't update any positions.
+-  if (host_widget->IsMinimized()) {
++  if (host_widget && host_widget->IsMinimized()) {
+     return;
+   }
+ 
