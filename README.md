@@ -167,8 +167,10 @@ search as `cargo bundle`), runs every `tests/*.expect` with a fresh profile, a l
 and the test extension, and exits non-zero with what differed. A test is a harness script
 (`tests/<name>.txt`, steps documented in `src/main.rs`) plus an `.expect` file (patterns that must
 or must not appear in the log, CDP probes; syntax at the top of `ci.py`). It opens real windows and
-needs `node` and network. CI runs it in `ci.yml` and `chromium.yml` on the release engine of the
-commit's `chromium/` tree.
+needs `node` and network. CI runs it in `harness.yml` on the release engine of the commit's
+`chromium/` tree. The tests depend on timing, so that workflow gates nothing: a landing and a
+release go ahead without it, and a red run is read by hand. Every log line starts with the seconds
+since the launch; a failed run keeps each test's log and Chromium net log as `harness-logs`.
 
 Useful environment variables when running the bundle:
 

@@ -167,7 +167,8 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
   `.github/chromium-next.sh` picks the newest build of the milestone in
   `chromium/helium/chromium_version.txt` whose imputnet tarballs exist. It writes that one line on
   `bot/chromium-<version>` and starts `chromium.yml` (release) and `ci.yml` on it. When that build
-  passes its privacy and harness tests and `ci.yml` is green, `chromium.yml`'s `land` job rebases the
+  passes its privacy test and `ci.yml` is green (the harness tests run beside it in `harness.yml`
+  and stop nothing: user, 2026-11-21), `chromium.yml`'s `land` job rebases the
   branch onto `main`, pushes it fast-forward, bumps the patch version, tags `v<version>` and starts
   `release.yml`. No PR. A patch that no longer applies stops it in the first phase: commit the refresh
   to the bot branch and run `chromium.yml` release on it again.

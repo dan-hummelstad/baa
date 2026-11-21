@@ -190,33 +190,29 @@ jobs:
           run-id: ${{ github.run_id }}
           artifact: ${{ steps.engine.outputs.name }}
 
-  # The //baa harness tests (crates/baa-chromium/tests) on the same engine.
+  # The //baa harness tests run on the same engine in their own workflow (harness.yml), which
+  # nothing here waits for: they fail without a fault too often to stop a landing.
   harness:
     needs: [phase_01, phase_02, phase_03, phase_04, phase_05, phase_06, phase_07, phase_08, phase_09, phase_10, phase_11, phase_12]
     if: always() && inputs.mode != 'dev' && contains(needs.*.outputs.status, 'finished')
-    runs-on: macos-15
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - id: engine
-        run: echo "name=baa-engine-$(git rev-parse HEAD:chromium)" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/harness
-        with:
-          run-id: ${{ github.run_id }}
-          artifact: ${{ steps.engine.outputs.name }}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run harness.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
 
-  # A Chromium bump (chromium-bump.yml) runs itself to a release: once this engine passed both
-  # tests and ci.yml is green on the bot branch, put the branch on main (fast-forward), bump
+  # A Chromium bump (chromium-bump.yml) runs itself to a release: once this engine passed the
+  # privacy test and ci.yml is green on the bot branch, put the branch on main (fast-forward), bump
   # the patch version, tag it and start release.yml, which takes this run's engine (same
   # chromium/ tree). A tag pushed with GITHUB_TOKEN starts nothing, hence the dispatch.
   # Earlier phases are often skipped, which would skip this job without always().
   land:
-    needs: [privacy, harness]
+    needs: [privacy]
     if: >-
       always() && inputs.mode == 'release' && startsWith(github.ref_name, 'bot/chromium-')
-      && needs.privacy.result == 'success' && needs.harness.result == 'success'
+      && needs.privacy.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

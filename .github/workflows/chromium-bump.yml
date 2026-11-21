@@ -4,7 +4,7 @@
 # tagged it (chromium-next.sh), put that version on a bot branch and start the
 # chromium (release) and ci runs on it. The commit changes one line,
 # chromium/helium/chromium_version.txt. From there it runs itself: when that release build passes
-# its privacy and harness tests and ci is green, chromium.yml's land job puts the branch on main,
+# its privacy test and ci is green (the harness tests run beside it and stop nothing), chromium.yml's land job puts the branch on main,
 # bumps the version and starts release.yml. No PR (trunk-based; Actions may not open one).
 # A patch that no longer applies fails the build's first phase: refresh it on the bot branch and
 # run chromium.yml release on it again.
