@@ -45,7 +45,6 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 TESTS = os.path.join(HERE, "tests")
 # Whatever a test expects, these are never fine.
-# A load wait that ran out: the steps after it acted on the page before.
 ALWAYS_NOT = r"FATAL|Check failed|panicked|Abort trap|NOTREACHED|waitload timed out"
 
 
@@ -176,7 +175,6 @@ def run_test(spec, exe, keep):
         # The mock keychain: no "baa Storage Key" prompt on a runner or after a rebuild.
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
                 "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
-                # Where a request waited, for a load that did not finish (the netlog viewer reads it).
                 f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
@@ -191,8 +189,6 @@ def run_test(spec, exe, keep):
             started = time.time()
             proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
 
-            # Seconds since the launch on every line: without them a wait that ran out and one
-            # that returned at once look the same.
             def stamp(lines, tag=""):
                 def pump():
                     try:
