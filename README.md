@@ -119,6 +119,11 @@ The engine is then `/Users/Shared/hb/helium-macos/build/src/out/Default`. Any ac
 directory from `/Users/Shared/hb` down is yours, is not a symlink and is not writable by group or
 others.
 
+Before starting a `chromium.yml` build that changes a patch or the Chromium version, run
+`xtask/check-patches.sh`: it applies every patch, in the build's order and with the build's tool,
+to the files they touch of the pinned Chromium (fetched once per version, no tree needed), in
+about a minute. A patch that does not apply otherwise fails the build's first phase half an hour in.
+
 Take an engine or a tree only from a `workflow_dispatch` run of `chromium.yml` in
 `dan-hummelstad/baa` (`trusted.sh` checks this in A; the first line of B checks it by hand). Any
 pull request can upload an artifact with the same name, and its title can read "chromium dev".
@@ -190,7 +195,8 @@ not survive that move, so sign in to sites once more.
 
 ## Release
 
-Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` uses the engine built from the
+Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` runs `ci.yml`'s checks on
+the tagged commit (a commit that fails them is not signed), uses the engine built from the
 tagged commit's `chromium/` tree (`baa-engine-<tree>`, built by `chromium.yml` with `mode=release`;
 it fails and says what to run if there is none), adds the Rust binary, signs with Chromium's signer,
 runs the privacy test, notarises a DMG and publishes a GitHub Release with its Sparkle appcast. A
@@ -200,6 +206,7 @@ release: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, 
 
 The secrets live in the `release` environment, which has a required reviewer, and only the `macos`
 job uses it. Each release waits for the owner's approval before anything is signed or published.
+That job compiles the Rust binary from nothing: it takes no compiler output from a cache.
 
 CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
 `chromium.yml` in this repository with a recorded `.sha256` counts (`.github/actions/engine/trusted.sh`).

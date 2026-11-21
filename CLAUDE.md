@@ -7,6 +7,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - `cargo check -p <crate>` for your crate. Full `cargo build -p baa` is slow (gpui); run it once at the end, not per edit.
 - macOS app only starts bundled: `cargo bundle --run` (needs an engine, README "Build").
 - Never run two Chromium builds (`pgrep -x siso`); never remove the hand-off guards in `chromium-phase.yml`.
+- Before a `chromium.yml` build that changes a patch or the Chromium version: `xtask/check-patches.sh` (about a minute, needs no tree).
 - Tests: `cargo test -p <crate>`. `//baa` changes are tested by `crates/baa-chromium/ci.sh` (CI runs it; it opens real windows, so agents do not run it unasked).
 - A change to a security prompt, URL handling, downloads, or private mode needs an offline regression test in the owning crate's `tests_*`. ci.sh is not a replacement for it.
 

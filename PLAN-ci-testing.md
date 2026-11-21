@@ -1,38 +1,106 @@
-# CI and automated testing (deferred, 2026-11-06)
+# CI: the pipeline, its rules, and what is still open (2026-11-22)
 
-The user put CI integration and automated testing on hold to get baa off the ground first. This plan
-collects everything known about that work so it can be picked up later without re-reviewing. It covers
-the //baa harness runner, the CI jobs, the release engine, and the checks that were never run.
+The pipeline was reorganised on 2026-11-22 at the user's request: checks run quickly, full builds
+are deliberate, releases are gated, and nothing that can fail without a fault gates anything. This
+file is the plan for it. `PLAN.md` §13 lists the workflows; the workflow files say why each step is
+there.
 
-## Where it stands
+## The shape
 
-- **Harness runner exists:** `crates/baa-chromium/ci.sh [--engine DIR] [--only NAME] [--keep]` builds
-  the harness against an engine, and `ci.py` runs `tests/*.txt` and checks them against `tests/*.expect`
-  (log patterns, exit code, crash dumps, files, pasteboard, CDP probes). It passed 17/17 once against
-  the local component tree (`/Users/Shared/hb`). It has never run on a CI runner.
-- **CI wiring exists, untested:** `.github/actions/harness`, plus a `harness` job in `ci.yml` and in
-  `chromium.yml`. Both run only when an engine artifact `baa-engine-<git rev-parse HEAD:chromium>`
-  exists. No such engine exists for the current tree, so today they only print a notice.
-- **Release engine:** no release-mode chain has ever finished. Run 42147459520 (started on 653f8884)
-  is measuring how long one takes. Its engine is for an older `chromium/` tree and will not be used.
-- **Privacy test:** wired as the `privacy` action (ci.yml, chromium.yml, release.yml). It has not run
-  on BaaCore yet.
-- **Agents do not run GUI tests.** The user's rule: checks are automated, not run by hand by agents.
+| Tier | Workflow | Starts on | Takes | What a red run stops |
+|---|---|---|---|---|
+| Checks | `ci.yml`: `lint`, `test`, `privacy` side by side | every push to `main`, every PR, by hand, and from `release.yml` | about 5 min (was 10) | a release of that commit; the landing of a Chromium bump |
+| Engine tests | `harness.yml` | by hand, from `chromium.yml` when an engine is finished, and on a push that changes what the tests can see | 25 min | nothing (user, 2026-11-21) |
+| Engine build | `chromium.yml` → `chromium-phase.yml` × up to 12 | by hand, or `chromium-bump.yml` (daily, only for a newer build of the vendored milestone) | 1.5 h on a base tree, about a day from scratch | the landing of that engine |
+| Release | `release.yml` | a `v*` tag (pushed by hand or by the `land` job) | an hour, most of it waiting for approval | the release |
 
-## Order of work
+## Rules
 
-1. **Get an engine for the current tree.** Dispatch `chromium.yml` with `mode=release`. Record the
-   phase count and total time, then decide whether free runners are enough (PLAN-chromium-phase5.md
-   §9 lists the fallbacks: no PGO, a paid runner, or this Mac as a self-hosted runner).
-2. **Make the runner CI-proof** (the "Runner" list below). Then run `ci.sh` locally once to confirm.
-3. **First CI harness run** on the engine from step 1. Fix whatever only fails on a runner. The likely
-   spots are activation/key window, geolocation, crash dumps and timing (below).
-4. **Turn on the gates:** the release lookup takes only engines whose harness and privacy jobs passed.
-   The harness runs on PRs that change `chromium/` (see "Workflows").
-5. **Parity checklist** (PLAN-chromium-phase5.md §5.0) as automated tests: the integration flows
-   below, driven in-process, not through System Events.
+1. **A check is deterministic or it is not a check.** `ci.yml` holds only what gives the same answer
+   twice: unit tests, clippy, greps, the scripts' own offline tests, and the privacy test (which
+   fails only when the app contacts a host outside the allowlist). Anything that depends on timing
+   or a window goes to `harness.yml`, which nothing waits for. No automatic retries anywhere: a
+   retry hides the flake that `harness.yml` exists to show.
+2. **Checks are quick.** Jobs run side by side, never one after the other; tests build the dev
+   profile; Cargo's downloads are cached. The lint job is seconds and includes the workflow files
+   themselves (actionlint, zizmor): a mistake in `chromium.yml` otherwise shows hours into a build.
+3. **A full build is deliberate.** Nothing starts `chromium.yml` on a push. A person starts it, or
+   the daily bump does, and only for a new build inside the milestone the patches were written for.
+4. **Before a full build, the cheap checks.** In order of cost: `xtask/check-patches.sh` (a minute,
+   no tree: do the patches apply?), `chromium/local-build.sh` on a dev tree (minutes: does `//baa`
+   compile?), a `mode=dev` chain on a base tree (an hour or two), a `mode=release` chain.
+5. **Compiled hours are never thrown away.** See the next section.
+6. **A release is gated three times:** the checks pass on the tagged commit, a trusted engine exists
+   for its `chromium/` tree, and the owner approves the job that holds the signing secrets. That job
+   takes nothing from a cache and runs no script from an artifact.
+7. **Workflow file names are part of the pipeline.** `trusted.sh` trusts an engine by the path
+   `chromium.yml`; the bump and `land` jobs start and query `ci.yml`, `harness.yml` and `release.yml`
+   by name. Renaming one orphans every engine built so far or stops a landing.
+8. **`.github/` is not part of an engine.** The engine's key is the tree hash of `chromium/`, so a
+   workflow change never costs a rebuild, and a file added under `chromium/` always does. Tooling
+   that is not a build input lives in `xtask/` or `.github/`.
 
-## Runner (from the Opus review of c3b4fa37, 2026-11-06)
+## Chromium trees: where hours were lost, and what closes each
+
+A from-scratch release chain is about 21 hours of compiling in 5 phases. Each row is a way that
+work was, or could be, thrown away. "Branch" means the fix is written and its offline tests pass,
+but it lands on `main` only after a test chain has run it (`ci/keep-trees`, see "Next").
+
+| Loss | Seen | Closed by | State |
+|---|---|---|---|
+| tar's whole-second mtimes made siso recompile everything, four times | 2026-11-04 | pax format, and three guards that fail the phase | on `main` |
+| `Pack tree` failed after the archive was complete (tar could not remove a directory), so the upload was skipped: a 4.75 h phase gone | run 43888560258 | `.github/pack-tree.sh`: when tar fails, the archive decides (it must read to its end and hold siso's state); `pack-tree_test.sh` reproduces that run | branch |
+| A step between Build and `Pack tree` fails (the summary's API call, the engine tarball) and vetoes the pack | not yet | the tree steps run on `!cancelled()` and the Build step's status alone; the summary cannot fail the job | branch |
+| The upload replaces the previous phase's tree before the new one exists (`overwrite: true` deletes first), so a failed upload leaves the chain with nothing | not yet; Helium and ungoogled-chromium have the same exposure | every phase uploads under its own name (`chromium-tree-xcode<v>-phase<N>`); only a finished tree takes the plain name. Trees are 5 to 7 GB, so keeping all of them costs nothing | branch |
+| A dev chain that fails to compile uploads nothing | by design until now | every ended Build step (running, finished, failed) packs, in both modes | branch |
+| A hand-off guard fires and the phase's tree is dropped with it | by design until now | the guard still ends the chain red, after the tree is uploaded | branch |
+| An unfinished tree expires after 2 days, a finished one after 14 | a failure on a Friday | 7 days and 30 days (a milestone is about four weeks) | branch |
+| A run is cancelled mid-phase | when someone does it | nothing can: a cancelled job is killed after five minutes and packing takes eight. The phase before it is kept, so the cost is at most one phase. Do not cancel a chain to push a fix; let the phase end | documented |
+| The runner dies, or the job hits six hours | not yet | "Re-run failed jobs": the phase starts again from the tree before it, which is no longer replaced | branch |
+| A patch does not apply, found half an hour into phase 1 | run 43876197908 and others | `xtask/check-patches.sh` before the build | on `main` |
+| A release chain starts from scratch although a finished release tree of the same milestone exists, because nobody passed `base_run` (the 157.0.8103.81 bump compiled for 24 h; its source differed from .79 in the `VERSION` file) | 2026-11-19 | open decision 1 | open |
+| A change under `chromium/` that is not a build input (`local-build.sh`, `packaging/`) orphans the engine | not recently | open decision 2 | open |
+
+## Next
+
+1. **Test chain for the branch.** `gh workflow run chromium.yml --ref ci/keep-trees -f mode=dev -f
+   budget_minutes=15 -f base_run=none`, three phases, then cancel: it shows the per-phase names
+   handing over, the guards passing and a failed phase's tree being uploaded. Then one `mode=dev`
+   run with no inputs, which picks a base by the new rule and finishes under the plain name. Then
+   the branch lands. A test chain's title is not "chromium dev", so nothing picks its tree as a base.
+2. **Open decisions** (the user's):
+   1. A release build picks the newest finished release tree of the same milestone as its base
+      unless `base_run=none`, as dev builds already do for the same version. A same-version resume
+      takes 1.5 to 3.5 h today; how much a new Chromium build of the milestone recompiles is not
+      measured (its PGO profile may change and with it every compile). Against it: a release binary
+      then comes from an incremental build, and a file that a newer Chromium no longer produces
+      could stay in `baa.app` from the older tree. Today a from-scratch release is the default and
+      `base_run` is passed by hand.
+   2. Key the engine on the build inputs (`chromium/{helium,helium-macos,patches,baa,vendor}`)
+      instead of all of `chromium/`. The lookup must then accept both keys while old engines live.
+   3. Restrict the `release` environment to `v*` tags (a repository setting; today any ref may ask
+      for it and the required reviewer is the only gate), and turn on immutable releases.
+3. **Not planned:** a merge queue or required status checks (one committer, trunk-based: the gate
+   is at the release, not at the push); nextest (the tests run for two seconds; the time is the
+   compile); a second cache tool (sccache works and is shared by every job).
+
+## Compared with others (read 2026-11-22)
+
+- **Helium, ungoogled-chromium-macos:** the same chain of phases with an artifact hand-off, which is
+  where baa's came from. Neither keeps a failed phase's work, neither has a resume from another
+  run, both overwrite the one tree artifact, and both sign inside the build jobs. baa already
+  differed by trusting artifacts by their producer, checking checksums and signing in a separate
+  gated job.
+- **Zed, uv, cargo, rust-analyzer:** tests and clippy are separate parallel jobs in the dev (or a
+  lighter) profile; none tests with `--release`. Zed's and uv's release workflows run the tests
+  again and gate publishing on an environment; uv turns caches off for releases. None runs
+  actionlint or zizmor as a workflow of its own: they are a job or a step of the main CI.
+- **Kubernetes, Chromium, Ladybird on flaky tests:** quarantine, do not retry. A flaky test is taken
+  out of what gates and run where its failure rate can be read.
+
+## Harness backlog (from the 2026-11-06 review; not re-checked on 2026-11-22)
+
+### Runner (from the Opus review of c3b4fa37, 2026-11-06)
 
 Must do before trusting a CI run:
 - **perm2 on CI:** runners have no camera or microphone, so `getUserMedia` fails before the prompt.
@@ -72,27 +140,7 @@ Should do:
 - Not automatable as is: print, because its modal panel blocks quit (`menu_print.txt` was deleted).
   Options: a `--kiosk-printing`-style switch, or cancelling the panel through the harness.
 
-## Workflows
-
-- Upload `harness-logs` and `privacy-netlog` with `overwrite: true`. Otherwise re-running a failed job
-  fails with a 409.
-- Skip the sccache/rustup setup in the harness jobs when there is no engine.
-- release.yml's engine lookup ignores the run conclusion. Prefer, or require, an engine whose
-  harness and privacy jobs passed.
-- chromium.yml can only be dispatched by hand (a user decision), so a PR that changes `chromium/` gets
-  no harness or privacy run until someone dispatches a release chain. Consider a cheaper PR job: a
-  dev-tree build of `//baa` plus the harness on the component engine.
-- The engine key is the whole `chromium/` tree hash, so a docs-only or `local-build.sh`-only change
-  forces a new multi-hour chain. Move files that don't affect the engine out of `chromium/`, or key on
-  `chromium/{baa,patches,helium,helium-macos}`.
-- helium-bump.yml uses `actions/checkout@v5`; the other workflows use `@v7`.
-- helium-bump also dispatches `ci.yml` on the bot branch. That works now, because ci.yml has
-  `workflow_dispatch`.
-- shared.sh dev mode prints `enable_precompiled_headers=false` after the symbol lines, while the
-  downloaded tree's args.gn has it first. The values are the same and nothing rebuilds. Swap the order
-  for byte-identical output if it ever matters.
-
-## Behaviour never exercised (needs a test or a decision)
+### Behaviour never exercised (needs a test or a decision)
 
 From the C++ implementer's reports and the reviews:
 - The combined `all` run with an extension popup open at quit. A fix (`CloseBareTabsForQuit` plus the
