@@ -12,8 +12,6 @@ Called by ci.sh, which builds and bundles the harness. Each test:
   env: NAME=value                   harness env (BAA_HARNESS_*, BAA_SPIKE_*)
   profile: Default                  page profile (BAA_SPIKE_PROFILE); default space-1
   ext: yes                          load test-ext (into the Default profile)
-  server: yes                       start tests/download-server.py; {SERVER} in the script, {PORT} its port
-                                    (http-only.example.com is that host by a name Chrome does not treat as local)
   arg: <switch>                     one more command-line switch for the app (repeatable)
   secs: <n>                         time limit (default 90)
   exit: any                         the app may not exit by itself (killed after kill-after)
@@ -27,6 +25,9 @@ Called by ci.sh, which builds and bundles the harness. Each test:
   clipboard-set: <text>             before the run
   clipboard: <text>                 the pasteboard afterwards
   exists: <path>                    under the user data dir afterwards
+{SERVER} in a script is tests/test-server.py over plain HTTP and {PORT} its port (http-only.example.com
+is that host by a name Chrome does not treat as local); https://example.com and the other SITES are the
+same server over TLS. A run uses no other host.
 {EXT_ID} in a script is the test extension's id. {EXT_COPY} is a fresh copy of test-ext in the
 test's temp dir (for baa_profile_load_unpacked; the script may edit it) and {COPY_ID} its id.
 """
@@ -58,42 +59,31 @@ def free_port():
         return s.getsockname()[1]
 
 
-def wait_listening(port, server, secs=90):
-    """macOS drops a connect to a port that is bound but not yet listening and answers nothing, so
-    the browser's connect waits on TCP's retries: 35 s on a runner (harness run 44866996495), which
-    no waitload outlasts. So no test starts before its server accepts."""
-    started = time.time()
-    while server.poll() is None and time.time() - started < secs:
-        try:
-            socket.create_connection(("127.0.0.1", port), 0.2).close()
-            return time.time() - started
-        except OSError:
-            time.sleep(0.1)
-    sys.exit(f"the test server on port {port} did not listen within {secs} s")
-
 # The hosts tests load by name. www.googleadservices.com: ublock.txt has to see uBlock refuse it, not the network.
 SITES = ["example.com", "example.org", "example.net", "www.iana.org", "www.googleadservices.com"]
-SITE_ARGS = []
 
 
-def start_sites(tmp):
-    """Serves SITES from this machine and gives Chrome no other host: a runner's DNS timed out on
-    example.com and failed three tests that had no fault (harness run 44938464287). Returns the
-    server; SITE_ARGS are the switches every test's app then gets."""
+def start_server(tmp):
+    """Starts tests/test-server.py for the run. Returns the process, its plain HTTP port, and the
+    switches that send Chrome to it for SITES and to no other host: a runner's DNS timed out on
+    example.com and failed three tests that had no fault (harness run 44938464287)."""
     key, cert = os.path.join(tmp, "key.pem"), os.path.join(tmp, "cert.pem")
     openssl = lambda *a, **k: subprocess.run(["openssl", *a], check=True, capture_output=True, **k).stdout
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=example.com", "-keyout", key, "-out", cert)
     public = openssl("pkey", "-pubin", "-outform", "der", input=openssl("x509", "-in", cert, "-pubkey", "-noout"))
-    port = free_port()
-    server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(port), cert, key],
-                              stderr=subprocess.DEVNULL)  # every test's net log has its requests
-    wait_listening(port, server)
-    rules = [f"MAP {host} 127.0.0.1:{port}" for host in SITES]
+    server = subprocess.Popen([sys.executable, os.path.join(TESTS, "test-server.py"), cert, key], text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)  # every test's net log has its requests
+    # It prints its ports once they listen. macOS answers nothing to a connect on a port that is bound
+    # but does not listen yet, and the browser then waited 35 s on TCP's retries (harness run 44866996495).
+    ports = server.stdout.readline().split()
+    if len(ports) != 2:
+        sys.exit("tests/test-server.py did not start")
+    port, tls_port = map(int, ports)
+    rules = [f"MAP {host} 127.0.0.1:{tls_port}" for host in SITES]
     rules += ["MAP http-only.example.com 127.0.0.1", "EXCLUDE 127.0.0.1", "EXCLUDE localhost", "MAP * ~NOTFOUND"]
     # Chrome takes this one certificate by its key and no other bad one.
-    SITE_ARGS[:] = [f"--host-resolver-rules={', '.join(rules)}",
-                    f"--ignore-certificate-errors-spki-list={base64.b64encode(hashlib.sha256(public).digest()).decode()}"]
-    return server
+    return server, port, [f"--host-resolver-rules={', '.join(rules)}",
+                          f"--ignore-certificate-errors-spki-list={base64.b64encode(hashlib.sha256(public).digest()).decode()}"]
 
 
 def ext_id(path):
@@ -107,7 +97,7 @@ class Spec:
         self.name = os.path.basename(path)[: -len(".expect")]
         self.script = None
         self.env, self.profile = {}, None
-        self.ext = self.server = False
+        self.ext = False
         self.args = []
         self.secs, self.exit_any, self.kill_after = 90, False, None
         self.cdp_after, self.cdp_settle, self.cdp = None, 1, []
@@ -128,8 +118,6 @@ class Spec:
                 self.profile = value
             elif key == "ext":
                 self.ext = value == "yes"
-            elif key == "server":
-                self.server = value == "yes"
             elif key == "arg":
                 self.args.append(value)
             elif key == "secs":
@@ -183,14 +171,13 @@ def run_cdp(port, target, expr):
     return (out.stdout + out.stderr).strip()
 
 
-def run_test(spec, exe, keep):
+def run_test(spec, exe, keep, server_port, site_args):
     # RUNNER_TEMP on CI, where a failed run's logs are uploaded from.
     tmp = tempfile.mkdtemp(prefix=f"baa-ci-{spec.name}-", dir=os.environ.get("RUNNER_TEMP"))
     udd = os.path.join(tmp, "profile")
     log_path = os.path.join(tmp, "log")
     problems = []
     ext_path = os.path.join(HERE, "test-ext")
-    server = None
     port = None
     proc = None
     try:
@@ -199,14 +186,7 @@ def run_test(spec, exe, keep):
         copy = os.path.join(os.path.realpath(tmp), "ext-copy")
         shutil.copytree(ext_path, copy)
         text = text.replace("{EXT_COPY}", copy).replace("{COPY_ID}", ext_id(copy))
-        if spec.server:
-            sp = free_port()
-            server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)],
-                                      stderr=subprocess.PIPE, text=True, errors="replace")
-            text = text.replace("{SERVER}", f"http://127.0.0.1:{sp}").replace("{PORT}", str(sp))
-            waited = wait_listening(sp, server)
-            if waited > 2:
-                print(f"     {spec.name}: the test server listened after {waited:.1f} s", flush=True)
+        text = text.replace("{SERVER}", f"http://127.0.0.1:{server_port}").replace("{PORT}", str(server_port))
         script = os.path.join(tmp, "script.txt")
         open(script, "w", encoding="utf-8").write(text)
 
@@ -223,7 +203,7 @@ def run_test(spec, exe, keep):
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
                 "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
                 f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
-        args += SITE_ARGS + spec.args
+        args += site_args + spec.args
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
         if spec.cdp_after is not None:
@@ -237,21 +217,15 @@ def run_test(spec, exe, keep):
             started = time.time()
             proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
 
-            def stamp(lines, tag=""):
-                def pump():
-                    try:
-                        for line in lines:
-                            log.write(f"{time.time() - started:7.2f} {tag}{line}")
-                    except ValueError:
-                        pass  # the log is closed: a helper outlived the browser and still holds the pipe
+            def stamp():
+                try:
+                    for line in proc.stdout:
+                        log.write(f"{time.time() - started:7.2f} {line}")
+                except ValueError:
+                    pass  # the log is closed: a helper outlived the browser and still holds the pipe
 
-                thread = threading.Thread(target=pump, daemon=True)
-                thread.start()
-                return thread
-
-            pump = stamp(proc.stdout)
-            if server:
-                stamp(server.stderr, "server: ")
+            pump = threading.Thread(target=stamp, daemon=True)
+            pump.start()
             probes = []
             if spec.cdp_after is not None:
                 while time.time() - started < spec.cdp_after and proc.poll() is None:
@@ -316,8 +290,6 @@ def run_test(spec, exe, keep):
             proc.kill()
         # Chrome's helpers outlive a killed browser process.
         subprocess.run(["pkill", "-f", tmp], capture_output=True)
-        if server:
-            server.kill()
         clean_downloads()
         if not keep and not (locals().get("problems")):
             shutil.rmtree(tmp, ignore_errors=True)
@@ -339,13 +311,13 @@ def main():
         specs = [s for s in specs if s.name in opts.only]
         if not specs:
             sys.exit(f"no test named {opts.only}")
-    sites_tmp = tempfile.mkdtemp(prefix="baa-sites-")
-    sites = start_sites(sites_tmp)
-    atexit.register(lambda: (sites.kill(), shutil.rmtree(sites_tmp, ignore_errors=True)))
+    server_tmp = tempfile.mkdtemp(prefix="baa-server-")
+    server, server_port, site_args = start_server(server_tmp)
+    atexit.register(lambda: (server.kill(), shutil.rmtree(server_tmp, ignore_errors=True)))
     failed = []
     for spec in specs:
         t0 = time.time()
-        problems, tmp = run_test(spec, exe, opts.keep)
+        problems, tmp = run_test(spec, exe, opts.keep, server_port, site_args)
         took = time.time() - t0
         if problems:
             failed.append(spec.name)

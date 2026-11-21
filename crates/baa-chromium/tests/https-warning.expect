@@ -1,7 +1,6 @@
 # a page with no HTTPS under HTTPS-first: Chrome's warning is a page in the tab and its Continue loads the site.
-# The app runs with HttpsFirstDialogUi off too (baa_privacy::CORE_DISABLED_FEATURES): as a dialog the warning ended 0.1.8.
+# The app runs with HttpsFirstDialogUi off too (baa_privacy::CORE_DISABLED_FEATURES).
 script: https-warning.txt
-server: yes
 arg: --disable-features=HttpsFirstDialogUi
 must: baa: prefb 1 https_only_mode_enabled true -> 1
 must: cdp tab=0 id=1 .*"value":"warning"

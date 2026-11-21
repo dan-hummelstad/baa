@@ -130,8 +130,8 @@ Should do:
   remembered" checks on notifications, and keep geolocation optional.
 - `chrome://crash` in `close`/`misc`: add an `allow-crash-dump` expect key. An official build may
   write dumps where the component build did not.
-- Point the fetch tests at the local `download-server.py` and keep at most one test that needs the
-  public internet.
+- Done 2026-11-21: no test needs the public internet. Every site a test loads is
+  `tests/test-server.py` (`ci.py` `start_server`), and Chrome is given no other host.
 - Require Node 22 or newer (cdp.mjs uses the global `WebSocket`): `actions/setup-node`
   `node-version: 22` in the harness action, and a major-version check in ci.py.
 - ci.sh: fail on a bad explicit `--engine` and print the engine chosen; check staleness on the

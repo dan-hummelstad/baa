@@ -5,9 +5,9 @@
 pub const CORE_SWITCHES: &[&str] = &["disable-background-networking", "no-pings"];
 
 /// Features the own build still turns off, in `--disable-features`. `HttpsFirstDialogUi` puts
-/// the warning before an http-only page in a dialog on Chrome's browser window, which baa does
-/// not have: Chromium aborts (`CHECK(host)` in `TabDialogManager`, 0.1.8 on 2026-11-21). Off,
-/// the same warning is a page in the tab.
+/// the warning before an http-only page in a tab-modal dialog, which in baa is a window of its own
+/// that can go behind baa's (`tab-dialog-manager-no-widget.patch`; without that patch 0.1.8 ended
+/// there). Off, the same warning is a page in the tab.
 pub const CORE_DISABLED_FEATURES: &[&str] = &["MediaRouter", "OptimizationHints", "AutofillServerCommunication", "AimEnabled", "HttpsFirstDialogUi"];
 
 /// Features the own build turns on, in `--enable-features`. Auto Picture in Picture for any

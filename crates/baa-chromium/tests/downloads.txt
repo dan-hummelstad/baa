@@ -1,4 +1,4 @@
-# downloads: {SERVER} is tests/download-server.py (/small and /slow attachments); downloads.expect cancels the slow one
+# downloads: {SERVER} is tests/test-server.py (/small and /slow attachments); downloads.expect cancels the slow one
 load {SERVER}/
 waitload 20000
 activate

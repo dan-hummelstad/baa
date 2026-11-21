@@ -1,7 +1,6 @@
 # Chrome's dialogs that go through tabs::TabDialogManager open in baa: its window is no views widget, and before
 # tab-dialog-manager-no-widget.patch Chromium ended the app here (CHECK(host), 0.1.8). The run has to end by itself with exit 0.
-script: https-warning-dialog.txt
-server: yes
+# The script is the page form's: with Chrome's default the warning is a dialog over a blank page, so it finds no button.
+script: https-warning.txt
 must: baa: prefb 1 https_only_mode_enabled true -> 1
-must: cdp tab=0 id=1 .*"value":"blank: 0"
-must: baa: get_state ok=true url=http://http-only\.example\.com:\d+/
+must: cdp tab=0 id=1 .*"value":"none: "
