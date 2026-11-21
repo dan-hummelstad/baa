@@ -54,6 +54,19 @@ def free_port():
         return s.getsockname()[1]
 
 
+def wait_listening(port, server, secs=90):
+    """macOS drops a connect to a port that is bound but not yet listening and answers nothing, so
+    the browser's connect waits on TCP's retries: 35 s on a runner (harness run 44866996495), which
+    no waitload outlasts. So no test starts before its server accepts."""
+    started = time.time()
+    while server.poll() is None and time.time() - started < secs:
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.2).close()
+            return time.time() - started
+        except OSError:
+            time.sleep(0.1)
+    sys.exit(f"the test server on port {port} did not listen within {secs} s")
+
 def ext_id(path):
     """Chromium's id for an unpacked extension: sha256 of its path, nibbles mapped to a-p."""
     digest = hashlib.sha256(path.encode()).digest()[:16]
@@ -159,7 +172,9 @@ def run_test(spec, exe, keep):
             server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(sp)],
                                       stderr=subprocess.PIPE, text=True, errors="replace")
             text = text.replace("{SERVER}", f"http://127.0.0.1:{sp}")
-            time.sleep(0.5)
+            waited = wait_listening(sp, server)
+            if waited > 2:
+                print(f"     {spec.name}: the test server listened after {waited:.1f} s", flush=True)
         script = os.path.join(tmp, "script.txt")
         open(script, "w", encoding="utf-8").write(text)
 

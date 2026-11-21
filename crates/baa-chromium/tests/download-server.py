@@ -1,5 +1,5 @@
 # Local server for downloads.txt and asks.txt: /small and /slow are attachments, /auth wants Basic u:p. Usage: download-server.py [port]
-import http.server, sys, time
+import http.server, socketserver, sys, time
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -43,4 +43,9 @@ class H(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
-http.server.ThreadingHTTPServer(('127.0.0.1', int(sys.argv[1]) if len(sys.argv) > 1 else 8123), H).serve_forever()
+class Server(http.server.ThreadingHTTPServer):
+    # HTTPServer's own server_bind also looks up the host's name, between bind and listen: a slow
+    # resolver there leaves the port bound and deaf.
+    server_bind = socketserver.TCPServer.server_bind
+
+Server(('127.0.0.1', int(sys.argv[1]) if len(sys.argv) > 1 else 8123), H).serve_forever()
