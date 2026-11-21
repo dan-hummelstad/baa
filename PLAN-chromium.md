@@ -137,6 +137,13 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
     derived from the origin.
   - `baa/no-crash-uploads.patch`: no upload URL and uploads forced off; crashpad keeps reports in
     `<user data>/Crashpad/`. The crash-reporting toggle in settings now does nothing (still to remove).
+  - `baa/tab-dialog-manager-no-widget.patch`: Chrome's newer tab-modal dialogs (`tabs::TabDialogManager`:
+    the HTTPS-first warning, the FedCM account chooser, autofill's card dialogs) need the browser
+    window's views widget, which baa's window is not; `CHECK(host)` ended 0.1.8 at a link to a site
+    with no HTTPS. With no host widget the dialog opens over the page of the tab that asked, placed by
+    baa's dialog host like Chrome's older tab-modal dialogs. Ceiling: it is a window of its own and can
+    go behind baa's. The HTTPS-first warning does not come this way in the app: `HttpsFirstDialogUi` is
+    off (`baa_privacy::CORE_DISABLED_FEATURES`), so it is a page in the tab.
 
 Taking a Helium release: `.github/helium-take.sh <helium-macos tag>` applies upstream's change since
 `chromium/HELIUM_RELEASE` 3-way under both prefixes as one plain commit (no subtree merge, so it rebases
