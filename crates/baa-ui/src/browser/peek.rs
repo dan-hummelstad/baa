@@ -34,6 +34,8 @@ pub(crate) enum Shown {
 /// sizes in quick succession as their content loads.
 const POPUP_SETTLE: std::time::Duration = std::time::Duration::from_millis(60);
 
+const NEW_TAB_CUE_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
+
 impl<H: WebHost> Browser<H> {
     pub(crate) fn shown(&self) -> Option<Shown> {
         match &self.peek {
@@ -50,6 +52,45 @@ impl<H: WebHost> Browser<H> {
         if let Some(current) = current {
             self.session.activate_tab(current, now());
         }
+    }
+
+    /// The tab a cmd-click opened stays out of sight; a pill at the top right says it exists (Arc).
+    pub(super) fn cue_new_tab(&mut self, cx: &mut Context<Self>) {
+        self.new_tabs += 1;
+        let n = self.new_tabs;
+        self.motion.from(("new-tab", 0), Feel::Glide, 0.0, 1.0);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NEW_TAB_CUE_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.new_tabs == n {
+                    this.motion.to(("new-tab", 0), Feel::Glide, 0.0);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn render_new_tab_cue(&self) -> Option<impl IntoElement> {
+        let t = self.motion.get(("new-tab", 0), Feel::Glide);
+        (t > 0.01).then(|| {
+            div()
+                .absolute()
+                .top(px(HEADER_H + 8.))
+                .right(px(INSET + 12.))
+                .mt(px(-8. * (1. - t)))
+                .opacity(t.clamp(0., 1.))
+                .px(px(16.))
+                .py(px(8.))
+                .rounded(r(12.))
+                .bg(self.theme().accent)
+                .shadow(vec![shadow(gpui::rgba(0x0A08143D).into(), 8., 24.)])
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(gpui::white())
+                .child("New Tab Created")
+        })
     }
 
     pub(crate) fn open_peek(

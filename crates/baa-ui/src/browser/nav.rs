@@ -128,7 +128,8 @@ impl<H: WebHost> Browser<H> {
                 .max_w(px(360.))
                 .bg(fade(accent, h))
                 .text_color(mix(surface::ink().into(), gpui::white(), h))
-                .on_click(cx.listener(move |this, _, window, cx| {
+                // Mouse up, not click: a held back/forward is released over the entry it wants.
+                .on_mouse_up(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                     this.with_page(cx, |p| p.go_to_offset(offset));
                     this.close_overlays(window, cx);
                 }))

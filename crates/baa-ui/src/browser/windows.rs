@@ -54,6 +54,9 @@ pub fn window_options(cx: &App) -> WindowOptions {
         // Pages are native views under gpui's layer, seen through the hole
         // each page element punches; that needs a transparent layer.
         window_background: WindowBackgroundAppearance::Transparent,
+        // AppKit's own titlebar drag moved the window out from under a held back/forward
+        // button; baa's toolbar strips drag it themselves (`drag_or_zoom`).
+        app_owns_titlebar_drag: true,
         ..Default::default()
     }
 }

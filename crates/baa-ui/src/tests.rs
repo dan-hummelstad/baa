@@ -280,6 +280,7 @@ fn page_events_update_the_session(cx: &mut TestAppContext) {
             (tabs[1].title.as_str(), tabs[1].url.as_str()),
             ("A", "https://a.example/next")
         );
+        assert_eq!(b.new_tabs, 1, "the background tab is announced");
     });
     page.update(cx, |_, cx| cx.emit(PageEvent::Closed));
     cx.run_until_parked();

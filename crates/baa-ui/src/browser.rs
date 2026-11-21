@@ -249,6 +249,7 @@ pub struct Browser<H: WebHost> {
     /// A short confirmation at the bottom of the window, and how many so far.
     pub(crate) toast: Option<SharedString>,
     pub(crate) toasts: u64,
+    pub(crate) new_tabs: u64,
     /// While the toast shows: the tabs Clear Today archived and the tab shown before, for Undo.
     pub(crate) undo_clear: Option<(Vec<TabId>, Option<TabId>)>,
     _downloads: Subscription,
@@ -487,6 +488,7 @@ impl<H: WebHost> Browser<H> {
             recorded_downloads: HashSet::new(),
             toast: None,
             toasts: 0,
+            new_tabs: 0,
             undo_clear: None,
             _downloads: downloads,
             _chrome_tabs: chrome_tabs,
@@ -808,6 +810,7 @@ impl<H: WebHost> Browser<H> {
                 let space = tab.space;
                 if *background {
                     self.open_background_tab(space, url);
+                    self.cue_new_tab(cx);
                 } else {
                     // Arc's Peek: a link that would open a tab (or a shift-click)
                     // previews over the page instead, unless settings say tab.
@@ -1436,7 +1439,11 @@ impl<H: WebHost> Render for Browser<H> {
         let top = if left {
             self.render_sidebar_top(&theme, card, cx).into_any_element()
         } else {
-            div().flex_none().h(px(HEADER_H)).into_any_element()
+            div()
+                .flex_none()
+                .h(px(HEADER_H))
+                .on_mouse_down(MouseButton::Left, crate::sidebar::drag_or_zoom)
+                .into_any_element()
         };
         let sidebar = div()
             .size_full()
@@ -1525,6 +1532,7 @@ impl<H: WebHost> Render for Browser<H> {
             .children(peek)
             .children(bar)
             .children(self.render_toast(cx))
+            .children(self.render_new_tab_cue())
             .children(popover)
             .children(history)
             .children(self.space_picker.as_ref().map(|p| p.render()))
