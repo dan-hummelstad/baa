@@ -205,7 +205,9 @@ def run_test(spec, exe, keep):
                 thread.start()
                 return thread
 
-            pumps = [stamp(proc.stdout)] + ([stamp(server.stderr, "server: ")] if server else [])
+            pump = stamp(proc.stdout)
+            if server:
+                stamp(server.stderr, "server: ")
             probes = []
             if spec.cdp_after is not None:
                 while time.time() - started < spec.cdp_after and proc.poll() is None:
@@ -224,10 +226,7 @@ def run_test(spec, exe, keep):
                 proc.kill()
             proc.wait()
             code = proc.returncode
-            if server:
-                server.kill()
-            for thread in pumps:
-                thread.join(5)
+            pump.join(5)
 
         out = open(log_path, errors="replace").read()
         with open(log_path, "a") as log:
