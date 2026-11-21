@@ -21,8 +21,9 @@ use baa_web::{DangerKind, Download, DownloadState, PageEvent, PageHandle, Permis
 use gpui::{div, prelude::*, px, relative, AnyElement, Context, Div, Entity, Hsla, KeyDownEvent, SharedString, Stateful, Window};
 
 use crate::{
-    browser::{cut_left, drop_in, feel, host_of, shadow, Browser, Shown, HEADER_H, INSET},
+    browser::{cut_left, drop_in, feel, host_of, shadow, Browser, Shown, Tip, HEADER_H, INSET},
     icons::icon,
+    command_bar::Command,
     input::Key,
     motion::Feel,
     theme::{fade, mix, surface, Theme},
@@ -418,44 +419,66 @@ impl<H: WebHost> Browser<H> {
         Some(feel(el, key, cx).into_any_element())
     }
 
-    /// The header's extensions button, Arc's: every extension, pinned or not.
+    /// The header's extensions button, Arc's: every extension, pinned or not, and the site's settings.
     pub(crate) fn render_extensions_button(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let key = ("extensions", 0);
         let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
         let open = self.popover == Some(Popover::Extensions);
         let el = div()
             .id("extensions-button")
-            .size(px(26.))
+            .size(px(28.))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(r(6.))
+            .rounded(r(7.))
             .bg(fade(theme.hover, h.max(open as u8 as f32)))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_popover(Popover::Extensions, window, cx)))
-            .child(icon("puzzle", 15. * (1. - 0.15 * p), mix(theme.ink_muted, theme.ink, h)));
+            .child(icon("sliders-horizontal", 15. * (1. - 0.15 * p), mix(theme.ink_muted, theme.ink, h)));
         feel(el, key, cx).into_any_element()
     }
 
-    /// Every extension as a tile: click opens it, the badge pins it to the
-    /// toolbar, a right click has the rest.
-    fn render_extensions_panel(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// Arc's site menu: page actions, every extension as a tile (the badge pins it to the
+    /// toolbar, a right click has the rest), the site's decided permissions, and its security.
+    fn render_extensions_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let unpinned = &self.settings.unpinned_extensions;
         let tile = |id: (&'static str, u64), h: f32| {
             div()
                 .id(id)
                 .relative()
-                .h(px(60.))
+                .h(px(44.))
                 .min_w_0()
-                .px(px(4.))
                 .flex()
-                .flex_col()
                 .items_center()
                 .justify_center()
-                .gap(px(6.))
-                .rounded(r(9.))
+                .rounded(r(10.))
                 .bg(mix(surface::key().into(), surface::line().into(), h))
         };
+        let heading = |text: &'static str| {
+            div().px(px(4.)).pt(px(12.)).pb(px(8.)).text_size(px(14.)).font_weight(gpui::FontWeight::BOLD).child(text)
+        };
+        let actions: Vec<AnyElement> = [
+            (Command::CopyUrl, "Copy Link"),
+            (Command::ReaderMode, "Reader Mode"),
+            (Command::PictureInPicture, "Picture in Picture"),
+            (Command::TranslatePage, "Translate Page"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (c, label))| {
+                let key = ("site-action", i as u64);
+                let h = self.motion.get(key, Feel::Hover);
+                let tip = SharedString::from(label);
+                let el = tile(key, h)
+                    .tooltip(move |_, cx| cx.new(|_| Tip(tip.clone())).into())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.close_overlays(window, cx);
+                        this.run_command(c, window, cx);
+                    }))
+                    .child(icon(c.icon(), 20., surface::ink().into()));
+                feel(el, key, cx).into_any_element()
+            })
+            .collect();
         let mut tiles: Vec<AnyElement> = self
             .extensions
             .iter()
@@ -465,24 +488,28 @@ impl<H: WebHost> Browser<H> {
                 let h = self.motion.get(key, Feel::Hover);
                 let pinned = !unpinned.contains(&ext.id);
                 let (open, pin, menu) = (ext.clone(), ext.id.clone(), ext.id.clone());
+                let name = SharedString::from(ext.name.clone());
                 let badge = div()
                     .id(("ext-pin", i as u64))
                     .absolute()
-                    .top(px(4.))
-                    .right(px(4.))
-                    .size(px(18.))
+                    .bottom(px(-3.))
+                    .right(px(-3.))
+                    .size(px(20.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(r(9.))
-                    .when(pinned, |d| d.bg(surface::raised()).shadow(vec![shadow(gpui::rgba(0x0000002E).into(), 1., 3.)]))
+                    .rounded_full()
+                    .bg(surface::ink())
+                    .border_2()
+                    .border_color(surface::bg())
                     .opacity(if pinned { 1. } else { h })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.toggle_extension_pin(&pin, cx);
                     }))
-                    .child(icon(if pinned { "pin" } else { "pin-off" }, 10., if pinned { theme.accent } else { surface::icon().into() }));
+                    .child(icon(if pinned { "pin" } else { "pin-off" }, 10., surface::bg().into()));
                 let el = tile(key, h)
+                    .tooltip(move |_, cx| cx.new(|_| Tip(name.clone())).into())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_overlays(window, cx);
                         this.open_extension(&open, window, cx);
@@ -493,19 +520,7 @@ impl<H: WebHost> Browser<H> {
                             this.open_menu(crate::browser::MenuKind::Extension(menu.clone()), e.position, window, cx)
                         }),
                     )
-                    .child(match &ext.icon {
-                        Some(path) if path.exists() => gpui::img(path.clone()).size(px(20.)).into_any_element(),
-                        _ => icon("puzzle", 18., surface::icon().into()).into_any_element(),
-                    })
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_center()
-                            .text_size(px(10.5))
-                            .text_color(surface::muted())
-                            .child(SharedString::from(ext.name.clone())),
-                    )
+                    .child(crate::icons::extension_icon(ext, 20., surface::icon().into()))
                     .child(badge);
                 feel(el, key, cx).into_any_element()
             })
@@ -513,30 +528,124 @@ impl<H: WebHost> Browser<H> {
         let key = ("ext-add", 0);
         let h = self.motion.get(key, Feel::Hover);
         let add = tile(key, h)
+            .tooltip(|_, cx| cx.new(|_| Tip("Add Extensions".into())).into())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.close_overlays(window, cx);
                 this.open_url("https://chromewebstore.google.com/", window, cx)
             }))
-            .child(icon("plus", 18., surface::icon().into()))
-            .child(div().text_size(px(10.5)).text_color(surface::muted()).child("Add"));
+            .child(icon("plus", 18., surface::icon().into()));
         tiles.push(feel(add, key, cx).into_any_element());
+
+        let page = self.active_page().map(|p| (p.read(cx).url(), p.read(cx).is_secure()));
+        let web = page.filter(|(url, _)| url.starts_with("http"));
+        // Arc lists only what the user decided; the lock's panel has every permission.
+        let settings: Vec<AnyElement> = match (&web, self.active_space().map(|s| s.profile)) {
+            (Some((url, _)), Some(profile)) => SITE_PERMISSIONS
+                .iter()
+                .map(|kind| (*kind, self.host.site_permission(profile, url, *kind)))
+                .filter(|(_, state)| *state != PermissionState::Ask)
+                .map(|(kind, state)| {
+                    let allowed = state == PermissionState::Allow;
+                    let url = url.clone();
+                    div()
+                        .id(SharedString::from(format!("site-setting-{kind:?}")))
+                        .p(px(4.))
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .rounded(r(8.))
+                        .hover(|d| d.bg(surface::key()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let next = if allowed { PermissionState::Block } else { PermissionState::Allow };
+                            this.host.set_site_permission(profile, &url, kind, next);
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .size(px(36.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(if allowed { surface::ink() } else { surface::key() })
+                                .child(icon(
+                                    permission_icon(kind),
+                                    16.,
+                                    if allowed { surface::bg().into() } else { surface::icon().into() },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(div().truncate().font_weight(gpui::FontWeight::SEMIBOLD).child(permission_name(kind)))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(surface::muted())
+                                        .child(if allowed { "Allowed" } else { "Blocked" }),
+                                ),
+                        )
+                        .into_any_element()
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let security = web.map(|(_, secure)| {
+            div()
+                .id("extensions-panel-site")
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(r(8.))
+                .bg(surface::key())
+                .hover(|d| d.bg(surface::line()))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_popover(Popover::Site, window, cx)))
+                .child(icon(
+                    if secure { "lock" } else { "triangle-alert" },
+                    13.,
+                    if secure { surface::ink().into() } else { surface::warn().into() },
+                ))
+                .child(if secure { "Secure" } else { "Not Secure" })
+        });
+        let manage = div()
+            .id("extensions-manage")
+            .ml_auto()
+            .size(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(surface::key())
+            .hover(|d| d.bg(surface::line()))
+            .tooltip(|_, cx| cx.new(|_| Tip("Manage Extensions".into())).into())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_own_page("baa://extensions", window, cx);
+            }))
+            .child(icon("ellipsis", 16., surface::ink().into()));
         drop_in(
             Self::popover_card("extensions-panel", 300.)
-                .child(div().px(px(8.)).py(px(6.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Extensions"))
-                .child(div().px(px(2.)).grid().grid_cols(4).gap(px(6.)).children(tiles))
+                .p(px(10.))
+                .rounded(r(16.))
+                .child(div().grid().grid_cols(4).gap(px(8.)).children(actions))
+                .child(heading("Extensions"))
+                .child(div().grid().grid_cols(4).gap(px(8.)).children(tiles))
+                .when(!settings.is_empty(), |d| d.child(heading("Settings")).children(settings))
                 .child(
                     div()
-                        .mt(px(8.))
-                        .pt(px(6.))
-                        .px(px(4.))
+                        .mt(px(10.))
+                        .pt(px(10.))
                         .flex()
+                        .items_center()
                         .border_t_1()
                         .border_color(surface::line())
-                        .child(button(("extensions-manage", 0), "Manage Extensions", false, theme, self, cx).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.open_own_page("baa://extensions", window, cx);
-                            }),
-                        )),
+                        .children(security)
+                        .child(manage),
                 ),
             "extensions-panel",
         )
@@ -594,10 +703,12 @@ impl<H: WebHost> Browser<H> {
         let card = match which {
             Popover::Downloads => self.render_downloads(theme, cx),
             Popover::Site => self.render_site_panel(cx)?,
-            Popover::Extensions => self.render_extensions_panel(theme, cx),
+            Popover::Extensions => self.render_extensions_panel(cx),
         };
         let placed = match which {
-            Popover::Downloads | Popover::Extensions => div().absolute().top(px(HEADER_H)).right(px(INSET)).child(card),
+            Popover::Downloads => div().absolute().top(px(HEADER_H)).right(px(INSET)).child(card),
+            // Under its button, which has split to its right.
+            Popover::Extensions => div().absolute().top(px(HEADER_H)).right(px(INSET + 36.)).child(card),
             Popover::Site => div()
                 .absolute()
                 .top(px(HEADER_H))

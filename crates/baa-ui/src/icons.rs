@@ -15,7 +15,7 @@ macro_rules! icons {
 
 icons!(
     "archive", "arrow-down-to-line", "arrow-left", "arrow-right", "arrow-up", "bell", "book-open", "calendar",
-    "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "file",
+    "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "ellipsis", "file",
     "file-archive", "file-image", "file-music", "file-spreadsheet", "file-text",
     "file-video-camera", "folder", "folder-open", "git-pull-request", "globe", "history", "house", "import",
     "key-round", "languages", "link", "list-filter", "lock", "map-pin", "maximize-2", "message-circle", "mic", "minus", "moon-star",
@@ -25,7 +25,20 @@ icons!(
 
 /// baa's own mark ("The leap, solid" in baa.pen, also the app icon: assets/baa.icns), for `img(MARK)`.
 pub const MARK: &str = "baa.png";
-const IMAGES: &[(&str, &[u8])] = &[(MARK, include_bytes!("../assets/baa.png"))];
+/// uBlock Origin's own icon (GPLv3, from chromium/vendor): as a component extension it names
+/// one that lives only in Chromium's resource pak, so the toolbar had no file to show.
+const UBLOCK: &str = "ublock.png";
+const IMAGES: &[(&str, &[u8])] = &[(MARK, include_bytes!("../assets/baa.png")), (UBLOCK, include_bytes!("../assets/ublock.png"))];
+
+/// An extension's icon at `size`: its file, uBlock's bundled one, or a puzzle piece.
+pub fn extension_icon(ext: &baa_web::Extension, size: f32, fallback: Hsla) -> gpui::AnyElement {
+    use gpui::{img, IntoElement};
+    match &ext.icon {
+        Some(path) if path.exists() => img(path.clone()).size(px(size)).into_any_element(),
+        _ if ext.name.starts_with("uBlock") => img(UBLOCK).size(px(size)).into_any_element(),
+        _ => icon("puzzle", size, fallback).into_any_element(),
+    }
+}
 
 pub struct Assets;
 

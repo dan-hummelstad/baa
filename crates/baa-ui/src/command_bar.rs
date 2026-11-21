@@ -147,7 +147,7 @@ impl Command {
         })
     }
 
-    fn icon(self) -> &'static str {
+    pub(crate) fn icon(self) -> &'static str {
         match self {
             Command::NewSpace | Command::NewWindow | Command::NewIncognitoWindow => "plus",
             Command::ToggleSidebar | Command::SwapSidebarSide => "panel-left",

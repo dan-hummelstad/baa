@@ -59,6 +59,7 @@ mod tests_live;
 mod tests_toss;
 #[cfg(test)]
 mod tests_m3_page;
+pub(crate) use header::Tip;
 pub(crate) use nav::HistoryMenu;
 pub(crate) use peek::{PeekPage, Shown};
 

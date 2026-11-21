@@ -5,7 +5,7 @@ use super::*;
 use ext_actions::{badge_ink, badge_text};
 
 /// A toolbar button's tooltip, one line: an extension chooses the text.
-struct Tip(SharedString);
+pub(crate) struct Tip(pub(crate) SharedString);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -89,11 +89,10 @@ impl<H: WebHost> Browser<H> {
             .enumerate()
             .filter(|(_, ext)| !unpinned.contains(&ext.id) && self.extension_enabled(&ext.id));
         let extensions: Vec<_> = pinned.map(|(i, ext)| {
-            let icon_path = ext.icon.clone();
             let ext = ext.clone();
             let key = ("extension", i as u64);
             let (h, p) = (self.motion.get(key, Feel::Hover), self.motion.get(key, Feel::Press));
-            let size = 16. * (1. + 0.08 * h - 0.18 * p);
+            let size = 18. * (1. + 0.08 * h - 0.18 * p);
             let action = self.actions.get(&ext.id);
             let badge = action.map(|a| (badge_text(&a.badge_text), a)).filter(|(t, _)| !t.is_empty()).map(|(text, a)| {
                 let id = ext.id.clone();
@@ -120,10 +119,11 @@ impl<H: WebHost> Browser<H> {
             });
             let dim = action.is_some_and(|a| !a.enabled);
             let title = action.map(|a| SharedString::from(plain_text(&a.title))).filter(|t| !t.is_empty() && !self.prompt_shown());
+            let logo = crate::icons::extension_icon(&ext, size, theme.ink_muted);
             let el = div()
                 .id(("extension", i))
                 .relative()
-                .size(px(26.))
+                .size(px(28.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -133,11 +133,7 @@ impl<H: WebHost> Browser<H> {
                 .on_click(cx.listener(move |this, _, window, cx| this.open_extension(&ext, window, cx)))
                 .when_some(title, |d, title| d.tooltip(move |_, cx| cx.new(|_| Tip(title.clone())).into()))
                 .child(
-                    div().when(dim, |d| d.opacity(0.4)).child(match icon_path {
-                        // A component extension (uBlock) names an icon that is only in the resource pak.
-                        Some(path) if path.exists() => gpui::img(path).size(px(size)).into_any_element(),
-                        _ => icon("sliders-horizontal", size, theme.ink_muted).into_any_element(),
-                    }),
+                    div().when(dim, |d| d.opacity(0.4)).child(logo),
                 )
                 .children(badge);
             feel(el, key, cx)
@@ -145,11 +141,11 @@ impl<H: WebHost> Browser<H> {
         div()
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(px(6.))
             .children(self.render_download_button(theme, cx))
             .children(extensions)
-            .child(self.render_split_button(theme, cx))
             .child(self.render_extensions_button(theme, cx))
+            .child(self.render_split_button(theme, cx))
     }
 
     /// The short URL (click to edit), centred in the header.
@@ -293,7 +289,7 @@ impl<H: WebHost> Browser<H> {
         let on = self.session.active_space().is_some_and(|s| self.session.shown_split(s).is_some());
         let el = div()
             .id("split-button")
-            .size(px(26.))
+            .size(px(28.))
             .flex()
             .items_center()
             .justify_center()
