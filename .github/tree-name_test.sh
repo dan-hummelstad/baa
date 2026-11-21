@@ -5,7 +5,7 @@ cd "$(dirname "$0")" || exit
 export TREE=chromium-tree-xcode27.2
 arts() { printf '['; printf '{"name":"%s"},' "$@" | sed 's/,$//'; printf ']'; }
 fail=0
-check() { # name want artifact-names...
+check() {
   local name=$1 want=$2
   shift 2
   got=$(arts "$@" | ./tree-name.sh) || got="(exit $?)"

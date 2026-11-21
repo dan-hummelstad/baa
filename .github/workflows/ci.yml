@@ -1,8 +1,5 @@
 # The checks: every push to main, every pull request, and release.yml before it signs anything.
-# Three jobs side by side, none of which depends on timing or on a window:
-#   lint     the scripts' own tests, the security greps, and the workflow files themselves
-#   test     clippy and the unit tests
-#   privacy  PLAN.md §5.3 on the release engine of this commit's chromium/ tree, when one exists
+# Three jobs side by side, none of which depends on timing or on a window.
 # The engine itself builds in chromium.yml, and the //baa harness tests run in harness.yml,
 # which nothing waits for.
 name: ci

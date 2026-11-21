@@ -43,31 +43,35 @@ there.
 ## Chromium trees: where hours were lost, and what closes each
 
 A from-scratch release chain is about 21 hours of compiling in 5 phases. Each row is a way that
-work was, or could be, thrown away. "Branch" means the fix is written and its offline tests pass,
-but it lands on `main` only after a test chain has run it (`ci/keep-trees`, see "Next").
+work was, or could be, thrown away. "Unrun" means the fix is on `main` since 2026-11-22 with its
+offline tests passing, but no chain has run it yet: it landed without a test chain (the user's
+choice), so the first chain after it is the test (see "Next").
 
 | Loss | Seen | Closed by | State |
 |---|---|---|---|
 | tar's whole-second mtimes made siso recompile everything, four times | 2026-11-04 | pax format, and three guards that fail the phase | on `main` |
-| `Pack tree` failed after the archive was complete (tar could not remove a directory), so the upload was skipped: a 4.75 h phase gone | run 43888560258 | `.github/pack-tree.sh`: when tar fails, the archive decides (it must read to its end and hold siso's state); `pack-tree_test.sh` reproduces that run | branch |
-| A step between Build and `Pack tree` fails (the summary's API call, the engine tarball) and vetoes the pack | not yet | the tree steps run on `!cancelled()` and the Build step's status alone; the summary cannot fail the job | branch |
-| The upload replaces the previous phase's tree before the new one exists (`overwrite: true` deletes first), so a failed upload leaves the chain with nothing | not yet; Helium and ungoogled-chromium have the same exposure | every phase uploads under its own name (`chromium-tree-xcode<v>-phase<N>`); only a finished tree takes the plain name. Trees are 5 to 7 GB, so keeping all of them costs nothing | branch |
-| A dev chain that fails to compile uploads nothing | by design until now | every ended Build step (running, finished, failed) packs, in both modes | branch |
-| A hand-off guard fires and the phase's tree is dropped with it | by design until now | the guard still ends the chain red, after the tree is uploaded | branch |
-| An unfinished tree expires after 2 days, a finished one after 14 | a failure on a Friday | 7 days and 30 days (a milestone is about four weeks) | branch |
+| `Pack tree` failed after the archive was complete (tar could not remove a directory), so the upload was skipped: a 4.75 h phase gone | run 43888560258 | `.github/pack-tree.sh`: when tar fails, the archive decides (it must read to its end and hold siso's state); `pack-tree_test.sh` reproduces that run | unrun |
+| A step between Build and `Pack tree` fails (the summary's API call, the engine tarball) and vetoes the pack | not yet | the tree steps run on `!cancelled()` and the Build step's status alone; the summary cannot fail the job | unrun |
+| The upload replaces the previous phase's tree before the new one exists (`overwrite: true` deletes first), so a failed upload leaves the chain with nothing | not yet; Helium and ungoogled-chromium have the same exposure | every phase uploads under its own name (`chromium-tree-xcode<v>-phase<N>`); only a finished tree takes the plain name. Trees are 5 to 7 GB, so keeping all of them costs nothing | unrun |
+| A dev chain that fails to compile uploads nothing | by design until now | every ended Build step (running, finished, failed) packs, in both modes | unrun |
+| A hand-off guard fires and the phase's tree is dropped with it | by design until now | the guard still ends the chain red, after the tree is uploaded | unrun |
+| An unfinished tree expires after 2 days, a finished one after 14 | a failure on a Friday | 7 days and 30 days (a milestone is about four weeks) | unrun |
 | A run is cancelled mid-phase | when someone does it | nothing can: a cancelled job is killed after five minutes and packing takes eight. The phase before it is kept, so the cost is at most one phase. Do not cancel a chain to push a fix; let the phase end | documented |
-| The runner dies, or the job hits six hours | not yet | "Re-run failed jobs": the phase starts again from the tree before it, which is no longer replaced | branch |
+| The runner dies, or the job hits six hours | not yet | "Re-run failed jobs": the phase starts again from the tree before it, which is no longer replaced | unrun |
 | A patch does not apply, found half an hour into phase 1 | run 43876197908 and others | `xtask/check-patches.sh` before the build | on `main` |
 | A release chain starts from scratch although a finished release tree of the same milestone exists, because nobody passed `base_run` (the 157.0.8103.81 bump compiled for 24 h; its source differed from .79 in the `VERSION` file) | 2026-11-19 | open decision 1 | open |
 | A change under `chromium/` that is not a build input (`local-build.sh`, `packaging/`) orphans the engine | not recently | open decision 2 | open |
 
 ## Next
 
-1. **Test chain for the branch.** `gh workflow run chromium.yml --ref ci/keep-trees -f mode=dev -f
-   budget_minutes=15 -f base_run=none`, three phases, then cancel: it shows the per-phase names
-   handing over, the guards passing and a failed phase's tree being uploaded. Then one `mode=dev`
-   run with no inputs, which picks a base by the new rule and finishes under the plain name. Then
-   the branch lands. A test chain's title is not "chromium dev", so nothing picks its tree as a base.
+1. **Read the first chain after 2026-11-22.** In its first phase: `Pack tree` ends with a
+   `name=chromium-tree-xcode<v>-phase1` line and `Upload tree` uploads that name. In its second:
+   `Restore tree` downloads `-phase1`, and the run's artifacts then hold both `-phase1` and
+   `-phase2`. At the end: the plain name, 30 days. If a phase fails in `Pack tree` or an upload, the
+   phases before it are still there: start again with `base_run=<that run>`. To see all of it
+   before a real build needs it: `gh workflow run chromium.yml -f mode=dev -f budget_minutes=15
+   -f base_run=none`, three phases, then cancel (a test chain's title is not "chromium dev", so
+   nothing picks its tree as a base).
 2. **Open decisions** (the user's):
    1. A release build picks the newest finished release tree of the same milestone as its base
       unless `base_run=none`, as dev builds already do for the same version. A same-version resume

@@ -131,7 +131,6 @@ jobs:
           if [ -n "$B" ]; then
             usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium $want $BAA_MODE tree"; exit 1; }
           else
-            # Only finished chains are picked unasked.
             for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=success&per_page=50" -q '.workflow_runs[].id'); do
               if usable "$r"; then B=$r; break; fi
             done
@@ -332,7 +331,6 @@ jobs:
           path: /Users/Shared/engine.tar.zst.sha256
           retention-days: 90
 
-      # Whatever the Build step ended as, and whatever failed since, the tree is kept.
       # !cancelled(), not always(): a cancelled job is killed five minutes later, mid-archive.
       - name: Pack tree
         id: pack
