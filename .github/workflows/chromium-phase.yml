@@ -89,14 +89,16 @@ jobs:
           pip3 install requests pillow --break-system-packages
           df -h /
 
-      # A dev chain builds on the newest finished dev tree of the same Chromium
-      # version, so it only recompiles what changed since. base_run: "" picks one,
-      # a run id names one, "none" builds from scratch. A release builds from scratch
-      # unless base_run names an earlier release run. A named run need not have finished:
-      # the tree of the last phase that ended is what there is to go on from.
+      # A chain builds on the newest finished tree of its mode and Chromium milestone, so it
+      # only recompiles what changed since: a bump inside the milestone as well as an engine fix
+      # (user, 2026-11-22; a release used to start from scratch unless a run was named, and the
+      # 157.0.8103.81 bump compiled for a day). base_run: "" picks one, a run id names one,
+      # "none" builds from scratch, which is the way to a release that owes nothing to an
+      # earlier tree. A named run need not have finished: the tree of the last phase that
+      # ended is what there is to go on from.
       - name: Pick base tree (phase 1)
         id: base
-        if: inputs.phase == 1 && inputs.base_run != 'none' && (inputs.mode == 'dev' || inputs.base_run != '')
+        if: inputs.phase == 1 && inputs.base_run != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -106,35 +108,41 @@ jobs:
           # Only a manual dispatch of chromium.yml in this repo (trusted.sh): any PR run can
           # name itself "chromium dev" and upload a tree whose out/ the next build would run.
           # Its tree must carry the checksum Pack tree records; older trees do not.
+          # usable <run> [finished]: sets NAME, ID and DIGEST to the run's tree to go on from.
+          # Only on success, so a run that was looked at and passed over leaves nothing behind.
           usable() {
-            local run sha arts
+            local run sha arts its name id='' digest=''
             run=$(gh api "repos/$R/actions/runs/$1") || return 1
             baa/.github/actions/engine/trusted.sh "$R" <<<"$run" || return 1
             sha=$(jq -r 'select(.display_title == "chromium " + env.BAA_MODE) | .head_sha' <<<"$run")
             [ -n "$sha" ] || return 1
             arts=$(gh api "repos/$R/actions/runs/$1/artifacts?per_page=100" -q '[.artifacts[] | select(.expired | not)]')
-            NAME=$(baa/.github/tree-name.sh <<<"$arts")
-            [ -n "$NAME" ] || return 1
-            if ! jq -e 'any(.name == env.NAME + ".sha256")' <<<"$arts" >/dev/null; then
+            name=$(baa/.github/tree-name.sh <<<"$arts")
+            [ -n "$name" ] || return 1
+            [ -z "${2:-}" ] || [ "$name" = "$TREE" ] || return 1
+            if ! jq -e --arg n "$name" 'any(.name == $n + ".sha256")' <<<"$arts" >/dev/null; then
               # Release trees from before the producer checksum (39b112cd) are checked
               # against the sha256 GitHub recorded when the producer uploaded them.
               [ "$BAA_MODE" = release ] || return 1
-              ID=$(jq -r 'map(select(.name == env.NAME))[0].id' <<<"$arts")
-              DIGEST=$(jq -r 'map(select(.name == env.NAME))[0].digest // empty' <<<"$arts")
-              case $DIGEST in sha256:?*) ;; *) return 1 ;; esac
+              id=$(jq -r --arg n "$name" 'map(select(.name == $n))[0].id' <<<"$arts")
+              digest=$(jq -r --arg n "$name" 'map(select(.name == $n))[0].digest // empty' <<<"$arts")
+              case $digest in sha256:?*) ;; *) return 1 ;; esac
             fi
-            [ "$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)" = "$want" ]
+            # The same milestone, not the same build: the sources are synced over the base by
+            # content, and inside a milestone few files differ.
+            its=$(gh api "repos/$R/contents/chromium/helium/chromium_version.txt?ref=$sha" -q .content | base64 -d)
+            [ "${its%%.*}" = "${want%%.*}" ] || return 1
+            NAME=$name ID=$id DIGEST=$digest
           }
-          ID='' DIGEST=''
-          export NAME=''
+          NAME='' ID='' DIGEST=''
           B=$BAA_BASE_RUN
           if [ -n "$B" ]; then
-            usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium $want $BAA_MODE tree"; exit 1; }
+            usable "$B" || { echo "::error::run $B has no usable, unexpired Chromium ${want%%.*} $BAA_MODE tree"; exit 1; }
           else
-            for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=success&per_page=50" -q '.workflow_runs[].id'); do
-              if usable "$r"; then B=$r; break; fi
+            # Unasked, only a finished tree, whatever the jobs after it made of the run.
+            for r in $(gh api "repos/$R/actions/workflows/chromium.yml/runs?status=completed&per_page=50" -q '.workflow_runs[].id'); do
+              if usable "$r" finished; then B=$r; break; fi
             done
-            [ -n "$B" ] || NAME=''
           fi
           { echo "run=$B"; echo "name=$NAME"; echo "id=$ID"; echo "digest=$DIGEST"; } >> "$GITHUB_OUTPUT"
           echo "- base tree: ${B:+$NAME of run }${B:-none, building from scratch}${DIGEST:+ (checked against the GitHub upload digest)}" >> "$GITHUB_STEP_SUMMARY"
@@ -299,7 +307,7 @@ jobs:
         working-directory: /Users/Shared/hb/helium-macos/build/src/out/Default
         run: |
           set -eux
-          T=$(git -C "$GITHUB_WORKSPACE/baa" rev-parse HEAD:chromium)
+          T=$("$GITHUB_WORKSPACE/baa/.github/engine-key.sh")
           echo "ENGINE=baa-engine-$T" >> "$GITHUB_ENV"
           jq -n --arg t "$T" --arg sha "$GITHUB_SHA" \
             --arg chromium "$(cat /Users/Shared/hb/helium/chromium_version.txt)" \

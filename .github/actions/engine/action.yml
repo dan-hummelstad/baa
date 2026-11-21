@@ -1,11 +1,11 @@
-# Finds the release engine (baa-engine-<tree>) built from this checkout's chromium/
-# tree. Equal tree hashes mean the same baa.h ABI and patches. Any run can upload
+# Finds the release engine (baa-engine-<key>) built from this checkout's chromium/
+# build inputs (engine-key.sh). Any run can upload
 # an artifact by that name (a fork PR's ci.yml too), so only one whose run passes
 # trusted.sh (a chromium.yml workflow_dispatch in this repo) and that also holds
 # the <name>.sha256 the producer records counts. Empty `run` when none does,
 # or a failure with `required: true`. Needs a checkout first.
 name: engine
-description: Find the trusted baa-engine artifact for this commit's chromium/ tree
+description: Find the trusted baa-engine artifact for this commit's engine key
 inputs:
   required:
     description: fail instead of returning an empty run when no trusted engine exists
@@ -18,7 +18,7 @@ outputs:
     description: artifact name
     value: ${{ steps.find.outputs.name }}
   tree:
-    description: git tree hash of chromium/
+    description: the engine key (engine-key.sh)
     value: ${{ steps.find.outputs.tree }}
 runs:
   using: composite
@@ -31,20 +31,23 @@ runs:
         TRUSTED: ${{ github.action_path }}/trusted.sh
       run: |
         set -eu
-        T=$(git rev-parse HEAD:chromium)
-        N=baa-engine-$T
+        T=$(.github/engine-key.sh)
         run= rejected=
-        for r in $(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$N&per_page=100" \
-            -q '.artifacts[] | select(.expired | not) | .workflow_run.id' | sort -run); do
-          if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$r" | "$TRUSTED" "$GITHUB_REPOSITORY" &&
-            [ -n "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$r/artifacts?name=$N.sha256" -q '.artifacts[] | select(.expired | not) | .id')" ]; then
-            run=$r; break
-          fi
-          rejected="$rejected $r"
+        # ponytail: the second name is the key engines had before 2026-11-22, the tree hash of all
+        # of chromium/. The last of those expires (90 days) in February 2027; then it goes.
+        for N in "baa-engine-$T" "baa-engine-$(git rev-parse HEAD:chromium)"; do
+          for r in $(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$N&per_page=100" \
+              -q '.artifacts[] | select(.expired | not) | .workflow_run.id' | sort -run); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$r" | "$TRUSTED" "$GITHUB_REPOSITORY" &&
+              [ -n "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$r/artifacts?name=$N.sha256" -q '.artifacts[] | select(.expired | not) | .id')" ]; then
+              run=$r; break 2
+            fi
+            rejected="$rejected $r"
+          done
         done
-        [ -z "$rejected" ] || echo "::warning::ignored $N from runs that are not a chromium.yml workflow_dispatch in $GITHUB_REPOSITORY with a recorded checksum:$rejected"
+        [ -z "$rejected" ] || echo "::warning::ignored engines from runs that are not a chromium.yml workflow_dispatch in $GITHUB_REPOSITORY with a recorded checksum:$rejected"
         if [ -z "$run" ] && [ "$REQUIRED" = true ]; then
-          echo "::error::no trusted engine for chromium/ tree $T; run: gh workflow run chromium.yml -f mode=release --ref $GITHUB_REF_NAME, then re-run this workflow"
+          echo "::error::no trusted engine for engine key $T; run: gh workflow run chromium.yml -f mode=release --ref $GITHUB_REF_NAME, then re-run this workflow"
           exit 1
         fi
         {

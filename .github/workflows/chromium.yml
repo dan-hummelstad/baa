@@ -28,7 +28,7 @@ on:
         description: "test the phase hand-off: compile only this long per phase"
         default: ""
       base_run:
-        description: "build on this run's tree (finished or not). Empty: dev picks the newest finished one, release builds from scratch. none: from scratch"
+        description: "build on this run's tree (finished or not). Empty: the newest finished tree of this mode and Chromium milestone. none: from scratch"
         default: ""
 
 # actions: read lets phase 1 find and download an earlier run's tree.
@@ -187,7 +187,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - id: engine
-        run: echo "name=baa-engine-$(git rev-parse HEAD:chromium)" >> "$GITHUB_OUTPUT"
+        run: echo "name=baa-engine-$(.github/engine-key.sh)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/privacy
         with:
           run-id: ${{ github.run_id }}
@@ -235,9 +235,9 @@ jobs:
           [ "$ci" = success ] || { echo "::error::ci.yml is not green on $GITHUB_SHA ('$ci'): gh workflow run ci.yml --ref $B, then re-run this job"; exit 1; }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          T=$(git rev-parse HEAD:chromium)
+          T=$(.github/engine-key.sh)
           git rebase -q origin/main
-          [ "$(git rev-parse HEAD:chromium)" = "$T" ] || { echo "::error::main changed chromium/ while this engine built, so it no longer matches: run chromium.yml release on $B again"; exit 1; }
+          [ "$(.github/engine-key.sh)" = "$T" ] || { echo "::error::main changed the engine's sources in chromium/ while this engine built, so it no longer matches: run chromium.yml release on $B again"; exit 1; }
           OLD=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           NEW=${OLD%.*}.$((${OLD##*.} + 1))
           perl -0pi -e 's/^version = "\Q'"$OLD"'\E"$/version = "'"$NEW"'"/m' Cargo.toml

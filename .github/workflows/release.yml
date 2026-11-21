@@ -232,5 +232,8 @@ jobs:
           e=dist/engine/engine.json
           notes="Engine: Chromium $(jq -r .chromium "$e"), Helium $(jq -r .helium "$e"), engine $(jq -r '.tree[0:8]' "$e"). Source: https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_REF_NAME"
           # ponytail: GitHub Release only; mirroring to baa.me/dl (§13) waits until baa.me hosts anything.
+          # Releases are immutable once published (repository setting, 2026-11-22): a draft takes
+          # the files, and publishing is the last step.
           gh release create "$GITHUB_REF_NAME" dist/baa-*.dmg dist/engine/engine.json dist/appcast.xml --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --title "baa $VER" --notes "$notes" --generate-notes
+            --draft --verify-tag --title "baa $VER" --notes "$notes" --generate-notes
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

@@ -86,20 +86,26 @@ Pick one.
 
 ```sh
 brew install zstd
-T=$(git rev-parse HEAD:chromium)
-for RUN in $(gh api "repos/dan-hummelstad/baa/actions/artifacts?name=baa-engine-$T" -q '.artifacts[]|select(.expired|not).workflow_run.id'); do
-  gh api "repos/dan-hummelstad/baa/actions/runs/$RUN" | .github/actions/engine/trusted.sh dan-hummelstad/baa && break
-  RUN=
+# The engine's key, then the name engines had before 2026-11-22 (the tree hash of chromium/).
+for T in $(.github/engine-key.sh) $(git rev-parse HEAD:chromium); do
+  for RUN in $(gh api "repos/dan-hummelstad/baa/actions/artifacts?name=baa-engine-$T" -q '.artifacts[]|select(.expired|not).workflow_run.id'); do
+    gh api "repos/dan-hummelstad/baa/actions/runs/$RUN" | .github/actions/engine/trusted.sh dan-hummelstad/baa && break 2
+    RUN=
+  done
 done
-[ -n "$RUN" ] || { echo "no trusted engine for tree $T; start one (below)"; exit 1; }
+[ -n "$RUN" ] || { echo "no trusted engine for this checkout; start one (below)"; exit 1; }
 gh run download "$RUN" -R dan-hummelstad/baa -n "baa-engine-$T" -D target/engine
 gh run download "$RUN" -R dan-hummelstad/baa -n "baa-engine-$T.sha256" -D target/engine
 (cd target/engine && shasum -a 256 -c engine.tar.zst.sha256)
 zstd -dc target/engine/engine.tar.zst | tar -xf - -C target/engine
 ```
 
-An engine exists only for `chromium/` trees CI has built. If the loop stops with "no trusted
-engine", start one with `gh workflow run chromium.yml -f mode=release` (one to two days), or use B.
+An engine exists only for what CI has built. Its key (`.github/engine-key.sh`) covers the five
+directories of `chromium/` that go into the build (`helium`, `helium-macos`, `patches`, `baa`,
+`vendor`), so a change anywhere else keeps the engine. If the loop stops with "no trusted
+engine", start one with `gh workflow run chromium.yml -f mode=release`, or use B. The build goes
+on from the newest finished release tree of the same Chromium milestone (an hour or two; a day
+when there is none, or with `-f base_run=none`).
 
 **B. Build the engine from source** (needs Xcode). Use this for C++ / `//baa` work, or to keep up
 with `chromium/` changes without waiting for CI. Download the newest `chromium-tree-xcode27.2`
@@ -197,15 +203,17 @@ not survive that move, so sign in to sites once more.
 
 Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` runs `ci.yml`'s checks on
 the tagged commit (a commit that fails them is not signed), uses the engine built from the
-tagged commit's `chromium/` tree (`baa-engine-<tree>`, built by `chromium.yml` with `mode=release`;
+tagged commit's engine sources (`baa-engine-<key>`, built by `chromium.yml` with `mode=release`;
 it fails and says what to run if there is none), adds the Rust binary, signs with Chromium's signer,
 runs the privacy test, notarises a DMG and publishes a GitHub Release with its Sparkle appcast. A
 release fails in its first step when any of these seven secrets is missing; there is no unsigned
 release: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_ID`,
 `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`, `SPARKLE_ED_PRIVATE_KEY`.
 
-The secrets live in the `release` environment, which has a required reviewer, and only the `macos`
-job uses it. Each release waits for the owner's approval before anything is signed or published.
+The secrets live in the `release` environment, which has a required reviewer and can only be
+asked for from a `v*` tag, and only the `macos` job uses it. A published release is immutable
+(repository setting): its files and its tag cannot be changed afterwards, so a bad release is
+followed by a new version, never repaired. Each release waits for the owner's approval before anything is signed or published.
 That job compiles the Rust binary from nothing: it takes no compiler output from a cache.
 
 CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
@@ -222,12 +230,14 @@ Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch v
 1. Commit the version bump on `main`: `version` in the root `Cargo.toml` plus the matching
    `baa`, `baa-*` and `xtask` entries in `Cargo.lock`. Message: `baa X.Y.Z: <what changed>`.
    Push to `main`.
-2. Check for an engine: the artifact `baa-engine-$(git rev-parse HEAD:chromium)` must exist in a
-   `workflow_dispatch` run of `chromium.yml`. A bump that leaves `chromium/` alone reuses the last one.
-3. If `chromium/` changed since the last release, build one, about an hour with a base run:
-   `gh workflow run chromium.yml --ref main -f mode=release -f base_run=<id of an earlier release
-   run whose chromium-tree artifact has not expired>`. Without `base_run` it takes 1-2 days.
-   Wait for it: `gh run watch <id>`. A build that fails keeps what it compiled: every phase's
+2. Check for an engine: the artifact `baa-engine-$(.github/engine-key.sh)` must exist in a
+   `workflow_dispatch` run of `chromium.yml`. A bump that leaves the engine's sources alone
+   reuses the last one.
+3. If they changed since the last release, build one: `gh workflow run chromium.yml --ref main
+   -f mode=release`. It builds on the newest finished release tree of the same milestone (30
+   days kept), about an hour or two; `-f base_run=<run id>` names another tree, `-f base_run=none`
+   builds from scratch (1-2 days), which is the way to a release that owes nothing to an earlier
+   tree. Wait for it: `gh run watch <id>`. A build that fails keeps what it compiled: every phase's
    tree is uploaded (7 days; a finished one 30), so after the fix start it again with
    `base_run=<the failed run>`, or use "Re-run failed jobs" when a runner died. Never cancel a
    chain mid-phase: that phase's hours cannot be packed.

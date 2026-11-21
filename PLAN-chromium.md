@@ -148,7 +148,7 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
 
 - **`chromium.yml`** builds the pinned Helium tree in one run of chained ~4.75 h phases on free runners, like Helium's `building.yml`.
   `mode=release` = Helium's official args (the timing run for the runner decision); it builds
-  `chrome chrome/installer/mac`, uploads `baa-engine-<T>` (`<T>` = `git rev-parse HEAD:chromium`;
+  `chrome chrome/installer/mac`, uploads `baa-engine-<T>` (`<T>` = `.github/engine-key.sh`, a hash of the five `chromium/` directories the build takes;
   `baa.app`, `baa Packaging`, `engine.json`; 90 days) and runs the `privacy` job on it. It starts by
   hand or from `helium-bump.yml`, not on every push (decided 2026-11-06). `mode=dev` = component
   build on the `xcode-27` runner with Xcode 27.2 (same as the dev Mac) at `/Users/Shared/hb`, a path that exists on both, since siso keys its records by absolute path; the finished tree is kept

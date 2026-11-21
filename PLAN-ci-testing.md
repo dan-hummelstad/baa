@@ -36,9 +36,11 @@ there.
 7. **Workflow file names are part of the pipeline.** `trusted.sh` trusts an engine by the path
    `chromium.yml`; the bump and `land` jobs start and query `ci.yml`, `harness.yml` and `release.yml`
    by name. Renaming one orphans every engine built so far or stops a landing.
-8. **`.github/` is not part of an engine.** The engine's key is the tree hash of `chromium/`, so a
-   workflow change never costs a rebuild, and a file added under `chromium/` always does. Tooling
-   that is not a build input lives in `xtask/` or `.github/`.
+8. **An engine is its sources.** The engine's key (`.github/engine-key.sh`) is a hash of the five
+   `chromium/` directories the build takes, so a workflow change, a doc or a script never costs a
+   rebuild. While engines named by the old key (the tree hash of all of `chromium/`) are in use,
+   which includes the 158 build that was running on 2026-11-22, a change elsewhere under
+   `chromium/` still orphans those.
 
 ## Chromium trees: where hours were lost, and what closes each
 
@@ -59,8 +61,8 @@ choice), so the first chain after it is the test (see "Next").
 | A run is cancelled mid-phase | when someone does it | nothing can: a cancelled job is killed after five minutes and packing takes eight. The phase before it is kept, so the cost is at most one phase. Do not cancel a chain to push a fix; let the phase end | documented |
 | The runner dies, or the job hits six hours | not yet | "Re-run failed jobs": the phase starts again from the tree before it, which is no longer replaced | unrun |
 | A patch does not apply, found half an hour into phase 1 | run 43876197908 and others | `xtask/check-patches.sh` before the build | on `main` |
-| A release chain starts from scratch although a finished release tree of the same milestone exists, because nobody passed `base_run` (the 157.0.8103.81 bump compiled for 24 h; its source differed from .79 in the `VERSION` file) | 2026-11-19 | open decision 1 | open |
-| A change under `chromium/` that is not a build input (`local-build.sh`, `packaging/`) orphans the engine | not recently | open decision 2 | open |
+| A release chain starts from scratch although a finished release tree of the same milestone exists, because nobody passed `base_run` (the 157.0.8103.81 bump compiled for 24 h; its source differed from .79 in the `VERSION` file) | 2026-11-19 | every chain picks the newest finished tree of its mode and milestone; `base_run=none` is the from-scratch build | unrun |
+| A change under `chromium/` that is not a build input (`local-build.sh`, `packaging/`) orphans the engine | not recently | the engine key is a hash of the five directories the build takes (`.github/engine-key.sh`); the lookup also takes the old name until the last old engine expires (February 2027) | unrun |
 
 ## Next
 
@@ -72,18 +74,19 @@ choice), so the first chain after it is the test (see "Next").
    before a real build needs it: `gh workflow run chromium.yml -f mode=dev -f budget_minutes=15
    -f base_run=none`, three phases, then cancel (a test chain's title is not "chromium dev", so
    nothing picks its tree as a base).
-2. **Open decisions** (the user's):
-   1. A release build picks the newest finished release tree of the same milestone as its base
-      unless `base_run=none`, as dev builds already do for the same version. A same-version resume
-      takes 1.5 to 3.5 h today; how much a new Chromium build of the milestone recompiles is not
-      measured (its PGO profile may change and with it every compile). Against it: a release binary
-      then comes from an incremental build, and a file that a newer Chromium no longer produces
-      could stay in `baa.app` from the older tree. Today a from-scratch release is the default and
-      `base_run` is passed by hand.
-   2. Key the engine on the build inputs (`chromium/{helium,helium-macos,patches,baa,vendor}`)
-      instead of all of `chromium/`. The lookup must then accept both keys while old engines live.
-   3. Restrict the `release` environment to `v*` tags (a repository setting; today any ref may ask
-      for it and the required reviewer is the only gate), and turn on immutable releases.
+2. **Decided by the user on 2026-11-22, all three done:**
+   1. Every chain, release included, builds on the newest finished tree of its mode and Chromium
+      milestone unless `base_run=none`. What it costs: a release binary then comes from an
+      incremental build, and a file that a newer Chromium no longer produces could stay in
+      `baa.app` from the older tree; `base_run=none` is the release that owes nothing to an
+      earlier tree. Not measured yet: how much a new Chromium build of the milestone recompiles
+      (its PGO profile may change, and with it every compile). A same-version resume takes 1.5 to
+      3.5 h. Read the first bump's `base tree:` summary line and its phase count.
+   2. The engine key is a hash of the build inputs (`chromium/{helium,helium-macos,patches,baa,
+      vendor}`), not of all of `chromium/`. `engine-key_test.sh` fails when that list and the
+      directories `chromium-phase.yml` copies into the build differ.
+   3. The `release` environment takes only `v*` tags, and releases are immutable once published
+      (both repository settings; `release.yml` fills a draft and publishes it last).
 3. **Not planned:** a merge queue or required status checks (one committer, trunk-based: the gate
    is at the release, not at the push); nextest (the tests run for two seconds; the time is the
    compile); a second cache tool (sccache works and is shared by every job).
