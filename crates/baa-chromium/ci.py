@@ -13,6 +13,7 @@ Called by ci.sh, which builds and bundles the harness. Each test:
   profile: Default                  page profile (BAA_SPIKE_PROFILE); default space-1
   ext: yes                          load test-ext (into the Default profile)
   server: yes                       start tests/download-server.py; {SERVER} in the script, {PORT} its port
+                                    (http-only.example.com is that host by a name Chrome does not treat as local)
   arg: <switch>                     one more command-line switch for the app (repeatable)
   secs: <n>                         time limit (default 90)
   exit: any                         the app may not exit by itself (killed after kill-after)
@@ -31,6 +32,8 @@ test's temp dir (for baa_profile_load_unpacked; the script may edit it) and {COP
 """
 
 import argparse
+import atexit
+import base64
 import glob
 import hashlib
 import os
@@ -67,6 +70,31 @@ def wait_listening(port, server, secs=90):
         except OSError:
             time.sleep(0.1)
     sys.exit(f"the test server on port {port} did not listen within {secs} s")
+
+# The hosts tests load by name. www.googleadservices.com: ublock.txt has to see uBlock refuse it, not the network.
+SITES = ["example.com", "example.org", "example.net", "www.iana.org", "www.googleadservices.com"]
+SITE_ARGS = []
+
+
+def start_sites(tmp):
+    """Serves SITES from this machine and gives Chrome no other host: a runner's DNS timed out on
+    example.com and failed three tests that had no fault (harness run 44938464287). Returns the
+    server; SITE_ARGS are the switches every test's app then gets."""
+    key, cert = os.path.join(tmp, "key.pem"), os.path.join(tmp, "cert.pem")
+    openssl = lambda *a, **k: subprocess.run(["openssl", *a], check=True, capture_output=True, **k).stdout
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=example.com", "-keyout", key, "-out", cert)
+    public = openssl("pkey", "-pubin", "-outform", "der", input=openssl("x509", "-in", cert, "-pubkey", "-noout"))
+    port = free_port()
+    server = subprocess.Popen([sys.executable, os.path.join(TESTS, "download-server.py"), str(port), cert, key],
+                              stderr=subprocess.DEVNULL)  # every test's net log has its requests
+    wait_listening(port, server)
+    rules = [f"MAP {host} 127.0.0.1:{port}" for host in SITES]
+    rules += ["MAP http-only.example.com 127.0.0.1", "EXCLUDE 127.0.0.1", "EXCLUDE localhost", "MAP * ~NOTFOUND"]
+    # Chrome takes this one certificate by its key and no other bad one.
+    SITE_ARGS[:] = [f"--host-resolver-rules={', '.join(rules)}",
+                    f"--ignore-certificate-errors-spki-list={base64.b64encode(hashlib.sha256(public).digest()).decode()}"]
+    return server
+
 
 def ext_id(path):
     """Chromium's id for an unpacked extension: sha256 of its path, nibbles mapped to a-p."""
@@ -195,7 +223,7 @@ def run_test(spec, exe, keep):
         args = [exe, f"--user-data-dir={udd}", "--no-first-run", "--enable-logging=stderr", "--use-mock-keychain",
                 "--use-fake-device-for-media-stream",  # runners have no camera; the prompt still shows
                 f"--log-net-log={os.path.join(tmp, 'netlog.json')}"]
-        args += spec.args
+        args += SITE_ARGS + spec.args
         if spec.ext:
             args += ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={ext_path}"]
         if spec.cdp_after is not None:
@@ -311,6 +339,9 @@ def main():
         specs = [s for s in specs if s.name in opts.only]
         if not specs:
             sys.exit(f"no test named {opts.only}")
+    sites_tmp = tempfile.mkdtemp(prefix="baa-sites-")
+    sites = start_sites(sites_tmp)
+    atexit.register(lambda: (sites.kill(), shutil.rmtree(sites_tmp, ignore_errors=True)))
     failed = []
     for spec in specs:
         t0 = time.time()

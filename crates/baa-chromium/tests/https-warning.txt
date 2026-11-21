@@ -1,4 +1,4 @@
-# HTTPS-first (strict) on a host with no HTTPS: {PORT} is tests/download-server.py, plain HTTP, reached as http-only.example.com (https-warning.expect maps the name; a loopback address gets no warning)
+# HTTPS-first (strict) on a host with no HTTPS: {PORT} is tests/download-server.py, plain HTTP, reached as http-only.example.com (a loopback address gets no warning)
 prefb 1 https_only_mode_enabled true
 sleep 500
 load http://http-only.example.com:{PORT}/
