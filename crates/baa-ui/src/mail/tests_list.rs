@@ -194,30 +194,43 @@ fn go_to_in_the_picker_opens_another_spaces_mail(cx: &mut TestAppContext) {
     });
 }
 
-/// `cargo test -p baa-ui mail_view_frame_time -- --ignored --nocapture`
+/// `cargo test --release -p baa-ui mail_view_frame_time -- --ignored --nocapture`
 #[gpui::test]
 #[ignore = "timing, run by hand"]
 fn mail_view_frame_time(cx: &mut TestAppContext) {
     let (b, cx, mail, folders) = with_account(cx);
     let space = mail_space(&b, cx);
     let second = mail.seed_account(&testing::account(2, Some(space), "dan@work.example"));
-    for i in 0..4000u64 {
-        let inbox = if i % 2 == 0 { folders[0] } else { second[0] };
-        let flags = Flags { seen: i % 3 != 0, ..Flags::default() };
-        mail.seed_message(inbox, &i.to_string(), &mail_in(1_763_800_000 - i * 7_919, &format!("p{}@x.example", i % 97), &format!("Subject number {i}")), flags, false);
-    }
-    let frames = |cx: &mut gpui::VisualTestContext, n: u32| {
+    let seed = |i: u64| {
+        let inbox = if i.is_multiple_of(2) { folders[0] } else { second[0] };
+        let flags = Flags { seen: !i.is_multiple_of(3), ..Flags::default() };
+        mail.seed_message(inbox, &i.to_string(), &mail_in(1_763_800_000 - i * 1_583, &format!("p{}@x.example", i % 97), &format!("Subject number {i}")), flags, false);
+    };
+    (0..20_000).for_each(seed);
+    let mut next = 20_000;
+    let mut frames = |cx: &mut gpui::VisualTestContext, n: u64, scroll: bool, sync: bool| {
         let start = std::time::Instant::now();
-        for _ in 0..n {
-            b.update(cx, |_, cx| cx.notify());
+        for f in 0..n {
+            if sync && f.is_multiple_of(10) {
+                seed(next);
+                next += 1;
+            }
+            b.update(cx, |b, cx| {
+                if scroll {
+                    b.mail.as_ref().unwrap().list.scroll_to_item((f * 7) as usize, gpui::ScrollStrategy::Top);
+                }
+                cx.notify();
+            });
             cx.run_until_parked();
         }
-        start.elapsed() / n
+        start.elapsed() / n as u32
     };
-    frames(cx, 5);
-    let with_mail = frames(cx, 60);
+    frames(cx, 5, false, false);
+    let still = frames(cx, 60, false, false);
+    let scrolling = frames(cx, 120, true, false);
+    let syncing = frames(cx, 120, true, true);
     b.update_in(cx, |b, window, cx| b.show_mail(false, window, cx));
-    frames(cx, 5);
-    let without = frames(cx, 60);
-    eprintln!("frame: mail view {with_mail:?}, without mail {without:?}");
+    frames(cx, 5, false, false);
+    let without = frames(cx, 60, false, false);
+    eprintln!("frame: still {still:?}, scrolling {scrolling:?}, scrolling while syncing {syncing:?}, mail closed {without:?}");
 }

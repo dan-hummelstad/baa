@@ -276,3 +276,21 @@ fn the_list_and_the_folders_are_read_again_after_a_write_on_any_connection() {
     drop((store, thread));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `cargo test --release -p baa-mail list_read_time -- --ignored --nocapture`
+#[test]
+#[ignore = "timing, run by hand"]
+fn list_read_time() {
+    let store = Store::open(None).unwrap();
+    let home = space(1);
+    store.put_account(&account(1, Some(home))).unwrap();
+    let a = inbox(&store, AccountId(1));
+    let date = |i: u64| format!("Sun, 1 Nov 2026 {:02}:{:02}:{:02} +0000", i / 3600 % 24, i / 60 % 60, i % 60);
+    let new: Vec<_> = (0..20_000u64).map(|i| new(&i.to_string(), header(&format!("m{i}@x"), &format!("Subject number {i}"), &date(i), ""), Flags::default())).collect();
+    store.apply_changes(a, &Changes { new, cursor: "1".into(), ..Changes::default() }).unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        assert_eq!(store.read_rows(&view(home)).unwrap().len(), 20_000);
+    }
+    eprintln!("read_rows: {:?}", start.elapsed() / 10);
+}

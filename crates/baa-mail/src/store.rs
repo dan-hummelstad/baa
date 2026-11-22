@@ -620,11 +620,22 @@ impl Store {
     // ponytail: the whole list is read on each change; a 100k-thread folder syncing costs one
     // read per sync batch. Page it (LIMIT around the visible range) if that shows.
     fn listed(&self, view: &View) -> Result<Arc<Vec<Row>>> {
-        let mut cache = self.cache()?;
+        self.listed_in(&mut *self.cache()?, view)
+    }
+
+    /// Unread and Flagged are taken from the view's All rows, so a change of mail.db costs one
+    /// read however many filters the nav counts.
+    fn listed_in(&self, cache: &mut Cache, view: &View) -> Result<Arc<Vec<Row>>> {
         if let Some((_, rows)) = cache.listed.iter().find(|(v, _)| v == view) {
             return Ok(rows.clone());
         }
-        let rows = Arc::new(self.read_rows(view)?);
+        let rows = Arc::new(match view.filter {
+            Filter::All => self.read_rows(view)?,
+            filter => {
+                let all = self.listed_in(cache, &View { filter: Filter::All, ..view.clone() })?;
+                all.iter().filter(|r| if filter == Filter::Unread { r.unread } else { r.flagged }).cloned().collect()
+            }
+        });
         // Typing a search makes a view a key; between two changes of mail.db that could pile up.
         if cache.listed.len() >= 8 {
             cache.listed.remove(0);
@@ -750,28 +761,24 @@ fn set_flags(tx: &rusqlite::Transaction, folder: FolderId, uid: &str, flags: Fla
 }
 
 /// The `listed` CTE of a list: the newest message of each conversation in the view, with what
-/// the row says of the whole conversation. Its parameters are [`list_args`].
+/// the row says of the whole conversation. Its parameters are [`list_args`]; it ignores the
+/// view's filter. With a single `max()` in a group, SQLite takes the bare `m.id` from the row
+/// holding it, so the newest message comes in one pass instead of a window's two sorts.
 fn listed(view: &View) -> String {
-    let having = match view.filter {
-        Filter::All => "",
-        Filter::Unread => " AND NOT all_seen",
-        Filter::Flagged => " AND any_flagged",
-    };
     let search = if fts_query(&view.search).is_some() {
         " AND m.id IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?4)"
     } else {
         " AND ?4 IS NULL"
     };
     format!(
-        "WITH scoped AS (SELECT m.thread, m.account, m.from_name, m.from_email, m.subject, m.snippet, \
-           row_number() OVER (PARTITION BY m.thread ORDER BY m.date DESC, m.id DESC) AS n, \
-           max(m.date) OVER t AS newest, min(m.seen) OVER t AS all_seen, \
-           max(m.flagged) OVER t AS any_flagged, max(m.attachments) OVER t AS any_attachment \
+        "WITH scoped AS (SELECT m.id, m.thread, max(m.date) AS newest, sum(m.seen) = count(*) AS all_seen, \
+           sum(m.flagged) > 0 AS any_flagged, sum(m.attachments) > 0 AS any_attachment \
            FROM message m JOIN folder f ON f.id = m.folder JOIN account a ON a.id = m.account \
            WHERE (a.space IS NULL OR a.space = ?1) AND (?2 IS NULL OR m.account = ?2) \
            AND CASE WHEN ?3 IS NULL THEN f.role = 'inbox' ELSE m.folder = ?3 END{search} \
-           WINDOW t AS (PARTITION BY m.thread)), \
-         listed AS (SELECT * FROM scoped WHERE n = 1{having})"
+           GROUP BY m.thread), \
+         listed AS (SELECT s.*, m.account, m.from_name, m.from_email, m.subject, m.snippet \
+           FROM scoped s JOIN message m ON m.id = s.id)"
     )
 }
 
