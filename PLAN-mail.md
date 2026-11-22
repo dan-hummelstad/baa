@@ -21,6 +21,8 @@ User decisions so far (they win over anything below):
   OAuth code is built as if the client ids exist; the user registers the clients outside this work.
 - 2026-11-22: who does the work (§12): the orchestrator, up to five Opus 5.5 leads, and up to three
   Sonnet 5.5 workers under each lead.
+- 2026-11-22: the inbox is sorted Gmail's way into Primary, Social and Promotions, with an
+  on-device model from Apple's APIs only (Foundation Models), no other model (§17).
 
 ---
 
@@ -72,7 +74,8 @@ Groups. They need a service, a licence or a product of their own. §10 (stage 4)
 come later.
 
 Not built, by the user's decision (§16): the Mailbox door, "Waiting for you", the Browser · Archive ·
-Mail switcher and a sidebar that becomes a second mode. Categories come in stage 3.
+Mail switcher and a sidebar that becomes a second mode. Categories come in stage 3; the inbox's
+Primary · Social · Promotions pills, sorted by Apple's on-device model, are §17.
 
 The mock's captions say the whole mail surface is one Chromium page (`baa://mail`). The brief says
 baa's own UI elements with Chromium rendering the messages; the plan follows the brief (decision 1).
@@ -481,6 +484,8 @@ approved it on 2026-11-22, for the standard ports only.
 - **A code offer is a security prompt** and follows those rules (origin from the engine, 500 ms,
   no Enter, ids from the request).
 - **Attachments are downloads**: quarantined, never opened by baa, dangerous types warned about.
+- **Inbox categories run on the Mac only** (§17): Apple's Foundation Models, guided to one of
+  three values; a category never causes an action, a fetch or a log line.
 
 `security-lint.sh` gains: a `Command::new("curl")` in `crates/baa-mail` must sit beside
 `--ssl-reqd` or `=https`; no `danger`/`dangerous` rustls configuration anywhere.
@@ -502,7 +507,7 @@ Each ends runnable, with mail still off by default.
 | 0 | Contracts and proofs | WP-0, WP-P1, WP-P2 | — |
 | 1 | Read, write, manage, codes | WP-A … WP-N (§11). Ends at §1's list. | a Google OAuth client id, to try Gmail for real |
 | 2 | More accounts | Microsoft Graph (Outlook.com, Microsoft 365, shared mailboxes, send as), POP3, Proton Bridge preset, autoconfig from the domain's own records and its MX, codes on Graph, the alias table, share an account to every Space from Settings | an Entra app id (and publisher verification before release) |
-| 3 | Outlook's management | categories, follow-up flags with dates, pin, snooze, scheduled send and outbox, Focused/Other, search folders, sweep, quick steps, rules (local, then the server's on Graph and Gmail), signatures, importance and receipts, tables and pictures in the editor, the full ribbon, contacts completion, `mailto:`, a draft in its own window, new-mail notices and badges, "Waiting for you" and "Recent files" in the Mail section, save all to Archive | — |
+| 3 | Outlook's management | categories, inbox categories with on-device AI (§17, replaces Focused/Other), follow-up flags with dates, pin, snooze, scheduled send and outbox, search folders, sweep, quick steps, rules (local, then the server's on Graph and Gmail), signatures, importance and receipts, tables and pictures in the editor, the full ribbon, contacts completion, `mailto:`, a draft in its own window, new-mail notices and badges, "Waiting for you" and "Recent files" in the Mail section, save all to Archive | — |
 | 4 | If asked for | on-premises EWS, ManageSieve, JMAP, S/MIME, calendar invitations, import from Mail.app, mail on by default | a decision each |
 
 ---
@@ -710,6 +715,8 @@ Rules for all of them:
 | A swipe up over the bottom bar collides with something | WP-G's test; the user tries it | a button only |
 | A mail server on a port other than the six | none needed: it is refused with a message that names the rule | the user widens the rule |
 | Dev builds ask for the Keychain on every rebuild (unsigned) | the first run of WP-P2's code | a file-backed `Secrets` for `baa Dev` only, never in a release |
+| CI's `macos-15` runner has no Xcode with the macOS 26 SDK, so `categorize.swift` does not compile | WP-Q's first commit builds `baa-mail` in CI | the `macos-26` runner for the jobs that build `baa-mail`; or build the bridge only when the SDK has `FoundationModels`, and the model step is then missing in that build |
+| The on-device model sorts mail badly | WP-Q's ignored test on the user's mail, then a week of real use | more header rules and the sender rules the user sets; Primary is always the safe answer |
 | Mail HTML written for a white page looks wrong in a dark Space | look at ten real messages | the message card stays paper white, as mock B2 has it |
 
 ---
@@ -754,7 +761,7 @@ What each needs, since baa has no server of its own.
 | Follow-up with a date | Graph flag dates; elsewhere `local` | local dates do not reach other clients | 3 |
 | Pin, snooze | `local` | other clients do not see them | 3 |
 | Scheduled send, delay delivery | Graph defers on the server; elsewhere the outbox | elsewhere baa must be running at the time | 3 |
-| Focused / Other | Graph's own; elsewhere bulk-mail headers | a heuristic outside Graph | 3 |
+| Primary / Social / Promotions (replaces Focused / Other) | header rules, then Apple's on-device model (§17) | needs Apple Intelligence for bulk mail; without it, bulk mail stays in Primary | 3 |
 | Search folders | saved queries on `mail.db` | only mail that has synced | 3 |
 | Sweep, quick steps | local sequences of `Action`s | — | 3 |
 | Rules | a local engine at sync time; server rules on Graph and Gmail filters | local rules run only while baa runs | 3 |
@@ -838,3 +845,110 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - With Chrome's "Preload pages" turned on by the user, hovering a link in a message can
   preconnect to its host. Helium ships with it off; no in-page control exists.
 - Stage 2 (§10) gets its work packages when the user has walked through stage 1.
+
+---
+
+## 17. Inbox categories with on-device AI (planned, 2026-11-22)
+
+The user asked for this on 2026-11-22: sort the inbox the way Gmail does, into **Primary**,
+**Social** and **Promotions**, with the help of a model that runs on the Mac. The model comes from
+Apple's APIs only (the user's decision, 2026-11-22): the Foundation Models framework, with no
+bundled model, no download and no service. It is stage 3 work and replaces Focused / Other (§15).
+
+**What the user sees.** Above the list in the inbox is a row of pills: Primary, Social, Promotions,
+All Mail. Primary, Social and Promotions show only their icons (a person, two people, a megaphone)
+with an unread dot. The selected pill also shows its name, as in Apple Mail. All Mail is the
+inbox as stage 1 shows it, so no mail can only be found under a category. Primary is selected
+when the inbox opens. "All inboxes" and the scope chips filter each category as they filter the
+inbox. A row's context menu and a drag to a pill move the message and set a rule for the sender
+("Always show mail from shop.example in Promotions"). Settings › Mail has the switch "Sort the
+inbox into categories" (on by default when Mail is on) and a line that says whether Apple
+Intelligence is available, and if it is not, why not. Categories apply to the inbox only. Other
+folders, search and codes (§7) do not use them.
+
+| Category | Holds | Gmail's name |
+|---|---|---|
+| Primary | mail from people, and what is sent to the user alone: receipts, orders, bookings, security notices, codes | Primary (Updates and Forums are folded in) |
+| Social | social networks, dating sites, forums and community mailing lists | Social |
+| Promotions | marketing, offers, newsletters sent in bulk | Promotions |
+
+Gmail's Updates and Forums tabs, and Apple's Transactions and Updates, are not used. Three
+categories keep the model's choice easy and the row short. Receipts and notices go to Primary
+because missing one costs more than seeing it.
+
+**How a message gets its category.** This runs on a new message in the inbox. The input is the
+headers in `message.header` and the snippet if the body was fetched. No body is fetched for
+classification. The first rule that matches decides:
+
+1. A rule the user set for the sender's address or registrable domain (`local`).
+2. Mail that is not bulk goes to Primary. Bulk mail has `List-Id`, `List-Unsubscribe`,
+   `Precedence: bulk|list` or `Auto-Submitted`, or comes from a known bulk sender
+   (`Feedback-ID`, the ESP headers in `categories.json`). Most of the mail from people stops here,
+   without a model call.
+3. A sender domain in `categories.json` → Social (facebookmail.com, linkedin.com, x.com, …). The
+   list is short and kept in the repository, as `codes.json` is.
+4. The model chooses for bulk mail that is left. If the model is not available, the result is
+   Primary.
+
+All of this is in `baa-mail/src/categories.rs`, with the rules in `categories.json`. `message`
+gains `category` (0 Primary, 1 Social, 2 Promotions) and `category_by` (rule, model, user). A
+row the model has not classified yet shows in Primary and All Mail. It moves when its category
+arrives (`Event::Changed`).
+
+**The model.** `SystemLanguageModel(useCase: .contentTagging)` with guided generation: an
+`@Generable enum Category { primary, social, promotions }`. The model cannot return anything other
+than one of the three values. There is one `LanguageModelSession` for each message, so no message
+can see another message. The instructions are fixed in the bridge. The message goes in the prompt
+as data: From (name and address), To, Subject, the bulk headers by name, and at most 1,000
+characters of snippet, which keeps the prompt far below the 4,096-token context. If the model
+gives an error, refuses or runs past a 5-second time limit, the result is Primary, and the
+message is not tried again until baa restarts.
+
+- One classifier thread for all of Mail. It is started on the first bulk message, and takes the
+  newest message first, so a first sync of thousands of messages shows the newest classified
+  first. On the first sync of an account, only the newest 500 inbox messages go to the model.
+  Older bulk mail stays in Primary until the user moves it.
+  `ponytail: 500, raise it if older mail matters`.
+- No model call on battery under 20 % (the Energy Saver rule Chromium uses), and none while
+  `ProcessInfo.thermalState` is serious or critical. The queue waits for those to clear.
+- Availability: `SystemLanguageModel.default.availability`. "Not eligible" (no Apple silicon or an
+  older macOS), "Apple Intelligence is off" and "the model is still downloading" each have their
+  own text in Settings. Steps 1 to 3 still run without the model.
+
+**The Swift bridge.** The Foundation Models framework is Swift only, and baa has no Swift. It
+gains one file, `crates/baa-mail/swift/categorize.swift`, with one `@_cdecl` function:
+`baa_categorize(json: *const c_char) -> i32` (−1 is unavailable or failed) and
+`baa_model_status() -> i32`. The function blocks on the async call with a semaphore, so it is
+called only from the classifier thread. `baa-mail/build.rs` compiles the file with `swiftc` into
+a static library. The library weak-links `FoundationModels` and is guarded with
+`#available(macOS 26, *)`, so baa still starts on an older macOS. There is no `swift-rs` or
+`swift-bridge`: one C function does not need a crate. Tests in `baa-mail` run the rules against a
+corpus of headers, with a fake classifier instead of the model. One `#[ignore]` test calls the
+real model on ten fixed messages and prints its choices. The user runs it by hand.
+
+**Privacy and security** (additions to §9).
+- The model runs on the Mac. Foundation Models does not use Private Cloud Compute, so no mail
+  leaves the Mac for classification. PRIVACY.md says this in the mail entry.
+- Mail content is untrusted, and prompt injection is expected. Guided generation lets the model
+  answer only with one of three values. The worst result of a hostile message is a wrong
+  category for that one message. A category never deletes, archives, marks read, sends, fetches
+  or offers a code. It only selects which pill shows the row.
+- No mail in incognito, as before (§9). The new `category` writes go into `mail.db`, which an
+  ephemeral Space never opens, and their test is the one every `Mail` call that takes a Space
+  already has.
+- Nothing the model receives or returns is logged.
+
+**Work packages** (stage 3).
+
+| WP | Owner | Files | Done when |
+|---|---|---|---|
+| Q Categories | baa-mail | `categories.rs`, `categories.json`, `swift/categorize.swift`, `build.rs`, store migration (`category`, `category_by`), `Mail::set_category` and the sender rule | the rules test passes on the corpus; the ignored model test runs on the user's Mac; baa starts on a Mac without Apple Intelligence |
+| R Category pills | baa-ui | `mail/list.rs` (pill row, both skins), the row menu and drag, Settings › Mail switch and status | the pill row filters the list and the unread dots match the counts, with the `Fake` backend |
+
+Q's first step is the CI check in §13: does the runner's Xcode have the macOS 26 SDK?
+
+**Open.**
+- Gmail sorts its own mail into these categories, and IMAP can search them
+  (`X-GM-RAW "category:social"`). Using Gmail's result for Gmail accounts would match the
+  Gmail web app exactly, but the IMAP codec has no Gmail extensions (§16). For now, the model
+  sorts Gmail mail as it sorts other mail.
