@@ -110,7 +110,7 @@ impl Toss {
 
 impl<H: WebHost> Browser<H> {
     /// A download began in this window: throws its icon from the pointer.
-    pub(super) fn toss_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toss_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if cx.reduce_motion() || self.fullscreen.is_some() {
             return;
         }

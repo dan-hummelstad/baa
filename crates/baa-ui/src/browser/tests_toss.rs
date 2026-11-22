@@ -83,3 +83,27 @@ fn reduce_motion_throws_nothing(cx: &mut TestAppContext) {
     start_download(&b, cx);
     b.read_with(cx, |b, _| assert!(b.tosses.is_empty()));
 }
+
+#[gpui::test]
+fn a_saved_mail_attachment_is_thrown_like_a_download(cx: &mut TestAppContext) {
+    let (b, cx, mail, folders) = crate::tests_mail::with_account(cx);
+    let raw = b"From: a@example.com\r\nMessage-ID: <att@x>\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n\
+        --b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"plan.pdf\"\r\n\r\npdf\r\n--b--\r\n";
+    mail.seed_message(folders[0], "1", raw, baa_mail::Flags::default(), true);
+    let dir = std::env::temp_dir().join(format!("baa-toss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let view = b.read_with(cx, |b, _| b.mail.as_ref().unwrap().view().unwrap());
+    let thread = mail.rows(&view, 0..1)[0].thread;
+    b.update_in(cx, |b, window, cx| {
+        b.settings.web.download_dir = Some(dir.clone());
+        b.select_thread(thread, window, cx);
+    });
+    cx.run_until_parked();
+
+    b.update_in(cx, |b, window, cx| b.save_attachment(0, window, cx));
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.saved_downloads[0].path, dir.join("plan.pdf").display().to_string());
+        assert_eq!(b.tosses.len(), 1);
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+}

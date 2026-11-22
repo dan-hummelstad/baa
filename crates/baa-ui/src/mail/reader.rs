@@ -172,7 +172,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The attachment goes to the download folder and into the Library as a download does.
-    fn save_attachment(&mut self, part: usize, cx: &mut Context<Self>) {
+    pub(crate) fn save_attachment(&mut self, part: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         let Some(reader) = &mut mail.reader else { return };
         let Some(att) = reader.body.as_ref().and_then(|b| b.attachments.iter().find(|a| a.part == part)).cloned() else { return };
@@ -191,8 +191,7 @@ impl<H: WebHost> Browser<H> {
                 }
                 self.saved_downloads.retain(|s| s.path != record.path);
                 self.saved_downloads.insert(0, record);
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.show_toast(format!("Saved {name} to Downloads"), cx);
+                self.toss_download(window, cx);
             }
             Err(e) => self.show_toast(e.to_string(), cx),
         }
@@ -371,7 +370,7 @@ impl<H: WebHost> Browser<H> {
             )
             .child(
                 self.mail_button("mail-attachment-save", part as u64, false, cx).child(if armed { "Save anyway" } else { "Save" })
-                    .on_click(cx.listener(move |this, _, _, cx| this.save_attachment(part, cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| this.save_attachment(part, window, cx))),
             )
     }
 
