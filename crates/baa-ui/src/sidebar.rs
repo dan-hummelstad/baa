@@ -61,13 +61,34 @@ impl Render for DraggedTab {
 }
 
 impl<H: WebHost> Browser<H> {
-    pub(crate) fn render_sidebar(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_sidebar(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.library.is_some() {
             return self.render_library(theme, window, cx);
         }
         let Some(space) = self.active_space().map(|s| s.id) else {
             return div().into_any_element();
         };
+        if self.mail_in_front() {
+            // Slides with a Space switch as the tab lists do.
+            let nav = div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .left(px(self.slide.value() * SIDEBAR_WIDTH))
+                .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
+                .child(self.render_nav(theme, window, cx));
+            return div()
+                .w(px(SIDEBAR_WIDTH))
+                .h_full()
+                .flex()
+                .flex_col()
+                .px(px(8.))
+                .pb(px(4.))
+                .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
+                .child(nav)
+                .child(self.render_bottom_bar(space, theme, cx))
+                .into_any_element();
+        }
         let (space_icon, space_name) = self
             .active_space()
             .map(|s| (s.icon.clone(), s.name.clone()))
@@ -499,10 +520,43 @@ impl<H: WebHost> Browser<H> {
             return div().relative().child(row).children(line).into_any_element();
         };
         let mut rows = Vec::new();
-        for t in split.tabs().filter_map(|id| self.session.tab(id)) {
-            rows.push(div().flex_1().min_w_0().child(self.render_tab_row(t, index, shown, theme, cx)));
+        for pane in &split.panes {
+            let cell = match pane {
+                Pane::Tab(id) => match self.session.tab(*id) {
+                    Some(t) => self.render_tab_row(t, index, shown, theme, cx).into_any_element(),
+                    None => continue,
+                },
+                Pane::Mail => self.render_mail_cell(theme, cx).into_any_element(),
+            };
+            rows.push(div().flex_1().min_w_0().child(cell));
         }
         div().relative().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).children(line).into_any_element()
+    }
+
+    /// A split's mail pane in its sidebar row. The sidebar is the mail nav while mail is in
+    /// front, so this row only shows with one of the tabs in front.
+    fn render_mail_cell(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let key = ("mail-cell", 0);
+        let h = self.motion.get(key, Feel::Hover);
+        feel(
+            div()
+                .id("mail-cell")
+                .h(px(row_h()))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(r(10.))
+                .bg(fade(theme.hover, h))
+                .text_size(px(14.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.ink_muted)
+                .on_click(cx.listener(|this, _, window, cx| this.show_mail(true, window, cx)))
+                .child(icon("mail", 16., theme.ink_muted))
+                .child("Mail"),
+            key,
+            cx,
+        )
     }
 
     fn render_tab_row(
@@ -1025,7 +1079,7 @@ impl<H: WebHost> Browser<H> {
         let add = self
             .icon_button("add-space", "plus", true, 0., plus_turn, theme, cx)
             .on_click(cx.listener(|this, _, window, cx| this.new_space(window, cx)));
-        div()
+        let row = div()
             .h(px(32.))
             .px(px(2.))
             .flex()
@@ -1039,7 +1093,63 @@ impl<H: WebHost> Browser<H> {
                     .justify_center()
                     .child(div().relative().flex().child(pill).children(dots)),
             )
-            .child(add)
+            .child(add);
+        div()
+            .id("bottom-bar")
+            .flex_none()
+            .flex()
+            .flex_col()
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
+            .children(self.mail_here().then(|| self.render_section_switcher(theme, cx)))
+            .child(row)
+    }
+
+    /// Browser · Archive · Mail, above the Space strip (mocks A2/B2). Archive is never lit
+    /// here: while it is open the Library has the sidebar.
+    fn render_section_switcher(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let mail = self.mail_in_front();
+        let item = |id: &'static str, name: &'static str, label: &'static str, ascii_label: &'static str, on: bool, cx: &mut Context<Self>| {
+            let key = (id, 0);
+            let h = self.motion.get(key, Feel::Hover);
+            let el = div()
+                .id(id)
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(5.))
+                .text_size(px(11.))
+                .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
+                .on_click(cx.listener(move |this, _, window, cx| match id {
+                    "section-browser" => this.show_mail(false, window, cx),
+                    "section-archive" => this.open_library_last(window, cx),
+                    _ => this.show_mail(true, window, cx),
+                }));
+            let el = if ascii() {
+                el.border_1()
+                    .border_color(if on { theme.accent } else { crate::theme::ascii::rule().into() })
+                    .when(on, |d| d.bg(fade(theme.accent, 0.15)))
+                    .child(ascii_label)
+            } else {
+                el.rounded(r(8.))
+                    .when(on, |d| d.bg(theme.glass_strong))
+                    .when(!on, |d| d.bg(fade(theme.hover, h)))
+                    .child(icon(name, 13., if on { theme.accent } else { theme.ink_muted }))
+                    .child(label)
+            };
+            feel(el, key, cx)
+        };
+        div()
+            .debug_selector(|| "section-switcher".into())
+            .h(px(if ascii() { 24. } else { 34. }))
+            .mb(px(6.))
+            .flex()
+            .gap(px(3.))
+            .when(!ascii(), |d| d.p(px(3.)).rounded(r(10.)).bg(theme.glass))
+            .child(item("section-browser", "globe", "Browser", "▦ BROWSER", !mail, cx))
+            .child(item("section-archive", "archive", "Archive", "▤ ARCHIVE", false, cx))
+            .child(item("section-mail", "mail", "Mail", "✉ MAIL", mail, cx))
     }
 }
 

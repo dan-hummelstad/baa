@@ -111,6 +111,41 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
+    /// A two-finger vertical swipe over the sidebar's bottom bar: fingers up
+    /// opens the Archive, fingers down closes it. Horizontal swipes stay with
+    /// `on_chrome_scroll`, which sees the same events.
+    pub(crate) fn on_bottom_bar_scroll(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        const THRESHOLD: f32 = 40.;
+        let gpui::ScrollDelta::Pixels(delta) = event.delta else {
+            return;
+        };
+        match event.touch_phase {
+            gpui::TouchPhase::Started => self.bar_swipe = Some(0.),
+            gpui::TouchPhase::Moved => {
+                let Some(swipe) = &mut self.bar_swipe else { return };
+                let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+                if dy.abs() > dx.abs() {
+                    *swipe += dy;
+                }
+            }
+            gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                let Some(swipe) = self.bar_swipe.take() else { return };
+                // macOS reports natural-scroll deltas (the content's direction): fingers up
+                // move the content up, a negative y, as a scrollable element adds it to its offset.
+                if swipe < -THRESHOLD && self.library.is_none() {
+                    self.open_library_last(window, cx);
+                } else if swipe > THRESHOLD {
+                    self.close_library(window, cx);
+                }
+            }
+        }
+    }
+
     pub(super) fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let menu = self.history_menu.as_ref()?;
         let accent = self.theme().accent;

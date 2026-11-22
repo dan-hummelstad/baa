@@ -34,12 +34,22 @@ impl<H: WebHost> Browser<H> {
         if self.session.spaces().len() < 2 {
             return;
         }
+        if let Some((mail, space)) = self.mail_of(id) {
+            mail.remove_accounts_of(space);
+        }
         let orphan = self.session.remove_space(id);
         // Pages must be gone before the profile directory is deleted.
         self.sync(window, cx);
         if let Some(profile) = orphan {
             self.host.delete_profile(profile);
         }
+    }
+
+    /// The addresses of the mail accounts that are `id`'s alone: deleting it removes them,
+    /// while accounts of every Space stay.
+    pub(crate) fn mail_lost_with(&self, id: SpaceId) -> Vec<String> {
+        let Some((mail, space)) = self.mail_of(id) else { return Vec::new() };
+        mail.accounts(space).into_iter().filter(|a| a.space == Some(id)).map(|a| a.address).collect()
     }
 
     /// "🐑 Work" sets icon and name; plain "Work" keeps the icon.

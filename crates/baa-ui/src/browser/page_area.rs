@@ -15,8 +15,9 @@ impl<H: WebHost> Browser<H> {
     ) -> impl IntoElement {
         let page = self.active_page().cloned();
         let has_page = page.is_some();
-        let panes = self.shown_panes();
-        let focused = panes.iter().position(|p| Some(*p) == self.active_tab()).unwrap_or(0);
+        let panes = self.panes_on_screen();
+        let front = self.front();
+        let focused = panes.iter().position(|p| Some(*p) == front).unwrap_or(0);
         // Split panes are separate cards with their strip on top: the page's top corners are square.
         let split = panes.len() > 1;
         let inner = move |_: usize| if split { 1 | 2 } else { 0 };
@@ -24,7 +25,7 @@ impl<H: WebHost> Browser<H> {
         // A phone pane (E2) is fixed, not springy: `render_split` lays it out at its device width
         // in px and the springy panes shrink to the rest. Its share here is of last frame's row,
         // for the prompt overlay only, so layout never waits a frame on it.
-        let phone = |id: &TabId| panes.len() > 1 && self.phone_panes.contains(id);
+        let phone = |pane: &Pane| panes.len() > 1 && self.is_phone(*pane);
         let shares: Vec<f32> = {
             let row = f32::from(self.split_area.get().size.width);
             let fixed = if row > PHONE_W { (PHONE_W + 1.) / row } else { 0.5 };
@@ -41,18 +42,20 @@ impl<H: WebHost> Browser<H> {
                 .collect()
         };
         // The native view rounds itself; keep it on the card's radius as the style changes.
-        for id in &panes {
-            if let Some((page, _)) = self.pages.get(id) {
+        for id in panes.iter().filter_map(|p| p.tab()) {
+            if let Some((page, _)) = self.pages.get(&id) {
                 page.read(cx).set_corner_radius(f32::from(r(PAGE_RADIUS)));
             }
         }
+        let active = front.and_then(Pane::tab);
         // A tab with no page here because it is in another window.
-        let elsewhere = self.active_tab().filter(|id| page.is_none() && self.holder(*id, cx).is_some());
+        let elsewhere = active.filter(|id| page.is_none() && self.holder(*id, cx).is_some());
         let content = match page {
             Some(page) => {
                 let content = page.update(cx, |p, cx| p.render(window, cx));
-                self.with_hover_url(self.active_tab().expect("a page is the active tab's"), content, cx)
+                self.with_hover_url(active.expect("a page is the front tab's"), content, cx)
             }
+            None if front == Some(Pane::Mail) => self.mail_view(theme, window, cx),
             None if elsewhere.is_some() => self.render_elsewhere(elsewhere.unwrap(), theme, cx),
             None => {
                 let this = cx.entity().downgrade();
@@ -62,8 +65,7 @@ impl<H: WebHost> Browser<H> {
                 crate::start::render(theme, &self.dev_server_tabs(), open).into_any_element()
             }
         };
-        // Only the active tab's DevTools shows; the rest keep their state hidden.
-        let active = self.active_tab();
+        // Only the front tab's DevTools shows; the rest keep their state hidden.
         for (tab, (tools, _)) in &self.devtools {
             tools.read(cx).set_visible(Some(*tab) == active);
         }
@@ -156,7 +158,7 @@ impl<H: WebHost> Browser<H> {
         // A tab dragged from the sidebar onto the page opens beside it: left or right half.
         // ponytail: any drag counts (tabs are the only thing the window drags); the drop
         // itself only takes a `DraggedTab`.
-        let drop_zone = (cx.has_active_drag() && has_page).then(|| {
+        let drop_zone = (cx.has_active_drag() && (has_page || front == Some(Pane::Mail))).then(|| {
             let accent = theme.accent;
             let half = |left: bool| {
                 div()
@@ -277,7 +279,7 @@ impl<H: WebHost> Browser<H> {
     #[allow(clippy::too_many_arguments)]
     fn render_split(
         &self,
-        panes: &[TabId],
+        panes: &[Pane],
         focused: usize,
         focused_pane: gpui::Div,
         shares: &[f32],
@@ -295,12 +297,12 @@ impl<H: WebHost> Browser<H> {
         let mut focused_pane = Some(focused_pane);
         // The springy panes' widths sum to the whole row; beside a fixed phone pane they shrink
         // in proportion to fit.
-        let springy: f32 = panes.iter().zip(shares).filter(|(id, _)| !self.phone_panes.contains(id)).map(|(_, s)| s).sum();
-        for (i, id) in panes.iter().enumerate() {
-            let phone = self.phone_panes.contains(id);
+        let springy: f32 = panes.iter().zip(shares).filter(|(p, _)| !self.is_phone(**p)).map(|(_, s)| s).sum();
+        for (i, &pane) in panes.iter().enumerate() {
+            let phone = self.is_phone(pane);
             // The gap between two cards is the seam; a phone pane's edges do not drag: it
             // keeps its device width.
-            if i > 0 && (phone || self.phone_panes.contains(&panes[i - 1])) {
+            if i > 0 && (phone || self.is_phone(panes[i - 1])) {
                 row = row.child(div().flex_none().h_full().w(px(SPLIT_GAP)));
             } else if i > 0 {
                 row = row.child(
@@ -316,15 +318,21 @@ impl<H: WebHost> Browser<H> {
                         })),
                 );
             }
-            let content = match (i == focused).then(|| focused_pane.take()).flatten() {
-                Some(pane) => pane.into_any_element(),
-                None => match self.pages.get(id) {
+            let content = match ((i == focused).then(|| focused_pane.take()).flatten(), pane) {
+                (Some(focused), _) => focused.into_any_element(),
+                // Mail is drawn by gpui: a click in it never reaches a page to report focus.
+                (None, Pane::Mail) => div()
+                    .size_full()
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| this.focus_pane(Pane::Mail, window, cx)))
+                    .child(self.mail_view(theme, window, cx))
+                    .into_any_element(),
+                (None, Pane::Tab(id)) => match self.pages.get(&id) {
                     Some((page, _)) => {
                         page.read(cx).set_square_corners(inner(i));
                         let content = page.update(cx, |p, cx| p.render(window, cx));
-                        self.with_hover_url(*id, content, cx)
+                        self.with_hover_url(id, content, cx)
                     }
-                    None if self.holder(*id, cx).is_some() => self.render_elsewhere(*id, theme, cx),
+                    None if self.holder(id, cx).is_some() => self.render_elsewhere(id, theme, cx),
                     None => div().into_any_element(),
                 },
             };
@@ -336,8 +344,8 @@ impl<H: WebHost> Browser<H> {
                 .overflow_hidden()
                 .bg(gpui::white())
                 .shadow(vec![shadow(Hsla { a: 0.12, ..theme.ink }, 1., 4.)])
-                .child(self.pane_strip(*id, i == focused, cx))
-                .when(phone, |d| d.child(self.phone_strip(*id, cx)))
+                .child(self.pane_strip(pane, i == focused, cx))
+                .when_some(pane.tab().filter(|_| phone), |d, id| d.child(self.phone_strip(id, cx)))
                 .child(div().flex_1().min_h_0().child(content));
             row = row.child(if phone {
                 card.flex_none().w(px(PHONE_W))
@@ -351,10 +359,14 @@ impl<H: WebHost> Browser<H> {
 
     /// A split pane's own top row: its host (the focused pane's darker), and × to take it
     /// out of the split. A click on it focuses the pane.
-    fn pane_strip(&self, id: TabId, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let host = self.session.tab(id).map(|t| host_of(&t.url)).unwrap_or_default();
+    fn pane_strip(&self, pane: Pane, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let host = match pane {
+            Pane::Tab(id) => self.session.tab(id).map(|t| host_of(&t.url)).unwrap_or_default(),
+            Pane::Mail => "Mail".into(),
+        };
+        let key = pane_key(pane);
         div()
-            .id(("pane-strip", id.0))
+            .id(("pane-strip", key))
             .flex_none()
             .h(px(PANE_STRIP_H))
             .px(px(10.))
@@ -366,12 +378,12 @@ impl<H: WebHost> Browser<H> {
             .border_color(surface::border())
             .text_size(px(12.))
             .text_color(if focused { surface::ink() } else { surface::muted() })
-            .on_click(cx.listener(move |this, _, window, cx| this.on_page_focused(id, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)))
             .child(div().size(px(20.)))
             .child(cut_left(div().flex_1().min_w_0().flex().justify_center()).child(host))
             .child(
                 div()
-                    .id(("pane-close", id.0))
+                    .id(("pane-close", key))
                     .size(px(20.))
                     .flex()
                     .items_center()
@@ -381,7 +393,7 @@ impl<H: WebHost> Browser<H> {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         if let Some(space) = this.session.active_space() {
-                            this.session.remove_from_split(space, baa_model::Pane::Tab(id));
+                            this.session.remove_from_split(space, pane);
                         }
                         this.sync(window, cx);
                     }))
@@ -389,19 +401,36 @@ impl<H: WebHost> Browser<H> {
             )
     }
 
-    /// The pages on screen: the shown split's panes, else the active tab (alone in fullscreen).
-    pub(crate) fn shown_panes(&self) -> Vec<TabId> {
+    /// The panes on screen: the shown split's, else the front pane (alone in fullscreen).
+    pub(crate) fn panes_on_screen(&self) -> Vec<Pane> {
         let Some(space) = self.active_space() else { return Vec::new() };
         match self.session.shown_split(space.id) {
-            Some(split) if self.fullscreen.is_none() => split.tabs().collect(),
-            _ => space.active_tab.into_iter().collect(),
+            Some(split) if self.fullscreen.is_none() => split.panes.clone(),
+            _ => space.front().into_iter().collect(),
         }
+    }
+
+    /// The pages on screen: the tabs of [`Self::panes_on_screen`].
+    pub(crate) fn shown_panes(&self) -> Vec<TabId> {
+        self.panes_on_screen().into_iter().filter_map(Pane::tab).collect()
+    }
+
+    /// A click on a pane (its strip, or mail) makes it the focused one.
+    fn focus_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
+        match pane {
+            Pane::Tab(id) => self.on_page_focused(id, window, cx),
+            Pane::Mail => self.show_mail(true, window, cx),
+        }
+    }
+
+    fn is_phone(&self, pane: Pane) -> bool {
+        pane.tab().is_some_and(|id| self.phone_panes.contains(&id))
     }
 
     /// Hides every page but the shown ones, then activates the focused pane:
     /// Chromium's one active tab per window is the pane the user is on.
     pub(crate) fn show_pages(&self, cx: &mut Context<Self>) {
-        let (shown, active) = (self.shown_panes(), self.active_tab());
+        let (shown, active) = (self.shown_panes(), self.front().and_then(Pane::tab));
         for (id, (page, _)) in &self.pages {
             if !shown.contains(id) {
                 page.read(cx).set_visible(false);
@@ -445,11 +474,9 @@ impl<H: WebHost> Browser<H> {
     /// Each shown pane's spring heads for its width; a pane that joins grows from 0,
     /// and a whole new set (another tab, launch) starts where it ends.
     fn tick_split(&mut self, dt: f32, reduce: bool) -> bool {
-        let widths: Vec<(TabId, f32)> = match self.active_space().and_then(|s| self.session.shown_split(s.id)) {
-            Some(split) if self.fullscreen.is_none() => {
-                split.panes.iter().zip(&split.widths).filter_map(|(pane, w)| Some((pane.tab()?, *w))).collect()
-            }
-            _ => self.active_tab().map(|t| (t, 1.)).into_iter().collect(),
+        let widths: Vec<(Pane, f32)> = match self.active_space().and_then(|s| self.session.shown_split(s.id)) {
+            Some(split) if self.fullscreen.is_none() => split.panes.iter().copied().zip(split.widths.iter().copied()).collect(),
+            _ => self.front().map(|p| (p, 1.)).into_iter().collect(),
         };
         let fresh = !widths.iter().any(|(id, _)| self.split_w.iter().any(|(p, _)| p == id));
         let mut old = std::mem::take(&mut self.split_w);
@@ -729,4 +756,9 @@ impl<H: WebHost> Browser<H> {
             }
         }
     }
+}
+
+/// An element id for a pane: its tab's id, or 0 for mail (`Session` hands out ids from 1).
+fn pane_key(pane: Pane) -> u64 {
+    pane.tab().map_or(0, |id| id.0)
 }

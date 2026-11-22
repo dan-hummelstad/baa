@@ -78,10 +78,12 @@ pub enum Command {
     Archive,
     SplitView,
     ResponsiveView,
+    OpenMail,
+    OpenMailbox,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 33] = [
+const COMMANDS: [(Command, &str); 35] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -115,6 +117,8 @@ const COMMANDS: [(Command, &str); 33] = [
     (Command::Archive, "Archived Tabs"),
     (Command::SplitView, "Split View"),
     (Command::ResponsiveView, "Responsive View"),
+    (Command::OpenMail, "Open Mail"),
+    (Command::OpenMailbox, "Open Archive: Mailbox"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -143,6 +147,8 @@ impl Command {
             Command::Archive => Box::new(actions::ShowArchive),
             Command::SplitView => Box::new(actions::SplitView),
             Command::ResponsiveView => Box::new(actions::ResponsiveView),
+            Command::OpenMail => Box::new(actions::ShowMail),
+            Command::OpenMailbox => Box::new(actions::OpenMailbox),
             _ => return None,
         })
     }
@@ -173,6 +179,7 @@ impl Command {
             Command::SetUpPasswords => "key-round",
             Command::ClearToday | Command::Archive => "archive",
             Command::SplitView | Command::ResponsiveView => "columns-2",
+            Command::OpenMail | Command::OpenMailbox => "mail",
             _ => "sliders-horizontal",
         }
     }
@@ -235,11 +242,13 @@ impl Bar {
         }
     }
 
-    fn rows(&self, session: &Session, settings: &Settings) -> Vec<Row> {
+    fn rows(&self, session: &Session, settings: &Settings, mail: bool) -> Vec<Row> {
         if self.mode == Mode::History {
             return self.history.iter().take(MAX_ROWS).map(history_row).collect();
         }
-        rows(&self.field.text, session, settings, &self.matches)
+        let mut out = rows(&self.field.text, session, settings, &self.matches);
+        out.retain(|r| mail || !matches!(r.item, Item::Command(Command::OpenMail | Command::OpenMailbox)));
+        out
     }
 }
 
@@ -433,8 +442,9 @@ pub(crate) fn on_key<H: WebHost>(
     window: &mut Window,
     cx: &mut Context<Browser<H>>,
 ) {
+    let mail = this.mail_here();
     let Some(bar) = &mut this.bar else { return };
-    let count = bar.rows(&this.session, &this.settings).len();
+    let count = bar.rows(&this.session, &this.settings, mail).len();
     match key {
         Key::Edited => {
             bar.selected = 0;
@@ -445,7 +455,7 @@ pub(crate) fn on_key<H: WebHost>(
         }
         Key::Complete => {
             // The autofill: the selected page's address replaces what was typed.
-            let rows = bar.rows(&this.session, &this.settings);
+            let rows = bar.rows(&this.session, &this.settings, mail);
             if let Some(Item::Page(page)) = rows.get(bar.selected).map(|r| &r.item) {
                 bar.field = TextField { text: page.url.into(), ..Default::default() };
                 bar.selected = 0;
@@ -520,7 +530,7 @@ fn submit<H: WebHost>(
 ) {
     let Some(bar) = this.bar.as_ref() else { return };
     let mode = bar.mode;
-    let rows = bar.rows(&this.session, &this.settings);
+    let rows = bar.rows(&this.session, &this.settings, this.mail_here());
     let Some(row) = rows.into_iter().nth(row.unwrap_or(bar.selected)) else {
         return;
     };
@@ -631,7 +641,7 @@ impl<H: WebHost> Browser<H> {
         } else {
             bar.selected as f32
         };
-        let rows = bar.rows(&self.session, &self.settings);
+        let rows = bar.rows(&self.session, &self.settings, self.mail_here());
         let placeholder = match bar.mode {
             Mode::NewTab => "Search or enter address…",
             Mode::Address => "Enter address…",
@@ -870,6 +880,19 @@ mod tests {
         assert_eq!(r[1].item, Item::Tab(gh));
         assert_eq!(r[2].item, Item::Command(Command::NewSpace));
         assert_eq!(r.len(), 2 + QUICK_COMMANDS);
+    }
+
+    #[test]
+    fn mail_commands_are_offered_only_where_mail_is() {
+        let (s, ..) = session();
+        let bar = Bar::new(Mode::NewTab, TextField::selected("open mail".into()));
+        let has = |bar: &Bar, mail| {
+            bar.rows(&s, &Settings::default(), mail)
+                .iter()
+                .any(|r| r.item == Item::Command(Command::OpenMail))
+        };
+        assert!(!has(&bar, false));
+        assert!(has(&bar, true));
     }
 
     #[test]

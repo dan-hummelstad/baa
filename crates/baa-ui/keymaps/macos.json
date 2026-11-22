@@ -111,7 +111,20 @@
       "cmd-shift-k": "baa::ClearToday",
       "cmd-shift-a": "baa::ShowArchive",
       "cmd-shift-l": "baa::ToggleLibrary",
-      "cmd-,": "baa::OpenSettings"
+      "cmd-,": "baa::OpenSettings",
+      "cmd-shift-m": "baa::ToggleMail"
+    }
+  },
+  {
+    "context": "Mail",
+    "bindings": {
+      "cmd-n": "baa::NewMessage",
+      "cmd-r": "baa::Reply",
+      "cmd-shift-r": "baa::ReplyAll",
+      "cmd-shift-f": "baa::ForwardMessage",
+      "cmd-enter": "baa::SendMessage",
+      "backspace": "baa::DeleteMessage",
+      "cmd-f": "baa::SearchMail"
     }
   },
   {

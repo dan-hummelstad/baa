@@ -40,6 +40,7 @@ const NAV_W: f32 = 96.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Section {
+    Mailbox,
     Downloads,
     Archive,
     Chat,
@@ -140,6 +141,8 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn open_library(&mut self, section: Section, cx: &mut Context<Self>) {
+        // library_last may be the Mailbox of a Space that has mail, and this one may not.
+        let section = if section == Section::Mailbox && !self.mail_here() { Section::Downloads } else { section };
         self.library_last = section;
         match &mut self.library {
             Some(library) => library.section = section,
@@ -218,7 +221,7 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    pub(crate) fn render_library(&self, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_library(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(library) = &self.library else { return div().into_any_element() };
         let t = self.motion.get(("library", 0), Feel::Glide);
         let nav_item = |section: Section, name: &'static str, label: &'static str, cx: &mut Context<Self>| {
@@ -294,11 +297,22 @@ impl<H: WebHost> Browser<H> {
                     .flex_col()
                     .justify_center()
                     .gap(px(10.))
+                    .children(self.mail_here().then(|| nav_item(Section::Mailbox, "mail", "Mailbox", cx)))
                     .child(nav_item(Section::Downloads, "circle-arrow-down", "Downloads", cx))
                     .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx))
                     .child(nav_item(Section::Chat, "message-circle", "Chat", cx)),
             )
-            .child(div().h(px(32.)).flex().items_center().justify_center().child(back));
+            // Where the bottom bar was: a swipe down here closes the Archive it opened.
+            .child(
+                div()
+                    .id("library-bottom")
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
+                    .child(back),
+            );
 
         let library_box = |body: AnyElement| {
             div()
@@ -314,10 +328,14 @@ impl<H: WebHost> Browser<H> {
         let placeholder = match library.section {
             Section::Downloads => "Search Downloads…",
             Section::Archive => "Search Archived Tabs…",
-            Section::Chat => {
-                let chat = self.render_agent_panel(theme, window, cx).unwrap_or_else(|| div().into_any_element());
+            Section::Chat | Section::Mailbox => {
+                let body = if library.section == Section::Mailbox {
+                    self.render_door(theme, window, cx)
+                } else {
+                    self.render_agent_panel(theme, window, cx).unwrap_or_else(|| div().into_any_element())
+                };
                 // Vertical scrolls stay with the transcript: the swipe takes only mostly-horizontal ones.
-                return library_box(chat)
+                return library_box(body)
                     .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
                     .into_any_element();
             }
@@ -371,7 +389,7 @@ impl<H: WebHost> Browser<H> {
         let list = match library.section {
             Section::Downloads => self.download_rows(library, theme, cx),
             Section::Archive => self.archive_rows(library, theme, cx),
-            Section::Chat => Vec::new(),
+            Section::Chat | Section::Mailbox => Vec::new(),
         };
         let empty = list.is_empty();
         let body = div()
@@ -401,7 +419,7 @@ impl<H: WebHost> Browser<H> {
                                 .child(match library.section {
                                     Section::Downloads => "No downloads",
                                     Section::Archive => "No archived tabs",
-                                    Section::Chat => "",
+                                    Section::Chat | Section::Mailbox => "",
                                 }),
                         )
                     }),

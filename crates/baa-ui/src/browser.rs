@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, PageScheme, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
+use baa_model::{now, DevToolsDock, DownloadRecord, FolderId, PageScheme, Pane, Session, SidebarSide, Space, SpaceId, Store, Tab, TabId, Zone};
 use baa_web::{PageEvent, PageHandle, WebHost};
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
@@ -146,7 +146,7 @@ pub struct Browser<H: WebHost> {
     page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     /// Split view: each shown pane's width (owned springs, in pane order), the seam
     /// being dragged, and the panes' row last frame.
-    split_w: Vec<(TabId, Spring)>,
+    split_w: Vec<(Pane, Spring)>,
     split_drag: Option<usize>,
     split_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     zoom: HashMap<TabId, f64>,
@@ -267,6 +267,8 @@ pub struct Browser<H: WebHost> {
     pub(crate) history_menu: Option<HistoryMenu>,
     /// Two-finger swipe across the chrome, in sidebar widths, while one is on.
     swipe: Option<f32>,
+    /// Two-finger swipe up or down over the bottom bar, in px, while one is on.
+    bar_swipe: Option<f32>,
     /// A two-finger history swipe over the page (Safari's sheet).
     history_swipe: Option<swipe::HistorySwipe>,
     /// Swipe pictures to take out of gpui's atlas on the next frame.
@@ -303,7 +305,6 @@ pub struct Browser<H: WebHost> {
     pub(crate) hover_url: Option<(TabId, String)>,
     pub(crate) actions: HashMap<String, baa_web::ExtensionAction>,
     /// `None` in a private window or with mail off.
-    #[allow(dead_code)] // nothing makes or reads it until WP-G
     pub(crate) mail: Option<crate::mail::MailUi<H>>,
     _actions_changed: Subscription,
     _popups: Subscription,
@@ -504,6 +505,7 @@ impl<H: WebHost> Browser<H> {
             nav_press: None,
             history_menu: None,
             swipe: None,
+            bar_swipe: None,
             history_swipe: None,
             stale_pictures: Vec::new(),
             window: window.window_handle(),
@@ -569,8 +571,14 @@ impl<H: WebHost> Browser<H> {
         self.active_space()?.active_tab
     }
 
+    /// The pane the user is on in the active Space: mail, or its active tab.
+    pub(crate) fn front(&self) -> Option<Pane> {
+        self.active_space()?.front()
+    }
+
+    /// The page in front: none while mail is, so page actions leave the hidden tab alone.
     pub(crate) fn active_page(&self) -> Option<&Entity<H::Page>> {
-        self.pages.get(&self.active_tab()?).map(|(p, _)| p)
+        self.pages.get(&self.front()?.tab()?).map(|(p, _)| p)
     }
 
     pub(crate) fn with_page(&self, cx: &mut Context<Self>, f: impl FnOnce(&H::Page)) {
@@ -596,6 +604,11 @@ impl<H: WebHost> Browser<H> {
         self.unshared = true;
         cx.set_reduce_motion(self.settings.reduce_motion);
         self.host.apply_settings(&self.settings);
+        if self.mail.is_some() != self.settings.mail.enabled {
+            self.sync_mail(cx);
+            self.show_pages(cx);
+            self.save();
+        }
         cx.notify();
     }
 
@@ -611,6 +624,7 @@ impl<H: WebHost> Browser<H> {
 
     /// Single place that reconciles live pages and motion with the session after any change.
     pub(crate) fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_mail(cx);
         let space = self.session.active_space();
         if space != self.shown_space {
             let index = |id| self.session.spaces().iter().position(|s| Some(s.id) == id);
@@ -730,9 +744,11 @@ impl<H: WebHost> Browser<H> {
         if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return window.focus(&self.input_focus, cx);
         }
+        let mail = self.mail.as_ref().filter(|_| self.mail_in_front()).map(|m| m.focus.clone());
         let target = self
             .active_page()
             .map(|p| p.read(cx).focus_handle(cx))
+            .or(mail)
             .unwrap_or_else(|| self.focus.clone());
         window.focus(&target, cx);
     }
@@ -888,7 +904,7 @@ impl<H: WebHost> Browser<H> {
         if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return self.focus_page(window, cx);
         }
-        if self.active_tab() != Some(id) && self.shown_panes().contains(&id) {
+        if self.front() != Some(Pane::Tab(id)) && self.shown_panes().contains(&id) {
             self.session.activate_tab(id, now());
             self.sync(window, cx);
         }

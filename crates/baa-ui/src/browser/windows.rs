@@ -198,6 +198,7 @@ impl<H: WebHost> Browser<H> {
             let kept = space.active_tab.is_none_or(|t| session.tab(t).is_some_and(|t| t.space == space.id));
             if let Some(theirs) = session.space_mut(space.id).filter(|_| kept) {
                 theirs.active_tab = space.active_tab;
+                theirs.showing = space.showing;
             }
         }
         if let Some(id) = mine.active_space() {

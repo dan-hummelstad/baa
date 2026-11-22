@@ -361,7 +361,9 @@ impl<H: WebHost> SettingsView<H> {
             }
             out.push(self.sub_row(format!("space:{}", id.0), left, buttons.into_any_element()));
             if confirming {
-                out.push(self.note(delete_warning(&self.browser.read(cx).extensions_lost_with(id))));
+                let browser = self.browser.read(cx);
+                let mail = crate::mail::delete_warning(&browser.mail_lost_with(id));
+                out.push(self.note(delete_warning(&browser.extensions_lost_with(id)) + &mail));
             }
         }
         out.push((

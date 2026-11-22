@@ -59,6 +59,16 @@ gpui::actions!(
         ReportProblem,
         Undo,
         Redo,
+        ToggleMail,
+        ShowMail,
+        OpenMailbox,
+        NewMessage,
+        Reply,
+        ReplyAll,
+        ForwardMessage,
+        SendMessage,
+        DeleteMessage,
+        SearchMail,
     ]
 );
 

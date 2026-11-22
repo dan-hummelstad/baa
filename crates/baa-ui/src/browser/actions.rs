@@ -27,10 +27,13 @@ impl<H: WebHost> Browser<H> {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-            if let Some(id) = this.active_tab() {
+            if let Some(id) = this.active_tab().filter(|_| !this.mail_in_front()) {
                 this.close_tab_id(id, window, cx);
             }
         }))
+        .on_action(cx.listener(|this, _: &ToggleMail, window, cx| this.show_mail(!this.mail_in_front(), window, cx)))
+        .on_action(cx.listener(|this, _: &ShowMail, window, cx| this.show_mail(true, window, cx)))
+        .on_action(cx.listener(|this, _: &OpenMailbox, _, cx| this.open_mailbox(cx)))
         .on_action(
             cx.listener(|this, _: &ReopenClosedTab, window, cx| this.reopen_closed(window, cx)),
         )
