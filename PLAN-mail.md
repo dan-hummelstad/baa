@@ -62,7 +62,7 @@ showed the browser or mail, and what mail showed.
 | A2/B2 | Mail nav: account select ("All inboxes · N mailboxes · Space"), Search mail, New message, Folders, Search folders | the Archive body of `Section::Mail`, `mail/nav.rs`; the select is a native menu, `MenuKind::MailScope` | 1 |
 | A2/B2 | Tab strip: narrow, the list's tab first, one italic preview tab, one tab a draft; wide, the list's tab and drafts (§5) | mail view, GPUI | 1 |
 | A2/B2 | Command row (ASCII: ribbon tabs Home/View/Folder/Options; Arc: pills) | one command table, drawn per skin | 1 the Home set, 3 rest |
-| A2/B2 | List: Focused/Other, scope chips, Pinned/Today/Yesterday groups, account dot a row | `gpui::uniform_list` (precedent `space_picker.rs:750`) | 1 (Focused/Other, pinned 3) |
+| A2/B2 | List: Focused/Other, scope chips, Apple Mail rows (sender and date, subject, two lines of preview; no day groups), unread dot coloured by account | `gpui::uniform_list` (precedent `space_picker.rs:750`) | 1 (Focused/Other, pinned 3) |
 | A2/B2 | Reading pane (beside the list when wide, the preview tab's whole view when narrow, with "← folder" first in its command row): subject, chips, sender, body, attachments, earlier messages, quick reply | GPUI around a message page (§6) | 1 (chips 3) |
 | A3/B3 | Composer in a draft tab, full width: From, To, Cc, Bcc, Subject, options row, attachments, body, footer | GPUI fields (`TextField`) around an editor page (§6) | 1 (options row 3) |
 | A3/B3 | Editor ribbon: Message, Insert, Format text, Options, Review | commands to the editor page | 1 basic set, 3 rest |

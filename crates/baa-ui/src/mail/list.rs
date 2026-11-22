@@ -14,8 +14,7 @@ use crate::{
     theme::{ascii, r, surface, Theme},
 };
 
-const ROW_H: f32 = 76.;
-const BAND_H: f32 = 20.;
+const ROW_H: f32 = 82.;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const PILLS: [(Option<Category>, &str, &str); 4] = [
@@ -86,20 +85,16 @@ fn short_date(secs: u64, now: u64) -> String {
     if year == this_year { format!("{day} {name}") } else { format!("{day} {name} {year}") }
 }
 
-/// Today: the clock; before: the date.
+/// Today: the clock; yesterday: "Yesterday"; before: the date.
 pub(crate) fn when(secs: u64) -> String {
     when_at(local(secs), local(now_secs()))
 }
 
 fn when_at(secs: u64, now: u64) -> String {
-    if secs / 86_400 == now / 86_400 { format!("{:02}:{:02}", secs % 86_400 / 3600, secs % 3600 / 60) } else { short_date(secs, now) }
-}
-
-fn group_of(secs: u64, now: u64) -> String {
     match (now / 86_400).saturating_sub(secs / 86_400) {
-        0 => "TODAY".into(),
-        1 => "YESTERDAY".into(),
-        _ => short_date(secs, now).to_uppercase(),
+        0 => format!("{:02}:{:02}", secs % 86_400 / 3600, secs % 3600 / 60),
+        1 => "Yesterday".into(),
+        _ => short_date(secs, now),
     }
 }
 
@@ -344,84 +339,67 @@ impl<H: WebHost> Browser<H> {
             .into_any_element()
     }
 
-    /// The rows of `range`; one more is read before it, to know whether the first starts a day.
     fn list_rows(&self, theme: &Theme, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let (Some(ui), Some((mail, space))) = (&self.mail, self.mail_space()) else { return Vec::new() };
         let Some(view) = ui.view() else { return Vec::new() };
         let accounts = mail.accounts(space);
-        let before = range.start.min(1);
-        let rows = mail.rows(&view, range.start - before..range.end);
         let now = local(now_secs());
-        let mut previous = rows.get(..before).and_then(|r| r.first()).map(|r| r.date);
-        let mut out = Vec::new();
-        for (n, row) in rows.iter().enumerate().skip(before) {
-            let group = previous.is_none_or(|p| group_of(local(p), now) != group_of(local(row.date), now)).then(|| group_of(local(row.date), now));
-            previous = Some(row.date);
-            let colour = account_colour(accounts.iter().position(|a| a.id == row.account).unwrap_or(0));
-            out.push(self.list_row(theme, range.start + n - before, row, group, colour, now, cx));
-        }
-        out
+        let start = range.start;
+        mail.rows(&view, range)
+            .iter()
+            .enumerate()
+            .map(|(n, row)| {
+                let dot = match accounts.len() > 1 {
+                    true => account_colour(accounts.iter().position(|a| a.id == row.account).unwrap_or(0)),
+                    false => theme.accent,
+                };
+                self.list_row(theme, start + n, row, dot, now, cx)
+            })
+            .collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn list_row(&self, theme: &Theme, index: usize, row: &Row, group: Option<String>, colour: Hsla, now: u64, cx: &mut Context<Self>) -> AnyElement {
+    fn list_row(&self, theme: &Theme, index: usize, row: &Row, dot: Hsla, now: u64, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.mail.as_ref().is_some_and(|ui| ui.state.selected == Some(row.thread));
         let thread = row.thread;
-        let weight = if row.unread { FontWeight::SEMIBOLD } else { FontWeight::NORMAL };
         let mark = |name: &'static str, glyph: &'static str, c: Hsla| if ascii() { div().text_size(px(11.)).text_color(c).child(glyph).into_any_element() } else { icon(name, 12., c).into_any_element() };
-        let marks = div()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .when(row.attachments, |d| d.child(mark("paperclip", "▯", surface::icon().into())))
-            .when(row.flagged, |d| d.child(mark("flag", "⚑", surface::warn().into())))
-            .when(row.unread, |d| d.child(div().size(px(8.)).rounded_full().bg(theme.accent)));
-        let content = div()
+        let line = |h: f32| div().h(px(h)).flex().items_center().gap(px(8.)).min_w_0();
+        let text = div()
             .flex_1()
-            .min_h_0()
-            .px(px(12.))
+            .min_w_0()
+            .h_full()
+            .pt(px(7.))
+            .pr(px(12.))
             .flex()
-            .items_center()
-            .gap(px(9.))
-            .border_b_1()
-            .border_color(surface::line())
-            .border_l_2()
-            .border_color(if selected { theme.accent } else { gpui::transparent_black() })
-            .when(selected, |d| d.bg(surface::key()))
-            .child(div().flex_none().self_start().mt(px(14.)).size(px(8.)).rounded_full().bg(colour))
+            .flex_col()
+            .when(!selected, |d| d.border_b_1().border_color(surface::line()))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .text_size(px(12.5))
-                    .child(div().h(px(18.)).truncate().font_weight(weight).child(SharedString::from(row.from.clone())))
-                    .child(div().h(px(17.)).truncate().font_weight(weight).child(SharedString::from(row.subject.clone())))
-                    .child(div().h(px(16.)).truncate().text_size(px(12.)).text_color(surface::muted()).child(SharedString::from(row.snippet.clone()))),
+                line(18.)
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(SharedString::from(row.from.clone())))
+                    .child(div().flex_none().text_size(px(11.5)).text_color(surface::muted()).child(when_at(local(row.date), now))),
             )
             .child(
-                div()
-                    .flex_none()
-                    .h(px(52.))
-                    .flex()
-                    .flex_col()
-                    .items_end()
-                    .justify_between()
-                    .child(div().text_size(px(11.)).text_color(if row.unread { theme.accent } else { surface::muted().into() }).child(when_at(local(row.date), now)))
-                    .child(marks),
-            );
+                line(17.)
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).child(SharedString::from(row.subject.clone())))
+                    .when(row.attachments, |d| d.child(mark("paperclip", "▯", surface::icon().into())))
+                    .when(row.flagged, |d| d.child(mark("flag", "⚑", surface::warn().into()))),
+            )
+            .child(div().text_size(px(12.)).line_height(px(15.)).line_clamp(2).text_color(surface::muted()).child(SharedString::from(row.snippet.clone())));
         div()
             .id(("mail-row", index))
             .debug_selector(|| format!("mail-row-{index}"))
+            .w_full()
             .h(px(ROW_H))
-            .flex()
-            .flex_col()
+            .px(px(6.))
             .cursor_pointer()
-            .children(group.map(|g| {
-                div().flex_none().h(px(BAND_H)).px(px(14.)).flex().items_center().text_size(px(10.)).text_color(surface::muted()).child(if ascii() { format!("── {g}") } else { g })
-            }))
-            .child(content)
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .rounded(r(8.))
+                    .when(selected, |d| d.bg(surface::key()))
+                    .child(div().flex_none().w(px(22.)).pt(px(12.)).flex().justify_center().when(row.unread, |d| d.child(div().size(px(8.)).rounded_full().bg(dot))))
+                    .child(text),
+            )
             .on_drag(DraggedThread { thread, subject: row.subject.clone().into(), theme: *theme }, |d, _, _, cx| cx.new(|_| d.clone()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(ui) = &mut this.mail {
@@ -458,12 +436,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn times_are_a_clock_today_and_a_date_before() {
+    fn times_are_a_clock_today_yesterday_and_a_date_before() {
         let now = 1_763_800_000; // 2025-11-22 08:26 UTC
         assert_eq!(when_at(now - 3600, now), "07:26");
+        assert_eq!(when_at(now - 86_400, now), "Yesterday");
         assert_eq!(when_at(now - 86_400 * 8, now), "14 Nov");
         assert_eq!(when_at(now - 86_400 * 400, now), "18 Oct 2024");
-        assert_eq!((group_of(now, now), group_of(now - 86_400, now), group_of(now - 86_400 * 3, now)), ("TODAY".into(), "YESTERDAY".into(), "19 NOV".into()));
     }
 
     #[test]
