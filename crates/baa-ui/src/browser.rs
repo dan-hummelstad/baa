@@ -912,7 +912,7 @@ impl<H: WebHost> Browser<H> {
 
     /// A click in another split pane makes it the focused one. A dialog on screen keeps
     /// the keyboard, whichever page the click went to.
-    fn on_page_focused(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_page_focused(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return self.focus_page(window, cx);
         }
