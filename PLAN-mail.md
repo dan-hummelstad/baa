@@ -214,7 +214,11 @@ in history) and never navigates. `set_document` writes it by script from the bro
   'unsafe-inline'; frame-src 'none'; form-action 'none'` (`img-src data: https:` once the user allows
   remote images for the message or its sender).
 - The message's HTML is the frame's `srcdoc`. The frame is `sandbox="allow-popups
-  allow-popups-to-escape-sandbox"`: no scripts, no forms, no same origin, no navigating the page.
+  allow-popups-to-escape-sandbox allow-same-origin"`: no scripts, no forms, no navigating the page.
+  `allow-same-origin` is for Chromium: without it the frame needs a sandboxed SiteInstance made
+  from its parent's site, a tab that was only ever `about:blank` has none, and Chromium 158 ends
+  the browser there (found on the user's first run, 2026-11-22). The frame keeps the page's
+  opaque origin, which nothing shares and which no script in the frame can use.
 - `<base target="_blank">` goes first, so a link opens through the engine's own new-tab path and
   arrives as `PageEvent::OpenRequested`, which the shell adopts. baa never loads a URL taken from a
   message.
@@ -733,6 +737,9 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - The editor is a sandboxed frame (`allow-same-origin`, no scripts) in the document, not an
   editable page body: quoted mail in the page itself could navigate it with `<meta refresh>`.
   The shell reaches it as `baa_web::EDITOR_DOCUMENT`.
+- The message frame has `allow-same-origin` (§6). Opening a message ended the browser on the
+  user's first run: the harness proof had written its message into a tab that already had a
+  page, and so a site; `mail-document` now also writes one into a new tab, as the app does.
 - A document drops `<link>` and starts with `x-dns-prefetch-control: off`: preconnect and link
   prefetch are outside every policy directive, and would tell a sender the mail was opened.
 - A code field is found by a focused-element check in the browser process

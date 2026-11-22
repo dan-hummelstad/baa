@@ -8,12 +8,18 @@
 use crate::DocumentKind;
 
 /// The message frame: links open as new tabs through the engine (and escape the sandbox, so the
-/// site works there); no scripts, forms, same origin, top navigation, or automatic features
+/// site works there); no scripts, forms, top navigation, or automatic features
 /// (`<meta http-equiv=refresh>` among them).
-pub(super) const MESSAGE_SANDBOX: &str = "allow-popups allow-popups-to-escape-sandbox";
-/// The editor frame shares the page's opaque origin, so the shell's script can edit and read it;
-/// without `allow-scripts` that grants the mail nothing, and quoted mail cannot refresh the page
-/// away or open anything.
+///
+/// `allow-same-origin` is there for Chromium, not for the mail. A frame without it must get a
+/// sandboxed SiteInstance made from its parent's site, and a tab that has only ever been
+/// `about:blank` has no site: Chromium 158 ends the browser there
+/// (`SiteInstanceImpl::GetCompatibleSandboxedSiteInstance`, `CHECK(has_site_)`). With it the
+/// frame keeps the page's origin, which is opaque and shared with nothing, and with no script
+/// in the frame that origin can be used for nothing.
+pub(super) const MESSAGE_SANDBOX: &str = "allow-popups allow-popups-to-escape-sandbox allow-same-origin";
+/// The editor frame shares the page's opaque origin too, and the shell's script edits and reads
+/// it through that; quoted mail cannot refresh the page away or open anything.
 pub(super) const EDITOR_SANDBOX: &str = "allow-same-origin";
 
 /// The script expression for the editor's document; its `body` is the editable content.
@@ -116,7 +122,8 @@ mod tests {
                 assert!(!sandbox.contains(banned), "{sandbox}");
             }
         }
-        assert!(!MESSAGE_SANDBOX.contains("allow-same-origin"));
+        // Both frames live in a tab with no site, where an origin-sandboxed frame ends the browser.
+        assert!(MESSAGE_SANDBOX.contains("allow-same-origin") && EDITOR_SANDBOX.contains("allow-same-origin"));
         assert!(!EDITOR_SANDBOX.contains("allow-popups"));
         assert!(page_html(MESSAGE).contains(&format!("<iframe sandbox=\"{MESSAGE_SANDBOX}\">")));
         assert!(page_html(DocumentKind::Editor).contains(&format!("<iframe sandbox=\"{EDITOR_SANDBOX}\">")));

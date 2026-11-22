@@ -7,6 +7,9 @@
 script: mail-document.txt
 must: baa: get_state ok=true url=about:blank title="editor:true:quoted" .* origin=null$
 must: baa: get_state ok=true url=about:blank title="frames:1:true:true" .* origin=null$
+# A message written into a tab that never had a page (so has no site), as the app does it: the
+# browser is still there to answer.
+must: baa: get_state ok=true url=about:blank title="fresh:1:true" .* origin=null$
 must: baa: tab_created tab=2 opener=0 .* url=https://example\.com/mail-link
 count: 1 baa: tab_created .*url=https://example\.com/mail-
 must: title="mail-seen:/mail-link"
