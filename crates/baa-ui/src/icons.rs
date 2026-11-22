@@ -14,12 +14,12 @@ macro_rules! icons {
 }
 
 icons!(
-    "archive", "arrow-down-to-line", "arrow-left", "arrow-right", "arrow-up", "bell", "book-open", "calendar",
-    "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "circle-arrow-down", "clipboard", "code-xml", "columns-2", "disc", "ellipsis", "file",
-    "file-archive", "file-image", "file-music", "file-spreadsheet", "file-text",
-    "file-video-camera", "folder", "folder-open", "git-pull-request", "globe", "history", "house", "import",
-    "key-round", "languages", "link", "list-filter", "lock", "map-pin", "maximize-2", "message-circle", "mic", "minus", "moon-star",
-    "panel-left", "pause", "picture-in-picture-2", "pin", "pin-off", "play", "plus", "printer", "puzzle", "rotate-cw", "rss", "search", "settings",
+    "alarm-clock", "archive", "arrow-down-to-line", "arrow-left", "arrow-right", "arrow-up", "at-sign", "ban", "bell", "book-open", "calendar",
+    "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "chevrons-right", "chevrons-up-down", "circle-arrow-down", "circle-dot", "clipboard", "code-xml", "columns-2", "disc", "download", "ellipsis", "file",
+    "file-archive", "file-image", "file-music", "file-pen", "file-spreadsheet", "file-text",
+    "file-video-camera", "flag", "folder", "folder-open", "git-pull-request", "globe", "history", "hourglass", "house", "import", "inbox",
+    "key-round", "languages", "link", "list-filter", "lock", "mail", "mail-open", "map-pin", "maximize-2", "message-circle", "mic", "minus", "moon-star",
+    "panel-left", "paperclip", "pause", "pencil-line", "picture-in-picture-2", "pin", "pin-off", "play", "plus", "printer", "puzzle", "rotate-cw", "rss", "search", "send", "settings",
     "skip-forward", "sliders-horizontal", "sparkles", "square", "sun", "terminal", "trash-2", "triangle-alert", "volume-2", "volume-x", "x",
 );
 
