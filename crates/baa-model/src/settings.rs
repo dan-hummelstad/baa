@@ -321,6 +321,8 @@ pub enum RemoteImages {
     #[default]
     Ask,
     Never,
+    /// Every message's, from every sender: the user's choice to be seen opening mail.
+    Always,
 }
 
 /// Claude Code's access to the browser (PLAN-m4-features D). Off by default: nothing is
@@ -528,6 +530,8 @@ mod tests {
         assert_eq!(on.mail, MailSettings { enabled: true, ..MailSettings::default() }, "a missing field of it defaults too");
         let never = Settings { mail: MailSettings { remote_images: RemoteImages::Never, codes: false, ..on.mail }, ..on };
         assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&never).unwrap()).unwrap(), never);
+        let always = Settings { mail: MailSettings { remote_images: RemoteImages::Always, ..never.mail }, ..never };
+        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&always).unwrap()).unwrap(), always);
     }
 
     #[test]

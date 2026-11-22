@@ -73,7 +73,11 @@ impl<H: WebHost> SettingsView<H> {
             "Loading one tells the sender the message was opened.",
             self.segments(
                 "pref-mail-images",
-                vec![(RemoteImages::Ask, "Ask for each message".into()), (RemoteImages::Never, "Never load remote images".into())],
+                vec![
+                    (RemoteImages::Ask, "Ask for each message".into()),
+                    (RemoteImages::Always, "Always load".into()),
+                    (RemoteImages::Never, "Never load".into()),
+                ],
                 s.mail.remote_images,
                 |v, s| s.mail.remote_images = v,
                 cx,

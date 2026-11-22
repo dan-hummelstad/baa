@@ -89,6 +89,18 @@ fn with_remote_images_set_to_never_there_is_no_banner(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn with_remote_images_set_to_always_every_message_loads_them_without_a_banner(cx: &mut gpui::TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    b.update(cx, |b, _| b.settings.mail.remote_images = baa_model::RemoteImages::Always);
+    deliver(&mail, folders[0], "1", "news@shop.example", "<img src=\"https://shop.example/pixel.gif\">", true);
+    let thread = thread_of(&mail, &b, cx);
+    select(&b, cx, thread);
+    assert!(!drawn(cx, "mail-images-banner"));
+    assert_eq!(documents(&b, cx), [DocumentKind::Message { remote_images: true }]);
+    assert!(!mail.trusts_images("news@shop.example"), "the setting remembers no sender");
+}
+
+#[gpui::test]
 fn a_link_in_a_message_is_adopted_and_never_loaded(cx: &mut gpui::TestAppContext) {
     let (b, cx, mail, folders) = with_account(cx);
     deliver(&mail, folders[0], "1", "ola@example.com", "<a href=\"https://evil.example/x\">x</a>", true);

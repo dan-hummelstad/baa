@@ -82,7 +82,7 @@ impl<H: WebHost> Browser<H> {
     /// Message `id` of the conversation in the page; `remote_images` once the user allowed them.
     fn show_message(&mut self, id: MessageId, remote_images: bool, window: &mut Window, cx: &mut Context<Self>) {
         let profile = self.active_space().map(|s| s.profile);
-        let never = self.settings.mail.remote_images == RemoteImages::Never;
+        let setting = self.settings.mail.remote_images;
         let Some(mail) = &mut self.mail else { return };
         let Some(reader) = &mut mail.reader else { return };
         reader.shown = id;
@@ -90,7 +90,11 @@ impl<H: WebHost> Browser<H> {
         reader.save_anyway = None;
         reader.body = mail.mail.body(id);
         let from = reader.message().map(|m| m.from.email.clone()).unwrap_or_default();
-        let remote_images = !never && (remote_images || mail.mail.trusts_images(&from));
+        let remote_images = match setting {
+            RemoteImages::Never => false,
+            RemoteImages::Always => true,
+            RemoteImages::Ask => remote_images || mail.mail.trusts_images(&from),
+        };
         reader.remote_images = remote_images;
         reader.page = None;
         reader._page = None;

@@ -712,7 +712,9 @@ Answered on 2026-11-22:
    work and gives the ids later: a Google Cloud client (type "Desktop", scope
    `https://mail.google.com/`), and an Entra app (any organisation and personal accounts, public
    client, loopback redirect).
-7. Remote images: ask a message, with "always for this sender".
+7. Remote images: ask a message, with "always for this sender". Later the same day the user
+   asked for an "Always load" choice as well; Settings › Mail offers Ask, Always and Never, Ask
+   by default.
 8. Exchange on-premises stays optional, in stage 4.
 
 Open, and not needed before stage 2:
