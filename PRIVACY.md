@@ -42,6 +42,17 @@ baa runs your own `claude` command-line tool, signed in with your own account. W
 Claude, and the pages you let it read, go to Anthropic through that tool. baa adds no account or
 server of its own. Turn it off: Settings › Claude › Let Claude use baa.
 
+**Mail (your mail provider).** Off by default and experimental. When you turn it on in
+Settings › Mail and add an account, baa connects to that account's mail servers, and to no other
+host: it keeps one connection open to hear of new mail, checks the other folders every ten
+minutes, and connects when you read, move or send a message. Your password, or the sign-in token
+of a Google account, goes only to that provider, and is kept in the macOS Keychain. Mail you have
+read is kept on your Mac in `~/Library/Application Support/baa/mail/`, not encrypted by baa.
+Images that a message loads from the web are not fetched until you ask for them. A verification
+code is read from your mail on your Mac and goes into a page only when you click it. baa has no
+mail server of its own and sends your mail nowhere else. Turn it off: remove the account, or
+Settings › Mail › Mail.
+
 Extensions you install can contact any site they have permission for. That is up to each extension.
 
 ## What baa does not do
@@ -52,9 +63,12 @@ Extensions you install can contact any site they have permission for. That is up
   `~/Library/Application Support/baa/chromium/Crashpad/`.
 - No Safe Browsing. baa does not check sites against Google's lists, so it does not warn about
   phishing or malware sites. Downloads are judged by file type only.
-- No sync. Your history, tabs and settings stay on your Mac.
+- No sync. Your history, tabs and settings stay on your Mac. Mail accounts are not carried to
+  another device either.
 
 ## Checked by CI
 
 Before each release is published, CI starts the signed app behind a proxy and fails the release if
-baa contacts a host it does not expect (`crates/baa-privacy`).
+baa contacts a host it does not expect (`crates/baa-privacy`). The proxy sees what the browser
+engine contacts. It does not see the connections baa makes itself for live folders and mail;
+those are held to the servers you chose by the code and its tests.

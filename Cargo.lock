@@ -563,6 +563,7 @@ dependencies = [
 name = "baa"
 version = "0.1.9"
 dependencies = [
+ "baa-mail",
  "baa-model",
  "baa-ui",
  "baa-web",

@@ -15,6 +15,7 @@ gpui_platform.workspace = true
 baa-ui.workspace = true
 baa-web.workspace = true
 baa-model.workspace = true
+baa-mail.workspace = true
 log.workspace = true
 env_logger.workspace = true
 # Already in the graph via gpui: an unbounded channel from the open-URL thread and

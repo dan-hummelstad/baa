@@ -124,6 +124,13 @@ fn launch<H: WebHost>(
     cx: &mut App,
 ) {
     baa_ui::init(cx);
+    // The data directory is in the Keychain service's name: account ids repeat between
+    // directories, and one directory's password must never go to another's server.
+    let keychain = baa_mail::Keychain::new(&format!("baa Mail: {}", dir.display()));
+    let mail = baa_ui::start_mail(cx, |notify| baa_mail::Mail::open(&dir.join("mail"), Box::new(keychain), notify));
+    if let Err(e) = mail {
+        log::error!("mail is off for this run: {e}");
+    }
     // Also tells the settings window where "Edit keymap.json…" goes.
     baa_ui::load_user_keymap(dir.join("keymap.json"), cx);
     cx.on_action(|_: &Quit, cx| quit::<H>(cx));

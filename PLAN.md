@@ -6,7 +6,7 @@ Domain: baa.me. Targets: **macOS** (Windows later, via the same `//baa`). iOS/An
 Researched 2026-10-22. Versions quoted are the ones live that day.
 
 The engine is specified in `PLAN-chromium.md`. Sections marked *superseded* are kept for history.
-Mail (proposed, not built) is specified in `PLAN-mail.md`.
+Mail (being built, off by default behind Settings › Mail) is specified in `PLAN-mail.md`.
 
 ---
 
@@ -88,6 +88,7 @@ Must-haves (in the brief) are bold.
 **Explicitly out of scope for v1**: Boosts (CSS/JS injection), Easels, Notes, Arc Max/AI, sync, iOS companion,
 extensions UI, password manager.
 Not out of scope: ad blocking. uBlock Origin (Helium's) is built in, one per Space, with bundled filter lists.
+Added after v1's list was written: mail, a client inside baa with accounts a Space (`PLAN-mail.md`).
 
 ---
 
@@ -103,6 +104,8 @@ baa/
 │  │                              input/IME bridge, profile manager
 │  ├─ baa-model/                  Space/Tab/Session structs, persistence (SQLite via rusqlite,
 │  │                              bundled), archive policy
+│  ├─ baa-mail/                   mail without its views: accounts, sync, mail.db, MIME, sending,
+│  │                              verification codes (no gpui; the views are baa-ui/src/mail)
 │  └─ baa-privacy/                switches, pref overrides, proxy allowlist; the CI test asserts
 │                                 nothing outside the allowlist is contacted
 ├─ chromium/                      vendored Helium + helium-macos, baa's patches, //baa, local-build.sh

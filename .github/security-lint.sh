@@ -22,6 +22,21 @@ for f in $(git ls-files '*.rs'); do
   ' "$f"
 done | grep . && fail=1
 
+# Mail's curl is the one exception to http(s) only, and it is TLS or nothing: https, or mail schemes with --ssl-reqd.
+for f in $(git ls-files 'crates/baa-mail/*.rs' 'crates/baa-mail/**/*.rs'); do
+  awk -v f="$f" '
+    /fn curl_args/ { args = NR; seen = "" }
+    args && NR <= args + 5 { seen = seen $0 }
+    args && NR == args + 5 { if (seen !~ /"--ssl-reqd"/ && seen !~ /"=https"/) print f ":" args ": mail curl_args without --ssl-reqd or =https"; args = 0 }
+    /"=http[,"]/ { print f ":" NR ": plain http in baa-mail" }
+    END { if (args && seen !~ /"--ssl-reqd"/ && seen !~ /"=https"/) print f ":" args ": mail curl_args without --ssl-reqd or =https" }
+  ' "$f"
+done | grep . && fail=1
+
+# Mail's TLS is checked against the system trust store: no verifier of baa's own, no way past a failure.
+out=$(git ls-files 'crates/*.rs' 'crates/**/*.rs' | xargs grep -nE '\.dangerous\(\)|danger_accept_invalid|ServerCertVerifier') && hit "$out
+  ^ a TLS verifier override: mail connections use the platform verifier only"
+
 # Page-supplied URLs are never re-issued as loads.
 out=$(grep -n 'load_url(' crates/baa-ui/src/browser/peek.rs crates/baa-ui/src/lil_baa.rs) && hit "$out
   ^ load_url in Peek/lil-baa: adopt the page's URL (take_pending) instead"
