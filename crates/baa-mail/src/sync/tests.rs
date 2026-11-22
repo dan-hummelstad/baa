@@ -330,7 +330,6 @@ fn a_code_in_the_body_of_new_mail_is_found_without_anyone_opening_it() {
     rig.synced();
     assert_eq!(codes_found(&rig), ["482913"]);
 
-    // And in mail that arrives while the account idles.
     let rig = Rig::standard();
     rig.start_default();
     rig.synced();
