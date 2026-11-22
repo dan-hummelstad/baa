@@ -129,7 +129,9 @@ impl<H: WebHost> Browser<H> {
                 let id = f.id;
                 let row = NavRow { key: ("nav-folder", id.0), icon: role_icon(f.role), label: f.name.clone().into(), count: f.unread as usize, selected: in_folder(Some(id)) };
                 body = body.child(self.nav_row(theme, row, cx, move |this, _, cx| {
-                    // ponytail: Mail::check_folder(folder) is called here once lane 1 lands it; until then such a folder refreshes every 10 minutes
+                    if let Some(mail) = &this.mail {
+                        mail.mail.check_folder(id);
+                    }
                     this.open_list(Some(id), Filter::All, cx)
                 }));
             }
