@@ -232,6 +232,23 @@ extern "C" fn tab_set_group(t: TabId, group: u64, title: *const c_char) {
 extern "C" fn tab_cdp(t: TabId, id: u64, json: *const c_char) {
     log(format!("tab_cdp {t:?} {id} {}", arg(json)));
 }
+extern "C" fn tab_fill_code(t: TabId, id: u64, code: *const c_char) {
+    log(format!("tab_fill_code {t:?} {id} {}", arg(code)));
+}
+/// "mail.google.com" is google.com's; "long.test" has a site too long for any buffer.
+extern "C" fn site_of(host: *const c_char, out: *mut c_char, len: usize) -> usize {
+    let site = match arg(host).as_str() {
+        "mail.google.com" => "google.com".to_string(),
+        "long.test" => "x".repeat(300),
+        other => other.to_string(),
+    };
+    let n = site.len().min(len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(site.as_ptr().cast(), out, n);
+        *out.add(n) = 0;
+    }
+    site.len()
+}
 extern "C" fn tab_media_action(t: TabId, action: u32) {
     log(format!("tab_media_action {t:?} {action}"));
 }
@@ -358,6 +375,8 @@ fn fake_core() -> &'static Core {
         tab_set_group,
         tab_cdp,
         tab_media_action,
+        tab_fill_code,
+        site_of,
         answer,
         context_menu_done,
         download_cancel,
@@ -546,6 +565,7 @@ mod adoption;
 mod cdp_tests;
 mod devtools_tests;
 mod dialogs;
+mod code_tests;
 mod document_tests;
 mod extension_tests;
 mod m3;

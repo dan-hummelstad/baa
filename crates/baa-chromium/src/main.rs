@@ -217,6 +217,7 @@ mod app {
         target_url: on_target_url,
         extension_action: on_extension_action,
         extension_popup_opened: on_extension_popup_opened,
+        code_field: on_code_field,
     };
 
     thread_local! {
@@ -257,6 +258,8 @@ mod app {
         static PROFILES: RefCell<[*mut ffi::Profile; 3]> = const { RefCell::new([std::ptr::null_mut(); 3]) };
         /// The last `dialog` id: ids come from the shared counter, so scripts say `answer last`.
         static LAST_DIALOG: Cell<u64> = const { Cell::new(0) };
+        /// The last `code_field` id shown, which `fillcode` fills.
+        static LAST_CODE_FIELD: Cell<u64> = const { Cell::new(0) };
     }
 
     fn tab_index(tab: ffi::TabId) -> String {
@@ -471,6 +474,29 @@ mod app {
     extern "C" fn on_target_url(_: *mut c_void, tab: ffi::TabId, url: *const c_char) {
         eprintln!("baa: target_url tab={} url=\"{}\"", tab_index(tab), text(url));
     }
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn on_code_field(
+        _: *mut c_void,
+        tab: ffi::TabId,
+        id: u64,
+        origin: *const c_char,
+        top: *const c_char,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        shown: bool,
+    ) {
+        if shown {
+            LAST_CODE_FIELD.with(|l| l.set(id));
+        }
+        eprintln!(
+            "baa: code_field tab={} id={id} origin={} top={} x={x} y={y} w={w} h={h} shown={shown}",
+            tab_index(tab),
+            text(origin),
+            text(top)
+        );
+    }
     extern "C" fn on_extension_action(_: *mut c_void, _: *mut ffi::Profile, id: *const c_char, tab: ffi::TabId) {
         eprintln!("baa: extension_action ext={} tab={}", text(id), if tab == 0 { "0".into() } else { tab_index(tab) });
     }
@@ -578,6 +604,7 @@ mod app {
     ///   rules <kind> | rule <kind> <pattern> <state> | clear <what> <since_ms> | unpacked <path> | reload-ext <id> | initscript <js> | schemes <website> <webui> | profile <1|2|e> | prefclear <1|local> <name> | defaultbrowser
     ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id|last> <0|1> [text] [password] [checked 0|1]
     ///   waitload <max_ms> (until the tab stops loading)
+    ///   fillcode <code> (baa_tab_fill_code into the last code field shown) | siteof <host> (baa_site_of)
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         cx.spawn(async move |cx| {
@@ -878,6 +905,12 @@ mod app {
                         let (user, password) = (c(parts.next().unwrap_or("")), c(parts.next().unwrap_or("")));
                         let checked = parts.next() == Some("1");
                         (core.answer)(id, &ffi::Answer { ok, text: user.as_ptr(), password: password.as_ptr(), checked });
+                    }
+                    "fillcode" => (core.tab_fill_code)(tab, LAST_CODE_FIELD.with(Cell::get), c(arg).as_ptr()),
+                    "siteof" => {
+                        let mut buf = [0u8; 256];
+                        (core.site_of)(c(arg).as_ptr(), buf.as_mut_ptr().cast(), buf.len());
+                        eprintln!("baa: site_of {arg} -> {}", text(buf.as_ptr().cast()));
                     }
                     "sleep" => executor.timer(std::time::Duration::from_millis(arg.parse().unwrap())).await,
                     // A first load on a fresh profile can take 3-13 s on a CI runner; a fixed sleep

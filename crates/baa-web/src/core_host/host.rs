@@ -263,10 +263,14 @@ impl WebHost for CoreWebHost {
         cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Document(kind), window, cx))
     }
 
-    // ponytail: the host itself, so only the same host is the same site, until WP-M asks
-    // the engine (`baa_site_of`, ABI 17).
     fn site_of(&self, host: &str) -> String {
-        host.to_string()
+        // Hosts are at most 253 bytes; a longer answer is cut, never trusted as a site.
+        let mut out = [0 as std::ffi::c_char; 256];
+        let len = (self.core.site_of)(c_string(host).as_ptr(), out.as_mut_ptr(), out.len());
+        if len >= out.len() {
+            return host.to_string();
+        }
+        unsafe { super::from_c(out.as_ptr()) }
     }
 
     fn ephemeral_profile(&self) -> ProfileId {

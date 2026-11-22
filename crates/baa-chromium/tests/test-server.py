@@ -1,4 +1,5 @@
 # The harness tests' server, one for a whole run (ci.py starts it): /small and /slow are attachments, /auth wants Basic u:p,
+# /otp is a page with a one-time-code field and a plain one (codes.expect),
 # /mail-seen lists the /mail-* paths asked for so far (mail-document.expect), anything else is a page.
 # Usage: test-server.py <cert> <key>. It serves the same over plain HTTP and over TLS (where ci.py maps the sites tests
 # load by name) and prints the two ports once both listen.
@@ -37,6 +38,15 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(200 if ok else 401)
             if not ok:
                 self.send_header('WWW-Authenticate', 'Basic realm="baa"')
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == '/otp':
+            body = (b'<html><head><title>otp</title></head><body>'
+                    b'<input id=c autocomplete="one-time-code" style="position:fixed;left:0;top:0;width:300px;height:60px">'
+                    b'<input id=n style="position:fixed;left:0;top:200px;width:300px;height:60px"></body></html>')
+            self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()

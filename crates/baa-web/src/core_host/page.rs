@@ -453,8 +453,9 @@ impl PageHandle for CorePage {
             (core.tab_eval)(tab, script.as_ptr(), false);
         });
     }
-    // ponytail: nothing is filled until WP-M (`baa_tab_fill_code`, ABI 17).
-    fn fill_code(&self, _id: u64, _code: &str) {}
+    fn fill_code(&self, id: u64, code: &str) {
+        self.shared.run(|core, tab| (core.tab_fill_code)(tab, id, c_string(code).as_ptr()));
+    }
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         Focusable::focus_handle(self, cx)
     }

@@ -112,6 +112,9 @@ void DetachCdp(uint64_t tab, bool tell);
 // media.mm: the tab's media session is reported by `media` from Watch to Unwatch.
 void WatchMedia(uint64_t tab, content::WebContents* wc);
 void UnwatchMedia(uint64_t tab);
+// codes.mm: the tab's one-time-code fields are reported by `code_field` from Watch to Unwatch.
+void WatchCodes(uint64_t tab, content::WebContents* wc);
+void UnwatchCodes(uint64_t tab);
 
 // downloads.mm: observes a profile's DownloadManager for as long as it lives
 // (BaaProfile owns one).

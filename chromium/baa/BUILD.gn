@@ -9,6 +9,7 @@ source_set("baa") {
     "app_mac.mm",
     "baa.h",
     "cdp.mm",
+    "codes.mm",
     "devtools.mm",
     "dialogs.mm",
     "downloads.mm",

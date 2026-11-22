@@ -1,0 +1,16 @@
+# baa_site_of (ABI 17): the registrable domain, a private suffix kept, an IP kept. A one-time-code field
+# is reported with its origin and the top frame's, on focus and on blur, and only that one (the plain
+# input reports nothing); a fill by the last shown id lands once and a fill after blur does not; a
+# cross-site frame's field says so.
+script: codes.txt
+must: baa: site_of mail\.google\.com -> google\.com$
+must: baa: site_of a\.github\.io -> a\.github\.io$
+must: baa: site_of 127\.0\.0\.1 -> 127\.0\.0\.1$
+must: baa: code_field tab=0 id=\d+ origin=https://example\.com top=https://example\.com x=0 y=0 w=300 h=60 shown=true$
+must: title="v:123456"
+must: baa: code_field tab=0 id=\d+ origin=https://example\.com top=https://example\.com .* shown=false$
+mustnot: title="v2:999999"
+must: title="v2:123456"
+must: baa: code_field tab=0 id=\d+ origin=https://example\.org top=https://example\.com .* shown=true$
+count: 2 baa: code_field .* shown=true$
+count: 1 baa: code_field .* shown=false$

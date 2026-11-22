@@ -655,6 +655,23 @@ pub(super) fn callbacks() -> Callbacks {
         let extension_id = unsafe { from_c(extension_id) };
         unsafe { dispatch(ctx) }.extension_popup_opened(profile, extension_id, popup);
     }
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn code_field(
+        ctx: *mut c_void,
+        tab: TabId,
+        id: u64,
+        origin: *const c_char,
+        top: *const c_char,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        shown: bool,
+    ) {
+        let (origin, top) = unsafe { (from_c(origin), from_c(top)) };
+        let at = shown.then(|| gpui::Bounds::new(gpui::point(gpui::px(x), gpui::px(y)), gpui::size(gpui::px(w), gpui::px(h))));
+        unsafe { dispatch(ctx) }.on_page(tab, move |_, cx| cx.emit(PageEvent::CodeField { id, origin, top, at }));
+    }
     Callbacks {
         key,
         tab_created,
@@ -684,6 +701,7 @@ pub(super) fn callbacks() -> Callbacks {
         target_url,
         extension_action,
         extension_popup_opened,
+        code_field,
     }
 }
 

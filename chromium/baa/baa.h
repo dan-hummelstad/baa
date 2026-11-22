@@ -33,7 +33,7 @@ extern "C" {
 #define BAA_EXPORT __attribute__((visibility("default")))
 
 // Bumped on every ABI change; the Rust loader refuses a mismatch.
-#define BAA_ABI_VERSION 16
+#define BAA_ABI_VERSION 17
 BAA_EXPORT int baa_abi_version(void);
 
 typedef struct BaaProfile BaaProfile;
@@ -383,6 +383,19 @@ typedef struct {
   // unknown to the app, or the app is quitting.
   void (*extension_popup_opened)(void* ctx, BaaProfile* profile,
                                  const char* extension_id, BaaTabId popup);
+
+  // A field for a one-time code (an enabled, writable <input> whose
+  // autocomplete has the token "one-time-code") got focus in any frame of the
+  // tab's page. `id` (from the shared counter) names it until it goes.
+  // `origin` is its frame's committed origin and `top` the main frame's;
+  // (x, y, w, h) is its rectangle at focus time, in points from the top left of
+  // the tab's view. `shown` false: field `id` lost focus, or its frame or page
+  // navigated or went away; the other arguments repeat what was shown. At most
+  // one field a tab is shown: the last is withdrawn before a new one comes. The
+  // page learns nothing of either. Not sent for popups or DevTools.
+  void (*code_field)(void* ctx, BaaTabId tab, uint64_t id, const char* origin,
+                     const char* top, float x, float y, float w, float h,
+                     bool shown);
 } BaaCallbacks;
 
 // BaaCallbacks.swipe phases.
@@ -820,6 +833,20 @@ BAA_EXPORT void baa_tab_cdp(BaaTabId tab, uint64_t id, const char* json);
 // One BAA_MEDIA_* action on the tab's media session, as Chrome's media
 // controls send it. An action the session does not take does nothing.
 BAA_EXPORT void baa_tab_media_action(BaaTabId tab, uint32_t action);
+
+// Puts `code` into `code_field` `id` as typed text (input events, no key
+// events), replacing what the field holds, only while that field still has
+// focus in its frame and the frame still shows the document and origin it was
+// reported with. Never submits the form. `code` is 1 to 32 ASCII letters,
+// digits or '-'; anything else, and an id that is gone, does nothing.
+BAA_EXPORT void baa_tab_fill_code(BaaTabId tab, uint64_t id, const char* code);
+
+// The site of `host` as Chrome's site isolation sees it: its registrable domain
+// with private registries ("mail.google.com" -> "google.com",
+// "a.github.io" -> "a.github.io"). A host with none (an IP address,
+// "localhost") is its own site. Written to `out` NUL-terminated, truncated to
+// fit `len`; returns the full length, without the NUL.
+BAA_EXPORT size_t baa_site_of(const char* host, char* out, size_t len);
 
 // ---- Dialogs ---------------------------------------------------------------
 

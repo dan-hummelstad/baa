@@ -3,7 +3,7 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
-pub const ABI_VERSION: c_int = 16;
+pub const ABI_VERSION: c_int = 17;
 
 #[repr(C)]
 pub struct Profile {
@@ -298,6 +298,18 @@ pub struct Callbacks {
     /// May come inside a `baa_*` call.
     pub extension_action: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, tab: TabId),
     pub extension_popup_opened: extern "C" fn(ctx: *mut c_void, profile: *mut Profile, extension_id: *const c_char, popup: TabId),
+    pub code_field: extern "C" fn(
+        ctx: *mut c_void,
+        tab: TabId,
+        id: u64,
+        origin: *const c_char,
+        top: *const c_char,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        shown: bool,
+    ),
 }
 
 /// Every function of `baa.h`. Plain data, so tests build one from fakes.
@@ -365,6 +377,9 @@ pub struct Core {
     /// Only through `cdp::command`: the allowlist decides what reaches it.
     pub tab_cdp: extern "C" fn(TabId, u64, *const c_char),
     pub tab_media_action: extern "C" fn(TabId, u32),
+    pub tab_fill_code: extern "C" fn(TabId, u64, *const c_char),
+    /// Writes the site NUL-terminated into the buffer, truncated; returns its full length.
+    pub site_of: extern "C" fn(*const c_char, *mut c_char, usize) -> usize,
     /// Answers a dialog or permission ask.
     pub answer: extern "C" fn(u64, *const Answer),
     pub context_menu_done: extern "C" fn(u64, c_int),
@@ -469,6 +484,8 @@ pub fn load() -> &'static Core {
             tab_set_group,
             tab_cdp,
             tab_media_action,
+            tab_fill_code,
+            site_of,
             answer,
             context_menu_done,
             download_cancel,

@@ -389,6 +389,7 @@ void BaaTab::Attach(content::WebContents* wc) {
   baa::AttachDialogs(wc);
   baa::AttachPermissions(wc);
   baa::WatchMedia(id, wc);
+  baa::WatchCodes(id, wc);
   if (auto* helper = find_in_page::FindTabHelper::FromWebContents(wc)) {
     find_helper = helper;
     helper->AddObserver(this);
@@ -444,6 +445,7 @@ void BaaTab::Detach() {
     find_helper = nullptr;
   }
   baa::UnwatchMedia(id);
+  baa::UnwatchCodes(id);
   Observe(nullptr);
 }
 
