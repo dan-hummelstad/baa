@@ -6,6 +6,7 @@ Domain: baa.me. Targets: **macOS** (Windows later, via the same `//baa`). iOS/An
 Researched 2026-10-22. Versions quoted are the ones live that day.
 
 The engine is specified in `PLAN-chromium.md`. Sections marked *superseded* are kept for history.
+Mail (proposed, not built) is specified in `PLAN-mail.md`.
 
 ---
 
