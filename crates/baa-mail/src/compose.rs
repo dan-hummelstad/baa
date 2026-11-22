@@ -11,7 +11,6 @@ use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The message a reply or forward is made from, as the store has it.
 pub(crate) struct Original {
     pub from: Address,
     pub reply_to: Vec<Address>,
@@ -27,7 +26,6 @@ pub(crate) struct Original {
     pub html: String,
 }
 
-/// The thread headers of the message a draft answers.
 pub(crate) struct Answered {
     pub message_id: String,
     pub references: Vec<String>,
@@ -345,7 +343,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         let text = String::from_utf8_lossy(&bytes).to_lowercase();
-        assert!(!text.contains("bcc") && !text.contains("secret@hidden"));
+        assert!(!text.contains("\nbcc:") && !text.contains("secret@hidden"), "the random Message-ID may hold the letters bcc");
         let m = MessageParser::default().parse(&bytes).unwrap();
         assert_eq!(m.subject(), Some("Hello"));
         assert_eq!(m.from().unwrap().first().unwrap().address(), Some("me@here.org"));

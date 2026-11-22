@@ -409,7 +409,9 @@ impl Mail {
     }
 
     pub fn discard_draft(&self, id: DraftId) {
-        self.read(|s| s.discard_draft(id))
+        if let Some(store) = self.store.get() {
+            let _ = store.discard_draft(id);
+        }
     }
 
     /// A reply to message `to`, from the account it came to. `None` while it is not in
@@ -473,19 +475,7 @@ impl Mail {
         let secs = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let after = secs(since).max(secs(SystemTime::now()) - 600);
         let offering: Vec<AccountId> = self.accounts(space).into_iter().filter(|a| a.codes).map(|a| a.id).collect();
-        let mut out: Vec<Code> = Vec::new();
-        for m in self.read(|s| s.code_candidates(space, after)) {
-            if !offering.contains(&m.account) {
-                continue;
-            }
-            let text = m.raw.as_deref().map(mime::plain_text).unwrap_or_default();
-            let token = mime::header_text(&m.header, "OTP-Token");
-            let Some((code, bound_host)) = codes::extract(&m.subject, &text, token.as_deref()) else { continue };
-            if !out.iter().any(|c| c.code == code) {
-                out.push(Code { code, sender: m.from, account: m.account, bound_host, dmarc_failed: m.dmarc_failed });
-            }
-        }
-        out
+        codes::found(self.read(|s| s.code_candidates(space, after)).into_iter().filter(|m| offering.contains(&m.account)))
     }
 }
 

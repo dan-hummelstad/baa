@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::Code;
+use crate::{mime, store::CodeCandidate, Code};
 
 #[derive(Deserialize)]
 struct Patterns {
@@ -34,6 +34,20 @@ impl Code {
         sender_site.eq_ignore_ascii_case(page_site)
             || patterns().aliases.get(&sender_site).is_some_and(|sites| sites.iter().any(|s| s.eq_ignore_ascii_case(page_site)))
     }
+}
+
+/// The codes `messages` carry, one each, the first message of a code winning.
+pub(crate) fn found(messages: impl Iterator<Item = CodeCandidate>) -> Vec<Code> {
+    let mut out: Vec<Code> = Vec::new();
+    for m in messages {
+        let text = m.raw.as_deref().map(mime::plain_text).unwrap_or_default();
+        let token = mime::header_text(&m.header, "OTP-Token");
+        let Some((code, bound_host)) = extract(&m.subject, &text, token.as_deref()) else { continue };
+        if !out.iter().any(|c| c.code == code) {
+            out.push(Code { code, sender: m.from, account: m.account, bound_host, dmarc_failed: m.dmarc_failed });
+        }
+    }
+    out
 }
 
 fn patterns() -> &'static Patterns {
