@@ -33,6 +33,30 @@ fn two_accounts_make_one_list_and_the_chips_filter_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_fold_lists_each_accounts_folders_a_folder_opens_in_the_mail_view_and_an_account_folds_away(cx: &mut TestAppContext) {
+    let (b, cx, mail, _) = with_account(cx);
+    let space = mail_space(&b, cx);
+    let second = mail.seed_account(&testing::account(2, Some(space), "dan@work.example"));
+    b.update(cx, |b, cx| b.set_scope(Some(AccountId(1)), cx));
+    assert!(drawn(cx, "nav-account-1") && drawn(cx, "nav-account-2"), "every account, whatever the scope");
+    let sent: &'static str = format!("nav-folder-{}", second[2].0).leak();
+    let click = |cx: &mut gpui::VisualTestContext, at: &'static str| {
+        let at = cx.debug_bounds(at).unwrap().center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx, sent);
+    b.read_with(cx, |b, _| {
+        let state = &b.mail.as_ref().unwrap().state;
+        assert_eq!((state.folder, state.account), (Some(second[2]), None), "the folder, out of the other account's scope");
+    });
+    click(cx, "nav-account-2");
+    assert!(!drawn(cx, sent), "folded away");
+    click(cx, "nav-account-2");
+    assert!(drawn(cx, sent), "and back");
+}
+
+#[gpui::test]
 fn the_unread_count_follows_a_read(cx: &mut TestAppContext) {
     let (b, cx, mail, folders) = with_account(cx);
     let space = mail_space(&b, cx);

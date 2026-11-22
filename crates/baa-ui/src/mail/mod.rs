@@ -1,6 +1,6 @@
 //! Mail in the shell (PLAN-mail.md §2, §5): the process's `Mail` and its events, what a window
 //! holds of mail, and the frame of the mail view. The parts are in the files beside this one:
-//! `nav` (the Archive's Mail section) and `list` (WP-H), `reader` and `commands` (WP-I),
+//! `nav` (the Fold's Mail section) and `list` (WP-H), `reader` and `commands` (WP-I),
 //! `compose` and `tabs` (WP-J), `setup` (WP-K) and `code_offer` (WP-L).
 
 mod code_offer;
@@ -8,6 +8,7 @@ mod commands;
 pub(crate) mod compose;
 mod list;
 mod nav;
+pub(crate) use nav::inbox_unread;
 pub(crate) mod reader;
 pub(crate) mod setup;
 mod tabs;
@@ -134,6 +135,7 @@ pub(crate) struct MailUi<H: WebHost> {
     pub(crate) synced_at: Option<Instant>,
     /// Verification codes offered to tabs (PLAN-mail.md §7).
     pub(crate) offers: code_offer::Offers,
+    pub(crate) folded: std::collections::HashSet<AccountId>,
     /// Made at the first sync with a window: a document is made in one.
     events: Option<Subscription>,
 }
@@ -230,6 +232,7 @@ impl<H: WebHost> Browser<H> {
                     status: HashMap::new(),
                     synced_at: None,
                     offers: code_offer::Offers::default(),
+                    folded: Default::default(),
                     events: None,
                 });
             }

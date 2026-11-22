@@ -612,7 +612,7 @@ fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Downloads", Box::new(ShowDownloads)),
         ("History", Box::new(ShowHistory)),
         ("Clear Today", Box::new(ClearToday)),
-        ("Archive (last section)", Box::new(ToggleLibrary)),
+        ("The Fold (last section)", Box::new(ToggleLibrary)),
         ("Settings", Box::new(OpenSettings)),
     ]
 }

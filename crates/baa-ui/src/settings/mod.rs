@@ -9,7 +9,7 @@
 mod claude;
 mod developer;
 mod extensions;
-mod mail;
+pub(crate) mod mail;
 mod privacy;
 pub(crate) mod rows;
 pub(crate) mod tabs;

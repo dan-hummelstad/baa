@@ -133,8 +133,8 @@ fn menus() -> Vec<Menu> {
             Sep,
             a("Clear Today", ClearToday),
         ]),
-        Menu::new("Archive").items([
-            a("Show Archive", ShowArchive),
+        Menu::new("The Fold").items([
+            a("Show The Fold", ShowArchive),
             a("History", ShowHistory),
             a("Downloads", ShowDownloads),
             Sep,

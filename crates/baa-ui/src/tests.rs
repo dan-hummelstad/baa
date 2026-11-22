@@ -942,6 +942,25 @@ fn incognito_downloads_leave_no_record(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn clear_list_forgets_finished_downloads_and_an_incognito_window_writes_nothing(cx: &mut TestAppContext) {
+    let (b, cx) = browser(cx);
+    let record = |path: &str| baa_model::DownloadRecord { path: path.into(), url: "https://a.example/f.zip".into(), bytes: 1, finished_at: 1 };
+    b.update(cx, |b, cx| {
+        b.store().unwrap().record_download(&record("/tmp/a.zip")).unwrap();
+        b.saved_downloads = vec![record("/tmp/a.zip")];
+        b.clear_downloads(cx);
+        assert!(b.saved_downloads.is_empty() && b.store().unwrap().downloads().unwrap().is_empty());
+    });
+    // An incognito window has no store to write to.
+    let (p, pcx) = crate::tests_windows::open(cx, true);
+    p.update(pcx, |p, cx| {
+        p.saved_downloads = vec![record("/tmp/b.zip")];
+        p.clear_downloads(cx);
+        assert!(p.store().is_none() && p.saved_downloads.is_empty());
+    });
+}
+
+#[gpui::test]
 fn a_dangerous_download_waits_for_keep_or_discard(cx: &mut TestAppContext) {
     use gpui::Modifiers;
     let (b, cx) = browser(cx);

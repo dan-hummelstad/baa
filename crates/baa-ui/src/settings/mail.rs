@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, AnyElement, Context, SharedString};
 use super::{Field, Item, SettingsView};
 use crate::{mail::setup::MailField, theme::surface};
 
-fn provider_name(provider: Provider) -> &'static str {
+pub(crate) fn provider_name(provider: Provider) -> &'static str {
     match provider {
         Provider::ICloud => "iCloud",
         Provider::Gmail => "Gmail",

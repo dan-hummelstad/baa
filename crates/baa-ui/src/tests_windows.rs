@@ -14,7 +14,7 @@ fn browser(cx: &mut TestAppContext) -> (B, &mut VisualTestContext) {
 }
 
 /// Opens a window the way ⌘N / ⌘⇧N do, from outside any window's update.
-fn open(cx: &mut VisualTestContext, private: bool) -> (B, &'static mut VisualTestContext) {
+pub(crate) fn open(cx: &mut VisualTestContext, private: bool) -> (B, &'static mut VisualTestContext) {
     let h = cx.cx.update(|cx| crate::open_window::<MockHost>(private, cx)).expect("a window opens");
     let other = VisualTestContext::from_window(h.into(), &cx.cx).into_mut();
     let b = h.root(other).unwrap();
