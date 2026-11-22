@@ -55,10 +55,15 @@ impl<H: WebHost> SettingsView<H> {
                 "Off by default. No data leaves this Mac except to your own mail servers.",
                 self.toggle("pref-mail", s.mail.enabled, |s, v| s.mail.enabled = v, cx),
             ),
+            self.row(
+                "mail_codes",
+                "Offers a code from a message to the page waiting for one, from the accounts switched on below.",
+                self.toggle("pref-mail-codes", s.mail.codes, |s, v| s.mail.codes = v, cx),
+            ),
             self.row("mail_accounts", detail, add.unwrap_or_else(|| div().into_any_element())),
         ];
         if running {
-            out.extend(self.mail_accounts(cx));
+            out.extend(self.mail_accounts(s.mail.codes, cx));
             if self.mail_setup.open {
                 out.extend(self.mail_form(cx));
             }
@@ -74,16 +79,11 @@ impl<H: WebHost> SettingsView<H> {
                 cx,
             ),
         ));
-        out.push(self.row(
-            "mail_codes",
-            "Offers a code from a message to the page waiting for one.",
-            self.toggle("pref-mail-codes", s.mail.codes, |s, v| s.mail.codes = v, cx),
-        ));
         out
     }
 
     /// The accounts of each stored Space, then those of every Space once.
-    fn mail_accounts(&self, cx: &mut Context<Self>) -> Vec<Item> {
+    fn mail_accounts(&self, codes: bool, cx: &mut Context<Self>) -> Vec<Item> {
         let groups: Vec<(SharedString, Vec<Account>)> = {
             let b = self.browser.read(cx);
             let mut shared: Vec<Account> = Vec::new();
@@ -107,12 +107,13 @@ impl<H: WebHost> SettingsView<H> {
         }
         for (title, accounts) in groups.into_iter().filter(|(_, a)| !a.is_empty()) {
             out.push((None, div().pt(px(10.)).px(px(26.)).text_size(px(11.)).text_color(surface::muted()).child(title).into_any_element()));
-            out.extend(accounts.iter().map(|a| self.mail_account_row(a, cx)));
+            out.extend(accounts.iter().map(|a| self.mail_account_row(a, codes, cx)));
         }
         out
     }
 
-    fn mail_account_row(&self, account: &Account, cx: &mut Context<Self>) -> Item {
+    /// `codes`: the global switch; off, the account's own is greyed.
+    fn mail_account_row(&self, account: &Account, codes: bool, cx: &mut Context<Self>) -> Item {
         let id = account.id;
         let confirming = self.mail_setup.confirm_remove == Some(id);
         let detail = if confirming {
@@ -150,8 +151,28 @@ impl<H: WebHost> SettingsView<H> {
                     .child(div().truncate().text_size(px(12.5)).child(SharedString::from(account.name.clone())))
                     .child(div().text_size(px(11.5)).text_color(surface::muted()).child(SharedString::from(detail))),
             )
+            .child(self.mail_codes_switch(account, codes, cx))
             .child(div().flex_none().child(buttons));
         (None, el.into_any_element())
+    }
+
+    fn mail_codes_switch(&self, account: &Account, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let (id, on) = (account.id, account.codes);
+        let el = div()
+            .id(("mail-account-codes", id.0))
+            .debug_selector(move || format!("mail-account-codes:{}:{}", id.0, if on { "on" } else { "off" }))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(11.5))
+            .text_color(surface::muted())
+            .child("Codes")
+            .child(self.switch("mail-account-codes", on));
+        if !enabled {
+            return el.opacity(0.4).into_any_element();
+        }
+        el.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.mail_set_codes(id, !on, cx))).into_any_element()
     }
 
     fn form_row(&self, selector: &'static str, label: &'static str, control: AnyElement) -> Item {

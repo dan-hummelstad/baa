@@ -25,7 +25,7 @@ mod tests_setup;
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use baa_mail::{AccountId, Event, Filter, Mail, MailSpace, SyncState, View, ViewState};
+use baa_mail::{AccountId, DraftId, Event, Filter, Mail, MailSpace, SyncState, View, ViewState};
 use baa_model::{Pane, Showing, SpaceId};
 use baa_web::{PageHandle, WebHost};
 use futures::StreamExt;
@@ -96,6 +96,13 @@ pub(crate) enum Field {
     Cc,
     Bcc,
     Subject,
+}
+
+/// Tells every window an account is gone, as a sync's `Changed` does, so what showed of it goes.
+pub(crate) fn account_removed(account: AccountId, cx: &mut App) {
+    if let Some(events) = cx.try_global::<MailHub>().map(|hub| hub.events.clone()) {
+        events.update(cx, |_, cx| cx.emit(Event::Changed { account }));
+    }
 }
 
 /// Mail in one window: `Browser.mail`, `Some` only with mail on in a window that is not private.
@@ -254,7 +261,7 @@ impl<H: WebHost> Browser<H> {
                 self.on_codes_changed(cx);
                 let Some(mail) = &self.mail else { return };
                 if !ours(mail, account) {
-                    return;
+                    return self.forget_account(*account, window, cx);
                 }
                 self.refresh_reader(window, cx);
                 if !self.mail_drawn() {
@@ -280,6 +287,31 @@ impl<H: WebHost> Browser<H> {
                 self.show_toast(what, cx);
             }
         }
+        cx.notify();
+    }
+
+    /// An account of this Space went (removed in Settings › Mail): its conversation, its
+    /// drafts' tabs and a scope or folder of it leave the view.
+    fn forget_account(&mut self, account: AccountId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        if mail.reader.as_ref().and_then(|r| r.message()).is_some_and(|m| m.account == account) {
+            mail.reader = None;
+            mail.state.selected = None;
+        }
+        if mail.state.account == Some(account) {
+            mail.state.account = None;
+        }
+        let folders = mail.space.map(|s| mail.mail.folders(s)).unwrap_or_default();
+        if mail.state.folder.is_some_and(|f| !folders.iter().any(|g| g.id == f)) {
+            mail.state.folder = None;
+        }
+        mail.save_view();
+        let drafts: Vec<DraftId> = mail.drafts.iter().filter(|d| d.from == account).map(|d| d.id).collect();
+        for draft in drafts {
+            self.close_composer(draft, cx);
+        }
+        self.refresh_reader(window, cx);
+        self.show_mail_documents(cx);
         cx.notify();
     }
 

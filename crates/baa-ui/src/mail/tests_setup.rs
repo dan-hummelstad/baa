@@ -197,3 +197,56 @@ fn with_mail_off_or_in_a_private_window_the_tab_offers_no_accounts(cx: &mut Test
     s.run_until_parked();
     assert!(!drawn(&mut s, "mail-add-account") && !drawn(&mut s, "mail-form:provider"), "an incognito Space is offered nothing");
 }
+
+fn offline() -> Connect {
+    Box::new(|_, _| Err(Error::Offline))
+}
+
+#[gpui::test]
+fn an_accounts_codes_switch_is_kept_and_greys_with_the_global_one(cx: &mut TestAppContext) {
+    let (b, vcx) = window(cx, store_with_mail(true), offline());
+    let (mail, space) = (mail(&b, vcx), mail_space(&b, vcx));
+    mail.seed_account(&baa_mail::testing::account(1, Some(space), "dan@example.com"));
+    let h = open_mail_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "mail-account-codes:1:on");
+    assert!(!mail.accounts(space)[0].codes, "the switch calls the setter");
+
+    h.update(&mut s, |_, window, _| window.remove_window()).unwrap();
+    s.run_until_parked();
+    let h = open_mail_settings(&b, &mut s);
+    let mut s = tall(h, cx);
+    assert!(drawn(&mut s, "mail-account-codes:1:off"), "reopened, the row shows what is stored");
+
+    click(&mut s, "pref-mail-codes");
+    click(&mut s, "mail-account-codes:1:off");
+    assert!(!mail.accounts(space)[0].codes, "greyed with codes off in settings: a click does nothing");
+}
+
+#[gpui::test]
+fn removing_an_account_takes_its_message_and_drafts_off_the_mail_view(cx: &mut TestAppContext) {
+    let (b, vcx) = window(cx, store_with_mail(true), offline());
+    let (mail, space) = (mail(&b, vcx), mail_space(&b, vcx));
+    let folders = mail.seed_account(&baa_mail::testing::account(1, Some(space), "dan@example.com"));
+    let raw = baa_mail::testing::message("ola@example.com", "dan@example.com", "Plans", crate::mail::now_secs(), "", "Hei");
+    mail.seed_message(folders[0], "1", &raw, baa_mail::Flags::default(), true);
+    b.update_in(vcx, |b, window, cx| {
+        b.show_mail(true, window, cx);
+        let view = b.mail.as_ref().unwrap().view().unwrap();
+        let thread = b.mail.as_ref().unwrap().mail.rows(&view, 0..1)[0].thread;
+        b.select_thread(thread, window, cx);
+        b.new_message(window, cx);
+        b.show_front(None, cx);
+        let ui = b.mail.as_ref().unwrap();
+        assert!(ui.reader.is_some() && ui.drafts.len() == 1);
+    });
+    let h = open_mail_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    click(&mut s, "mail-remove");
+    click(&mut s, "mail-remove-yes");
+    b.read_with(&s, |b, _| {
+        let ui = b.mail.as_ref().unwrap();
+        assert!(ui.reader.is_none() && ui.state.selected.is_none(), "its message left the reading pane");
+        assert!(ui.drafts.is_empty() && ui.state.drafts.is_empty(), "its drafts' tabs closed");
+    });
+}

@@ -233,8 +233,15 @@ impl<H: WebHost> SettingsView<H> {
         self.mail_setup.confirm_remove = None;
         if let Some(mail) = self.browser.read(cx).mail.as_ref().map(|m| m.mail.clone()) {
             mail.remove_account(id);
+            crate::mail::account_removed(id, cx);
         }
-        self.browser.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    pub(crate) fn mail_set_codes(&mut self, id: AccountId, on: bool, cx: &mut Context<Self>) {
+        if let Some(mail) = self.browser.read(cx).mail.as_ref().map(|m| m.mail.clone()) {
+            mail.set_codes(id, on);
+        }
         cx.notify();
     }
 }

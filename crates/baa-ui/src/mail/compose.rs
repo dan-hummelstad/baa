@@ -280,7 +280,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// Removes the tab and its page; the draft stays where it was saved.
-    fn close_composer(&mut self, id: DraftId, cx: &mut Context<Self>) {
+    pub(crate) fn close_composer(&mut self, id: DraftId, cx: &mut Context<Self>) {
         let Some(ui) = self.mail.as_mut() else { return };
         if let Some(i) = ui.drafts.iter().position(|d| d.id == id) {
             if let Some(page) = &ui.drafts[i].page {
