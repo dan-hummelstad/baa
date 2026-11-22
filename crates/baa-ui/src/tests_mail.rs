@@ -1,7 +1,5 @@
 //! Mail in the shell (PLAN-mail.md §5), on `MockHost`.
 
-use std::path::Path;
-
 use baa_mail::{Mail, MemorySecrets};
 use baa_model::{Pane, Session, Settings, Showing, SpaceId, Store, TabId};
 use baa_web::{DocumentKind, PageHandle, WebHost};
@@ -11,13 +9,11 @@ use crate::{actions::*, library::Section, mock::MockHost, Browser};
 
 type B = Entity<Browser<MockHost>>;
 
-/// A window on `store`, after the app has started the process's `Mail`.
-// ponytail: `Mail::open` keeps nothing yet. Once lane 2 lands `Mail::open_with(None, …)` (an
-// in-memory store), this takes it, so that no test writes a mail.db; the path is one that
-// cannot be written, so a store that tried would fail here first.
+/// A window on `store`, after the app has started the process's `Mail` with mail.db in memory.
 fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) {
     cx.update(crate::init);
-    cx.update(|cx| crate::start_mail(cx, |notify| Mail::open(Path::new("/nonexistent"), Box::new(MemorySecrets::default()), notify)))
+    let connect: baa_mail::Connect = Box::new(|_| Err(baa_mail::Error::Other("no server in these tests".into())));
+    cx.update(|cx| crate::start_mail(cx, |notify| Mail::open_with(None, Box::new(MemorySecrets::default()), notify, connect)))
         .unwrap();
     cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), store, window, cx))
 }
