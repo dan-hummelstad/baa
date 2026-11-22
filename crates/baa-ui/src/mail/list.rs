@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use baa_mail::{AccountId, Filter, FolderId, Row, SyncState};
+use baa_mail::{AccountId, Filter, FolderId, Row, SyncState, Tab};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, Hsla, SharedString, Window};
 
@@ -98,50 +98,57 @@ fn status_line(states: &[SyncState], synced_secs_ago: Option<u64>, unread: u32) 
 }
 
 impl<H: WebHost> Browser<H> {
-    /// A folder or a search folder opened from the nav or the door.
+    /// A folder or a search folder opened from the nav: the list's tab comes to the front.
     pub(crate) fn open_list(&mut self, folder: Option<FolderId>, filter: Filter, cx: &mut Context<Self>) {
         let Some(ui) = &mut self.mail else { return };
         ui.state.folder = folder;
         ui.filter = filter;
-        ui.state.selected = None;
         ui.state.scroll = 0;
         ui.list.scroll_to_item(0, gpui::ScrollStrategy::Top);
-        ui.save_view();
-        cx.notify();
+        self.show_tab(Tab::List, cx);
     }
 
-    /// A scope chip: one account's mail, or all of them (`None`).
+    /// A scope chip or the account picker: one account's mail, or all of them (`None`).
     pub(crate) fn set_scope(&mut self, account: Option<AccountId>, cx: &mut Context<Self>) {
         let Some(ui) = &mut self.mail else { return };
         ui.state.account = account;
         ui.state.scroll = 0;
         ui.list.scroll_to_item(0, gpui::ScrollStrategy::Top);
-        ui.save_view();
-        cx.notify();
+        self.show_tab(Tab::List, cx);
     }
 
-    pub(crate) fn render_list(&self, theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let col = div().w(px(380.)).h_full().flex_none().flex().flex_col();
+    /// What the list shows, for its header, its tab and the preview's way back: the name, a
+    /// number, and whether that number counts unread mail (else the matches).
+    pub(crate) fn list_title(&self) -> (String, usize, bool) {
+        let (Some(ui), Some((mail, space))) = (&self.mail, self.mail_space()) else { return (String::new(), 0, false) };
+        let Some(view) = ui.view() else { return (String::new(), 0, false) };
+        let folders = mail.folders(space);
+        let named = view.folder.and_then(|id| folders.iter().find(|f| f.id == id));
+        let several = view.account.is_none() && mail.accounts(space).len() > 1;
+        match (!view.search.is_empty(), view.filter, named) {
+            (true, ..) => ("Search".into(), mail.count(&view), false),
+            (_, Filter::Unread, _) => ("Unread".into(), mail.count(&view), false),
+            (_, Filter::Flagged, _) => ("Flagged".into(), mail.count(&view), false),
+            (_, _, Some(f)) => (f.name.clone(), f.unread as usize, true),
+            _ => ((if several { "All inboxes" } else { "Inbox" }).into(), inbox_unread(&folders, view.account) as usize, true),
+        }
+    }
+
+    /// The list: a column beside the reading pane when `beside`, else across the mail view.
+    pub(crate) fn render_list(&self, beside: bool, theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let col = div().h_full().flex().flex_col();
+        let col = if beside { col.w(px(380.)).flex_none() } else { col.w_full() };
         let (Some(ui), Some((mail, space))) = (&self.mail, self.mail_space()) else { return col.into_any_element() };
         let Some(view) = ui.view() else { return col.into_any_element() };
         let accounts = mail.accounts(space);
         let folders = mail.folders(space);
         let count = mail.count(&view);
         let unread = inbox_unread(&folders, view.account);
-
         let searching = !view.search.is_empty();
-        let named = view.folder.and_then(|id| folders.iter().find(|f| f.id == id));
-        let title = match (searching, view.filter, named) {
-            (true, ..) => "Search".to_owned(),
-            (_, Filter::Unread, _) => "Unread".to_owned(),
-            (_, Filter::Flagged, _) => "Flagged".to_owned(),
-            (_, _, Some(f)) => f.name.clone(),
-            _ => "All inboxes".to_owned(),
-        };
-        let pill = match (searching, view.filter, named) {
-            (true, ..) | (_, Filter::Unread | Filter::Flagged, _) => Some(count.to_string()),
-            (_, _, Some(f)) => Some(f.unread).filter(|n| *n > 0).map(|n| format!("{n} unread")),
-            _ => Some(unread).filter(|n| *n > 0).map(|n| format!("{n} unread")),
+        let (title, n, of_unread) = self.list_title();
+        let pill = match of_unread {
+            true => Some(n).filter(|n| *n > 0).map(|n| format!("{n} unread")),
+            false => Some(n.to_string()),
         };
         let header = div()
             .flex_none()

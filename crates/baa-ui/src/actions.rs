@@ -68,6 +68,7 @@ gpui::actions!(
         SendMessage,
         DeleteMessage,
         SearchMail,
+        BackToList,
     ]
 );
 

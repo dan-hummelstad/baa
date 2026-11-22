@@ -1,7 +1,7 @@
-//! The command row over the list and reading pane: the ribbon's Home set in ASCII, pills in
-//! Arc, from one table (mocks A2/B2; WP-I). The ribbon's other tabs are stage 3.
+//! The command row of the list's tab and the preview's: the ribbon's Home set in ASCII, pills
+//! in Arc, from one table (mocks A2/B2; WP-I). The ribbon's other tabs are stage 3.
 
-use baa_mail::{Action, Role};
+use baa_mail::{Action, Role, Tab};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, Window};
 
@@ -64,39 +64,53 @@ impl<H: WebHost> Browser<H> {
             .collect()
     }
 
-    pub(crate) fn render_commands(&self, _theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let message = self.mail.as_ref().and_then(|m| m.reader.as_ref()).and_then(|r| r.message());
-        let on = message.is_some();
-        let (flagged, unread) = message.map_or((false, false), |m| (m.flagged, m.unread));
-        let items = COMMANDS.iter().map(|&(command, glyph, label, ascii_label)| {
+    /// The commands for the conversation `tab` shows, `None` with none shown. The list's tab
+    /// beside no reading pane leaves the message's own commands to the preview, which also
+    /// has the way back to the list. A narrow row wraps.
+    pub(crate) fn render_commands(&self, tab: Tab, _theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ui = self.mail.as_ref()?;
+        let message = ui.reader.as_ref().and_then(|r| r.message())?;
+        let preview = tab == Tab::Preview;
+        let list_only = !preview && !ui.wide();
+        let (flagged, unread) = (message.flagged, message.unread);
+        let items = COMMANDS.iter().filter(|(command, ..)| !list_only || !matches!(command, Command::Reply | Command::ReplyAll | Command::Forward)).map(|&(command, glyph, label, ascii_label)| {
             let label = match command {
                 Command::Flag if flagged => if ascii() { "⚑ Unflag" } else { "Unflag" },
                 Command::Read if !unread => if ascii() { "✉ Unread" } else { "Mark unread" },
                 _ if ascii() => ascii_label,
                 _ => label,
             };
-            let ink = if on { surface::ink() } else { surface::muted() };
-            div()
-                .id(("mail-command", command as u64))
-                .occlude()
-                .h(px(26.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .text_size(px(12.))
-                .text_color(ink)
-                .when(on, |d| d.cursor_pointer().hover(|d| d.bg(surface::key())))
-                .when(!ascii(), |d| d.rounded(r(7.)).child(icon(glyph, 13., ink.into())))
-                .when(on, |d| d.on_click(cx.listener(move |this, _, window, cx| this.run_mail_command(command, window, cx))))
+            self.command_button(("mail-command", command as u64), Some(glyph))
+                .on_click(cx.listener(move |this, _, window, cx| this.run_mail_command(command, window, cx)))
                 .child(label)
+        }).collect::<Vec<_>>();
+        let back = preview.then(|| {
+            let title = self.list_title().0;
+            self.command_button(("mail-back", 0), None)
+                .debug_selector(|| "mail-back".into())
+                .mr(px(6.))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.back_to_list(window, cx);
+                }))
+                .child(format!("← {title}"))
         });
-        let row = div().flex().items_center().gap(px(2.)).px(px(10.)).h(px(38.)).border_b_1().border_color(surface::line());
-        let row = if ascii() {
-            row.child(div().px(px(6.)).mr(px(6.)).text_size(px(11.)).text_color(surface::muted()).child("HOME"))
-        } else {
-            row
-        };
-        row.debug_selector(|| "mail-commands".into()).children(items).into_any_element()
+        let row = div().flex().flex_wrap().items_center().gap(px(2.)).px(px(10.)).py(px(6.)).min_h(px(38.)).border_b_1().border_color(surface::line());
+        let row = row.children(back).when(ascii(), |row| row.child(div().px(px(6.)).mr(px(6.)).text_size(px(11.)).text_color(surface::muted()).child("HOME")));
+        Some(row.debug_selector(|| "mail-commands".into()).children(items).into_any_element())
+    }
+
+    fn command_button(&self, id: (&'static str, u64), glyph: Option<&'static str>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .occlude()
+            .h(px(26.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .text_size(px(12.))
+            .cursor_pointer()
+            .hover(|d| d.bg(surface::key()))
+            .when(!ascii(), |d| d.rounded(r(7.)).children(glyph.map(|g| icon(g, 13., surface::ink().into()))))
     }
 }

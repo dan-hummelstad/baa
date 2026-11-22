@@ -1,8 +1,9 @@
-//! The reading pane (mocks A2/B2, right; WP-I). A message's HTML reaches Chromium only as a
+//! The selected conversation: the reading pane beside the list in a wide mail view, the
+//! preview tab in a narrow one (mocks A2/B2, right; WP-I). A message's HTML reaches Chromium only as a
 //! message document (PLAN-mail.md §6), made afresh for each message and again when the user
 //! allows its remote images: a document's policy is fixed when it is made.
 
-use baa_mail::{Action, Address, Attachment, Body, Message, MessageId, ThreadId};
+use baa_mail::{Action, Address, Attachment, Body, Message, MessageId, Tab, ThreadId};
 use baa_model::{now, DownloadRecord, RemoteImages};
 use baa_web::{DocumentKind, PageEvent, PageHandle, WebHost};
 use gpui::{div, prelude::*, px, AnyElement, Context, Entity, SharedString, Subscription, Window};
@@ -48,13 +49,23 @@ fn people(list: &[Address]) -> String {
 }
 
 impl<H: WebHost> Browser<H> {
-    /// A row of the list was picked: its conversation, its newest message in the page, and
-    /// what was unread in it is read now.
+    /// A row of the list was picked: it shows beside the list when the mail view is wide, else
+    /// in the preview tab, which it opens or takes over, in front.
     pub(crate) fn select_thread(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        let tab = if mail.wide() { Tab::List } else { Tab::Preview };
+        mail.state.set_tab(tab);
+        self.show_thread(thread, window, cx);
+    }
+
+    /// The conversation, its newest message in a new page, and what was unread in it read now.
+    pub(crate) fn show_thread(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         let messages = mail.mail.conversation(thread);
         let Some(newest) = messages.last().map(|m| m.id) else {
-            mail.reader = None;
+            mail.drop_reader();
+            mail.save_view();
+            self.show_mail_documents(cx);
             return cx.notify();
         };
         let unread: Vec<MessageId> = messages.iter().filter(|m| m.unread).map(|m| m.id).collect();
@@ -62,7 +73,6 @@ impl<H: WebHost> Browser<H> {
             mail.mail.act(&unread, Action::Read(true));
         }
         mail.state.selected = Some(thread);
-        mail.state.front = None;
         mail.save_view();
         mail.reader = Some(Reader {
             thread,
@@ -117,8 +127,7 @@ impl<H: WebHost> Browser<H> {
         let Some(reader) = &mut mail.reader else { return };
         let messages = mail.mail.conversation(reader.thread);
         if messages.is_empty() {
-            mail.reader = None;
-            mail.state.selected = None;
+            mail.drop_reader();
             mail.save_view();
             return self.show_mail_documents(cx);
         }
@@ -202,6 +211,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// ⌫ and the command row's Delete, Archive, Move, Flag and Read act on the whole conversation.
+    /// One that takes it out of the list closes its preview tab, which shows the list again.
     pub(crate) fn act_on_selected(&mut self, action: Action, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         let Some(reader) = &mail.reader else { return };
@@ -213,8 +223,7 @@ impl<H: WebHost> Browser<H> {
                 reader.messages = mail.mail.conversation(thread);
             }
         } else {
-            mail.reader = None;
-            mail.state.selected = None;
+            mail.drop_reader();
             mail.save_view();
             self.show_mail_documents(cx);
         }
@@ -280,13 +289,14 @@ impl<H: WebHost> Browser<H> {
                 .px(px(10.))
                 .py(px(6.))
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap(px(10.))
                 .text_size(px(12.))
                 .bg(surface::key())
                 .when(ascii(), |d| d.border_1().border_color(surface::border()))
                 .when(!ascii(), |d| d.rounded(r(8.)))
-                .child(div().flex_1().text_color(surface::muted()).child("Remote images are off, so the sender cannot see that you opened this."))
+                .child(div().flex_1().min_w(px(200.)).text_color(surface::muted()).child("Remote images are off, so the sender cannot see that you opened this."))
                 .child(self.mail_button("mail-load-images", 0, false, cx).child("Load images").on_click(cx.listener(|this, _, window, cx| this.load_images(false, window, cx))))
                 .child(self.mail_button("mail-trust-images", 0, false, cx).child("Always for this sender").on_click(cx.listener(|this, _, window, cx| this.load_images(true, window, cx))))
                 .child(div().text_size(px(11.)).text_color(surface::muted()).truncate().max_w(px(180.)).child(from))

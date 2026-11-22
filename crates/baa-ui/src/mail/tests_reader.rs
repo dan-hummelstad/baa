@@ -203,7 +203,7 @@ fn an_incognito_space_shows_none_of_the_mail_views(cx: &mut gpui::TestAppContext
         b.show_mail(true, window, cx);
         assert!(b.mail.as_ref().unwrap().space.is_none(), "no view state is read for it");
     });
-    for view in ["mail-view", "mail-nav", "mail-commands", "mail-tab-inbox"] {
+    for view in ["mail-view", "mail-nav", "mail-commands", "mail-tab-list"] {
         assert!(!drawn(cx, view), "{view}");
     }
 }

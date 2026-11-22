@@ -236,7 +236,7 @@ fn removing_an_account_takes_its_message_and_drafts_off_the_mail_view(cx: &mut T
         let thread = b.mail.as_ref().unwrap().mail.rows(&view, 0..1)[0].thread;
         b.select_thread(thread, window, cx);
         b.new_message(window, cx);
-        b.show_front(None, cx);
+        b.show_tab(baa_mail::Tab::List, cx);
         let ui = b.mail.as_ref().unwrap();
         assert!(ui.reader.is_some() && ui.drafts.len() == 1);
     });

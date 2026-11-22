@@ -224,9 +224,9 @@ impl PageHandle for MockPage {
         self.focus.clone()
     }
     fn render(&self, _: &mut Window, _: &mut App) -> AnyElement {
-        // Focusable like the real page element, so actions dispatched while the page has
-        // focus still bubble up to Browser.
-        div().track_focus(&self.focus).into_any_element()
+        // Focusable and in the `Webview` key context like the real page element, so actions
+        // dispatched while the page has focus still bubble up to Browser.
+        div().track_focus(&self.focus).key_context("Webview").into_any_element()
     }
     fn set_corner_radius(&self, radius: f32) {
         self.radius.set(radius);

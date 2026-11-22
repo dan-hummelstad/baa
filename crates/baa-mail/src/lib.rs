@@ -253,10 +253,63 @@ pub struct ViewState {
     pub selected: Option<ThreadId>,
     /// The open draft tabs, left to right.
     pub drafts: Vec<DraftId>,
-    /// The draft tab in front; `None`: the list's own tab.
+    /// The draft tab in front; `None`: the list's tab or the preview's. Kept as it was so a
+    /// build from before the preview tab reads this row.
     pub front: Option<DraftId>,
+    /// The preview tab, which shows `selected` in a narrow mail view.
+    pub preview: Preview,
     /// The list's first row on screen.
     pub scroll: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Preview {
+    #[default]
+    Closed,
+    Open,
+    InFront,
+}
+
+/// The mail view's tab in front: the list's (first, always there), the preview's, or a draft's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    List,
+    Preview,
+    Draft(DraftId),
+}
+
+impl ViewState {
+    pub fn tab(&self) -> Tab {
+        match (self.front, self.preview) {
+            (Some(draft), _) => Tab::Draft(draft),
+            (None, Preview::InFront) => Tab::Preview,
+            (None, _) => Tab::List,
+        }
+    }
+
+    /// Puts `tab` in front; a preview tab put behind stays open.
+    pub fn set_tab(&mut self, tab: Tab) {
+        self.front = match tab {
+            Tab::Draft(draft) => Some(draft),
+            _ => None,
+        };
+        self.preview = match (tab, self.preview) {
+            (Tab::Preview, _) => Preview::InFront,
+            (_, Preview::Closed) => Preview::Closed,
+            _ => Preview::Open,
+        };
+    }
+
+    /// A wide mail view has no preview tab: its conversation shows in the reading pane beside
+    /// the list, and the list's tab takes the preview's place in front.
+    pub fn fit(&mut self, wide: bool) {
+        if wide && self.preview != Preview::Closed {
+            if self.tab() == Tab::Preview {
+                self.set_tab(Tab::List);
+            }
+            self.preview = Preview::Closed;
+        }
+    }
 }
 
 /// A verification code from a just-arrived message (PLAN-mail.md §7). No `Debug`: a code,
@@ -720,6 +773,29 @@ mod tests {
         assert_eq!(again.view_state(space), state, "kept across a restart");
         drop(again);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_view_state_written_before_the_preview_tab_loads_with_its_draft_in_front() {
+        let old = r#"{"folder":9,"account":3,"selected":7,"drafts":[2,5],"front":5,"scroll":4}"#;
+        let state: ViewState = serde_json::from_str(old).unwrap();
+        assert_eq!(state.tab(), Tab::Draft(DraftId(5)));
+        assert_eq!((state.selected, state.drafts.as_slice(), state.scroll), (Some(ThreadId(7)), &[DraftId(2), DraftId(5)][..], 4));
+        assert_eq!(state.preview, Preview::Closed);
+    }
+
+    #[test]
+    fn the_preview_tab_stays_open_behind_another_and_folds_away_when_wide() {
+        let mut state = ViewState { selected: Some(ThreadId(1)), ..ViewState::default() };
+        state.set_tab(Tab::Preview);
+        state.set_tab(Tab::Draft(DraftId(2)));
+        assert_eq!((state.tab(), state.preview), (Tab::Draft(DraftId(2)), Preview::Open));
+        state.set_tab(Tab::List);
+        state.fit(false);
+        assert_eq!((state.tab(), state.preview), (Tab::List, Preview::Open), "narrow keeps it");
+        state.set_tab(Tab::Preview);
+        state.fit(true);
+        assert_eq!((state.tab(), state.preview, state.selected), (Tab::List, Preview::Closed, Some(ThreadId(1))));
     }
 
     #[test]

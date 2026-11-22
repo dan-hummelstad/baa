@@ -1,11 +1,11 @@
-//! A draft in the reading pane (mocks A3/B3; WP-J).
+//! A draft in its own tab, across the mail view (mocks A3/B3; WP-J).
 
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
 
-use baa_mail::{parse_addresses, Account, AccountId, Address, Draft, DraftId, MessageId};
+use baa_mail::{parse_addresses, Account, AccountId, Address, Draft, DraftId, MessageId, Preview, Tab};
 use baa_web::{DocumentKind, PageHandle, WebHost, EDITOR_DOCUMENT};
 use gpui::{div, prelude::*, px, AnyElement, Context, Div, ElementId, Entity, Hsla, PathPromptOptions, Window};
 
@@ -245,16 +245,7 @@ impl<H: WebHost> Browser<H> {
                 ui.state.drafts.push(id);
             }
         }
-        self.show_front(Some(id), cx);
-    }
-
-    /// `front`: a draft's tab, or `None` for Inbox.
-    pub(crate) fn show_front(&mut self, front: Option<DraftId>, cx: &mut Context<Self>) {
-        let Some(ui) = self.mail.as_mut() else { return };
-        ui.state.front = front;
-        ui.save_view();
-        self.show_mail_documents(cx);
-        cx.notify();
+        self.show_tab(Tab::Draft(id), cx);
     }
 
     /// The view state's open drafts, after a Space switch or at launch.
@@ -273,24 +264,29 @@ impl<H: WebHost> Browser<H> {
         if !gone.is_empty() {
             ui.state.drafts.retain(|id| !gone.contains(id));
             if ui.state.front.is_some_and(|f| gone.contains(&f)) {
-                ui.state.front = None;
+                ui.state.set_tab(Tab::List);
             }
             ui.save_view();
         }
     }
 
-    /// Removes the tab and its page; the draft stays where it was saved.
+    /// Removes the tab and its page; the draft stays where it was saved. In front, the tab on
+    /// its left takes its place, as in an editor.
     pub(crate) fn close_composer(&mut self, id: DraftId, cx: &mut Context<Self>) {
         let Some(ui) = self.mail.as_mut() else { return };
+        let mut left = if ui.state.preview == Preview::Closed { Tab::List } else { Tab::Preview };
         if let Some(i) = ui.drafts.iter().position(|d| d.id == id) {
             if let Some(page) = &ui.drafts[i].page {
                 page.read(cx).set_visible(false);
+            }
+            if let Some(before) = i.checked_sub(1) {
+                left = Tab::Draft(ui.drafts[before].id);
             }
             ui.drafts.remove(i);
         }
         ui.state.drafts.retain(|d| *d != id);
         if ui.state.front == Some(id) {
-            ui.state.front = None;
+            ui.state.set_tab(left);
         }
         ui.save_view();
         self.show_mail_documents(cx);
@@ -302,7 +298,7 @@ impl<H: WebHost> Browser<H> {
         match self.composer_mut(id) {
             Some(c) if c.dirty => {
                 c.ask_close = true;
-                self.show_front(Some(id), cx);
+                self.show_tab(Tab::Draft(id), cx);
             }
             Some(_) => self.close_composer(id, cx),
             None => {}

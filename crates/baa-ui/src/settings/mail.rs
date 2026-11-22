@@ -29,6 +29,7 @@ pub(super) fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
         ("Send", Box::new(SendMessage)),
         ("Delete Message", Box::new(DeleteMessage)),
         ("Search Mail", Box::new(SearchMail)),
+        ("Back to the List", Box::new(BackToList)),
         ("Browser ⇄ Mail", Box::new(ToggleMail)),
     ]
 }

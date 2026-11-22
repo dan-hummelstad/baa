@@ -21,18 +21,19 @@ mod tests_list;
 mod tests_reader;
 #[cfg(test)]
 mod tests_setup;
+#[cfg(test)]
+mod tests_tabs;
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use baa_mail::{AccountId, DraftId, Event, Filter, Mail, MailSpace, SyncState, View, ViewState};
+use baa_mail::{AccountId, DraftId, Event, Filter, Mail, MailSpace, Preview, SyncState, Tab, View, ViewState};
 use baa_model::{Pane, Showing, SpaceId};
 use baa_web::{PageHandle, WebHost};
 use futures::StreamExt;
 use gpui::{div, prelude::*, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Hsla, KeyDownEvent, Stateful, Subscription, Window};
 
-
 use crate::{
-    actions::{DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
+    actions::{BackToList, CloseTab, DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
     browser::{feel, Browser},
     input::{self, TextField},
     motion::Feel,
@@ -95,6 +96,10 @@ pub(crate) enum Field {
     Subject,
 }
 
+/// The narrowest mail view that shows the list (380 px) beside a readable message; a narrower
+/// one shows each in a tab of its own.
+pub(crate) const MAIL_WIDE: f32 = 900.;
+
 /// Tells every window an account is gone, as a sync's `Changed` does, so what showed of it goes.
 pub(crate) fn account_removed(account: AccountId, cx: &mut App) {
     if let Some(events) = cx.try_global::<MailHub>().map(|hub| hub.events.clone()) {
@@ -118,9 +123,12 @@ pub(crate) struct MailUi<H: WebHost> {
     /// The Unread and Flagged search folders; not kept across a Space switch.
     pub(crate) filter: Filter,
     pub(crate) list: gpui::UniformListScrollHandle,
+    /// The selected conversation, in the reading pane or the preview tab.
     pub(crate) reader: Option<reader::Reader<H>>,
-    /// The open drafts, as the tab strip shows them; `state.front` is the one in front.
+    /// The open drafts, as the tab strip shows them; `state.tab()` says which tab is in front.
     pub(crate) drafts: Vec<compose::Composer<H>>,
+    /// The mail view was at least [`MAIL_WIDE`] when last laid out; `None` before that.
+    pub(crate) wide: Option<bool>,
     /// The last state each account reported, and when the last sync finished.
     pub(crate) status: HashMap<AccountId, SyncState>,
     pub(crate) synced_at: Option<Instant>,
@@ -148,6 +156,30 @@ impl<H: WebHost> MailUi<H> {
         }
     }
 
+    pub(crate) fn wide(&self) -> bool {
+        self.wide.unwrap_or(true)
+    }
+
+    /// The reader is on screen when mail is: beside the list, or as the preview tab.
+    fn reader_drawn(&self) -> bool {
+        match self.state.tab() {
+            Tab::List => self.wide(),
+            Tab::Preview => true,
+            Tab::Draft(_) => false,
+        }
+    }
+
+    /// The selected conversation is gone (deleted, moved, its account removed), and with it
+    /// the preview tab.
+    pub(crate) fn drop_reader(&mut self) {
+        self.reader = None;
+        self.state.selected = None;
+        if self.state.tab() == Tab::Preview {
+            self.state.set_tab(Tab::List);
+        }
+        self.state.preview = Preview::Closed;
+    }
+
     pub(crate) fn front_draft(&self) -> Option<&compose::Composer<H>> {
         let front = self.state.front?;
         self.drafts.iter().find(|d| d.id == front)
@@ -167,15 +199,13 @@ impl<H: WebHost> MailUi<H> {
 
     /// The pages of mail: hidden unless mail is on screen, and then only the one in front.
     fn show_documents(&self, on_screen: bool, cx: &App) {
-        let front = self.front_draft().and_then(|d| d.page.as_ref());
-        let reader = self.reader.as_ref().and_then(|r| r.page.as_ref()).filter(|_| self.state.front.is_none());
         for draft in &self.drafts {
             if let Some(page) = &draft.page {
-                page.read(cx).set_visible(on_screen && front.is_some_and(|f| f == page));
+                page.read(cx).set_visible(on_screen && self.state.front == Some(draft.id));
             }
         }
         if let Some(page) = self.reader.as_ref().and_then(|r| r.page.as_ref()) {
-            page.read(cx).set_visible(on_screen && reader.is_some());
+            page.read(cx).set_visible(on_screen && self.reader_drawn());
         }
     }
 }
@@ -200,6 +230,7 @@ impl<H: WebHost> Browser<H> {
                     list: gpui::UniformListScrollHandle::new(),
                     reader: None,
                     drafts: Vec::new(),
+                    wide: None,
                     status: HashMap::new(),
                     synced_at: None,
                     offers: code_offer::Offers::default(),
@@ -226,6 +257,9 @@ impl<H: WebHost> Browser<H> {
         if mail.space != space {
             mail.space = space;
             mail.state = space.map(|s| mail.mail.view_state(s)).unwrap_or_default();
+            if let Some(wide) = mail.wide {
+                mail.state.fit(wide);
+            }
             mail.filter = Filter::All;
             mail.search = TextField::default();
             mail.reader = None;
@@ -233,11 +267,25 @@ impl<H: WebHost> Browser<H> {
             mail.list.scroll_to_item(mail.state.scroll, gpui::ScrollStrategy::Top);
             self.restore_drafts(window, cx);
             if let Some(thread) = self.mail.as_ref().and_then(|m| m.state.selected) {
-                self.select_thread(thread, window, cx);
+                self.show_thread(thread, window, cx);
             }
         }
         self.show_mail_documents(cx);
         self.drop_hidden_offers(cx);
+    }
+
+    /// The mail view was laid out at `wide` or not: crossing [`MAIL_WIDE`] folds the preview tab
+    /// into the reading pane or takes the pane away, and moves the reader's page with it.
+    pub(crate) fn set_mail_wide(&mut self, wide: bool, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        if mail.wide == Some(wide) {
+            return;
+        }
+        mail.wide = Some(wide);
+        mail.state.fit(wide);
+        mail.save_view();
+        self.show_mail_documents(cx);
+        cx.notify();
     }
 
     /// After the page in front of mail changed (a draft opened or closed, a message selected).
@@ -292,8 +340,7 @@ impl<H: WebHost> Browser<H> {
     fn forget_account(&mut self, account: AccountId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         if mail.reader.as_ref().and_then(|r| r.message()).is_some_and(|m| m.account == account) {
-            mail.reader = None;
-            mail.state.selected = None;
+            mail.drop_reader();
         }
         if mail.state.account == Some(account) {
             mail.state.account = None;
@@ -458,20 +505,56 @@ impl<H: WebHost> Browser<H> {
             .on_action(hook::<H, SendMessage>(|b, w, cx| b.send_front_draft(w, cx), cx))
             .on_action(hook::<H, DeleteMessage>(|b, w, cx| b.delete_selected(w, cx), cx))
             .on_action(hook::<H, SearchMail>(|b, w, cx| b.focus_mail_field(Field::Search, w, cx), cx))
+            .on_action(cx.listener(|this, _: &BackToList, window, cx| {
+                if !this.back_to_list(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_mail_tab(cx)))
             .child(self.render_view(theme, window, cx))
             .child(fields)
+            .child(self.measure_mail(cx))
             .into_any_element()
     }
 
+    /// Reads the mail view's own width once laid out: a split pane is narrow in a wide window.
+    fn measure_mail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let known = self.mail.as_ref().and_then(|m| m.wide);
+        let this = cx.entity().downgrade();
+        gpui::canvas(
+            move |bounds, _, cx| {
+                let wide = f32::from(bounds.size.width) >= MAIL_WIDE;
+                if known != Some(wide) {
+                    cx.defer(move |cx| {
+                        let _ = this.update(cx, |b, cx| b.set_mail_wide(wide, cx));
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The mail view: the page area's content (or a split pane's) while mail shows. The tab
-    /// strip, then the command row, then the list beside the reading pane or the draft in front.
+    /// strip, then the tab in front across the whole view: the list (beside the reading pane
+    /// when wide), the preview, or a draft; the list and the preview have their command row.
     pub(crate) fn render_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(mail) = &self.mail else { return div().into_any_element() };
-        let right = match mail.state.front {
-            Some(_) => self.render_composer(theme, window, cx),
-            None => self.render_reader(theme, window, cx),
+        let tab = mail.state.tab();
+        let commands = (!matches!(tab, Tab::Draft(_))).then(|| self.render_commands(tab, theme, window, cx)).flatten();
+        let body = match tab {
+            Tab::Draft(_) => self.render_composer(theme, window, cx),
+            Tab::Preview => self.render_reader(theme, window, cx),
+            Tab::List if mail.wide() => div()
+                .size_full()
+                .flex()
+                .child(self.render_list(true, theme, window, cx))
+                .child(div().w(px(1.)).h_full().bg(surface::line()))
+                .child(div().flex_1().min_w_0().h_full().child(self.render_reader(theme, window, cx)))
+                .into_any_element(),
+            Tab::List => self.render_list(false, theme, window, cx),
         };
-        let commands = mail.state.front.is_none().then(|| self.render_commands(theme, window, cx));
         div()
             .size_full()
             .flex()
@@ -480,15 +563,7 @@ impl<H: WebHost> Browser<H> {
             .text_color(surface::ink())
             .child(self.render_mail_tabs(theme, window, cx))
             .children(commands)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_list(theme, window, cx))
-                    .child(div().w(px(1.)).h_full().bg(surface::line()))
-                    .child(div().flex_1().min_w_0().h_full().child(right)),
-            )
+            .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }
 }
