@@ -56,11 +56,8 @@ showed the browser or mail, and what mail showed.
 
 | Mock | Part | Built as | Stage |
 |---|---|---|---|
-| A1/B1 | Archive rail: Mailbox first, then Downloads, Archived Tabs, Chat | `library::Section::Mailbox`, first `nav_item` (`library.rs:297`) | 1 |
-| A1/B1 | Mailbox door: "All inboxes" card with the Space's accounts and counts, Open Mailbox | the section's body, as Chat has its own (`library.rs:317`) | 1 |
-| A1/B1 | "Waiting for you" (unread, flagged, snoozed, scheduled, mentions), "Recent files" | rows under the door; each opens mail on that view | 1 unread/flagged, 3 rest |
-| A2/B2 | Sidebar becomes mail nav: account header, New Message, Folders, Search folders, Categories, Other Spaces | `render_sidebar` early return, as the Library has (`sidebar.rs:65`) | 1 (categories 3) |
-| A2/B2 | Section switcher Browser · Archive · Mail above the Space strip | a row in `render_bottom_bar` (`sidebar.rs:960`) | 1 |
+| A1/B1 | Archive rail: Mail first, then Downloads, Archived Tabs, Chat | `library::Section::Mail`, labelled "Mail", first `nav_item` in `library.rs`; drawn only when the active Space can have mail | 1 |
+| A2/B2 | Mail nav: account select ("All inboxes · N mailboxes · Space"), Search mail, New message, Folders, Search folders | the Archive body of `Section::Mail`, `mail/nav.rs`; the select is a native menu, `MenuKind::MailScope` | 1 |
 | A2/B2 | Tab strip: Inbox plus one tab a draft | mail view, GPUI | 1 |
 | A2/B2 | Command row (ASCII: ribbon tabs Home/View/Folder/Options; Arc: pills) | one command table, drawn per skin | 1 the Home set, 3 rest |
 | A2/B2 | List: Focused/Other, scope chips, Pinned/Today/Yesterday groups, account dot a row | `gpui::uniform_list` (precedent `space_picker.rs:750`) | 1 (Focused/Other, pinned 3) |
@@ -73,6 +70,9 @@ In the mocks and **not planned**: the Draw tab, Loop cloud attachments, Translat
 calendar and bell buttons, the Clipboard and History rail items, "Encrypt" (S/MIME), Microsoft 365
 Groups. They need a service, a licence or a product of their own. §10 (stage 4) and §15 say which could
 come later.
+
+Not built, by the user's decision (§16): the Mailbox door, "Waiting for you", the Browser · Archive ·
+Mail switcher and a sidebar that becomes a second mode. Categories come in stage 3.
 
 The mock's captions say the whole mail surface is one Chromium page (`baa://mail`). The brief says
 baa's own UI elements with Chromium rendering the messages; the plan follows the brief (decision 1).
@@ -169,26 +169,39 @@ no id the provider's sign-in button says so and does nothing; no test needs a re
 
 Owner: `baa-ui` (the files named here), with the model change in `baa-model`.
 
-- **Showing.** `Space.showing` is `Browser` or `Mail`. `render_sidebar` returns the mail nav when the
-  focused pane is mail (the Library's early return still comes first). `render_page`
+- **Showing.** `Space.showing` is `Browser` or `Mail`; `Mail` means the Archive is open on Mail in
+  that Space. One rule, `Browser::sync_library`, run after every session change, keeps the Archive
+  open on `Section::Mail` exactly while the active Space shows mail. `render_page`
   (`page_area.rs:51`) draws the mail view in place of the page; `show_pages` (`page_area.rs:401`)
-  hides the Space's native pages while it does.
-- **Door.** `Section::Mailbox` heads the Library rail. Its body is the door of mock A1/B1. Open
-  Mailbox closes the Library, restores the 228 px sidebar and sets `showing = Mail`. In an ephemeral
-  Space the rail item is not drawn. With no account the door is the "Add an account" card.
-- **Switcher.** Browser · Archive · Mail, one row above the Space strip, drawn only when
-  `settings.mail.enabled`. ⌘⇧M goes between Browser and Mail; ⌘⇧A stays the Archive.
+  hides the Space's native pages while it does. The browser sidebar never shows mail.
+- **Mail section.** `Section::Mail` is the Archive's first rail item, labelled "Mail", drawn only when
+  mail is on and the window is not private and the Space is not incognito. Choosing it shows the
+  mail nav as the Archive body and the mail view in the page area at once; there is no door and no
+  Open Mailbox step. It opens on All inboxes of the Space unless the `view` row says otherwise. The
+  body, top to bottom: the account select (a native menu: All inboxes, each account of the Space,
+  which sets the same scope as the list's chips, then "Go to <Space>" for each other Space with
+  mail); Search mail; New message (⌘N); Folders; Search folders (Unread, Flagged). With no account
+  the select is the "Add an account" card. The Archive keeps its width (374 px) and its rail.
+- **Keys.** ⌘⇧M and the command bar's "Open Mail" open the Archive on Mail and, when mail shows,
+  collapse it. ⌘⇧L closes the Archive on Mail as it closes it anywhere. Choosing Downloads,
+  Archived Tabs or Chat shows that section and the browser page; choosing Mail again brings mail
+  back as it was left. ⌘⇧A is Archived Tabs, so in mail it leaves mail as the other sections do.
 - **Gesture.** Today the Archive opens by a swipe right past the first Space (`nav.rs:99`). New: a
-  two-finger swipe up over the bottom bar opens it in any Space, and a swipe down closes it. The bar
-  does not scroll, so the vertical axis is free there. Horizontal swipes keep switching Spaces, in
-  mail too: the nav slides as the tab list does and the mail view follows the Space.
-- **Other Spaces.** The mail nav lists the other Spaces that have accounts, with unread counts; a
-  click goes to that Space with mail showing. The door lists them too.
+  two-finger swipe up over the bottom bar opens it in any Space, and a swipe down over the
+  Archive's bottom closes it. Closing the Archive on Mail (its back arrow, ⌘⇧L, the swipe down, the
+  horizontal swipe that closes it) shows the browser page as it was. The bar does not scroll, so the
+  vertical axis is free there. Horizontal swipes switch Spaces in the browser; in mail, as in any
+  Archive section, a swipe left closes the Archive.
+- **Other Spaces.** While the Archive is open its rail replaces the bottom bar, so the Space dots
+  are not on screen in mail. Spaces switch by keyboard, the command bar, or the select's Go to
+  entries, which list the other Spaces that have accounts. A Space switch shows each Space as it
+  was left.
 - **Split.** `Split.panes: Vec<Pane>` replaces `tabs: Vec<TabId>`. ⌃⇧= in mail splits mail with the
   most recent tab; dragging a tab onto the mail view adds it; the pane strip's × takes mail out. The
-  sidebar follows the focused pane (`PageEvent::Focused` for a tab, a click for mail). At most one
-  mail pane a Space. A split holding a mail pane shows when the Space shows mail or its active tab is
-  one of the panes.
+  Archive follows the focused pane: it opens on Mail while the mail pane has focus (a click on it is
+  `show_mail(true)`) and collapses when a tab pane takes focus (`PageEvent::Focused`); the split
+  stays on screen either way. At most one mail pane a Space. A split holding a mail pane shows when
+  the Space shows mail or its active tab is one of the panes.
 - **Memory.** `Space.showing` and `Space.active_tab` are in the session already or by this change.
   What mail showed (folder, scope, sort, selected conversation, open draft tabs and which is in
   front, list scroll) is the `view` row of `mail.db`, written on change and read on Space switch and
@@ -734,6 +747,9 @@ passed, and `harness.yml` run 44981543411 passed 31/31 on it, `codes` and `mail-
 them. No test connects to a mail server or touches the Keychain, and nobody has run the app.
 
 **Built differently from the plan, and why**
+- Mail is the Archive's Mail section, not a second sidebar mode with a switcher and a door: the
+  user, on the first build, wanted one sidebar, with mail's mailboxes in the Archive and the
+  browser back by collapsing it.
 - The editor is a sandboxed frame (`allow-same-origin`, no scripts) in the document, not an
   editable page body: quoted mail in the page itself could navigate it with `<meta refresh>`.
   The shell reaches it as `baa_web::EDITOR_DOCUMENT`.
