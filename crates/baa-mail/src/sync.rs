@@ -16,7 +16,7 @@ use crate::{
     backend::Backend,
     secrets::Secrets,
     store::{StoredFolder, Store},
-    Account, Connect, Error, Event, Flags, MessageId, Result, Role, SyncState,
+    Account, Connect, Error, Event, FolderId, Flags, MessageId, Result, Role, SyncState,
 };
 
 /// Folders other than INBOX are asked for changes this often.
@@ -35,6 +35,8 @@ pub(crate) enum Job {
     Wake,
     /// Look at INBOX now.
     Check,
+    /// Sync this folder now.
+    Folder(FolderId),
     Body(MessageId),
     Stop,
 }
@@ -141,7 +143,7 @@ fn offline(t: &Thread, wait: Option<Duration>) -> std::result::Result<(), Stoppe
         };
         match job {
             Ok(Job::Stop) | Err(()) => return Err(Stopped),
-            Ok(Job::Check) => return Ok(()),
+            Ok(Job::Check | Job::Folder(_)) => return Ok(()),
             Ok(_) => {}
         }
     }
@@ -163,6 +165,11 @@ fn online(t: &Thread, backend: &mut dyn Backend) -> Result<Stopped> {
                     send_outbox(t, backend)?;
                 }
                 Ok(Job::Check) => sync_role(t, backend, Role::Inbox)?,
+                Ok(Job::Folder(id)) => {
+                    if let Some(folder) = t.store.folder(id)? {
+                        sync_folder(t, backend, &folder)?;
+                    }
+                }
                 Ok(Job::Body(id)) => fetch_body(t, backend, id)?,
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
             }

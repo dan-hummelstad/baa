@@ -307,8 +307,10 @@ pub struct Mail {
     shared: Arc<sync::Shared>,
     /// The account threads started so far. A thread stops when its entry goes.
     threads: Mutex<HashMap<AccountId, sync::AccountThread>>,
-    /// When each account last took a [`Mail::check_now`].
+    /// When each account last took a [`Mail::check_now`], and each folder a
+    /// [`Mail::check_folder`].
     checked: Mutex<HashMap<AccountId, Instant>>,
+    folders_checked: Mutex<HashMap<FolderId, Instant>>,
 }
 
 impl Mail {
@@ -331,6 +333,7 @@ impl Mail {
             shared: Arc::new(sync::Shared { connect, secrets, notify }),
             threads: Mutex::default(),
             checked: Mutex::default(),
+            folders_checked: Mutex::default(),
         };
         if dir.is_none_or(|dir| dir.join("mail.db").exists()) {
             mail.store()?;
@@ -599,14 +602,18 @@ impl Mail {
     /// so a page cannot make baa hammer a server (PLAN-mail.md §7).
     pub fn check_now(&self, space: MailSpace) {
         for account in self.accounts(space) {
-            {
-                let mut checked = self.checked.lock().unwrap();
-                if checked.get(&account.id).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
-                    continue;
-                }
-                checked.insert(account.id, Instant::now());
+            if due(&self.checked, account.id) {
+                self.job(account.id, sync::Job::Check);
             }
-            self.job(account.id, sync::Job::Check);
+        }
+    }
+
+    /// Asks the folder's account to sync it now, as the views do when the user opens it; at
+    /// most once every 10 s a folder. [`Event::Changed`] follows if it changed.
+    pub fn check_folder(&self, folder: FolderId) {
+        let Some(account) = self.read(|s| s.folder(folder)).map(|f| f.account) else { return };
+        if due(&self.folders_checked, folder) {
+            self.job(account, sync::Job::Folder(folder));
         }
     }
 
@@ -619,6 +626,16 @@ impl Mail {
         let offering: Vec<AccountId> = self.accounts(space).into_iter().filter(|a| a.codes).map(|a| a.id).collect();
         codes::found(self.read(|s| s.code_candidates(space, after)).into_iter().filter(|m| offering.contains(&m.account)))
     }
+}
+
+/// Whether `key` may be checked now (not within the last 10 s); if so, it is marked checked.
+fn due<K: Eq + std::hash::Hash>(checked: &Mutex<HashMap<K, Instant>>, key: K) -> bool {
+    let mut checked = checked.lock().unwrap();
+    if checked.get(&key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+        return false;
+    }
+    checked.insert(key, Instant::now());
+    true
 }
 
 fn images_key(sender: &str) -> String {

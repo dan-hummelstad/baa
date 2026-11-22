@@ -27,6 +27,7 @@ struct Net {
     refusals: Mutex<VecDeque<Error>>,
     send_error: Mutex<Option<Error>>,
     inbox_asked: AtomicUsize,
+    archive_asked: AtomicUsize,
 }
 
 impl Net {
@@ -42,6 +43,7 @@ impl Net {
             refusals: Mutex::default(),
             send_error: Mutex::default(),
             inbox_asked: AtomicUsize::new(0),
+            archive_asked: AtomicUsize::new(0),
         })
     }
 
@@ -104,9 +106,11 @@ impl Backend for Link {
 
     fn changes(&mut self, folder: &str, cursor: Option<&str>) -> Result<Changes> {
         self.up()?;
-        if folder == "INBOX" {
-            self.net.inbox_asked.fetch_add(1, SeqCst);
-        }
+        match folder {
+            "INBOX" => self.net.inbox_asked.fetch_add(1, SeqCst),
+            "Archive" => self.net.archive_asked.fetch_add(1, SeqCst),
+            _ => 0,
+        };
         self.fake.changes(folder, cursor)
     }
 
@@ -493,4 +497,24 @@ fn check_now_asks_each_account_once_every_ten_seconds() {
     eventually("one more INBOX check", || rig.net.inbox_asked.load(SeqCst) > before);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(rig.net.inbox_asked.load(SeqCst), before + 1);
+}
+
+#[test]
+fn an_opened_folder_syncs_at_once_and_at_most_once_in_ten_seconds() {
+    let rig = Rig::standard();
+    rig.start_default();
+    rig.synced();
+    let archive = rig.folder(Role::Archive);
+    let view = View { folder: Some(archive), ..rig.inboxes() };
+    rig.net.fake.deliver("Archive", &raw("filed"), Flags::default());
+    let before = rig.net.archive_asked.load(SeqCst);
+
+    rig.mail.check_folder(archive);
+    rig.mail.check_folder(archive);
+    until(&rig.rx, changed);
+    eventually("the archived message in mail.db", || rig.mail.count(&view) == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(rig.net.archive_asked.load(SeqCst), before + 1, "two calls within 10 s, one sync");
+
+    rig.mail.check_folder(crate::FolderId(9999));
 }
