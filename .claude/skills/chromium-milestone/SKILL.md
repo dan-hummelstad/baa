@@ -200,19 +200,20 @@ security, network, UI, build, and flag:
 Only what step 1 listed: baa patches that no longer apply, `//baa` code that no longer compiles.
 Bump nothing else. Keep the mechanical refresh in its own commit, apart from behaviour changes.
 
-**Text-only apply check** (allowed: it compiles nothing). For the files baa's patches touch, fetch
-the new tag's version from gitiles into a scratch directory, apply the Helium and helium-macos
-patches that touch those files in series order, then baa's series
-(`patch -p1 --dry-run`, or for real in the scratch copy). `prepare_sources` applies patches before
-domain and name substitution, so plain upstream text is the right base. Prove the method first:
-the same run on the old tag with `main`'s patches must apply all of baa's series cleanly. CI
+**Text-only apply check** (allowed: it compiles nothing): `xtask/check-patches.sh`, about a
+minute, on the branch after the take and again after every refresh. It applies Helium's,
+helium-macos's and baa's series, in the build's order and with the build's tool, to the files
+they touch of the Chromium in `chromium_version.txt` (a sparse checkout; no tree needed), and
+names the first patch that fails. `prepare_sources` applies patches before domain and name
+substitution, so plain upstream text is the right base. CI
 applies with fuzz, so a hunk that only fuzzes does not fail there: refresh it anyway, the next
 milestone turns fuzz into a reject. This proves hunks apply, not that the result compiles.
 
 ### 5. Build
 `gh workflow run chromium.yml --ref <branch> -f mode=release` (and `ci.yml` on the branch). A new
-milestone builds from scratch (leave `base_run` empty: the old milestone's tree cannot be reused); expect
-one to two days of chained phases. On a compile failure fix on the branch and start again with
+milestone builds from scratch by itself (a build only takes a finished tree of its own milestone
+as its base); expect one to two days of chained phases. Never cancel one mid-phase: a cancelled
+phase cannot pack its tree. On a compile failure fix on the branch and start again with
 `-f base_run=<failed run id>`: its tree was uploaded. siso stops at the first failed object, so one
 round shows one broken file: fix everything the error class implies, not only the line shown.
 Privacy must pass. The harness tests run in their own workflow (`harness.yml`, started when the
@@ -221,15 +222,18 @@ the new engine: read the run, and treat a failure as a code fault until its `har
 otherwise. Release-only failures: `baa-release-only-failures`.
 
 ### 6. Land
-Rebase onto `main`. If `main` changed `chromium/` meanwhile, `git rev-parse HEAD:chromium` changes
-and the engine must be rebuilt (`base_run` = this run). Push fast-forward. Update
+Rebase onto `main`. If `main` changed the engine's sources meanwhile (`.github/engine-key.sh`
+prints another key than the engine's name), the engine must be rebuilt: start `chromium.yml`
+again, and it builds on this run's finished tree. Push fast-forward. Update
 `PLAN-chromium.md`, `CLAUDE.md` and the memory notes where they name the frozen release. Then run
 `chromium-bump.yml` once by hand: it must be green and say the version is the newest of its
 milestone, or open its own `bot/chromium-*` bump.
 
 ### 7. Release
-Version in `Cargo.toml` and `Cargo.lock`, tag `vX.Y.Z`, the user approves the `release`
-environment. Confirm the release is published and `releases/latest/download/appcast.xml` offers it.
+Version in `Cargo.toml` and `Cargo.lock`, tag `vX.Y.Z` (README "Cutting a release by hand").
+`release.yml` runs the checks on the tag, then the user approves the `release` environment. A
+published release cannot be changed: a fault after that is the next version. Confirm the release
+is published and `releases/latest/download/appcast.xml` offers it.
 
 ## Report
 After step 3: the review summary, the breaks from step 1, the expected number of CI rounds.

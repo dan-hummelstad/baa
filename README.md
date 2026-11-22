@@ -178,8 +178,8 @@ search as `cargo bundle`), runs every `tests/*.expect` with a fresh profile, a l
 and the test extension, and exits non-zero with what differed. A test is a harness script
 (`tests/<name>.txt`, steps documented in `src/main.rs`) plus an `.expect` file (patterns that must
 or must not appear in the log, CDP probes; syntax at the top of `ci.py`). It opens real windows and
-needs `node` and network. CI runs it in `harness.yml` on the release engine of the commit's
-`chromium/` tree. The tests depend on timing, so that workflow gates nothing: a landing and a
+needs `node` and network. CI runs it in `harness.yml` on the release engine for the commit's
+engine sources. The tests depend on timing, so that workflow gates nothing: a landing and a
 release go ahead without it, and a red run is read by hand. Every log line starts with the seconds
 since the launch; a failed run keeps each test's log and Chromium net log as `harness-logs`.
 
@@ -199,6 +199,49 @@ uploaded), `keymap.json` (overrides `crates/baa-ui/keymaps/macos.json`). Builds 
 move to Chromium kept profiles in `profile/space-<id>/`; the first launch moves them. Cookies do
 not survive that move, so sign in to sites once more.
 
+## CI
+
+Five workflows in `.github/workflows`. The rules behind them, and every way an engine build has
+lost work with what now prevents it, are in `PLAN-ci-testing.md`.
+
+| Workflow | What it is | Starts by itself on | Start it by hand |
+|---|---|---|---|
+| `ci.yml` | the checks: `lint`, `test` and `privacy` side by side, about 5 minutes | a push to `main`, a pull request, every release | `gh workflow run ci.yml --ref <branch>` |
+| `harness.yml` | the engine tests (above), 25 minutes; nothing waits for it | a push to `main` that changes `chromium/`, `crates/baa-chromium`, `vendor/gpui_apple`, `Cargo.lock` or the harness's own workflow files; a finished release engine build | `gh workflow run harness.yml --ref <branch>` |
+| `chromium.yml` | the engine build: up to 12 chained phases of about 4.75 h each | never a push; the daily bump starts one | `gh workflow run chromium.yml --ref <branch> -f mode=release` (or `mode=dev`) |
+| `chromium-bump.yml` | a newer Chromium build of the vendored milestone goes on a `bot/chromium-*` branch, is built, lands and is released | daily, 06:17 UTC | `gh workflow run chromium-bump.yml` |
+| `release.yml` | signs and publishes ("Release" below) | a `v*` tag | push the tag |
+
+**A red `ci.yml` is a fault to fix:** nothing in it depends on timing. It stops a release of that
+commit and the landing of a Chromium bump. Its `lint` job also checks the workflow files, so
+before pushing a change to `.github/` run what it runs: the `.github/*_test.sh` scripts,
+`.github/actions/engine/trusted_test.sh`, `.github/security-lint.sh` and
+`go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`.
+
+**A red `harness.yml` stops nothing** and is read by hand (above).
+
+**`chromium-bump.yml` is red every day** once Chrome stable is on a newer milestone than
+`chromium/helium/chromium_version.txt`: the patches are frozen for the old one, and a person takes
+the new one (`.claude/skills/chromium-milestone`).
+
+**An engine build** (`chromium.yml`):
+
+- Before it, when a patch or the Chromium version changed: `xtask/check-patches.sh` (above).
+- It builds on the newest finished tree of its mode and Chromium milestone and compiles only what
+  changed: about an hour for an engine fix. `-f base_run=<run id>` names another run's tree,
+  finished or not. `-f base_run=none` builds from scratch, a day or two. The run's summary says
+  which base it took.
+- A build that fails keeps what it compiled. Every phase uploads its tree
+  (`chromium-tree-xcode27.2-phase<N>`, kept 7 days; the finished tree is `chromium-tree-xcode27.2`,
+  kept 30). After the fix, start it again with `-f base_run=<the failed run>`. When a runner
+  died, use "Re-run failed jobs" on the run instead.
+- Never cancel a build in the middle of a phase: a cancelled phase cannot pack its tree, and its
+  hours are gone. Let the phase end.
+- A release build that finishes uploads the engine (`baa-engine-<key>`), runs the privacy test on
+  it and starts `harness.yml`.
+- `-f budget_minutes=15` compiles only that long per phase, to test the hand-off between phases.
+  Such a run's tree is never taken as a base.
+
 ## Release
 
 Tag `vX.Y.Z`, where `X.Y.Z` is the `Cargo.toml` version. `release.yml` runs `ci.yml`'s checks on
@@ -213,8 +256,9 @@ release: `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, 
 The secrets live in the `release` environment, which has a required reviewer and can only be
 asked for from a `v*` tag, and only the `macos` job uses it. A published release is immutable
 (repository setting): its files and its tag cannot be changed afterwards, so a bad release is
-followed by a new version, never repaired. Each release waits for the owner's approval before anything is signed or published.
-That job compiles the Rust binary from nothing: it takes no compiler output from a cache.
+followed by a new version, never repaired. Each release waits for the owner's approval before
+anything is signed or published. That job compiles the Rust binary from nothing: it takes no
+compiler output from a cache.
 
 CI trusts an artifact by the run that made it, never by its name: only a `workflow_dispatch` of
 `chromium.yml` in this repository with a recorded `.sha256` counts (`.github/actions/engine/trusted.sh`).
@@ -234,20 +278,34 @@ Chromium bumps release themselves (`chromium.yml`'s `land` job bumps the patch v
    `workflow_dispatch` run of `chromium.yml`. A bump that leaves the engine's sources alone
    reuses the last one.
 3. If they changed since the last release, build one: `gh workflow run chromium.yml --ref main
-   -f mode=release`. It builds on the newest finished release tree of the same milestone (30
-   days kept), about an hour or two; `-f base_run=<run id>` names another tree, `-f base_run=none`
-   builds from scratch (1-2 days), which is the way to a release that owes nothing to an earlier
-   tree. Wait for it: `gh run watch <id>`. A build that fails keeps what it compiled: every phase's
-   tree is uploaded (7 days; a finished one 30), so after the fix start it again with
-   `base_run=<the failed run>`, or use "Re-run failed jobs" when a runner died. Never cancel a
-   chain mid-phase: that phase's hours cannot be packed.
-4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml`
-   version or `release.yml` stops in its first job.
-5. Approve the `macos` job when `release.yml` asks (the `release` environment), watch it
-   (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json`
-   and `appcast.xml`.
+   -f mode=release`, about an hour ("CI" above has the rest: what it builds on, what to do when
+   it fails). `-f base_run=none` is the way to a release that owes nothing to an earlier tree.
+   Wait for it: `gh run watch <id>`.
+4. Wait for `ci.yml` to be green on the commit, then tag and push:
+   `git tag vX.Y.Z && git push origin vX.Y.Z`. The tag must equal the `Cargo.toml` version or
+   `release.yml` stops in its first job. A `v*` tag can be neither moved nor deleted afterwards
+   (repository ruleset).
+5. `release.yml` runs the checks on the tagged commit again (about 5 minutes) and looks for the
+   engine. When both have passed it asks for approval of the `macos` job (the `release`
+   environment): approve it on the run's page. That job signs, notarises and runs the privacy
+   test on the signed app; `publish` then fills a draft release and publishes it. Watch it
+   (`gh run watch`), then check `gh release view vX.Y.Z`: the DMG, `engine.json` and
+   `appcast.xml`.
 
-If `release.yml` fails for want of an engine, do step 3 and re-run it (`gh run rerun <id>`).
+When it stops:
+
+- **For want of an engine:** do step 3, then `gh run rerun <id> --failed`.
+- **In the checks:** if the runner was at fault, `gh run rerun <id> --failed`. If the commit is,
+  the tag stays where it is: fix on `main` and release the next version.
+- **In `macos`:** when the cause is outside the repository (a secret, Apple's notary service),
+  fix it and `gh run rerun <id> --failed`; it asks for approval again. A fault in the commit
+  means the next version.
+- **In `publish`, after it made the draft:** `gh release delete vX.Y.Z --yes` removes the draft
+  (not the tag), then `gh run rerun <id> --failed`.
+- **After it is published:** nothing can be changed. Release the next version.
+
+`release.yml` can also be started by hand, and only on a tag:
+`gh workflow run release.yml --ref vX.Y.Z` (the `land` job does this for a Chromium bump).
 
 ## Layout
 

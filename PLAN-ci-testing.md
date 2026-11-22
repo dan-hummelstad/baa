@@ -46,8 +46,13 @@ there.
 
 A from-scratch release chain is about 21 hours of compiling in 5 phases. Each row is a way that
 work was, or could be, thrown away. "Unrun" means the fix is on `main` since 2026-11-22 with its
-offline tests passing, but no chain has run it yet: it landed without a test chain (the user's
-choice), so the first chain after it is the test (see "Next").
+offline tests passing, but no chain has run that path yet: it landed without a test chain (the
+user's choice). What has run since (three one-phase release builds on a named base, runs
+44939065595, 44976842341 and 45004648911, and the 0.1.9 release): `pack-tree.sh`, the finished
+tree's plain name and 30 days, the new engine key, the checks before the signing job, the
+tag-only environment and the draft that becomes an immutable release. What has not: a build of
+more than one phase (the `-phase<N>` hand-off), a failed phase's upload, and a build that picks
+its base by itself (see "Next").
 
 | Loss | Seen | Closed by | State |
 |---|---|---|---|
