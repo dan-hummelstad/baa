@@ -8,12 +8,10 @@ use std::time::Duration;
 
 use crate::{Result, Role};
 
-/// A folder as its server lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteFolder {
     /// The server's own name or id for it: what the other calls take as `folder`.
     pub path: String,
-    /// What the user reads.
     pub name: String,
     pub role: Role,
 }
@@ -25,7 +23,6 @@ pub struct Flags {
     pub answered: bool,
 }
 
-/// A message as its folder's server lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteMessage {
     /// The server's id for it within its folder (an IMAP UID, a Graph id). A move gives
@@ -38,7 +35,6 @@ pub struct RemoteMessage {
     pub thread: Option<String>,
 }
 
-/// What [`Backend::changes`] found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
     pub new: Vec<RemoteMessage>,

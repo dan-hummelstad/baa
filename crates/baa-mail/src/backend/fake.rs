@@ -25,7 +25,7 @@ struct Server {
     gone: Vec<Gone>,
     /// Counts every change. A cursor is its value at that `changes`.
     clock: u64,
-    sent: Vec<Sent>,
+    sent: Vec<SentMessage>,
 }
 
 struct Held {
@@ -37,7 +37,6 @@ struct Held {
     changed: u64,
 }
 
-/// A message that left `folder`.
 struct Gone {
     folder: String,
     uid: String,
@@ -45,9 +44,8 @@ struct Gone {
     at: u64,
 }
 
-/// A message that went through [`Backend::send`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sent {
+pub struct SentMessage {
     pub from: String,
     pub to: Vec<String>,
     pub raw: Vec<u8>,
@@ -63,7 +61,7 @@ impl Fake {
         self.change(|server, now| server.hold(folder, raw.to_vec(), flags, None, now))
     }
 
-    pub fn sent(&self) -> Vec<Sent> {
+    pub fn sent(&self) -> Vec<SentMessage> {
         self.server.0.lock().unwrap().sent.clone()
     }
 
@@ -110,8 +108,8 @@ impl Server {
 
 /// Up to and including the blank line that ends the headers.
 fn header_of(raw: &[u8]) -> Vec<u8> {
-    let end = (0..raw.len())
-        .find_map(|i| [&b"\r\n\r\n"[..], b"\n\n"].into_iter().find(|blank| raw[i..].starts_with(blank)).map(|blank| i + blank.len()));
+    let after = |blank: &[u8]| raw.windows(blank.len()).position(|w| w == blank).map(|at| at + blank.len());
+    let end = [after(b"\r\n\r\n"), after(b"\n\n")].into_iter().flatten().min();
     raw[..end.unwrap_or(raw.len())].to_vec()
 }
 
@@ -177,7 +175,66 @@ impl Backend for Fake {
     }
 
     fn send(&mut self, from: &str, to: &[String], raw: &[u8]) -> Result<()> {
-        self.change(|server, _| server.sent.push(Sent { from: from.into(), to: to.to_vec(), raw: raw.to_vec() }));
+        self.change(|server, _| server.sent.push(SentMessage { from: from.into(), to: to.to_vec(), raw: raw.to_vec() }));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RAW: &[u8] = b"From: Fredrik <fredrik@example.com>\r\nSubject: Call sheet\r\n\r\nSee you at 09:10.\r\n";
+
+    #[test]
+    fn the_fake_backend_returns_what_it_was_given() {
+        let server = Fake::default();
+        server.add_folder("INBOX", Role::Inbox);
+        server.add_folder("Archive", Role::Archive);
+        let first = server.deliver("INBOX", RAW, Flags::default());
+        let flagged = Flags { flagged: true, ..Flags::default() };
+        let second = server.deliver("INBOX", b"Subject: no body", flagged);
+
+        let mut backend: Box<dyn Backend> = Box::new(server.clone());
+        let inbox = RemoteFolder { path: "INBOX".into(), name: "INBOX".into(), role: Role::Inbox };
+        let archive = RemoteFolder { path: "Archive".into(), name: "Archive".into(), role: Role::Archive };
+        assert_eq!(backend.folders().unwrap(), [inbox, archive]);
+
+        let all = backend.changes("INBOX", None).unwrap();
+        let header = b"From: Fredrik <fredrik@example.com>\r\nSubject: Call sheet\r\n\r\n".to_vec();
+        assert_eq!(
+            all.new,
+            [
+                RemoteMessage { uid: first.clone(), flags: Flags::default(), header, thread: None },
+                RemoteMessage { uid: second.clone(), flags: flagged, header: b"Subject: no body".to_vec(), thread: None },
+            ]
+        );
+        assert!(all.changed.is_empty() && all.removed.is_empty() && !all.reset);
+        assert_eq!(backend.fetch_body("INBOX", &first).unwrap(), RAW);
+        assert!(backend.fetch_body("Archive", &first).is_err(), "a uid is its folder's");
+
+        let none = backend.changes("INBOX", Some(&all.cursor)).unwrap();
+        assert_eq!(none, Changes { cursor: all.cursor.clone(), ..Changes::default() });
+        assert!(!backend.wait("INBOX", Duration::ZERO).unwrap(), "nothing since the last changes");
+
+        backend.apply("INBOX", &first, &Op::Seen(true)).unwrap();
+        backend.apply("INBOX", &second, &Op::Move("Archive".into())).unwrap();
+        let third = server.deliver("INBOX", RAW, Flags::default());
+        assert!(backend.wait("INBOX", Duration::from_secs(5)).unwrap(), "the test's own clone delivered");
+        let next = backend.changes("INBOX", Some(&all.cursor)).unwrap();
+        assert_eq!(next.new.iter().map(|m| m.uid.as_str()).collect::<Vec<_>>(), [third.as_str()]);
+        assert_eq!(next.changed, [(first.clone(), Flags { seen: true, ..Flags::default() })]);
+        assert_eq!(next.removed, [second]);
+        let moved = backend.changes("Archive", None).unwrap().new;
+        assert_eq!((moved.len(), moved[0].flags, moved[0].header.as_slice()), (1, flagged, &b"Subject: no body"[..]));
+
+        backend.apply("INBOX", &first, &Op::Delete).unwrap();
+        assert!(backend.apply("INBOX", &first, &Op::Flagged(true)).is_err());
+        assert_eq!(backend.changes("INBOX", Some(&next.cursor)).unwrap().removed, [first]);
+
+        backend.append("Archive", RAW, Flags { seen: true, ..Flags::default() }).unwrap();
+        assert_eq!(backend.changes("Archive", None).unwrap().new.len(), 2);
+        backend.send("dan@example.com", &["ola@example.com".into()], RAW).unwrap();
+        assert_eq!(server.sent(), [SentMessage { from: "dan@example.com".into(), to: vec!["ola@example.com".into()], raw: RAW.to_vec() }]);
     }
 }

@@ -2,12 +2,9 @@ use std::{collections::HashMap, sync::Mutex};
 
 use crate::AccountId;
 
-/// Which secret of an account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Secret {
-    /// A password or app password.
     Password,
-    /// An OAuth refresh token.
     RefreshToken,
 }
 

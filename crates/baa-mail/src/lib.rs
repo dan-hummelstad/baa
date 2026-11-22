@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use account::{Account, NewAccount};
 pub use backend::{
-    fake::{Fake, Sent},
+    fake::{Fake, SentMessage},
     Backend, Changes, Flags, Op, RemoteFolder, RemoteMessage,
 };
 pub use secrets::{MemorySecrets, Secret, Secrets};
@@ -153,7 +153,6 @@ pub struct Message {
     pub flagged: bool,
 }
 
-/// A message's content, ready to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Body {
     /// What the message's page is given: the HTML part with its `cid:` images inlined, or
@@ -186,9 +185,7 @@ pub struct Draft {
     pub subject: String,
     pub html: String,
     pub text: String,
-    /// Files to attach.
     pub attachments: Vec<PathBuf>,
-    /// The message it answers.
     pub in_reply_to: Option<MessageId>,
 }
 
@@ -340,7 +337,6 @@ impl Mail {
     /// Asks the Space's accounts for one INBOX check now, at most one every 10 s an account.
     pub fn check_now(&self, _space: MailSpace) {}
 
-    /// The codes in messages that arrived since `since`.
     pub fn codes(&self, _space: MailSpace, _since: SystemTime) -> Vec<Code> {
         Vec::new()
     }
@@ -348,8 +344,6 @@ impl Mail {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     fn space(session: &baa_model::Session) -> MailSpace {
@@ -406,59 +400,5 @@ mod tests {
         mail.check_now(space);
         mail.remove_account(AccountId(1));
         assert!(!dir.exists());
-    }
-
-    const RAW: &[u8] = b"From: Fredrik <fredrik@example.com>\r\nSubject: Call sheet\r\n\r\nSee you at 09:10.\r\n";
-
-    #[test]
-    fn the_fake_backend_returns_what_it_was_given() {
-        let server = Fake::default();
-        server.add_folder("INBOX", Role::Inbox);
-        server.add_folder("Archive", Role::Archive);
-        let first = server.deliver("INBOX", RAW, Flags::default());
-        let flagged = Flags { flagged: true, ..Flags::default() };
-        let second = server.deliver("INBOX", b"Subject: no body", flagged);
-
-        let mut backend: Box<dyn Backend> = Box::new(server.clone());
-        let inbox = RemoteFolder { path: "INBOX".into(), name: "INBOX".into(), role: Role::Inbox };
-        let archive = RemoteFolder { path: "Archive".into(), name: "Archive".into(), role: Role::Archive };
-        assert_eq!(backend.folders().unwrap(), [inbox, archive]);
-
-        let all = backend.changes("INBOX", None).unwrap();
-        let header = b"From: Fredrik <fredrik@example.com>\r\nSubject: Call sheet\r\n\r\n".to_vec();
-        assert_eq!(
-            all.new,
-            [
-                RemoteMessage { uid: first.clone(), flags: Flags::default(), header, thread: None },
-                RemoteMessage { uid: second.clone(), flags: flagged, header: b"Subject: no body".to_vec(), thread: None },
-            ]
-        );
-        assert!(all.changed.is_empty() && all.removed.is_empty() && !all.reset);
-        assert_eq!(backend.fetch_body("INBOX", &first).unwrap(), RAW);
-        assert!(backend.fetch_body("Archive", &first).is_err(), "a uid is its folder's");
-
-        let none = backend.changes("INBOX", Some(&all.cursor)).unwrap();
-        assert_eq!(none, Changes { cursor: all.cursor.clone(), ..Changes::default() });
-        assert!(!backend.wait("INBOX", Duration::ZERO).unwrap(), "nothing since the last changes");
-
-        backend.apply("INBOX", &first, &Op::Seen(true)).unwrap();
-        backend.apply("INBOX", &second, &Op::Move("Archive".into())).unwrap();
-        let third = server.deliver("INBOX", RAW, Flags::default());
-        assert!(backend.wait("INBOX", Duration::from_secs(5)).unwrap(), "the test's own clone delivered");
-        let next = backend.changes("INBOX", Some(&all.cursor)).unwrap();
-        assert_eq!(next.new.iter().map(|m| m.uid.as_str()).collect::<Vec<_>>(), [third.as_str()]);
-        assert_eq!(next.changed, [(first.clone(), Flags { seen: true, ..Flags::default() })]);
-        assert_eq!(next.removed, [second]);
-        let moved = backend.changes("Archive", None).unwrap().new;
-        assert_eq!((moved.len(), moved[0].flags, moved[0].header.as_slice()), (1, flagged, &b"Subject: no body"[..]));
-
-        backend.apply("INBOX", &first, &Op::Delete).unwrap();
-        assert!(backend.apply("INBOX", &first, &Op::Flagged(true)).is_err());
-        assert_eq!(backend.changes("INBOX", Some(&next.cursor)).unwrap().removed, [first]);
-
-        backend.append("Archive", RAW, Flags { seen: true, ..Flags::default() }).unwrap();
-        assert_eq!(backend.changes("Archive", None).unwrap().new.len(), 2);
-        backend.send("dan@example.com", &["ola@example.com".into()], RAW).unwrap();
-        assert_eq!(server.sent(), [Sent { from: "dan@example.com".into(), to: vec!["ola@example.com".into()], raw: RAW.to_vec() }]);
     }
 }
