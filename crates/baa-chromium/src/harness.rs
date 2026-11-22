@@ -136,3 +136,14 @@ pub fn window_number(view: *mut AnyObject) -> isize {
         msg_send![window, windowNumber]
     }
 }
+
+pub fn child_window_count(view: *mut AnyObject) -> usize {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        if window.is_null() {
+            return 0;
+        }
+        let children: *mut AnyObject = msg_send![window, childWindows];
+        if children.is_null() { 0 } else { msg_send![children, count] }
+    }
+}

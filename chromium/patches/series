@@ -16,6 +16,7 @@ baa/history-swipe-hook.patch
 baa/doh-probe-host.patch
 baa/tab-dialogs-hook.patch
 baa/tab-dialog-manager-no-widget.patch
+baa/dialog-child-window.patch
 baa/widevine-opt-in.patch
 baa/no-helium-onboarding.patch
 baa/target-url-hook.patch

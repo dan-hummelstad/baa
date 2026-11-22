@@ -603,7 +603,7 @@ mod app {
     ///   prefb|prefi|prefs <1|local> <name> <value> | zoomdefault <f> | engine <name> <kw> <url>
     ///   rules <kind> | rule <kind> <pattern> <state> | clear <what> <since_ms> | unpacked <path> | reload-ext <id> | initscript <js> | schemes <website> <webui> | profile <1|2|e> | prefclear <1|local> <name> | defaultbrowser
     ///   reopen <1|2|e> <url> (close the current tab, make one at once) | closeprofile <1|2|e> | answer <id|last> <0|1> [text] [password] [checked 0|1]
-    ///   waitload <max_ms> (until the tab stops loading)
+    ///   waitload <max_ms> (until the tab stops loading) | childwindows (of the tab's window)
     ///   fillcode <code> (baa_tab_fill_code into the last code field shown) | siteof <host> (baa_site_of)
     fn run_script(path: String, cx: &mut App) {
         let script = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -856,6 +856,12 @@ mod app {
                             let mut p = arg.splitn(3, ' ');
                             let (code, chars, flags) = (p.next().unwrap(), p.next().unwrap(), p.next().unwrap());
                             harness::post_key(harness::window_number(s.view.cast()), code.parse().unwrap(), chars, flags.parse().unwrap());
+                        }
+                    }
+                    "childwindows" => {
+                        let mut s = empty_state();
+                        if (core.tab_get_state)(tab, &mut s) {
+                            eprintln!("baa: childwindows {}", harness::child_window_count(s.view.cast()));
                         }
                     }
                     "screenshot" => {

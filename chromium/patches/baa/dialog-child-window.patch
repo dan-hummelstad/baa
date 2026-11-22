@@ -1,0 +1,66 @@
+--- a/ui/views/cocoa/native_widget_mac_ns_window_host.h
++++ b/ui/views/cocoa/native_widget_mac_ns_window_host.h
+@@ -110,6 +110,7 @@
+     return native_widget_mac_;
+   }
+   NativeWidgetMacNSWindowHost* parent() const { return parent_; }
++  NSView* foreign_parent_view() const { return foreign_parent_view_; }
+   const std::vector<raw_ptr<NativeWidgetMacNSWindowHost>>& children() const {
+     return children_;
+   }
+@@ -518,6 +519,11 @@
+   // Parent and child widgets.
+   raw_ptr<NativeWidgetMacNSWindowHost> parent_ = nullptr;
+   std::vector<raw_ptr<NativeWidgetMacNSWindowHost>> children_;
++
++  // baa: a parent NSView that is in no views window (baa's page views). Such a
++  // parent gets no host above, so its window holds this one as a child window
++  // while it is shown instead.
++  NSView* __weak foreign_parent_view_ = nil;
+ 
+   // The factory that was used to create |remote_ns_window_remote_|. This must
+   // be the same as |parent_->application_host_|.
+--- a/ui/views/cocoa/native_widget_mac_ns_window_host.mm
++++ b/ui/views/cocoa/native_widget_mac_ns_window_host.mm
+@@ -468,6 +468,9 @@
+ 
+   Widget* widget = GetWidget();
+   widget_type_ = params.type;
++  if (!parent_ && params.parent && in_process_ns_window_) {
++    foreign_parent_view_ = params.parent.GetNativeNSView();
++  }
+   bool is_tooltip = params.type == Widget::InitParams::TYPE_TOOLTIP;
+   if (!is_tooltip) {
+     tooltip_manager_ = std::make_unique<TooltipManagerMac>(GetNSWindowMojo());
+@@ -1207,6 +1210,20 @@
+     ResetOcclusion(/*update_compositor=*/false);
+   }
+   UpdateCompositorVisibility();
++
++  // baa: a child window moves with its parent and stays in front of it. Adding
++  // a child to a window on another Space switches Space (as in
++  // NativeWidgetNSWindowBridge::OrderChildren), so then it stays on its own.
++  if (foreign_parent_view_ && in_process_ns_window_) {
++    NSWindow* parent_window = foreign_parent_view_.window;
++    if (!window_visible) {
++      [in_process_ns_window_.parentWindow
++          removeChildWindow:in_process_ns_window_];
++    } else if (parent_window.visible && parent_window.onActiveSpace) {
++      [parent_window addChildWindow:in_process_ns_window_
++                            ordered:NSWindowAbove];
++    }
++  }
+ 
+   Widget* widget = GetWidget();
+   if (!widget) {
+--- a/ui/views/widget/native_widget_mac.mm
++++ b/ui/views/widget/native_widget_mac.mm
+@@ -598,7 +598,7 @@
+   // A peculiarity of the constrained window framework is that it permits a
+   // dialog of ModalType::kWindow to have a null parent window; falling back to
+   // a non-modal window in this case.
+-  DCHECK(ns_window_host_->parent() ||
++  DCHECK(ns_window_host_->parent() || ns_window_host_->foreign_parent_view() ||
+          modal_type == ui::mojom::ModalType::kWindow);
+ 
+   // Everything happens upon show.

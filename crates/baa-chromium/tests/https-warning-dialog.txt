@@ -1,0 +1,10 @@
+# The HTTPS-first warning as Chrome's dialog (tabs::TabDialogManager) over a blank page: it must be a child window of the page's window
+prefb 1 https_only_mode_enabled true
+sleep 500
+load http://http-only.example.com:{PORT}/
+waitload 20000
+sleep 2000
+childwindows
+cdpeval document.querySelector('#proceed-button') ? 'warning' : 'none: ' + document.body.innerText.slice(0, 80)
+sleep 1000
+quit

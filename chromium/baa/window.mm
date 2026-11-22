@@ -466,7 +466,8 @@ class Window::ContentsDialogHost : public web_modal::WebContentsModalDialogHost,
                 usingBlock:^(NSNotification*) {
                   NotifyPositionRequiresUpdate();
                 }];
-    // The dialog is a window of its own, so it does not move with ours by itself.
+    // A dialog shown while our window was on another Space is no child window
+    // (dialog-child-window.patch), so it does not move with ours by itself.
     window_watch_ = [NSNotificationCenter.defaultCenter
         addObserverForName:NSWindowDidMoveNotification
                     object:nil

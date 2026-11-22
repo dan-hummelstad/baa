@@ -1,6 +1,8 @@
 # Chrome's dialogs that go through tabs::TabDialogManager open in baa: its window is no views widget, and before
 # tab-dialog-manager-no-widget.patch Chromium ended the app here (CHECK(host), 0.1.8). The run has to end by itself with exit 0.
-# The script is the page form's: with Chrome's default the warning is a dialog over a blank page, so it finds no button.
-script: https-warning.txt
+# With Chrome's default the warning is a dialog over a blank page, so the page has no button; the dialog moves with baa's
+# window and stays in front of it because it is that window's child (dialog-child-window.patch).
+script: https-warning-dialog.txt
 must: baa: prefb 1 https_only_mode_enabled true -> 1
 must: cdp tab=0 id=1 .*"value":"none: "
+must: baa: childwindows 1
