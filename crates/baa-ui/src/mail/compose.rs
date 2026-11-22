@@ -590,7 +590,7 @@ impl<H: WebHost> Browser<H> {
                     .child(icon("x", 12., surface::icon().into())),
             );
 
-        let mut format = div().flex().items_center().gap(px(4.)).px(px(16.)).py(px(6.)).border_b_1().border_color(surface::line());
+        let mut format = div().flex().flex_wrap().items_center().gap(px(4.)).px(px(16.)).py(px(6.)).border_b_1().border_color(surface::line());
         let commands = [("B", "bold"), ("I", "italic"), ("U", "underline"), ("•", "insertUnorderedList"), ("1.", "insertOrderedList")];
         for (n, (text, command)) in commands.into_iter().enumerate() {
             let script = format!("{EDITOR_DOCUMENT}.execCommand('{command}')");
@@ -708,6 +708,7 @@ impl<H: WebHost> Browser<H> {
                 .debug_selector(|| "mail-close-ask".into())
                 .occlude()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap(px(8.))
                 .px(px(16.))
@@ -735,6 +736,7 @@ impl<H: WebHost> Browser<H> {
         let status = if c.dirty { "unsaved".to_owned() } else { saved_label(c.saved_at) };
         let footer = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(8.))
             .px(px(16.))

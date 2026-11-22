@@ -58,11 +58,11 @@ showed the browser or mail, and what mail showed.
 |---|---|---|---|
 | A1/B1 | Archive rail: Mail first, then Downloads, Archived Tabs, Chat | `library::Section::Mail`, labelled "Mail", first `nav_item` in `library.rs`; drawn only when the active Space can have mail | 1 |
 | A2/B2 | Mail nav: account select ("All inboxes · N mailboxes · Space"), Search mail, New message, Folders, Search folders | the Archive body of `Section::Mail`, `mail/nav.rs`; the select is a native menu, `MenuKind::MailScope` | 1 |
-| A2/B2 | Tab strip: Inbox plus one tab a draft | mail view, GPUI | 1 |
+| A2/B2 | Tab strip: narrow, the list's tab first, one italic preview tab, one tab a draft; wide, the list's tab and drafts (§5) | mail view, GPUI | 1 |
 | A2/B2 | Command row (ASCII: ribbon tabs Home/View/Folder/Options; Arc: pills) | one command table, drawn per skin | 1 the Home set, 3 rest |
 | A2/B2 | List: Focused/Other, scope chips, Pinned/Today/Yesterday groups, account dot a row | `gpui::uniform_list` (precedent `space_picker.rs:750`) | 1 (Focused/Other, pinned 3) |
-| A2/B2 | Reading pane: subject, chips, sender, body, attachments, earlier messages, quick reply | GPUI around a message page (§6) | 1 (chips 3) |
-| A3/B3 | Composer in the reading pane: From, To, Cc, Bcc, Subject, options row, attachments, body, footer | GPUI fields (`TextField`) around an editor page (§6) | 1 (options row 3) |
+| A2/B2 | Reading pane (beside the list when wide, the preview tab's whole view when narrow, with "← folder" first in its command row): subject, chips, sender, body, attachments, earlier messages, quick reply | GPUI around a message page (§6) | 1 (chips 3) |
+| A3/B3 | Composer in a draft tab, full width: From, To, Cc, Bcc, Subject, options row, attachments, body, footer | GPUI fields (`TextField`) around an editor page (§6) | 1 (options row 3) |
 | A3/B3 | Editor ribbon: Message, Insert, Format text, Options, Review | commands to the editor page | 1 basic set, 3 rest |
 | A2 | Status line: "imap ✓ synced 40s ago · 12 unread" | mail view footer | 1 |
 
@@ -211,10 +211,25 @@ Owner: `baa-ui` (the files named here), with the model change in `baa-model`.
   `show_mail(true)`) and collapses when a tab pane takes focus (`PageEvent::Focused`); the split
   stays on screen either way. At most one mail pane a Space. A split holding a mail pane shows when
   the Space shows mail or its active tab is one of the panes.
+- **Tabs and width.** The mail view's own laid-out width decides the layout, not the window's: a
+  split pane is narrow in a wide window. The breakpoint is `MAIL_WIDE` (900 px, `mail/mod.rs`), read
+  by a canvas in the mail view after layout. Wide: the list (380 px) beside the reading pane, no
+  preview tab. Narrow: the first tab is always the list's, labelled with the open folder or scope,
+  never closed or moved, list across the view. Picking a conversation opens one preview tab after
+  it, in front, with the message across the view and an italic title; another pick replaces its
+  content. Its command row starts with "← folder", and ⌘[ and Esc (not in a text field or the
+  message page) go back to the list, keeping the preview tab, the selection and the list's scroll.
+  Closing the preview (× or ⌘W) shows the list and clears the selection, as do Delete, Archive and
+  Move. Each new message, reply, reply all and forward has its own full-width draft tab in either
+  width; a preview never replaces one, and closing a draft in front shows the tab on its left.
+  Choosing a folder or account brings the list's tab to the front. Going wide folds the preview
+  into the pane; going narrow shows the list with the selection kept and opens no preview.
 - **Memory.** `Space.showing` and `Space.active_tab` are in the session already or by this change.
   What mail showed (folder, scope, sort, selected conversation, open draft tabs and which is in
-  front, list scroll) is the `view` row of `mail.db`, written on change and read on Space switch and
-  at launch.
+  front, whether a preview tab is closed, open or in front, list scroll) is the `view` row of
+  `mail.db`, written on change and read on Space switch and at launch. `ViewState::tab()` gives the
+  tab in front (list, preview or draft); a switch or launch returns to it, and the width then
+  decides its form (`ViewState::fit`).
 - **Space delete.** The confirmation names the mail accounts that go with the Space, as it names
   extensions (`settings/tabs.rs:612`); then `mail.remove_accounts_of(space)` drops their rows, cache
   and Keychain items. Accounts of every Space stay.
@@ -765,6 +780,10 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - In the Archive a horizontal swipe switches Space and stays in mail, the Space dots show under the
   rail, ⌘⇧A toggles the Archive on its last section (⌘⇧L is gone), and ⌘ with a swipe toggles it:
   the user's decision, 2026-11-22.
+- The list's tab is always first and a conversation opens in one preview tab, with drafts in tabs
+  of their own, and a wide mail view keeps the list and the reading pane together: on a real build
+  the mail pane in a split view was half the window, and the list and the reading pane were each
+  too narrow to read (the user's decision, 2026-11-22; §5, Tabs and width).
 - The editor is a sandboxed frame (`allow-same-origin`, no scripts) in the document, not an
   editable page body: quoted mail in the page itself could navigate it with `<meta refresh>`.
   The shell reaches it as `baa_web::EDITOR_DOCUMENT`.
@@ -808,6 +827,8 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - Formatting, attachments, autosave and send in the composer, with a real account.
 - The swipe up over the bottom bar, the swipe between Spaces in mail, the ⌘ swipe, and the dots in
   the Archive's bottom row.
+- The preview tab, its back control, ⌘[ and Esc, and the crossing between the two layouts when
+  resizing the window or dragging a split's seam.
 
 **Open**
 - Google sign-in needs the client id and its client secret (`BAA_GOOGLE_CLIENT_ID`,

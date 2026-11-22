@@ -267,11 +267,11 @@ impl<H: WebHost> Browser<H> {
                     .items_center()
                     .gap(px(8.))
                     .children(dot.map(|c| div().size(px(8.)).rounded_full().bg(c)))
-                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(sender(&message.from)))
-                    // The real address always: a display name proves nothing.
-                    .child(div().debug_selector(|| "mail-sender-address".into()).text_color(surface::muted()).child(message.from.email.clone()))
+                    .child(div().min_w_0().truncate().font_weight(gpui::FontWeight::SEMIBOLD).child(sender(&message.from)))
+                    // The real address always, never cut: a display name proves nothing.
+                    .child(div().debug_selector(|| "mail-sender-address".into()).flex_none().text_color(surface::muted()).child(message.from.email.clone()))
                     .child(div().flex_1())
-                    .child(div().text_size(px(11.5)).text_color(surface::muted()).child(date)),
+                    .child(div().flex_none().text_size(px(11.5)).text_color(surface::muted()).child(date)),
             )
             .child(
                 div()
@@ -361,6 +361,7 @@ impl<H: WebHost> Browser<H> {
                 div()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .child(div().max_w(px(220.)).truncate().child(SharedString::from(a.name.clone())))
                     .child(div().text_size(px(10.5)).text_color(if a.dangerous { warn } else { surface::muted().into() }).child(if a.dangerous {
                         "This file may harm your computer".to_string()
@@ -393,7 +394,7 @@ impl<H: WebHost> Browser<H> {
                     .on_click(cx.listener(move |this, _, window, cx| this.show_message(id, false, window, cx)))
                     .child(div().w(px(160.)).truncate().child(sender(&m.from)))
                     .child(div().flex_1().truncate().text_color(surface::muted()).child(m.subject.clone()))
-                    .child(div().text_color(surface::muted()).child(crate::mail::list::when(m.date)))
+                    .child(div().flex_none().text_color(surface::muted()).child(crate::mail::list::when(m.date)))
             })
         });
         div()
