@@ -380,7 +380,9 @@ impl<H: WebHost> Browser<H> {
                     .hover(|d| d.bg(surface::key()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.session.remove_from_split(id);
+                        if let Some(space) = this.session.active_space() {
+                            this.session.remove_from_split(space, baa_model::Pane::Tab(id));
+                        }
                         this.sync(window, cx);
                     }))
                     .child(icon("x", 13., surface::icon().into())),

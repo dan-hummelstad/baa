@@ -113,6 +113,17 @@ impl Showing {
     }
 }
 
+impl Space {
+    /// The pane the user is on: mail while the Space shows it, else the active tab. A split
+    /// is on screen while this is one of its panes.
+    pub fn front(&self) -> Option<Pane> {
+        match self.showing {
+            Showing::Mail => Some(Pane::Mail),
+            Showing::Browser => self.active_tab.map(Pane::Tab),
+        }
+    }
+}
+
 /// How a Space's colours are shown: as picked, with light or dark ink chosen from
 /// them (`Auto`), or moved into a pale (`Light`) or deep (`Dark`) band.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +348,23 @@ impl Session {
     pub fn set_active_space(&mut self, id: SpaceId) {
         if self.space(id).is_some() {
             self.active_space = Some(id);
+        }
+    }
+
+    /// Browser or mail in `space`. An incognito Space never shows mail (PLAN-mail.md §9).
+    pub fn set_showing(&mut self, space: SpaceId, showing: Showing) {
+        if let Some(s) = self.space_mut(space).filter(|s| showing == Showing::Browser || !s.ephemeral) {
+            s.showing = showing;
+        }
+    }
+
+    /// With mail off every Space shows the browser and no split holds mail, so the shell is
+    /// what it was before mail.
+    pub fn forget_mail(&mut self) {
+        let ids: Vec<SpaceId> = self.spaces.iter().map(|s| s.id).collect();
+        for id in ids {
+            self.set_showing(id, Showing::Browser);
+            self.leave_split(id, Pane::Mail);
         }
     }
 
@@ -583,7 +611,7 @@ impl Session {
         if from != space {
             self.pick_neighbour(from, id);
         } else if zone == Zone::Favorite {
-            self.leave_split(from, id);
+            self.leave_split(from, Pane::Tab(id));
         }
     }
 
@@ -624,20 +652,25 @@ impl Session {
         }
         if let Some(s) = self.space_mut(space) {
             s.active_tab = Some(id);
+            s.showing = Showing::Browser;
         }
         self.active_space = Some(space);
     }
 
     /// If `id` (already gone from `space`) was its active tab, hand that to the tab shown
-    /// before it, favourites included. A split pane hands it to the pane beside it.
+    /// before it, favourites included. A split pane hands it to the pane beside it, and
+    /// when that is mail, mail comes to the front.
     fn pick_neighbour(&mut self, space: SpaceId, id: TabId) {
-        let pane = self.leave_split(space, id);
+        let pane = self.leave_split(space, Pane::Tab(id));
         if self.space(space).and_then(|s| s.active_tab) != Some(id) {
             return;
         }
-        let next = pane.or_else(|| self.recent(space, id));
+        let next = pane.and_then(Pane::tab).or_else(|| self.recent(space, id));
         if let Some(s) = self.space_mut(space) {
             s.active_tab = next;
+        }
+        if pane == Some(Pane::Mail) {
+            self.set_showing(space, Showing::Mail);
         }
     }
 
@@ -656,14 +689,14 @@ impl Session {
         self.spaces.iter().filter_map(|s| s.active_tab).chain(panes).collect()
     }
 
-    /// Takes `id` out of `space`'s split, which dissolves at one pane. Returns the pane
+    /// Takes `pane` out of `space`'s split, which dissolves at one pane. Returns the pane
     /// left of it (or the new first one) to take over focus.
-    fn leave_split(&mut self, space: SpaceId, id: TabId) -> Option<TabId> {
+    fn leave_split(&mut self, space: SpaceId, pane: Pane) -> Option<Pane> {
         let s = self.space_mut(space)?;
         let split = s.split.as_mut()?;
-        let i = split.panes.iter().position(|&p| p == Pane::Tab(id))?;
+        let i = split.panes.iter().position(|&p| p == pane)?;
         split.panes.remove(i);
-        let next = split.panes.get(i.saturating_sub(1)).and_then(|p| p.tab());
+        let next = split.panes.get(i.saturating_sub(1)).copied();
         *split = Split::even(std::mem::take(&mut split.panes));
         if split.panes.len() < 2 {
             s.split = None;
@@ -671,17 +704,20 @@ impl Session {
         next
     }
 
-    /// Puts `tab` in `space`'s split at `index` (clamped), making one with the Space's
-    /// active tab if there is none, and focuses it. A favourite or pinned tab goes in as a copy
-    /// opened in `space` (also when it is the active tab): a pane never belongs to another
-    /// Space, and the pinned tab stays where it is in the sidebar.
+    /// Puts `tab` in `space`'s split at `index` (clamped), making one with the Space's front
+    /// pane (mail, or the active tab) if none is on screen, and focuses it. A favourite or
+    /// pinned tab goes in as a copy opened in `space` (also when it is the active tab): a pane
+    /// never belongs to another Space, and the pinned tab stays where it is in the sidebar.
     /// Returns the pane's tab; `None` for another Space's tab or a full split.
     pub fn add_to_split(&mut self, space: SpaceId, tab: TabId, index: usize, now: u64) -> Option<TabId> {
-        let active = self.space(space)?.active_tab;
-        let mut panes = match self.space(space)?.split.clone() {
-            Some(split) if active.is_some_and(|a| split.panes.contains(&Pane::Tab(a))) => split.panes,
-            // The old split is not on screen: the new one replaces it.
-            _ => vec![Pane::Tab(self.pane_of(space, active?, now)?)],
+        let mut panes = match self.shown_split(space) {
+            Some(split) => split.panes.clone(),
+            // The old split is not on screen: the new one replaces it. A mail pane in it goes
+            // as its tabs do; mail itself stays the Space's, one ⌘⇧M away.
+            None => vec![match self.space(space)?.front()? {
+                Pane::Tab(active) => Pane::Tab(self.pane_of(space, active, now)?),
+                Pane::Mail => Pane::Mail,
+            }],
         };
         let tab = self.pane_of(space, tab, now)?;
         if panes.contains(&Pane::Tab(tab)) {
@@ -724,28 +760,31 @@ impl Session {
         Some(copy_id)
     }
 
-    /// ⌃⇧=: splits with the Space's most recently shown other tab.
+    /// ⌃⇧=: splits the front pane with the Space's most recently shown other tab; in mail,
+    /// that may be the active tab.
     pub fn split_with_recent(&mut self, space: SpaceId, now: u64) -> Option<TabId> {
         let s = self.space(space)?;
         let panes = s.split.as_ref().map_or(&[][..], |p| &p.panes[..]);
         let recent = self
             .space_tabs(space)
-            .filter(|t| Some(t.id) != s.active_tab && !panes.contains(&Pane::Tab(t.id)))
+            .filter(|t| s.front() != Some(Pane::Tab(t.id)) && !panes.contains(&Pane::Tab(t.id)))
             .max_by_key(|t| t.last_active)?
             .id;
         self.add_to_split(space, recent, usize::MAX, now)
     }
 
-    /// The tab stays open, out of the split.
-    pub fn remove_from_split(&mut self, tab: TabId) {
-        let Some(space) = self.spaces.iter().find(|s| s.split.as_ref().is_some_and(|p| p.panes.contains(&Pane::Tab(tab)))) else {
-            return;
-        };
-        let (space, active) = (space.id, space.active_tab);
-        let next = self.leave_split(space, tab);
-        if active == Some(tab) {
-            if let Some(s) = self.space_mut(space) {
-                s.active_tab = next.or(Some(tab));
+    /// A tab pane's tab stays open, out of the split, and mail stays the Space's. Focus on the
+    /// pane goes to the one beside it.
+    pub fn remove_from_split(&mut self, space: SpaceId, pane: Pane) {
+        let Some(front) = self.space(space).map(Space::front) else { return };
+        let Some(next) = self.leave_split(space, pane).filter(|_| front == Some(pane)) else { return };
+        match next {
+            Pane::Mail => self.set_showing(space, Showing::Mail),
+            Pane::Tab(tab) => {
+                if let Some(s) = self.space_mut(space) {
+                    s.active_tab = Some(tab);
+                    s.showing = Showing::Browser;
+                }
             }
         }
     }
@@ -759,10 +798,11 @@ impl Session {
         }
     }
 
-    /// The split on screen in `space`: there is one and its active tab is a pane.
+    /// The split on screen in `space`: there is one and the front pane is one of its panes.
     pub fn shown_split(&self, space: SpaceId) -> Option<&Split> {
         let s = self.space(space)?;
-        s.split.as_ref().filter(|p| s.active_tab.is_some_and(|a| p.panes.contains(&Pane::Tab(a))))
+        let front = s.front()?;
+        s.split.as_ref().filter(|p| p.panes.contains(&front))
     }
 
     /// ⌘W. Pushes onto the reopen stack and, unless incognito, the archive.
@@ -1253,7 +1293,7 @@ mod tests {
         s.set_split_widths(sp, vec![0.3, 0.7]);
         s.set_split_widths(sp, vec![1.]);
         assert_eq!(s.shown_split(sp).unwrap().widths, [0.3, 0.7]);
-        s.remove_from_split(copy);
+        s.remove_from_split(sp, Pane::Tab(copy));
         assert!(s.space(sp).unwrap().split.is_none());
         assert_eq!(s.space(sp).unwrap().active_tab, Some(a));
         assert!(s.tab(copy).is_some(), "out of the split, still open");
@@ -1280,13 +1320,148 @@ mod tests {
         assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned, "the pinned tab stays pinned");
         assert_eq!(shown_panes(&s, sp), [a, copy]);
         // The active pinned tab as the split's first pane is copied too.
-        s.remove_from_split(copy);
+        s.remove_from_split(sp, Pane::Tab(copy));
         s.activate_tab(pin, 3);
         assert_eq!(s.add_to_split(sp, a, usize::MAX, 4), Some(a));
         let first = shown_panes(&s, sp)[0];
         assert_ne!(first, pin);
         assert_eq!(shown_panes(&s, sp), [first, a]);
         assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned);
+    }
+
+    fn panes(s: &Session, space: SpaceId) -> Vec<Pane> {
+        s.shown_split(space).map(|p| p.panes.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_split_with_mail_shows_while_mail_or_one_of_its_tabs_is_in_front() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        // Opening b stamped a too; shown again, b is the most recent alone.
+        s.activate_tab(b, 3);
+        s.set_showing(sp, Showing::Mail);
+        assert_eq!(s.space(sp).unwrap().front(), Some(Pane::Mail));
+        assert_eq!(s.split_with_recent(sp, 3), Some(b), "in mail, the active tab is the most recent other one");
+        assert_eq!(panes(&s, sp), [Pane::Mail, Pane::Tab(b)]);
+        assert_eq!(s.space(sp).unwrap().front(), Some(Pane::Tab(b)), "the new pane has focus");
+        s.set_showing(sp, Showing::Mail);
+        assert_eq!(panes(&s, sp), [Pane::Mail, Pane::Tab(b)], "mail in front shows its split");
+        s.activate_tab(a, 4);
+        assert_eq!(s.space(sp).unwrap().showing, Showing::Browser, "showing a tab leaves mail");
+        assert!(s.shown_split(sp).is_none(), "a tab outside the split leaves it standing, off screen");
+        s.set_showing(sp, Showing::Mail);
+        assert_eq!(panes(&s, sp), [Pane::Mail, Pane::Tab(b)]);
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(a), "mail keeps the tab to come back to");
+    }
+
+    #[test]
+    fn a_tab_leaving_a_split_beside_mail_hands_focus_to_mail() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        s.set_showing(sp, Showing::Mail);
+        s.add_to_split(sp, b, usize::MAX, 3);
+        s.close_tab(b, 4);
+        assert!(s.space(sp).unwrap().split.is_none(), "mail alone is no split");
+        assert_eq!(s.space(sp).unwrap().front(), Some(Pane::Mail), "the pane beside it was mail");
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(a), "a tab to come back to");
+
+        // Out of the split by its ×, with mail beside it: the tab stays open, mail has focus.
+        s.add_to_split(sp, a, usize::MAX, 5);
+        s.remove_from_split(sp, Pane::Tab(a));
+        assert_eq!((s.space(sp).unwrap().front(), s.tab(a).is_some()), (Some(Pane::Mail), true));
+        assert!(s.space(sp).unwrap().split.is_none());
+    }
+
+    #[test]
+    fn mail_counts_as_a_pane_and_is_one_at_most() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let tabs: Vec<TabId> = (1..=4).map(|i| s.open_tab(sp, "t", i)).collect();
+        s.set_showing(sp, Showing::Mail);
+        for &t in &tabs[..SPLIT_MAX - 1] {
+            assert_eq!(s.add_to_split(sp, t, usize::MAX, 5), Some(t));
+            s.set_showing(sp, Showing::Mail);
+        }
+        assert_eq!(panes(&s, sp).len(), SPLIT_MAX);
+        assert_eq!(s.add_to_split(sp, tabs[3], usize::MAX, 6), None, "mail and three tabs fill it");
+        assert_eq!(panes(&s, sp).iter().filter(|p| **p == Pane::Mail).count(), 1);
+        for &t in &tabs[..SPLIT_MAX - 2] {
+            s.remove_from_split(sp, Pane::Tab(t));
+        }
+        assert_eq!(panes(&s, sp), [Pane::Mail, Pane::Tab(tabs[2])]);
+        s.remove_from_split(sp, Pane::Tab(tabs[2]));
+        assert!(s.space(sp).unwrap().split.is_none(), "dissolves at one pane, mail too");
+    }
+
+    #[test]
+    fn a_split_off_screen_with_mail_is_replaced_and_mail_stays_the_spaces() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        let c = s.open_tab(sp, "c", 3);
+        s.set_showing(sp, Showing::Mail);
+        s.add_to_split(sp, b, usize::MAX, 4);
+        s.activate_tab(a, 5);
+        assert_eq!(s.add_to_split(sp, c, usize::MAX, 6), Some(c));
+        assert_eq!(panes(&s, sp), [Pane::Tab(a), Pane::Tab(c)], "made from the tab in front");
+        s.set_showing(sp, Showing::Mail);
+        assert_eq!(s.space(sp).unwrap().front(), Some(Pane::Mail), "mail is still there, on its own");
+        assert!(s.shown_split(sp).is_none());
+    }
+
+    #[test]
+    fn taking_mail_out_of_a_split_focuses_the_pane_beside_it() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let a = s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        s.set_showing(sp, Showing::Mail);
+        s.add_to_split(sp, b, 0, 3);
+        s.add_to_split(sp, a, 0, 4);
+        s.set_showing(sp, Showing::Mail);
+        assert_eq!(panes(&s, sp), [Pane::Tab(a), Pane::Tab(b), Pane::Mail]);
+        s.remove_from_split(sp, Pane::Mail);
+        assert_eq!(s.space(sp).unwrap().front(), Some(Pane::Tab(b)));
+        assert_eq!(panes(&s, sp), [Pane::Tab(a), Pane::Tab(b)]);
+    }
+
+    #[test]
+    fn an_incognito_space_never_shows_mail_and_mail_off_forgets_it() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let private = s.add_ephemeral_space("Incognito", ProfileId(99));
+        s.open_tab(private, "a", 1);
+        s.set_showing(private, Showing::Mail);
+        assert_eq!(s.space(private).unwrap().showing, Showing::Browser);
+
+        s.open_tab(sp, "a", 1);
+        let b = s.open_tab(sp, "b", 2);
+        s.set_showing(sp, Showing::Mail);
+        s.add_to_split(sp, b, usize::MAX, 3);
+        s.set_showing(sp, Showing::Mail);
+        s.forget_mail();
+        assert_eq!(s.space(sp).unwrap().showing, Showing::Browser);
+        assert!(s.space(sp).unwrap().split.is_none());
+        assert_eq!(s.space(sp).unwrap().active_tab, Some(b));
+    }
+
+    #[test]
+    fn mail_in_front_and_in_a_split_survive_a_save_and_load() {
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let b = s.open_tab(sp, "b", 1);
+        s.set_showing(sp, Showing::Mail);
+        s.add_to_split(sp, b, usize::MAX, 2);
+        s.set_showing(sp, Showing::Mail);
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.space(sp), s.space(sp));
+        assert_eq!(panes(&back, sp), [Pane::Mail, Pane::Tab(b)]);
     }
 
     #[test]

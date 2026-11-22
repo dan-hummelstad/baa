@@ -137,7 +137,9 @@ impl<H: WebHost> Browser<H> {
                     items.push(MenuEntry::item(
                         "Remove from Split",
                         Box::new(move |this, window, cx| {
-                            this.session.remove_from_split(id);
+                            if let Some(space) = this.session.tab(id).map(|t| t.space) {
+                                this.session.remove_from_split(space, baa_model::Pane::Tab(id));
+                            }
                             this.sync(window, cx);
                         }),
                     ));
