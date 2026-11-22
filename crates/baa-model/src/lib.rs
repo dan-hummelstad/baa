@@ -13,8 +13,8 @@ mod tolerant;
 
 pub use permission::{Permission, PermissionState};
 pub use settings::{
-    Account, ChromeStyle, Claude, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, Preload, SearchEngine,
-    SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
+    Account, ChromeStyle, Claude, Cookies, DevToolsDock, ExternalLinks, Https, MailSettings, PageScheme, Preload,
+    RemoteImages, SearchEngine, SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
 };
 pub use live::{LiveItem, LiveSource};
 pub use settings::{Env, Project};
@@ -89,8 +89,28 @@ pub struct Space {
     pub sidebar_side: Option<SidebarSide>,
     pub active_tab: Option<TabId>,
     /// Shown while `active_tab` is one of its panes; another tab leaves it standing, as in Arc.
-    #[serde(default)]
+    /// One with a pane this build does not know (a newer baa's) loads as no split.
+    #[serde(default, deserialize_with = "known_or_none")]
     pub split: Option<Split>,
+    /// Left out of the JSON while it is the browser, so a session without mail is saved as
+    /// it was before mail existed.
+    #[serde(default, skip_serializing_if = "Showing::is_browser")]
+    pub showing: Showing,
+}
+
+/// What a Space has on screen (PLAN-mail.md §5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
+pub enum Showing {
+    #[default]
+    Browser,
+    Mail,
+}
+
+impl Showing {
+    fn is_browser(&self) -> bool {
+        *self == Showing::Browser
+    }
 }
 
 /// How a Space's colours are shown: as picked, with light or dark ink chosen from
@@ -104,11 +124,33 @@ pub enum ThemeMode {
     Dark,
 }
 
-/// Split view: 2 to [`SPLIT_MAX`] live tabs of one Space side by side, left to right.
+/// What one pane of a split holds: a live tab of the Space, saved as its bare id so a session
+/// from before mail loads, or the Space's mail, saved as `"mail"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pane {
+    Mail,
+    #[serde(untagged)]
+    Tab(TabId),
+}
+
+impl Pane {
+    pub fn tab(self) -> Option<TabId> {
+        match self {
+            Pane::Tab(id) => Some(id),
+            Pane::Mail => None,
+        }
+    }
+}
+
+/// Split view: 2 to [`SPLIT_MAX`] panes of one Space side by side, left to right.
 /// Never a favourite (one is copied in) and never another Space's tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Split {
-    pub tabs: Vec<TabId>,
+    /// Saved as `tabs`, its name before mail: a split of tabs is then what an older baa
+    /// wrote, and reads.
+    #[serde(rename = "tabs")]
+    pub panes: Vec<Pane>,
     /// One per pane, summing to 1.
     pub widths: Vec<f32>,
 }
@@ -116,9 +158,14 @@ pub struct Split {
 pub const SPLIT_MAX: usize = 4;
 
 impl Split {
-    fn even(tabs: Vec<TabId>) -> Self {
-        let widths = vec![1. / tabs.len() as f32; tabs.len()];
-        Split { tabs, widths }
+    fn even(panes: Vec<Pane>) -> Self {
+        let widths = vec![1. / panes.len() as f32; panes.len()];
+        Split { panes, widths }
+    }
+
+    /// Its tab panes, left to right.
+    pub fn tabs(&self) -> impl Iterator<Item = TabId> + '_ {
+        self.panes.iter().filter_map(|p| p.tab())
     }
 }
 
@@ -254,6 +301,7 @@ impl Session {
             sidebar_side: None,
             active_tab: None,
             split: None,
+            showing: Showing::Browser,
         });
         id
     }
@@ -604,7 +652,7 @@ impl Session {
 
     /// Every Space's active tab and split panes: what auto-archive and live folders leave alone.
     fn shown_tabs(&self) -> Vec<TabId> {
-        let panes = self.spaces.iter().flat_map(|s| s.split.iter().flat_map(|p| p.tabs.iter().copied()));
+        let panes = self.spaces.iter().flat_map(|s| s.split.iter().flat_map(Split::tabs));
         self.spaces.iter().filter_map(|s| s.active_tab).chain(panes).collect()
     }
 
@@ -613,11 +661,11 @@ impl Session {
     fn leave_split(&mut self, space: SpaceId, id: TabId) -> Option<TabId> {
         let s = self.space_mut(space)?;
         let split = s.split.as_mut()?;
-        let i = split.tabs.iter().position(|&t| t == id)?;
-        split.tabs.remove(i);
-        let next = split.tabs.get(i.saturating_sub(1)).copied();
-        *split = Split::even(std::mem::take(&mut split.tabs));
-        if split.tabs.len() < 2 {
+        let i = split.panes.iter().position(|&p| p == Pane::Tab(id))?;
+        split.panes.remove(i);
+        let next = split.panes.get(i.saturating_sub(1)).and_then(|p| p.tab());
+        *split = Split::even(std::mem::take(&mut split.panes));
+        if split.panes.len() < 2 {
             s.split = None;
         }
         next
@@ -630,20 +678,20 @@ impl Session {
     /// Returns the pane's tab; `None` for another Space's tab or a full split.
     pub fn add_to_split(&mut self, space: SpaceId, tab: TabId, index: usize, now: u64) -> Option<TabId> {
         let active = self.space(space)?.active_tab;
-        let mut tabs = match self.space(space)?.split.clone() {
-            Some(split) if active.is_some_and(|a| split.tabs.contains(&a)) => split.tabs,
+        let mut panes = match self.space(space)?.split.clone() {
+            Some(split) if active.is_some_and(|a| split.panes.contains(&Pane::Tab(a))) => split.panes,
             // The old split is not on screen: the new one replaces it.
-            _ => vec![self.pane_of(space, active?, now)?],
+            _ => vec![Pane::Tab(self.pane_of(space, active?, now)?)],
         };
         let tab = self.pane_of(space, tab, now)?;
-        if tabs.contains(&tab) {
+        if panes.contains(&Pane::Tab(tab)) {
             return None;
         }
-        if tabs.len() >= SPLIT_MAX {
+        if panes.len() >= SPLIT_MAX {
             return None;
         }
-        tabs.insert(index.min(tabs.len()), tab);
-        self.space_mut(space)?.split = Some(Split::even(tabs));
+        panes.insert(index.min(panes.len()), Pane::Tab(tab));
+        self.space_mut(space)?.split = Some(Split::even(panes));
         self.activate_tab(tab, now);
         Some(tab)
     }
@@ -679,10 +727,10 @@ impl Session {
     /// ⌃⇧=: splits with the Space's most recently shown other tab.
     pub fn split_with_recent(&mut self, space: SpaceId, now: u64) -> Option<TabId> {
         let s = self.space(space)?;
-        let panes = s.split.as_ref().map_or(&[][..], |p| &p.tabs[..]);
+        let panes = s.split.as_ref().map_or(&[][..], |p| &p.panes[..]);
         let recent = self
             .space_tabs(space)
-            .filter(|t| Some(t.id) != s.active_tab && !panes.contains(&t.id))
+            .filter(|t| Some(t.id) != s.active_tab && !panes.contains(&Pane::Tab(t.id)))
             .max_by_key(|t| t.last_active)?
             .id;
         self.add_to_split(space, recent, usize::MAX, now)
@@ -690,7 +738,7 @@ impl Session {
 
     /// The tab stays open, out of the split.
     pub fn remove_from_split(&mut self, tab: TabId) {
-        let Some(space) = self.spaces.iter().find(|s| s.split.as_ref().is_some_and(|p| p.tabs.contains(&tab))) else {
+        let Some(space) = self.spaces.iter().find(|s| s.split.as_ref().is_some_and(|p| p.panes.contains(&Pane::Tab(tab)))) else {
             return;
         };
         let (space, active) = (space.id, space.active_tab);
@@ -714,7 +762,7 @@ impl Session {
     /// The split on screen in `space`: there is one and its active tab is a pane.
     pub fn shown_split(&self, space: SpaceId) -> Option<&Split> {
         let s = self.space(space)?;
-        s.split.as_ref().filter(|p| s.active_tab.is_some_and(|a| p.tabs.contains(&a)))
+        s.split.as_ref().filter(|p| s.active_tab.is_some_and(|a| p.panes.contains(&Pane::Tab(a))))
     }
 
     /// ⌘W. Pushes onto the reopen stack and, unless incognito, the archive.
@@ -808,7 +856,7 @@ impl Session {
     pub fn clear_today(&mut self, space: SpaceId, now: u64, keep: impl Fn(TabId) -> bool) -> Vec<TabId> {
         let Some(sp) = self.space(space).filter(|s| !s.ephemeral) else { return Vec::new() };
         // Split panes stay, whatever `keep` says: a split is put away by closing it.
-        let panes = sp.split.as_ref().map_or(Vec::new(), |p| p.tabs.clone());
+        let panes: Vec<TabId> = sp.split.iter().flat_map(Split::tabs).collect();
         let (cleared, live): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs)
             .into_iter()
             .partition(|t| t.zone == Zone::Today && t.space == space && !keep(t.id) && !panes.contains(&t.id));
@@ -868,6 +916,10 @@ mod tests {
 
     fn urls(s: &Session, space: SpaceId, zone: Zone) -> Vec<String> {
         s.tabs(space, zone).map(|t| t.url.clone()).collect()
+    }
+
+    fn shown_panes(s: &Session, space: SpaceId) -> Vec<TabId> {
+        s.shown_split(space).unwrap().tabs().collect()
     }
 
     #[test]
@@ -1059,7 +1111,7 @@ mod tests {
         s.activate_tab(b, 9);
         s.add_to_split(sp, a, usize::MAX, 9);
         assert_eq!(s.clear_today(sp, 10, |_| false), [kept], "split panes stay");
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [b, a]);
+        assert_eq!(shown_panes(&s, sp), [b, a]);
     }
 
     #[test]
@@ -1165,15 +1217,14 @@ mod tests {
         let b = s.open_tab(sp, "b", 2);
         let c = s.open_tab(sp, "c", 3);
         assert_eq!(s.split_with_recent(sp, 4), Some(b), "the most recent other tab");
-        let split = s.shown_split(sp).unwrap();
-        assert_eq!((split.tabs.clone(), split.widths.clone()), (vec![c, b], vec![0.5, 0.5]));
+        assert_eq!((shown_panes(&s, sp), s.shown_split(sp).unwrap().widths.clone()), (vec![c, b], vec![0.5, 0.5]));
         assert_eq!(s.space(sp).unwrap().active_tab, Some(b));
         assert_eq!(s.add_to_split(sp, a, 0, 5), Some(a));
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, c, b]);
+        assert_eq!(shown_panes(&s, sp), [a, c, b]);
         assert_eq!(s.add_to_split(sp, a, 0, 5), None, "already a pane");
         s.close_tab(a, 6);
         assert_eq!(s.space(sp).unwrap().active_tab, Some(c), "the pane beside it takes focus, not a sidebar neighbour");
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [c, b]);
+        assert_eq!(shown_panes(&s, sp), [c, b]);
         let d = s.open_tab(sp, "d", 7);
         assert!(s.shown_split(sp).is_none(), "another tab leaves the split standing, off screen");
         assert!(s.space(sp).unwrap().split.is_some());
@@ -1198,7 +1249,7 @@ mod tests {
         let copy = s.add_to_split(sp, fav, usize::MAX, 2).unwrap();
         assert_ne!(copy, fav);
         assert_eq!((s.tab(copy).unwrap().url.as_str(), s.tab(copy).unwrap().zone), ("fav", Zone::Today));
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, copy]);
+        assert_eq!(shown_panes(&s, sp), [a, copy]);
         s.set_split_widths(sp, vec![0.3, 0.7]);
         s.set_split_widths(sp, vec![1.]);
         assert_eq!(s.shown_split(sp).unwrap().widths, [0.3, 0.7]);
@@ -1211,7 +1262,7 @@ mod tests {
         assert!(s.space(sp).unwrap().split.is_none());
         assert_eq!(s.space(sp).unwrap().active_tab, Some(copy));
         s.add_to_split(sp, fav, 0, 4);
-        let pane = s.space(sp).unwrap().split.as_ref().unwrap().tabs[1];
+        let pane = shown_panes(&s, sp)[1];
         s.move_tab(pane, sp, Zone::Favorite, 0);
         assert!(s.space(sp).unwrap().split.is_none(), "a pane made a favourite leaves the split");
     }
@@ -1227,14 +1278,14 @@ mod tests {
         assert_ne!(copy, pin);
         assert_eq!((s.tab(copy).unwrap().url.as_str(), s.tab(copy).unwrap().zone), ("pin", Zone::Today));
         assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned, "the pinned tab stays pinned");
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [a, copy]);
+        assert_eq!(shown_panes(&s, sp), [a, copy]);
         // The active pinned tab as the split's first pane is copied too.
         s.remove_from_split(copy);
         s.activate_tab(pin, 3);
         assert_eq!(s.add_to_split(sp, a, usize::MAX, 4), Some(a));
-        let first = s.shown_split(sp).unwrap().tabs[0];
+        let first = shown_panes(&s, sp)[0];
         assert_ne!(first, pin);
-        assert_eq!(s.shown_split(sp).unwrap().tabs, [first, a]);
+        assert_eq!(shown_panes(&s, sp), [first, a]);
         assert_eq!(s.tab(pin).unwrap().zone, Zone::Pinned);
     }
 

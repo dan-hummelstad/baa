@@ -1,8 +1,8 @@
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 
 use crate::{
-    ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, PermissionState, Preload, SecureDns,
-    SidebarSide, ThemeMode, Zone,
+    ChromeStyle, Cookies, DevToolsDock, ExternalLinks, Https, PageScheme, PermissionState, Preload, RemoteImages,
+    SecureDns, Showing, SidebarSide, ThemeMode, Zone,
 };
 
 /// A stored enum value this build does not know (one a newer baa wrote) loads as the fallback
@@ -40,6 +40,8 @@ tolerant! {
     Preload => Preload::default(),
     SecureDns => SecureDns::default(),
     PermissionState => PermissionState::Ask,
+    Showing => Showing::default(),
+    RemoteImages => RemoteImages::Never,
 }
 
 pub(crate) fn known<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
@@ -66,6 +68,7 @@ mod tests {
         for path in ["cookies", "https", "preload", "secure_dns"] {
             settings["web"][path] = unknown.clone();
         }
+        settings["mail"]["remote_images"] = unknown.clone();
         settings["shared_accounts"] = json!(["GitHub", "FromANewerBaa"]);
         settings["kept_accounts"] = json!([[3, "Google"], [4, "FromANewerBaa"]]);
         settings["web"]["site_defaults"] = json!([
@@ -85,6 +88,7 @@ mod tests {
                 ],
                 ..WebPrefs::default()
             },
+            mail: MailSettings { remote_images: RemoteImages::Never, ..MailSettings::default() },
             ..Settings::default()
         };
         assert_eq!(back, expected);
@@ -98,11 +102,15 @@ mod tests {
         session["tabs"][0]["zone"] = unknown.clone();
         session["spaces"][0]["mode"] = unknown.clone();
         session["spaces"][0]["sidebar_side"] = unknown.clone();
+        session["spaces"][0]["showing"] = unknown.clone();
+        session["spaces"][0]["split"] = json!({ "tabs": [3, "FromANewerBaa"], "widths": [0.5, 0.5] });
         session["folders"][0]["live"] = json!({ "FromANewerBaa": { "id": 1 } });
         let back: Session = serde_json::from_value(session).unwrap();
         assert_eq!(back.tabs[0].zone, Zone::Today);
         assert_eq!(back.spaces[0].mode, ThemeMode::Auto);
         assert_eq!(back.spaces[0].sidebar_side, Some(SidebarSide::Left));
+        assert_eq!(back.spaces[0].showing, Showing::Browser);
+        assert_eq!(back.spaces[0].split, None, "a pane this build cannot show: no split");
         assert_eq!(back.folder(live).unwrap().live, None, "a plain folder");
 
         let known = Settings { chrome: ChromeStyle::Ascii, web: WebPrefs { secure_dns: SecureDns::Custom("https://d/".into()), ..WebPrefs::default() }, ..Settings::default() };

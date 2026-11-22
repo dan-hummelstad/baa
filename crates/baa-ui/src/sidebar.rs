@@ -5,7 +5,7 @@
 use crate::theme::r;
 use std::time::Duration;
 
-use baa_model::{Folder, FolderId, SpaceId, Tab, TabId, Zone};
+use baa_model::{Folder, FolderId, Pane, SpaceId, Split, Tab, TabId, Zone};
 use baa_web::{PageHandle, WebHost};
 use gpui::{
     div, img, prelude::*, pulsating_between, px, Animation, AnimationExt, AnyElement, Context,
@@ -466,15 +466,14 @@ impl<H: WebHost> Browser<H> {
         shown.min(1. - growing)
     }
 
-    /// The panes of the split `tab` is in.
-    fn split_of(&self, tab: &Tab) -> Option<&[TabId]> {
-        let split = self.session.space(tab.space)?.split.as_ref()?;
-        split.tabs.contains(&tab.id).then_some(&split.tabs[..])
+    /// The split `tab` is a pane of.
+    fn split_of(&self, tab: &Tab) -> Option<&Split> {
+        self.session.space(tab.space)?.split.as_ref().filter(|split| split.panes.contains(&Pane::Tab(tab.id)))
     }
 
-    /// A split shows as one row where its first pane is; its other panes are left out.
+    /// A split shows as one row where its first tab is; its other tabs are left out.
     fn split_lead(&self, tab: &Tab) -> bool {
-        self.split_of(tab).is_none_or(|panes| panes[0] == tab.id)
+        self.split_of(tab).is_none_or(|split| split.tabs().next() == Some(tab.id))
     }
 
     /// A tab's row, or its split's panes side by side in one row, as in Arc.
@@ -495,12 +494,12 @@ impl<H: WebHost> Browser<H> {
                 None
             }
         });
-        let Some(panes) = self.split_of(tab) else {
+        let Some(split) = self.split_of(tab) else {
             let row = self.render_tab_row(tab, index, shown, theme, cx);
             return div().relative().child(row).children(line).into_any_element();
         };
         let mut rows = Vec::new();
-        for t in panes.iter().filter_map(|id| self.session.tab(*id)) {
+        for t in split.tabs().filter_map(|id| self.session.tab(id)) {
             rows.push(div().flex_1().min_w_0().child(self.render_tab_row(t, index, shown, theme, cx)));
         }
         div().relative().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).children(line).into_any_element()

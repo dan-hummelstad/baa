@@ -1384,7 +1384,7 @@ fn split_view_shows_its_panes_and_follows_the_clicked_one(cx: &mut TestAppContex
     cx.run_until_parked();
     let (split, focused) = b.read_with(cx, |b, _| {
         let s = b.session();
-        (s.shown_split(s.active_space().unwrap()).expect("a split").tabs.clone(), b.active_tab().unwrap())
+        (s.shown_split(s.active_space().unwrap()).expect("a split").tabs().collect::<Vec<_>>(), b.active_tab().unwrap())
     });
     assert_eq!(split.len(), 2);
     assert_eq!(split[0], c);
@@ -1442,7 +1442,7 @@ fn a_tab_dropped_on_the_page_joins_the_split(cx: &mut TestAppContext) {
     cx.run_until_parked();
     b.read_with(cx, |b, _| {
         let s = b.session();
-        assert_eq!(s.shown_split(s.active_space().unwrap()).unwrap().tabs, [a, second], "dropped on the left half");
+        assert_eq!(s.shown_split(s.active_space().unwrap()).unwrap().tabs().collect::<Vec<_>>(), [a, second], "dropped on the left half");
         assert_eq!(b.active_tab(), Some(a));
     });
     assert_eq!(shown(&b, cx).len(), 2);

@@ -391,7 +391,7 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn shown_panes(&self) -> Vec<TabId> {
         let Some(space) = self.active_space() else { return Vec::new() };
         match self.session.shown_split(space.id) {
-            Some(split) if self.fullscreen.is_none() => split.tabs.clone(),
+            Some(split) if self.fullscreen.is_none() => split.tabs().collect(),
             _ => space.active_tab.into_iter().collect(),
         }
     }
@@ -444,7 +444,9 @@ impl<H: WebHost> Browser<H> {
     /// and a whole new set (another tab, launch) starts where it ends.
     fn tick_split(&mut self, dt: f32, reduce: bool) -> bool {
         let widths: Vec<(TabId, f32)> = match self.active_space().and_then(|s| self.session.shown_split(s.id)) {
-            Some(split) if self.fullscreen.is_none() => split.tabs.iter().copied().zip(split.widths.iter().copied()).collect(),
+            Some(split) if self.fullscreen.is_none() => {
+                split.panes.iter().zip(&split.widths).filter_map(|(pane, w)| Some((pane.tab()?, *w))).collect()
+            }
             _ => self.active_tab().map(|t| (t, 1.)).into_iter().collect(),
         };
         let fresh = !widths.iter().any(|(id, _)| self.split_w.iter().any(|(p, _)| p == id));

@@ -292,6 +292,35 @@ pub struct Settings {
     pub claude: Claude,
     pub extension_updates: bool,
     pub revocation_updates: bool,
+    pub mail: MailSettings,
+}
+
+/// The mail client (PLAN-mail.md). Off by default: with it off no part of mail is drawn and
+/// no mail server is contacted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MailSettings {
+    pub enabled: bool,
+    pub remote_images: RemoteImages,
+    /// Offer verification codes from mail to a page's one-time-code field. Nothing happens
+    /// without an account that has them on.
+    pub codes: bool,
+}
+
+impl Default for MailSettings {
+    fn default() -> Self {
+        MailSettings { enabled: false, remote_images: RemoteImages::default(), codes: true }
+    }
+}
+
+/// Whether a message may load images from the network, which tells its sender it was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self")]
+pub enum RemoteImages {
+    /// Not until the user allows them for the message or its sender.
+    #[default]
+    Ask,
+    Never,
 }
 
 /// Claude Code's access to the browser (PLAN-m4-features D). Off by default: nothing is
@@ -386,6 +415,7 @@ impl Default for Settings {
             claude: Claude::default(),
             extension_updates: true,
             revocation_updates: true,
+            mail: MailSettings::default(),
         }
     }
 }
@@ -488,6 +518,16 @@ mod tests {
         assert_eq!(s.claude, Claude::default());
         assert!(!s.claude.enabled && !s.claude.evaluate_allowed && !s.claude.auto_mode && !s.claude.terminal_auto && s.claude.allowed_spaces.is_empty());
         assert!(s.claude.token.is_empty(), "settings saved before pairing have no token, so nothing pairs");
+    }
+
+    #[test]
+    fn settings_saved_before_mail_have_it_off_with_codes_on_and_images_asked_for() {
+        let s: Settings = serde_json::from_str(r#"{"reduce_motion":true,"claude":{"enabled":true}}"#).unwrap();
+        assert_eq!(s.mail, MailSettings { enabled: false, remote_images: RemoteImages::Ask, codes: true });
+        let on: Settings = serde_json::from_str(r#"{"mail":{"enabled":true}}"#).unwrap();
+        assert_eq!(on.mail, MailSettings { enabled: true, ..MailSettings::default() }, "a missing field of it defaults too");
+        let never = Settings { mail: MailSettings { remote_images: RemoteImages::Never, codes: false, ..on.mail }, ..on };
+        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&never).unwrap()).unwrap(), never);
     }
 
     #[test]

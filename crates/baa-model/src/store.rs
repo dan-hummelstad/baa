@@ -368,7 +368,7 @@ mod tests {
         store.remove_download("/d/a").unwrap();
         assert_eq!(store.downloads().unwrap().len(), 1);
     }
-    use crate::{ProfileId, SidebarSide, Zone};
+    use crate::{Pane, ProfileId, Showing, SidebarSide, Space, Split, TabId, Zone};
 
     #[test]
     fn clear_since_keeps_older_rows() {
@@ -499,6 +499,52 @@ mod tests {
         assert!(back.tabs.iter().all(|t| t.space != incog));
         assert!(back.sidebar_collapsed, "the window's own state is kept, incognito or not");
         assert_eq!(back.last_id, s.last_id);
+    }
+
+    /// A session as baa 0.1.9 saved it: a split of two tabs, and no mail anywhere.
+    const SESSION_0_1_9: &str = r#"{"profiles":[{"id":1,"name":"Personal"}],"spaces":[{"id":2,"name":"Personal","icon":"🐑","accent":7118079,"accent_to":null,"accent_mid":null,"mode":"Auto","profile":1,"sidebar_side":null,"active_tab":4,"split":{"tabs":[5,4],"widths":[0.25,0.75]}}],"tabs":[{"id":5,"space":2,"zone":"Today","folder":null,"url":"https://c/","pinned_url":null,"title":"","favicon":null,"last_active":14,"archived_at":null},{"id":4,"space":2,"zone":"Today","folder":null,"url":"https://b/","pinned_url":null,"title":"","favicon":null,"last_active":14,"archived_at":null},{"id":3,"space":2,"zone":"Today","folder":null,"url":"https://a/","pinned_url":null,"title":"","favicon":null,"last_active":12,"archived_at":null}],"folders":[],"archive":[],"active_space":2,"sidebar_collapsed":false,"last_id":5}"#;
+
+    fn stored_session(store: &Store) -> String {
+        store.get("session").unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_session_from_before_mail_loads_and_is_saved_as_it_was() {
+        let store = Store::open(":memory:").unwrap();
+        store.conn.execute("INSERT INTO kv VALUES ('session', ?1)", [SESSION_0_1_9]).unwrap();
+        let s = store.load_session().unwrap();
+        let space = &s.spaces()[0];
+        assert_eq!(space.showing, Showing::Browser);
+        let split = s.shown_split(space.id).expect("the split is on screen");
+        assert_eq!((split.panes.clone(), split.widths.clone()), (vec![Pane::Tab(TabId(5)), Pane::Tab(TabId(4))], vec![0.25, 0.75]));
+        store.save_session(&s).unwrap();
+        assert_eq!(stored_session(&store), SESSION_0_1_9, "an older baa reads what this one saves");
+    }
+
+    #[test]
+    fn a_mail_pane_and_a_space_showing_mail_round_trip_and_never_from_incognito() {
+        let store = Store::open(":memory:").unwrap();
+        let mut s = Session::first_run();
+        let sp = s.active_space().unwrap();
+        let tab = s.open_tab(sp, "https://a/", 1);
+        let mail = |space: &mut Space, tab| {
+            space.showing = Showing::Mail;
+            space.split = Some(Split { panes: vec![Pane::Mail, Pane::Tab(tab)], widths: vec![0.4, 0.6] });
+        };
+        mail(s.space_mut(sp).unwrap(), tab);
+        store.save_session(&s).unwrap();
+        let json = stored_session(&store);
+        assert!(json.contains(r#""split":{"tabs":["mail",3],"widths":[0.4,0.6]},"showing":"Mail""#), "{json}");
+        assert_eq!(store.load_session().unwrap().space(sp), s.space(sp));
+
+        // Private mode: an incognito Space is not saved, so neither is what it showed.
+        let mut s = Session::first_run();
+        let incog = s.add_ephemeral_space("Incognito", ProfileId(u64::MAX));
+        let secret = s.open_tab(incog, "https://secret/", 2);
+        mail(s.space_mut(incog).unwrap(), secret);
+        store.save_session(&s).unwrap();
+        let json = stored_session(&store);
+        assert!(!json.contains("mail") && !json.contains("showing") && !json.contains("secret"), "{json}");
     }
 
     struct TempDir(std::path::PathBuf);

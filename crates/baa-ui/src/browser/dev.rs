@@ -58,7 +58,7 @@ impl<H: WebHost> Browser<H> {
             session
                 .tab(*id)
                 .and_then(|t| session.space(t.space)?.split.as_ref())
-                .is_some_and(|s| s.tabs.contains(id))
+                .is_some_and(|s| s.panes.contains(&baa_model::Pane::Tab(*id)))
         };
         let left: Vec<TabId> = self.phone_panes.iter().copied().filter(|id| !in_split(id)).collect();
         for id in left {

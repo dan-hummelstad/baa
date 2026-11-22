@@ -156,7 +156,7 @@ fn in_split_view_it_shows_in_the_pane_of_its_tab(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let (left, right) = b.read_with(cx, |b, _| {
         let s = b.session();
-        let tabs = s.shown_split(s.active_space().unwrap()).expect("a split").tabs.clone();
+        let tabs = s.shown_split(s.active_space().unwrap()).expect("a split").tabs().collect::<Vec<_>>();
         (b.pages[&tabs[0]].0.clone(), b.pages[&tabs[1]].0.clone())
     });
     assert!(left == first || right == first);

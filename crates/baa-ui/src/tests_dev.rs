@@ -106,7 +106,7 @@ fn responsive_view_splits_off_a_phone_pane_that_ends_the_split_when_closed(cx: &
     cx.run_until_parked();
     let phone = b.read_with(cx, |b, cx| {
         let s = b.session();
-        let split = s.shown_split(s.active_space().unwrap()).expect("a split").tabs.clone();
+        let split = s.shown_split(s.active_space().unwrap()).expect("a split").tabs().collect::<Vec<_>>();
         assert_eq!(split.len(), 2);
         assert_eq!(split[0], first);
         let phone = split[1];

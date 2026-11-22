@@ -132,7 +132,7 @@ impl<H: WebHost> Browser<H> {
                         items.push(MenuEntry::Submenu("Move to Space".into(), targets));
                     }
                 }
-                let in_split = self.session.spaces().iter().any(|s| s.split.as_ref().is_some_and(|p| p.tabs.contains(&id)));
+                let in_split = self.session.spaces().iter().any(|s| s.split.as_ref().is_some_and(|p| p.panes.contains(&baa_model::Pane::Tab(id))));
                 if in_split {
                     items.push(MenuEntry::item(
                         "Remove from Split",
