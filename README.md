@@ -48,6 +48,12 @@ work through their Chrome extensions; Apple's iCloud Passwords cannot (macOS onl
 Edge start its helper). The UI follows the pen.dev mocks. Split view shows tabs of one Space side
 by side.
 
+Mail (experimental, off by default; Settings › Mail): iCloud, Gmail, Fastmail, Yahoo and other
+IMAP accounts in baa's own Mail view, an inbox sorted into Primary, Social and Promotions on the
+Mac (by the headers, then Apple's on-device model), a reading pane, compose, attachments saved as
+downloads, and verification codes from mail offered to a page's code field. `PLAN-mail.md` is its spec and
+`PRIVACY.md` says what it connects to.
+
 ## Known limitations
 
 - No Safe Browsing: baa shows no phishing or malware warnings, and judges downloads by file type
@@ -61,6 +67,8 @@ by side.
   passwords.
 - Apple silicon only, macOS 13 or later.
 - Claude is experimental and off by default.
+- Mail is experimental and off by default. Sorting the inbox into categories needs Apple
+  Intelligence (macOS 26 or later); without it, bulk mail stays in Primary.
 
 ## Build
 
