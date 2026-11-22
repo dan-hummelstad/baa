@@ -150,7 +150,6 @@ fn chrome_gets_user_flags_our_switches_and_no_urls() {
     let disabled: Vec<_> = argv.iter().filter(|a| a.starts_with("--disable-features=")).collect();
     assert_eq!(disabled.len(), 1);
     assert!(disabled[0].contains("Foo") && disabled[0].contains("MediaRouter"));
-    // Why it is off: baa_privacy::CORE_DISABLED_FEATURES.
     assert!(disabled[0].contains("HttpsFirstDialogUi"));
     let enabled: Vec<_> = argv.iter().filter(|a| a.starts_with("--enable-features=")).collect();
     assert_eq!(enabled, ["--enable-features=Bar,BrowserInitiatedAutomaticPictureInPicture"]);

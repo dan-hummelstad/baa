@@ -81,7 +81,6 @@ def start_server(tmp):
     port, tls_port = map(int, ports)
     rules = [f"MAP {host} 127.0.0.1:{tls_port}" for host in SITES]
     rules += ["MAP http-only.example.com 127.0.0.1", "EXCLUDE 127.0.0.1", "EXCLUDE localhost", "MAP * ~NOTFOUND"]
-    # Chrome takes this one certificate by its key and no other bad one.
     return server, port, [f"--host-resolver-rules={', '.join(rules)}",
                           f"--ignore-certificate-errors-spki-list={base64.b64encode(hashlib.sha256(public).digest()).decode()}"]
 
