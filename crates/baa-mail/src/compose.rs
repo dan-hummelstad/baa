@@ -1,9 +1,6 @@
 //! Outgoing mail (PLAN-mail.md §11 WP-B): a draft to RFC 822, and the drafts of a reply or a
 //! forward.
 
-// ponytail: the bytes are for WP-D's send, which lands after this. Remove once it calls outgoing.
-#![allow(dead_code)]
-
 use crate::{store::Store, AccountId, Address, Draft, Error, MessageId, Result};
 use mail_builder::{MessageBuilder, headers::address::Address as BuilderAddress};
 use std::collections::HashSet;

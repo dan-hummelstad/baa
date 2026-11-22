@@ -5,10 +5,6 @@
 //! [`MailSpace`], and an ephemeral Space can make neither (`MailSpace::of`), so nothing an
 //! incognito Space does reaches this file.
 
-// ponytail: the write side is for the account threads (WP-C, WP-D), which land after it.
-// Remove this once they call it.
-#![allow(dead_code)]
-
 use std::{
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
@@ -290,6 +286,18 @@ impl Store {
             .optional()?)
     }
 
+    /// Mail in `folder` a verification code may be in (dated in the code window) whose body is
+    /// not here, newest first. A code is read from the body, so sync fetches these itself.
+    pub(crate) fn code_mail_without_body(&self, folder: FolderId, limit: usize) -> Result<Vec<MessageId>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT m.id FROM message m LEFT JOIN body b ON b.message = m.id \
+             WHERE m.folder = ?1 AND m.arrived >= ?2 AND m.date >= ?2 AND b.message IS NULL \
+             ORDER BY m.date DESC, m.id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![folder.0, now() - crate::codes::WINDOW_SECS, limit as i64], |r| r.get(0).map(MessageId))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
 
     /// Applies what the server reported for `folder` and keeps its cursor, in one transaction:
     /// a reset first forgets all the folder's mail; new messages are added (one already known

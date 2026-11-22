@@ -21,6 +21,9 @@ use crate::{
 
 /// Folders other than INBOX are asked for changes this often.
 const POLL: Duration = Duration::from_secs(10 * 60);
+/// At most this many bodies are fetched for codes in one sync of a folder, so a burst of new
+/// mail cannot hold the thread.
+const CODE_BODIES: usize = 20;
 /// How long the thread waits in IDLE before it looks at its jobs again.
 const STEP: Duration = if cfg!(test) { Duration::from_millis(20) } else { Duration::from_secs(1) };
 /// Back-off after a failed connection: doubling from the first to the last.
@@ -252,6 +255,14 @@ fn sync_folder(t: &Thread, backend: &mut dyn Backend, folder: &StoredFolder) -> 
     let changes = backend.changes(&folder.path, folder.cursor.as_deref())?;
     let changed = changes.reset || !changes.new.is_empty() || !changes.changed.is_empty() || !changes.removed.is_empty();
     t.store.apply_changes(folder.id, &changes)?;
+    // A verification code is read from the body, and nobody opens the mail it is in: new mail
+    // a code may be in gets its body with the sync. Mail the user wrote or threw away is never
+    // read for codes (`Store::code_candidates`).
+    if !changes.new.is_empty() && !matches!(folder.role, Role::Sent | Role::Drafts | Role::Trash) {
+        for id in t.store.code_mail_without_body(folder.id, CODE_BODIES)? {
+            store_body(t, backend, id)?;
+        }
+    }
     if changed {
         t.notify(Event::Changed { account: t.account.id });
     }
@@ -259,17 +270,25 @@ fn sync_folder(t: &Thread, backend: &mut dyn Backend, folder: &StoredFolder) -> 
 }
 
 fn fetch_body(t: &Thread, backend: &mut dyn Backend, id: MessageId) -> Result<()> {
-    let Some(at) = t.store.locate(id)? else { return Ok(()) };
+    if store_body(t, backend, id)? {
+        t.notify(Event::Changed { account: t.account.id });
+    }
+    Ok(())
+}
+
+/// Whether the body is in mail.db now. A body the server will not give is left out; only a
+/// lost connection is an error.
+fn store_body(t: &Thread, backend: &mut dyn Backend, id: MessageId) -> Result<bool> {
+    let Some(at) = t.store.locate(id)? else { return Ok(false) };
     match backend.fetch_body(&at.path, &at.uid) {
         Ok(raw) => {
             t.store.put_body(id, &raw)?;
-            t.notify(Event::Changed { account: t.account.id });
-            Ok(())
+            Ok(true)
         }
         Err(Error::Offline) => Err(Error::Offline),
         Err(error) => {
             log::debug!("mail: a body was not fetched: {error}");
-            Ok(())
+            Ok(false)
         }
     }
 }

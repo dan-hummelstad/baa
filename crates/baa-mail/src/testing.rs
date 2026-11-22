@@ -1,5 +1,8 @@
 //! For other crates' tests (feature `test-support`): puts accounts, folders and mail into a
 //! [`Mail`] as an account's sync would, and raises the events sync raises.
+//!
+//! Give such a `Mail` a connector that fails (`Err(Error::Offline)`): a sync against a server
+//! that does not hold the seeded mail removes it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

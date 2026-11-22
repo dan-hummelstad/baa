@@ -631,7 +631,7 @@ impl Mail {
     /// on a page is [`Code::offered_on`].
     pub fn codes(&self, space: MailSpace, since: SystemTime) -> Vec<Code> {
         let secs = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-        let after = secs(since).max(secs(SystemTime::now()) - 600);
+        let after = secs(since).max(secs(SystemTime::now()) - codes::WINDOW_SECS);
         let offering: Vec<AccountId> = self.accounts(space).into_iter().filter(|a| a.codes).map(|a| a.id).collect();
         codes::found(self.read(|s| s.code_candidates(space, after)).into_iter().filter(|m| offering.contains(&m.account)))
     }
@@ -656,8 +656,10 @@ mod tests {
     use super::*;
     use crate::store::tests::{account, header, inbox, new, space, temp_dir};
 
+    /// Its accounts stay offline: these tests put mail straight into mail.db, and a sync
+    /// against a server that has none of it would take it out again.
     fn memory() -> Mail {
-        let connect: Connect = Box::new(|_, _| Ok(Box::new(Fake::default())));
+        let connect: Connect = Box::new(|_, _| Err(Error::Offline));
         Mail::open_with(None, Box::new(MemorySecrets::default()), Box::new(|_| {}), connect).unwrap()
     }
 

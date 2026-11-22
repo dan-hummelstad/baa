@@ -16,7 +16,8 @@ use crate::{
     NewAccount, NewSignIn, Op, RemoteFolder, Result, Role, Secret, Secrets, SyncState, View,
 };
 
-const DATE: &str = "Sun, 22 Nov 2026 10:00:00 +0000";
+/// Well in the past, so this mail is outside the window sync fetches bodies for (codes).
+const DATE: &str = "Mon, 02 Nov 2026 10:00:00 +0000";
 
 /// What the test can look at: the server, whether it can be reached, and what was asked of it.
 struct Net {
@@ -308,6 +309,45 @@ fn a_body_is_fetched_on_demand() {
     assert!(rig.mail.body(id).is_none());
     until(&rig.rx, changed);
     assert!(rig.mail.body(id).unwrap().text.contains("Text of one"));
+}
+
+fn code_mail(subject: &str, date: &str) -> Vec<u8> {
+    [header(&format!("{subject}@x"), subject, date, ""), b"Your verification code is 482913.\r\n".to_vec()].concat()
+}
+
+fn codes_found(rig: &Rig) -> Vec<String> {
+    let since = std::time::SystemTime::now() - Duration::from_secs(60);
+    rig.mail.codes(rig.space, since).into_iter().map(|c| c.code).collect()
+}
+
+#[test]
+fn a_code_in_the_body_of_new_mail_is_found_without_anyone_opening_it() {
+    let now = mail_parser::DateTime::from_timestamp(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64);
+    // In an account's first sync: the user focused a code field before ever opening mail.
+    let rig = Rig::standard();
+    rig.net.fake.deliver("INBOX", &code_mail("Sign in", &now.to_rfc822()), Flags::default());
+    rig.start_default();
+    rig.synced();
+    assert_eq!(codes_found(&rig), ["482913"]);
+
+    // And in mail that arrives while the account idles.
+    let rig = Rig::standard();
+    rig.start_default();
+    rig.synced();
+    assert!(codes_found(&rig).is_empty());
+    rig.net.fake.deliver("INBOX", &code_mail("Sign in", &now.to_rfc822()), Flags::default());
+    until(&rig.rx, changed);
+    assert_eq!(codes_found(&rig), ["482913"]);
+}
+
+#[test]
+fn a_sync_does_not_fetch_the_bodies_of_older_mail() {
+    let rig = Rig::standard();
+    rig.net.fake.deliver("INBOX", &code_mail("Old", DATE), Flags::default());
+    rig.start_default();
+    rig.synced();
+    let id = rig.message(Role::Inbox, "Old");
+    assert!(rig.mail.store().unwrap().raw(id).unwrap().is_none());
 }
 
 #[test]

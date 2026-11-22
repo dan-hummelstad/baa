@@ -57,6 +57,9 @@ fn patterns() -> &'static Patterns {
     &PATTERNS
 }
 
+/// Mail older than this carries no code worth offering: a code is used within minutes.
+pub(crate) const WINDOW_SECS: i64 = 10 * 60;
+
 const TEXT_CHARS: usize = 64 * 1024;
 const SUBJECT_CHARS: usize = 1000;
 const AFTER: usize = 80;
