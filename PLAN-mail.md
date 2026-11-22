@@ -306,7 +306,28 @@ the spike; everything else codes against `MockHost` until it lands.
 
 ## 8. Contracts
 
-WP-0 lands these as stubs with defaults; after that only the orchestrator changes them.
+WP-0 landed these as stubs (`c8069ed0`, 2026-11-22); only the orchestrator changes them, except
+where a lane owns both sides (lane 1: `Backend`, `Account`, `Error`). **Where the code and the
+sketches below differ, the code is the contract.** What landed differently, and what was decided
+after it:
+- `Pane { Mail, Tab(TabId) }` saves as `"mail"` or the bare tab id; `Split::tabs()` and
+  `Pane::tab()` give the tab panes. `Space.showing` is left out of the JSON while it is `Browser`.
+  A split holding a pane this build does not know loads as no split.
+- An ephemeral Space is kept out by type: `MailSpace::of(&Space)` is `None` for one, and every
+  `Mail` call that names a Space takes a `MailSpace`.
+- `Backend` (`baa-mail/src/backend.rs`) is protocol only and parses no mail: `folders`, `changes`
+  (new, changed, removed, reset, and an opaque cursor), `fetch_body`, `apply`, `wait`, `append`,
+  `send`. `Fake` is a shared in-memory server (`add_folder`, `deliver`, `sent`).
+- `Mail::open_with(dir: Option<&Path>, secrets, notify, connect: Connect)`, where
+  `Connect = Box<dyn Fn(&Account) -> Result<Box<dyn Backend>> + Send + Sync>` and `None` is an
+  in-memory store: how a test gives `Mail` a `Fake`. `Mail::open` calls it with the real connector.
+- `Mail::draft(id) -> Option<Draft>` and `Mail::discard_draft(id)`; `save_draft` returns a `Result`.
+- Account rows are a JSON column beside a Space column, so `Account` can gain fields without a
+  schema change.
+- The code patterns are `codes.json` (`serde_json`), not TOML: the workspace has no TOML parser.
+- WP-M does not land on `main` until its engine is built: it goes to the branch
+  `engine/abi-17-codes`, the orchestrator starts `chromium.yml` there, and it lands when the engine
+  passes. An ABI change on `main` would stop the app loading the current engine for days.
 
 **baa-model** (`lib.rs`, `settings.rs`)
 ```rust
