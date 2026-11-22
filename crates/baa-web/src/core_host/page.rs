@@ -436,6 +436,10 @@ impl PageHandle for CorePage {
             self.cdp("Runtime.enable", json!({}), None);
         }
     }
+    // ponytail: nothing is written until WP-P1 and WP-F (`core_host/document.rs`).
+    fn set_document(&self, _html: &str) {}
+    // ponytail: nothing is filled until WP-M (`baa_tab_fill_code`, ABI 17).
+    fn fill_code(&self, _id: u64, _code: &str) {}
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         Focusable::focus_handle(self, cx)
     }

@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 gpui.workspace = true
 baa-model.workspace = true
+baa-mail.workspace = true
 baa-web.workspace = true
 anyhow.workspace = true
 log.workspace = true

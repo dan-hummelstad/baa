@@ -16,6 +16,10 @@ pub struct MockHost {
     pub created: RefCell<Vec<(ProfileId, String)>>,
     /// The URL of each `create_page` a page or extension asked for (`user_initiated: false`).
     pub supplied: RefCell<Vec<String>>,
+    /// Each `create_document`. Documents are not in `created`.
+    pub documents: RefCell<Vec<(ProfileId, baa_web::DocumentKind)>>,
+    /// What `site_of` answers, by host; a host not listed is its own site.
+    pub sites: RefCell<std::collections::HashMap<String, String>>,
     /// Ids passed to `download_validate` and `download_discard`.
     pub validated: RefCell<Vec<u64>>,
     pub discarded: RefCell<Vec<u64>>,
@@ -96,6 +100,10 @@ pub struct MockPage {
     /// The other CDP-backed calls, in order: "click 1 2", "insert_text hi",
     /// "press_key Enter", "emulation Some(Phone)", "media Pause", "watch_console".
     pub cdp: RefCell<Vec<String>>,
+    /// The html of each `set_document` on a document; the last is what it shows.
+    pub set_documents: RefCell<Vec<String>>,
+    /// (field id, code) of each `fill_code`.
+    pub filled: RefCell<Vec<(u64, String)>>,
     pub id: Cell<Option<gpui::EntityId>>,
 }
 
@@ -202,6 +210,14 @@ impl PageHandle for MockPage {
     fn watch_console(&self) {
         self.cdp.borrow_mut().push("watch_console".into());
     }
+    fn set_document(&self, html: &str) {
+        if *self.url.borrow() == DOCUMENT_URL {
+            self.set_documents.borrow_mut().push(html.into());
+        }
+    }
+    fn fill_code(&self, id: u64, code: &str) {
+        self.filled.borrow_mut().push((id, code.into()));
+    }
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
     }
@@ -224,7 +240,42 @@ impl PageHandle for MockPage {
     }
 }
 
+/// What a document's page reports as its URL, as the engine's blank page does.
+const DOCUMENT_URL: &str = "about:blank";
+
 impl MockHost {
+    fn page(url: &str, cx: &mut App) -> Entity<MockPage> {
+        let page = cx.new(|cx| MockPage {
+            url: RefCell::new(url.into()),
+            committed: RefCell::default(),
+            loading: Cell::default(),
+            visible: Cell::new(true),
+            shown_at: Cell::new(0),
+            zoom: Cell::new(1.0),
+            radius: Cell::new(8.0),
+            square: Cell::new(0),
+            moved: Cell::new(0),
+            floating: Cell::new(false),
+            muted: Cell::new(false),
+            answers: RefCell::default(),
+            answered: RefCell::default(),
+            groups: RefCell::default(),
+            exited_fullscreen: Cell::default(),
+            reloads: Cell::default(),
+            loads: RefCell::default(),
+            focus: cx.focus_handle(),
+            activations: Cell::default(),
+            evals: RefCell::default(),
+            screenshots: RefCell::default(),
+            cdp: RefCell::default(),
+            set_documents: RefCell::default(),
+            filled: RefCell::default(),
+            id: Cell::default(),
+        });
+        page.read(cx).id.set(Some(page.entity_id()));
+        page
+    }
+
     /// Chrome improves the list of the last `autocomplete`. Deferred: the browser
     /// that owns this host is being updated when a test calls it.
     pub fn suggest(&self, list: Vec<Suggestion>, cx: &mut App) {
@@ -243,6 +294,8 @@ impl MockHost {
         Self {
             created: RefCell::default(),
             supplied: RefCell::default(),
+            documents: RefCell::default(),
+            sites: RefCell::default(),
             validated: RefCell::default(),
             discarded: RefCell::default(),
             downloads: cx.new(|_| Downloads::default()),
@@ -314,33 +367,14 @@ impl WebHost for MockHost {
         if !user_initiated {
             self.supplied.borrow_mut().push(url.into());
         }
-        let page = cx.new(|cx| MockPage {
-            url: RefCell::new(url.into()),
-            committed: RefCell::default(),
-            loading: Cell::default(),
-            visible: Cell::new(true),
-            shown_at: Cell::new(0),
-            zoom: Cell::new(1.0),
-            radius: Cell::new(8.0),
-            square: Cell::new(0),
-            moved: Cell::new(0),
-            floating: Cell::new(false),
-            muted: Cell::new(false),
-            answers: RefCell::default(),
-            answered: RefCell::default(),
-            groups: RefCell::default(),
-            exited_fullscreen: Cell::default(),
-            reloads: Cell::default(),
-            loads: RefCell::default(),
-            focus: cx.focus_handle(),
-            activations: Cell::default(),
-            evals: RefCell::default(),
-            screenshots: RefCell::default(),
-            cdp: RefCell::default(),
-            id: Cell::default(),
-        });
-        page.read(cx).id.set(Some(page.entity_id()));
-        page
+        Self::page(url, cx)
+    }
+    fn create_document(&self, profile: ProfileId, kind: baa_web::DocumentKind, _: &mut Window, cx: &mut App) -> Entity<MockPage> {
+        self.documents.borrow_mut().push((profile, kind));
+        Self::page(DOCUMENT_URL, cx)
+    }
+    fn site_of(&self, host: &str) -> String {
+        self.sites.borrow().get(host).cloned().unwrap_or_else(|| host.into())
     }
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<MockPage> {
         self.popups.borrow_mut().push(url.into());

@@ -11,6 +11,7 @@ mod input;
 mod library;
 mod markdown;
 mod lil_baa;
+mod mail;
 mod motion;
 mod pages;
 mod prompts;
@@ -41,6 +42,8 @@ mod tests_windows;
 mod tests_hover;
 #[cfg(test)]
 mod tests_extensions;
+#[cfg(test)]
+mod tests_mail;
 
 pub use agent::{AgentPeer, AgentSwitch};
 pub use browser::Browser;

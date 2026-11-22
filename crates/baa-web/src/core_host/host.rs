@@ -19,7 +19,7 @@ use super::{
     skin, Core, PageKind,
 };
 use crate::{
-    Account, Callback, ChromeTabs, ClearData, Downloads, Extension, ExtensionAction, ExtensionActionsChanged, ExtensionChange,
+    Account, Callback, ChromeTabs, ClearData, DocumentKind, Downloads, Extension, ExtensionAction, ExtensionActionsChanged, ExtensionChange,
     ExtensionCommand, ExtensionInfo, ExtensionPopups, MenuDone, MenuItem, PageHandle, Permission, PermissionState, ProfileId,
     SignIns, ExtensionsChanged, WebHost,
 };
@@ -253,6 +253,18 @@ impl WebHost for CoreWebHost {
             }
             page
         })
+    }
+
+    // ponytail: a blank tab of any kind. WP-P1 and WP-F give it the kind's page and policy
+    // (`core_host/document.rs`).
+    fn create_document(&self, profile: ProfileId, _kind: DocumentKind, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
+        self.create_page(profile, "about:blank", true, window, cx)
+    }
+
+    // ponytail: the host itself, so only the same host is the same site, until WP-M asks
+    // the engine (`baa_site_of`, ABI 17).
+    fn site_of(&self, host: &str) -> String {
+        host.to_string()
     }
 
     fn ephemeral_profile(&self) -> ProfileId {

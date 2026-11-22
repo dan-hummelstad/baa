@@ -608,6 +608,7 @@ name = "baa-ui"
 version = "0.1.9"
 dependencies = [
  "anyhow",
+ "baa-mail",
  "baa-model",
  "baa-web",
  "futures",

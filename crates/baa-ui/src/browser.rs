@@ -302,6 +302,9 @@ pub struct Browser<H: WebHost> {
     pub(crate) agent: crate::agent::Agent<H>,
     pub(crate) hover_url: Option<(TabId, String)>,
     pub(crate) actions: HashMap<String, baa_web::ExtensionAction>,
+    /// `None` in a private window or with mail off.
+    #[allow(dead_code)] // nothing makes or reads it until WP-G
+    pub(crate) mail: Option<crate::mail::MailUi<H>>,
     _actions_changed: Subscription,
     _popups: Subscription,
 }
@@ -523,6 +526,7 @@ impl<H: WebHost> Browser<H> {
             agent: Default::default(),
             hover_url: None,
             actions: HashMap::new(),
+            mail: None,
             _actions_changed: actions_changed,
             _popups: popups,
         };
@@ -858,6 +862,8 @@ impl<H: WebHost> Browser<H> {
             | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
             PageEvent::GroupChanged { group, title } => return self.on_group_changed(id, *group, title, window, cx),
+            // No code is offered until WP-L.
+            PageEvent::CodeField { .. } => return,
             PageEvent::ExclusiveAccess { .. } |
             PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) => {
                 return self.on_page_state_event(id, event, window, cx)

@@ -174,6 +174,19 @@ pub enum PageEvent {
     /// page chooses it: display only, never load it. Not cleared on a tab
     /// switch, a navigation or the page closing: the UI clears it then.
     TargetUrl(String),
+    /// A one-time-code field has focus. `origin` is its frame's, `top` the page's, `at` its
+    /// rectangle in the page. `None` in `at`: field `id` lost focus or is gone.
+    CodeField { id: u64, origin: String, top: String, at: Option<gpui::Bounds<gpui::Pixels>> },
+}
+
+/// What a document ([`WebHost::create_document`]) holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    /// A mail message, shown with its scripts dead. `remote_images`: it may load images
+    /// over https.
+    Message { remote_images: bool },
+    /// The compose body, editable.
+    Editor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -370,6 +383,10 @@ pub trait PageHandle: EventEmitter<PageEvent> + 'static {
     /// From now on the page reports [`PageEvent::Console`]. Off by default, so
     /// normal browsing does not pay for it.
     fn watch_console(&self);
+    /// Replaces a document's content. Does nothing on a page that has a URL.
+    fn set_document(&self, html: &str);
+    /// Fills the code field `id` if it still has focus and its origin is unchanged.
+    fn fill_code(&self, id: u64, code: &str);
     /// Focus this to send keyboard input to the page (after closing the command bar, say).
     fn focus_handle(&self, cx: &App) -> FocusHandle;
     /// Render the page for this frame at the element's laid-out bounds.
@@ -408,6 +425,10 @@ pub trait WebHost: 'static {
     /// An extension's toolbar popup, acting on the profile's active tab; or, after
     /// [`ExtensionPopupOpened`], the one the engine opened.
     fn create_popup(&self, profile: ProfileId, url: &str, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
+    /// A page baa writes itself (§6 of PLAN-mail.md): it has no URL and never navigates.
+    fn create_document(&self, profile: ProfileId, kind: DocumentKind, window: &mut Window, cx: &mut App) -> Entity<Self::Page>;
+    /// The registrable domain of `host` ("mail.google.com" → "google.com"), as Chrome sees it.
+    fn site_of(&self, host: &str) -> String;
     /// In-memory profile; nothing persisted (incognito Space).
     fn ephemeral_profile(&self) -> ProfileId;
     /// Drop a profile's on-disk data once all its pages are closed.
