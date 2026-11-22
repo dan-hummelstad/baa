@@ -788,5 +788,7 @@ fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+mod local;
+
 #[cfg(test)]
 pub(crate) mod tests;

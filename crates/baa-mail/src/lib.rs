@@ -12,6 +12,8 @@ mod secrets;
 mod send;
 mod store;
 mod sync;
+#[cfg(feature = "test-support")]
+pub mod testing;
 mod thread;
 
 use std::{
@@ -577,6 +579,19 @@ impl Mail {
         }
     }
 
+    /// The user chose "always for this sender": remote images of mail from `sender` load.
+    pub fn trusts_images(&self, sender: &str) -> bool {
+        self.read(|s| s.local(&images_key(sender))).is_some()
+    }
+
+    /// Private mode: a sender reaches this only from a message of an account, and an
+    /// incognito Space has none (`MailSpace`).
+    pub fn trust_images(&self, sender: &str) {
+        if let Ok(store) = self.store() {
+            let _ = store.set_local(&images_key(sender), "1");
+        }
+    }
+
     /// Asks the Space's accounts for one INBOX check now, at most one every 10 s an account,
     /// so a page cannot make baa hammer a server (PLAN-mail.md §7).
     pub fn check_now(&self, space: MailSpace) {
@@ -601,6 +616,10 @@ impl Mail {
         let offering: Vec<AccountId> = self.accounts(space).into_iter().filter(|a| a.codes).map(|a| a.id).collect();
         codes::found(self.read(|s| s.code_candidates(space, after)).into_iter().filter(|m| offering.contains(&m.account)))
     }
+}
+
+fn images_key(sender: &str) -> String {
+    format!("images:{}", sender.trim().to_lowercase())
 }
 
 #[cfg(test)]
@@ -668,6 +687,26 @@ mod tests {
         drop(mail);
         let again = Mail::open(&dir, Box::new(MemorySecrets::default()), Box::new(|_| {})).unwrap();
         assert_eq!(again.view_state(space), state, "kept across a restart");
+        drop(again);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_sender_trusted_for_images_stays_trusted_by_address_alone() {
+        let mail = memory();
+        assert!(!mail.trusts_images("news@shop.example"));
+        mail.trust_images("News@Shop.example");
+        assert!(mail.trusts_images("news@shop.example") && mail.trusts_images(" NEWS@shop.example"));
+        assert!(!mail.trusts_images("other@shop.example") && !mail.trusts_images("shop.example"));
+
+        let dir = temp_dir("images");
+        let mail = Mail::open(&dir, Box::new(MemorySecrets::default()), Box::new(|_| {})).unwrap();
+        assert!(!mail.trusts_images("news@shop.example"));
+        assert!(!dir.exists(), "asking writes nothing");
+        mail.trust_images("news@shop.example");
+        drop(mail);
+        let again = Mail::open(&dir, Box::new(MemorySecrets::default()), Box::new(|_| {})).unwrap();
+        assert!(again.trusts_images("news@shop.example"), "kept across a restart");
         drop(again);
         std::fs::remove_dir_all(&dir).unwrap();
     }

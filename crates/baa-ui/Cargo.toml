@@ -22,6 +22,7 @@ futures = "0.3"
 image = { version = "0.25", default-features = false }
 
 [dev-dependencies]
+baa-mail = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 # Already in the graph via baa-model: a test writes a value baa.db cannot read back.
 rusqlite.workspace = true

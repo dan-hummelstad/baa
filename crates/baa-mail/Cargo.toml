@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# `testing`: other crates' tests put mail into a `Mail` as a sync would.
+test-support = []
+
 [dependencies]
 baa-model.workspace = true
 serde.workspace = true
