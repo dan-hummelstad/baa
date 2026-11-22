@@ -49,7 +49,10 @@ minutes, and connects when you read, move or send a message. Your password, or t
 of a Google account, goes only to that provider, and is kept in the macOS Keychain. Mail you have
 read is kept on your Mac in `~/Library/Application Support/baa/mail/`, not encrypted by baa.
 Images that a message loads from the web are not fetched until you ask for them. A verification
-code is read from your mail on your Mac and goes into a page only when you click it. baa has no
+code is read from your mail on your Mac and goes into a page only when you click it. The inbox's
+Primary, Social and Promotions are chosen on your Mac, by rules and by Apple's on-device model;
+baa never uses Apple's Private Cloud Compute, so no mail is sent anywhere to be sorted
+(Settings › Mail › Sort the inbox into categories). baa has no
 mail server of its own and sends your mail nowhere else. Turn it off: remove the account, or
 Settings › Mail › Mail.
 

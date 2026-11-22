@@ -18,6 +18,17 @@ pub(crate) fn provider_name(provider: Provider) -> &'static str {
     }
 }
 
+fn categories_detail(status: baa_mail::ModelStatus) -> &'static str {
+    use baa_mail::ModelStatus::*;
+    match status {
+        Available => "Primary, Social and Promotions. Bulk mail is sorted by Apple's on-device model; no mail leaves this Mac.",
+        NotEligible => "Primary, Social and Promotions. This Mac cannot run Apple Intelligence, so most bulk mail stays in Primary.",
+        AppleIntelligenceOff => "Primary, Social and Promotions. Turn on Apple Intelligence in System Settings to sort bulk mail; until then most of it stays in Primary.",
+        NotReady => "Primary, Social and Promotions. Apple Intelligence is still downloading; until it is ready, most bulk mail stays in Primary.",
+        Unavailable => "Primary, Social and Promotions. Apple's on-device model needs macOS 26 or later; without it, most bulk mail stays in Primary.",
+    }
+}
+
 /// The mail actions of the Keyboard tab, under their own heading.
 pub(super) fn shortcuts() -> Vec<(&'static str, Box<dyn gpui::Action>)> {
     use crate::actions::*;
@@ -60,6 +71,11 @@ impl<H: WebHost> SettingsView<H> {
                 "mail_codes",
                 "Offers a code from a message to the page waiting for one, from the accounts switched on below.",
                 self.toggle("pref-mail-codes", s.mail.codes, |s, v| s.mail.codes = v, cx),
+            ),
+            self.row(
+                "mail_categories",
+                categories_detail(baa_mail::model_status()),
+                self.toggle("pref-mail-categories", s.mail.categories, |s, v| s.mail.categories = v, cx),
             ),
             self.row("mail_accounts", detail, add.unwrap_or_else(|| div().into_any_element())),
         ];

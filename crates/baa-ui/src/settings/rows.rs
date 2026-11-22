@@ -162,6 +162,7 @@ pub(crate) static ROWS: &[Row] = &[
     row(Mail, "mail_accounts", "Mail accounts", "add account icloud gmail fastmail yahoo imap sign in remove"),
     row(Mail, "mail_images", "Remote images in mail", "tracking pixels load"),
     row(Mail, "mail_codes", "Offer verification codes from mail", "one-time code otp 2fa"),
+    row(Mail, "mail_categories", "Sort the inbox into categories", "primary social promotions apple intelligence ai"),
     row(Extensions, "dev_mode", "Developer mode", "unpacked extensions developer"),
     row(Extensions, "load_unpacked", "Load unpacked…", "extension folder developer"),
     row(Extensions, "ext_list", "Installed extensions", "add-ons plugins"),

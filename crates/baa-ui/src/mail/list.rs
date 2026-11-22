@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use baa_mail::{AccountId, Filter, FolderId, Row, SyncState, Tab};
+use baa_mail::{AccountId, Category, Filter, FolderId, Role, Row, SyncState, Tab, ThreadId, View};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, Hsla, SharedString, Window};
 
@@ -17,6 +17,40 @@ use crate::{
 const ROW_H: f32 = 76.;
 const BAND_H: f32 = 20.;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const PILLS: [(Option<Category>, &str, &str); 4] = [
+    (Some(Category::Primary), "Primary", "user"),
+    (Some(Category::Social), "Social", "users"),
+    (Some(Category::Promotions), "Promotions", "megaphone"),
+    (None, "All Mail", "inbox"),
+];
+
+pub(crate) fn inbox_filter(categories: bool) -> Filter {
+    if categories { Filter::Category(Category::Primary) } else { Filter::All }
+}
+
+#[derive(Clone)]
+pub(crate) struct DraggedThread {
+    thread: ThreadId,
+    subject: SharedString,
+    theme: Theme,
+}
+
+impl Render for DraggedThread {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(280.))
+            .h(px(28.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .rounded(r(8.))
+            .bg(self.theme.glass_strong)
+            .text_color(self.theme.ink)
+            .text_size(px(12.5))
+            .child(div().truncate().child(self.subject.clone()))
+    }
+}
 
 /// The dot of the account at `index` among its Space's accounts, in the list and the reader.
 pub(crate) fn account_colour(index: usize) -> Hsla {
@@ -100,12 +134,74 @@ fn status_line(states: &[SyncState], synced_secs_ago: Option<u64>, unread: u32) 
 impl<H: WebHost> Browser<H> {
     /// A folder or a search folder opened from the nav: the list's tab comes to the front.
     pub(crate) fn open_list(&mut self, folder: Option<FolderId>, filter: Filter, cx: &mut Context<Self>) {
+        let inbox = filter == Filter::All && self.is_inbox(folder);
+        let categories = self.settings.mail.categories;
         let Some(ui) = &mut self.mail else { return };
         ui.state.folder = folder;
-        ui.filter = filter;
+        ui.filter = if inbox { inbox_filter(categories) } else { filter };
         ui.state.scroll = 0;
         ui.list.scroll_to_item(0, gpui::ScrollStrategy::Top);
         self.show_tab(Tab::List, cx);
+    }
+
+    fn is_inbox(&self, folder: Option<FolderId>) -> bool {
+        let Some(id) = folder else { return true };
+        self.mail_space().is_some_and(|(mail, space)| mail.folders(space).iter().any(|f| f.id == id && f.role == Role::Inbox))
+    }
+
+    pub(crate) fn move_to_category(&mut self, thread: ThreadId, category: Category, cx: &mut Context<Self>) {
+        if let Some(ui) = &self.mail {
+            ui.mail.move_to_category(thread, category);
+        }
+        cx.notify();
+    }
+
+    fn render_pills(&self, view: &View, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let shown = self.settings.mail.categories
+            && view.search.is_empty()
+            && matches!(view.filter, Filter::All | Filter::Category(_))
+            && self.is_inbox(view.folder);
+        let (Some(ui), true) = (&self.mail, shown) else { return None };
+        let mut row = div().flex_none().px(px(12.)).pb(px(8.)).flex().gap(px(6.));
+        for (i, (category, name, glyph)) in PILLS.into_iter().enumerate() {
+            let filter = category.map_or(Filter::All, Filter::Category);
+            let on = view.filter == filter;
+            let unread = category.is_some() && ui.mail.unread(&View { filter, ..view.clone() }) > 0;
+            let ink: Hsla = if on { theme.ink } else { surface::icon().into() };
+            let mut pill = div()
+                .id(("mail-pill", i))
+                .debug_selector(move || format!("mail-pill-{i}"))
+                .h(px(28.))
+                .px(px(if on || ascii() { 12. } else { 10. }))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(r(14.))
+                .cursor_pointer()
+                .text_size(px(12.))
+                .text_color(ink)
+                .when(on, |d| d.bg(surface::key()).font_weight(FontWeight::SEMIBOLD))
+                .when(!on, |d| d.hover(|d| d.bg(surface::key())))
+                .when(!ascii(), |d| d.child(icon(glyph, 14., ink)))
+                .when(on || ascii(), |d| d.child(name))
+                .when(unread && !on, |d| d.child(div().size(px(6.)).rounded_full().bg(theme.accent)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(ui) = &mut this.mail {
+                        ui.filter = filter;
+                        ui.state.scroll = 0;
+                        ui.list.scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    }
+                    cx.notify();
+                }));
+            if let Some(category) = category {
+                let accent = theme.accent;
+                pill = pill
+                    .drag_over::<DraggedThread>(move |s, _, _, _| s.border_1().border_color(accent))
+                    .on_drop(cx.listener(move |this, d: &DraggedThread, _, cx| this.move_to_category(d.thread, category, cx)));
+            }
+            row = row.child(pill);
+        }
+        Some(row.into_any_element())
     }
 
     /// A scope chip or the account picker: one account's mail, or all of them (`None`).
@@ -215,7 +311,8 @@ impl<H: WebHost> Browser<H> {
                 .child(div().truncate().child(line))
         });
 
-        col.child(header).children(chips).child(div().flex_1().min_h_0().child(body)).children(status).into_any_element()
+        let pills = self.render_pills(&view, theme, cx);
+        col.child(header).children(pills).children(chips).child(div().flex_1().min_h_0().child(body)).children(status).into_any_element()
     }
 
     fn list_empty(&self, text: &'static str, add: bool, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -325,6 +422,7 @@ impl<H: WebHost> Browser<H> {
                 div().flex_none().h(px(BAND_H)).px(px(14.)).flex().items_center().text_size(px(10.)).text_color(surface::muted()).child(if ascii() { format!("── {g}") } else { g })
             }))
             .child(content)
+            .on_drag(DraggedThread { thread, subject: row.subject.clone().into(), theme: *theme }, |d, _, _, cx| cx.new(|_| d.clone()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(ui) = &mut this.mail {
                     ui.state.scroll = ui.list.0.borrow().base_handle.logical_scroll_top().0;

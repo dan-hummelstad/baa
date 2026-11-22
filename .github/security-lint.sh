@@ -37,6 +37,10 @@ done | grep . && fail=1
 out=$(git ls-files 'crates/*.rs' 'crates/**/*.rs' | xargs grep -nE '\.dangerous\(\)|danger_accept_invalid|ServerCertVerifier') && hit "$out
   ^ a TLS verifier override: mail connections use the platform verifier only"
 
+# Inbox categories use Apple's on-device model only: mail never goes to Private Cloud Compute (PLAN-mail.md §17).
+out=$(git ls-files 'crates/*' 'crates/**' | xargs grep -n 'PrivateCloudCompute') && hit "$out
+  ^ Private Cloud Compute: mail categories run on the Mac, through SystemLanguageModel only"
+
 # Page-supplied URLs are never re-issued as loads.
 out=$(grep -n 'load_url(' crates/baa-ui/src/browser/peek.rs crates/baa-ui/src/lil_baa.rs) && hit "$out
   ^ load_url in Peek/lil-baa: adopt the page's URL (take_pending) instead"

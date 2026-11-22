@@ -14,13 +14,14 @@ use std::{
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row as SqlRow};
 
 use crate::{
+    categories::{self, By, Category},
     mime, thread, Account, AccountId, Address, Changes, Draft, DraftId, Error, Filter, Flags, Folder, FolderId, MailSpace,
     Message, MessageId, Op, RemoteFolder, Result, Role, Row, ThreadId, View, ViewState,
 };
 
 /// The data version this build writes, as SQLite's `user_version`. Raise it when the schema
 /// changes: an older file loses its cache (`CACHE`) and keeps the rest, migrated in `init`.
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 /// What the servers hold anyway: dropped and refilled by sync when the schema changes.
 const CACHE: [&str; 5] = ["message_fts", "body", "message", "thread_key", "folder"];
@@ -341,10 +342,19 @@ impl Store {
                 continue;
             }
             let e = mime::envelope(&m.header);
+            let rule: Option<String> = tx
+                .query_row("SELECT value FROM local WHERE key = ?1", [categories::rule_key(&categories::domain(&e.from.email))], |r| r.get(0))
+                .optional()?;
+            let rule = rule.and_then(|v| v.parse().ok()).map(Category::of);
+            let (category, by) = match (rule, categories::by_rules(&m.header)) {
+                (Some(c), _) => (c, Some(By::User as i64)),
+                (None, Some(c)) => (c, Some(By::Rule as i64)),
+                (None, None) => (Category::Primary, None),
+            };
             let id: i64 = tx.query_row(
                 "INSERT INTO message (account, folder, uid, thread, message_id, header, from_name, from_email, subject, \
-                 date, arrived, seen, flagged, answered, attachments, dmarc_failed) \
-                 VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) RETURNING id",
+                 date, arrived, seen, flagged, answered, attachments, dmarc_failed, category, category_by) \
+                 VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) RETURNING id",
                 params![
                     account.0,
                     folder.0,
@@ -360,7 +370,9 @@ impl Store {
                     m.flags.flagged,
                     m.flags.answered,
                     e.attachments,
-                    e.dmarc_failed
+                    e.dmarc_failed,
+                    category.n(),
+                    by
                 ],
                 |r| r.get(0),
             )?;
@@ -617,6 +629,10 @@ impl Store {
         Ok(self.listed(view)?.len())
     }
 
+    pub(crate) fn unread(&self, view: &View) -> Result<usize> {
+        Ok(self.listed(view)?.iter().filter(|r| r.unread).count())
+    }
+
     // ponytail: the whole list is read on each change; a 100k-thread folder syncing costs one
     // read per sync batch. Page it (LIMIT around the visible range) if that shows.
     fn listed(&self, view: &View) -> Result<Arc<Vec<Row>>> {
@@ -633,7 +649,15 @@ impl Store {
             Filter::All => self.read_rows(view)?,
             filter => {
                 let all = self.listed_in(cache, &View { filter: Filter::All, ..view.clone() })?;
-                all.iter().filter(|r| if filter == Filter::Unread { r.unread } else { r.flagged }).cloned().collect()
+                all.iter()
+                    .filter(|r| match filter {
+                        Filter::Unread => r.unread,
+                        Filter::Flagged => r.flagged,
+                        Filter::Category(c) => r.category == c,
+                        Filter::All => true,
+                    })
+                    .cloned()
+                    .collect()
             }
         });
         // Typing a search makes a view a key; between two changes of mail.db that could pile up.
@@ -647,7 +671,7 @@ impl Store {
     fn read_rows(&self, view: &View) -> Result<Vec<Row>> {
         let sql = format!(
             "{} SELECT thread, account, from_name, from_email, subject, snippet, newest, all_seen, any_flagged, any_attachment \
-             FROM listed ORDER BY newest DESC, thread DESC",
+             , category FROM listed ORDER BY newest DESC, thread DESC",
             listed(view)
         );
         let conn = self.conn();
@@ -664,6 +688,7 @@ impl Store {
                 unread: !r.get::<_, bool>(7)?,
                 flagged: r.get(8)?,
                 attachments: r.get(9)?,
+                category: Category::of(r.get(10)?),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -702,6 +727,62 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// The newest bulk message the model has not sorted, among the newest 500 of each inbox;
+    /// older bulk mail stays in Primary.
+    // ponytail: numbers every inbox row on each call (about 10 ms at 20k messages, against half
+    // a second for the model); keep a queue table if that shows.
+    pub(crate) fn next_to_categorize(&self) -> Result<Option<categories::Waiting>> {
+        let row: Option<(i64, u64, Vec<u8>, String)> = self
+            .conn()
+            .query_row(
+                "SELECT id, account, header, snippet FROM (SELECT m.id, m.account, m.header, m.snippet, m.date, m.category_by, \
+                 row_number() OVER (PARTITION BY m.folder ORDER BY m.date DESC) AS n \
+                 FROM message m JOIN folder f ON f.id = m.folder WHERE f.role = 'inbox') \
+                 WHERE category_by IS NULL AND n <= 500 ORDER BY date DESC, id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        Ok(row.map(|(id, account, header, snippet)| {
+            (MessageId(id as u64), AccountId(account), categories::prompt(&header, &snippet))
+        }))
+    }
+
+    pub(crate) fn set_category(&self, id: MessageId, category: Category, by: By) -> Result<()> {
+        self.conn().execute(
+            "UPDATE message SET category = ?1, category_by = ?2 WHERE id = ?3",
+            params![category.n(), by as i64, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn move_to_category(&self, thread: ThreadId, category: Category) -> Result<Vec<AccountId>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let from: Option<String> = tx
+            .query_row("SELECT from_email FROM message WHERE thread = ?1 ORDER BY date DESC LIMIT 1", [thread.0], |r| r.get(0))
+            .optional()?;
+        let domain = from.as_deref().map(categories::domain).unwrap_or_default();
+        if !domain.is_empty() {
+            tx.execute(
+                "INSERT INTO local (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![categories::rule_key(&domain), category.n().to_string()],
+            )?;
+        }
+        let mut accounts: Vec<AccountId> = {
+            let mut stmt = tx.prepare(
+                "UPDATE message SET category = ?1, category_by = ?2 \
+                 WHERE thread = ?3 OR (?4 <> '' AND lower(substr(from_email, instr(from_email, '@') + 1)) = ?4) RETURNING account",
+            )?;
+            let rows = stmt.query_map(params![category.n(), By::User as i64, thread.0, domain], |r| r.get(0).map(AccountId))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        tx.commit()?;
+        accounts.sort_by_key(|a| a.0);
+        accounts.dedup();
+        Ok(accounts)
     }
 
     pub(crate) fn raw(&self, id: MessageId) -> Result<Option<Vec<u8>>> {
@@ -777,7 +858,7 @@ fn listed(view: &View) -> String {
            WHERE (a.space IS NULL OR a.space = ?1) AND (?2 IS NULL OR m.account = ?2) \
            AND CASE WHEN ?3 IS NULL THEN f.role = 'inbox' ELSE m.folder = ?3 END{search} \
            GROUP BY m.thread), \
-         listed AS (SELECT s.*, m.account, m.from_name, m.from_email, m.subject, m.snippet \
+         listed AS (SELECT s.*, m.account, m.from_name, m.from_email, m.subject, m.snippet, m.category \
            FROM scoped s JOIN message m ON m.id = s.id)"
     )
 }
@@ -832,6 +913,7 @@ fn init(conn: &Connection) -> Result<()> {
            from_email TEXT NOT NULL, subject TEXT NOT NULL, date INTEGER NOT NULL, arrived INTEGER NOT NULL,
            seen INTEGER NOT NULL, flagged INTEGER NOT NULL, answered INTEGER NOT NULL,
            attachments INTEGER NOT NULL, dmarc_failed INTEGER NOT NULL, snippet TEXT NOT NULL DEFAULT '',
+           category INTEGER NOT NULL DEFAULT 0, category_by INTEGER,
            UNIQUE (folder, uid));
          CREATE INDEX IF NOT EXISTS message_thread ON message (thread);
          CREATE INDEX IF NOT EXISTS message_folder_date ON message (folder, date);

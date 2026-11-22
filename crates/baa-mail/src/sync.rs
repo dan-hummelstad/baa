@@ -5,8 +5,9 @@
 
 use std::{
     sync::{
+        atomic::AtomicBool,
         mpsc::{Receiver, RecvTimeoutError, Sender},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -14,6 +15,7 @@ use std::{
 
 use crate::{
     backend::Backend,
+    categories,
     secrets::Secrets,
     store::{StoredFolder, Store},
     Account, Connect, Error, Event, FolderId, Flags, MessageId, Result, Role, SyncState,
@@ -48,7 +50,12 @@ pub(crate) struct Shared {
     pub connect: Connect,
     pub secrets: Box<dyn Secrets>,
     pub notify: Box<dyn Fn(Event) + Send + Sync>,
+    /// `None`: no model in this build or this `Mail`; the rules alone sort the inbox.
+    pub model: Option<categories::Model>,
+    pub categorizer: OnceLock<Mutex<Sender<()>>>,
+    pub categories: AtomicBool,
 }
+
 
 /// Dropping it stops the thread at its next step, without waiting: a thread may be inside a
 /// connect or a send for a while, and the UI thread drops it.
@@ -255,6 +262,9 @@ fn sync_folder(t: &Thread, backend: &mut dyn Backend, folder: &StoredFolder) -> 
     let changes = backend.changes(&folder.path, folder.cursor.as_deref())?;
     let changed = changes.reset || !changes.new.is_empty() || !changes.changed.is_empty() || !changes.removed.is_empty();
     t.store.apply_changes(folder.id, &changes)?;
+    if !changes.new.is_empty() && folder.role == Role::Inbox {
+        t.shared.categorize(&t.store);
+    }
     // A verification code is read from the body, and nobody opens the mail it is in: new mail
     // a code may be in gets its body with the sync. Mail the user wrote or threw away is never
     // read for codes (`Store::code_candidates`).

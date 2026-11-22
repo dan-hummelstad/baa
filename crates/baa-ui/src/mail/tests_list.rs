@@ -1,6 +1,6 @@
 //! Tests of list, on MockHost and an in-memory Mail.
 
-use baa_mail::{testing, AccountId, Action, Filter, Flags, MailSpace, View};
+use baa_mail::{testing, AccountId, Action, Category, Filter, Flags, MailSpace, View};
 use baa_model::SpaceId;
 use gpui::TestAppContext;
 
@@ -233,4 +233,40 @@ fn mail_view_frame_time(cx: &mut TestAppContext) {
     frames(cx, 5, false, false);
     let without = frames(cx, 60, false, false);
     eprintln!("frame: still {still:?}, scrolling {scrolling:?}, scrolling while syncing {syncing:?}, mail closed {without:?}");
+}
+
+#[gpui::test]
+fn the_inbox_opens_on_primary_and_the_pills_show_each_category(cx: &mut TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    let space = mail_space(&b, cx);
+    mail.seed_message(folders[0], "1", &mail_in(1_700_000_000, "ana@x.example", "Dinner"), Flags::default(), false);
+    let social = testing::message("n@linkedin.com", "dan@example.com", "Kudos", 1_700_000_100, "List-Unsubscribe: <x>\r\n", "");
+    mail.seed_message(folders[0], "2", &social, Flags::default(), false);
+    b.update(cx, |_, cx| cx.notify());
+    let shown = |b: &B, cx: &mut gpui::VisualTestContext| mail.count(&view_of(b, cx, space));
+    assert_eq!(view_of(&b, cx, space).filter, Filter::Category(Category::Primary));
+    assert_eq!(shown(&b, cx), 1);
+    let click = |cx: &mut gpui::VisualTestContext, at: &'static str| {
+        let at = cx.debug_bounds(at).unwrap().center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx, "mail-pill-1");
+    assert_eq!(view_of(&b, cx, space).filter, Filter::Category(Category::Social));
+    assert_eq!(shown(&b, cx), 1);
+    click(cx, "mail-pill-3");
+    assert_eq!(shown(&b, cx), 2, "All Mail");
+
+    let thread = mail.rows(&view_of(&b, cx, space), 0..1)[0].thread;
+    b.update(cx, |b, cx| b.move_to_category(thread, Category::Promotions, cx));
+    click(cx, "mail-pill-2");
+    assert_eq!(shown(&b, cx), 1, "the moved conversation");
+
+    b.update(cx, |b, cx| {
+        b.settings.mail.categories = false;
+        b.sync_mail(cx);
+        cx.notify();
+    });
+    assert_eq!(view_of(&b, cx, space).filter, Filter::All);
+    assert!(!drawn(cx, "mail-pill-0"), "no pills with categories off");
 }

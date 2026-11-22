@@ -305,11 +305,12 @@ pub struct MailSettings {
     /// Offer verification codes from mail to a page's one-time-code field. Nothing happens
     /// without an account that has them on.
     pub codes: bool,
+    pub categories: bool,
 }
 
 impl Default for MailSettings {
     fn default() -> Self {
-        MailSettings { enabled: false, remote_images: RemoteImages::default(), codes: true }
+        MailSettings { enabled: false, remote_images: RemoteImages::default(), codes: true, categories: true }
     }
 }
 
@@ -525,7 +526,7 @@ mod tests {
     #[test]
     fn settings_saved_before_mail_have_it_off_with_codes_on_and_images_asked_for() {
         let s: Settings = serde_json::from_str(r#"{"reduce_motion":true,"claude":{"enabled":true}}"#).unwrap();
-        assert_eq!(s.mail, MailSettings { enabled: false, remote_images: RemoteImages::Ask, codes: true });
+        assert_eq!(s.mail, MailSettings { enabled: false, remote_images: RemoteImages::Ask, codes: true, categories: true });
         let on: Settings = serde_json::from_str(r#"{"mail":{"enabled":true}}"#).unwrap();
         assert_eq!(on.mail, MailSettings { enabled: true, ..MailSettings::default() }, "a missing field of it defaults too");
         let never = Settings { mail: MailSettings { remote_images: RemoteImages::Never, codes: false, ..on.mail }, ..on };

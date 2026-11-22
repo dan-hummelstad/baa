@@ -107,6 +107,11 @@ jobs:
           github-token: ${{ github.token }}
           path: engine
       - name: Unpack engine, add the Rust binary
+        # baa-mail's Swift bridge needs the macOS 26 SDK, which the image's default Xcode lacks;
+        # a release never ships without Apple's model (PLAN-mail.md §17).
+        env:
+          BAA_SWIFT_XCODE: /Applications/Xcode_26.3.app
+          BAA_REQUIRE_MODEL: "1"
         run: |
           (cd engine && shasum -a 256 -c engine.tar.zst.sha256)
           zstd -dc engine/engine.tar.zst | tar -xf - -C engine

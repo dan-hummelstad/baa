@@ -224,7 +224,7 @@ impl<H: WebHost> Browser<H> {
                     search: TextField::default(),
                     space: None,
                     state: ViewState::default(),
-                    filter: Filter::All,
+                    filter: list::inbox_filter(self.settings.mail.categories),
                     list: gpui::UniformListScrollHandle::new(),
                     reader: None,
                     drafts: Vec::new(),
@@ -241,6 +241,13 @@ impl<H: WebHost> Browser<H> {
                 self.session.forget_mail();
             }
         }
+        let categories = self.settings.mail.categories;
+        if let Some(ui) = &mut self.mail {
+            ui.mail.set_categories(categories);
+            if !categories && matches!(ui.filter, Filter::Category(_)) {
+                ui.filter = Filter::All;
+            }
+        }
     }
 
     /// After every session change (`Browser::sync`): the active Space's view is the one
@@ -252,6 +259,7 @@ impl<H: WebHost> Browser<H> {
         if let (None, Some(events)) = (&mail.events, hub) {
             mail.events = Some(cx.subscribe_in(&events, window, |this, _, event, window, cx| this.on_mail_event(event, window, cx)));
         }
+        let categories = self.settings.mail.categories;
         let Some(mail) = &mut self.mail else { return };
         if mail.space != space {
             mail.space = space;
@@ -259,7 +267,7 @@ impl<H: WebHost> Browser<H> {
             if let Some(wide) = mail.wide {
                 mail.state.fit(wide);
             }
-            mail.filter = Filter::All;
+            mail.filter = if mail.state.folder.is_none() { list::inbox_filter(categories) } else { Filter::All };
             mail.search = TextField::default();
             mail.reader = None;
             mail.drafts.clear();

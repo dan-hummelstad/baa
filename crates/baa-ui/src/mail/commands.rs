@@ -1,7 +1,7 @@
 //! The command row of the list's tab and the preview's: the ribbon's Home set in ASCII, pills
 //! in Arc, from one table (mocks A2/B2; WP-I). The ribbon's other tabs are stage 3.
 
-use baa_mail::{Action, Role, Tab};
+use baa_mail::{Action, Category, Role, Tab};
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, Window};
 
@@ -54,14 +54,24 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn mail_move_menu(&self) -> Vec<MenuEntry<H>> {
         let Some(message) = self.mail.as_ref().and_then(|m| m.reader.as_ref()).and_then(|r| r.message().cloned()) else { return Vec::new() };
         let Some((mail, space)) = self.mail_space() else { return Vec::new() };
-        mail.folders(space)
+        let mut entries: Vec<MenuEntry<H>> = mail
+            .folders(space)
             .into_iter()
             .filter(|f| f.account == message.account && f.role != Role::Drafts)
             .map(|f| {
                 let id = f.id;
                 MenuEntry::Item { label: f.name, checked: false, enabled: true, run: Box::new(move |this: &mut Browser<H>, _: &mut Window, cx: &mut Context<Browser<H>>| this.act_on_selected(Action::Move(id), cx)) }
             })
-            .collect()
+            .collect();
+        let thread = self.mail.as_ref().and_then(|m| m.state.selected);
+        if let (Some(thread), true) = (thread, self.settings.mail.categories) {
+            entries.push(MenuEntry::Separator);
+            for (category, label) in [(Category::Primary, "Primary"), (Category::Social, "Social"), (Category::Promotions, "Promotions")] {
+                let run = Box::new(move |this: &mut Browser<H>, _: &mut Window, cx: &mut Context<Browser<H>>| this.move_to_category(thread, category, cx));
+                entries.push(MenuEntry::Item { label: label.into(), checked: false, enabled: true, run });
+            }
+        }
+        entries
     }
 
     /// The commands for the conversation `tab` shows, `None` with none shown (a draft has its

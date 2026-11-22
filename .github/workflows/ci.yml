@@ -56,7 +56,13 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        env:
+          BAA_SWIFT_XCODE: /Applications/Xcode_26.3.app
+          BAA_REQUIRE_MODEL: "1"
       - run: cargo test --workspace
+        env:
+          BAA_SWIFT_XCODE: /Applications/Xcode_26.3.app
+          BAA_REQUIRE_MODEL: "1"
 
   privacy:
     runs-on: macos-15

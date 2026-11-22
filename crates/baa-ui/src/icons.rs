@@ -18,9 +18,9 @@ icons!(
     "camera", "check", "chevron-down", "chevron-left", "chevron-right", "chevron-up", "chevrons-left-right", "chevrons-right", "chevrons-up-down", "circle-arrow-down", "circle-dot", "clipboard", "code-xml", "columns-2", "disc", "download", "ellipsis", "file",
     "file-archive", "file-image", "file-music", "file-pen", "file-spreadsheet", "file-text",
     "file-video-camera", "flag", "folder", "folder-open", "git-pull-request", "globe", "history", "hourglass", "house", "import", "inbox",
-    "key-round", "languages", "link", "list-filter", "lock", "mail", "mail-open", "map-pin", "maximize-2", "message-circle", "mic", "minus", "moon-star",
+    "key-round", "languages", "link", "list-filter", "lock", "mail", "mail-open", "map-pin", "maximize-2", "megaphone", "message-circle", "mic", "minus", "moon-star",
     "panel-left", "paperclip", "pause", "pencil-line", "picture-in-picture-2", "pin", "pin-off", "play", "plus", "printer", "puzzle", "rotate-cw", "rss", "search", "send", "settings",
-    "skip-forward", "sliders-horizontal", "sparkles", "square", "sun", "terminal", "trash-2", "triangle-alert", "volume-2", "volume-x", "x",
+    "skip-forward", "sliders-horizontal", "sparkles", "square", "sun", "terminal", "trash-2", "triangle-alert", "user", "users", "volume-2", "volume-x", "x",
 );
 
 /// baa's own mark ("The leap, solid" in baa.pen, also the app icon: assets/baa.icns), for `img(MARK)`.
