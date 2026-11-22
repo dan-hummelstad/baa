@@ -8,7 +8,27 @@
 
 use std::{env, path::PathBuf, process::Command};
 
+/// baa's Google client for `oauth.rs`: from the build's environment (CI's secrets), else from
+/// the repository's `.env`.
+fn google_client() {
+    let dotenv = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../.env");
+    // Only when it exists: Cargo reruns a script whose watched file is missing on every build.
+    if dotenv.exists() {
+        println!("cargo:rerun-if-changed={}", dotenv.display());
+    }
+    let file = std::fs::read_to_string(&dotenv).unwrap_or_default();
+    for key in ["BAA_GOOGLE_CLIENT_ID", "BAA_GOOGLE_CLIENT_SECRET"] {
+        println!("cargo:rerun-if-env-changed={key}");
+        let from_file = file.lines().rev().find_map(|l| l.trim().strip_prefix(key)?.trim_start().strip_prefix('='));
+        let value = env::var(key).ok().filter(|v| !v.is_empty()).or(from_file.map(|v| v.trim().trim_matches('"').to_owned()));
+        if let Some(value) = value {
+            println!("cargo:rustc-env={key}={value}");
+        }
+    }
+}
+
 fn main() {
+    google_client();
     println!("cargo:rustc-check-cfg=cfg(baa_model)");
     println!("cargo:rerun-if-changed=swift/categorize.swift");
     println!("cargo:rerun-if-env-changed=BAA_SWIFT_XCODE");

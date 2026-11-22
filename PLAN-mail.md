@@ -151,8 +151,9 @@ older one drops and refills the cache tables and migrates `draft`, `outbox`, `op
 probably signed in already. Authorization code with PKCE (S256) and `state`; the redirect is
 `http://127.0.0.1:<port>/` on a `std::net::TcpListener` that binds loopback only, takes one request,
 checks `state`, and closes after 5 minutes. The token exchange and refresh are curl to https. The
-client ids are constants in `baa-mail/src/oauth.rs`, empty until the user has registered the
-clients (`BAA_GOOGLE_CLIENT_ID` and `BAA_MICROSOFT_CLIENT_ID` in the environment override them). With
+client ids are compiled in: `baa-mail/build.rs` takes `BAA_GOOGLE_CLIENT_ID` and
+`BAA_GOOGLE_CLIENT_SECRET` from the build's environment (release.yml, from the repository's
+secrets) or else from the git-ignored `.env` (`.env.example`); empty when neither has them. With
 no id the provider's sign-in button says so and does nothing; no test needs a real client.
 
 **Dependencies to add** (all in `crates/baa-mail`; each is confirmed and its licence checked against
@@ -838,9 +839,9 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
   resizing the window or dragging a split's seam.
 
 **Open**
-- Google sign-in needs the client id and its client secret (`BAA_GOOGLE_CLIENT_ID`,
-  `BAA_GOOGLE_CLIENT_SECRET`, or the constants in `baa-mail/src/oauth.rs`); a Desktop client's
-  secret is not confidential, by Google's own description.
+- Google sign-in needs the client id and its client secret at build time (`BAA_GOOGLE_CLIENT_ID`,
+  `BAA_GOOGLE_CLIENT_SECRET`: repository secrets for release.yml, `.env` locally); a Desktop
+  client's secret is not confidential, by Google's own description.
 - Proton Mail Bridge (§14).
 - With Chrome's "Preload pages" turned on by the user, hovering a link in a message can
   preconnect to its host. Helium ships with it off; no in-page control exists.

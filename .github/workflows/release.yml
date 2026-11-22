@@ -112,7 +112,11 @@ jobs:
         env:
           BAA_SWIFT_XCODE: /Applications/Xcode_26.3.app
           BAA_REQUIRE_MODEL: "1"
+          # Compiled into baa-mail (its build.rs): a Desktop client's secret is not secret.
+          BAA_GOOGLE_CLIENT_ID: ${{ secrets.BAA_GOOGLE_CLIENT_ID }}
+          BAA_GOOGLE_CLIENT_SECRET: ${{ secrets.BAA_GOOGLE_CLIENT_SECRET }}
         run: |
+          [ -n "$BAA_GOOGLE_CLIENT_ID" ] || echo "::warning::no BAA_GOOGLE_CLIENT_ID secret: this release has no Google sign-in"
           (cd engine && shasum -a 256 -c engine.tar.zst.sha256)
           zstd -dc engine/engine.tar.zst | tar -xf - -C engine
           cargo bundle --release --engine engine --no-sign

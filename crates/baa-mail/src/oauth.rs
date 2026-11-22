@@ -14,11 +14,17 @@ use url::Url;
 
 use crate::{Error, Result};
 
-// Empty until the user registers baa's client (a Google "Desktop" client). The environment
-// overrides them. Google's token endpoint wants the secret of a Desktop client too, and Google
-// documents that it is not a secret in an installed app.
-const GOOGLE_CLIENT_ID: &str = "";
-const GOOGLE_CLIENT_SECRET: &str = "";
+// baa's Google "Desktop" client, put in at build time by build.rs (CI's secrets, or `.env`);
+// empty when the build had none. Google's token endpoint wants the secret of a Desktop client
+// too, and Google documents that it is not a secret in an installed app.
+const GOOGLE_CLIENT_ID: &str = match option_env!("BAA_GOOGLE_CLIENT_ID") {
+    Some(id) => id,
+    None => "",
+};
+const GOOGLE_CLIENT_SECRET: &str = match option_env!("BAA_GOOGLE_CLIENT_SECRET") {
+    Some(secret) => secret,
+    None => "",
+};
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://mail.google.com/";
@@ -104,12 +110,7 @@ pub(crate) fn refresh(refresh_token: &str) -> Result<String> {
 }
 
 fn client() -> Option<Client> {
-    let pick = |var: &str, constant: &str| match std::env::var(var) {
-        Ok(v) if !v.is_empty() => v,
-        _ => constant.to_string(),
-    };
-    let id = pick("BAA_GOOGLE_CLIENT_ID", GOOGLE_CLIENT_ID);
-    (!id.is_empty()).then(|| Client { id, secret: pick("BAA_GOOGLE_CLIENT_SECRET", GOOGLE_CLIENT_SECRET) })
+    (!GOOGLE_CLIENT_ID.is_empty()).then(|| Client { id: GOOGLE_CLIENT_ID.into(), secret: GOOGLE_CLIENT_SECRET.into() })
 }
 
 fn random_token<const N: usize>() -> Result<String> {

@@ -1,3 +1,5 @@
 /target
 .DS_Store
 __pycache__/
+# OAuth clients for local builds (.env.example)
+.env
