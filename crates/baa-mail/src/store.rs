@@ -36,6 +36,17 @@ impl From<rusqlite::Error> for Error {
 /// connection, so every handle of it shares that one.
 pub(crate) struct Store {
     conn: Arc<Mutex<Connection>>,
+    cache: Mutex<Cache>,
+}
+
+/// The UI renders every frame and asks for the list and the folders each time; both scan the
+/// Space's mail. They are kept until mail.db changes: `data_version` moves when another
+/// connection commits, `total_changes()` when this one writes.
+#[derive(Default)]
+struct Cache {
+    stamp: (i64, i64),
+    listed: Option<(View, Arc<Vec<Row>>)>,
+    folders: Option<(MailSpace, Vec<Folder>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,19 +182,30 @@ impl Store {
             None => Connection::open_in_memory()?,
         };
         init(&conn)?;
-        Ok(Store { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Store { conn: Arc::new(Mutex::new(conn)), cache: Mutex::default() })
     }
 
     pub(crate) fn another(&self) -> Result<Store> {
         let path = self.conn().path().filter(|p| !p.is_empty()).map(str::to_owned);
-        let Some(path) = path else { return Ok(Store { conn: self.conn.clone() }) };
+        let Some(path) = path else { return Ok(Store { conn: self.conn.clone(), cache: Mutex::default() }) };
         let conn = Connection::open(path)?;
         init(&conn)?;
-        Ok(Store { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Store { conn: Arc::new(Mutex::new(conn)), cache: Mutex::default() })
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn cache(&self) -> Result<MutexGuard<'_, Cache>> {
+        let stamp = self.conn().query_row("SELECT data_version, total_changes() FROM pragma_data_version", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        let mut cache = self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if cache.stamp != stamp {
+            *cache = Cache { stamp, ..Cache::default() };
+        }
+        Ok(cache)
     }
 
 
@@ -542,6 +564,16 @@ impl Store {
 
 
     pub(crate) fn folders(&self, space: MailSpace) -> Result<Vec<Folder>> {
+        let mut cache = self.cache()?;
+        if let Some((_, folders)) = cache.folders.as_ref().filter(|(s, _)| *s == space) {
+            return Ok(folders.clone());
+        }
+        let folders = self.read_folders(space)?;
+        cache.folders = Some((space, folders.clone()));
+        Ok(folders)
+    }
+
+    fn read_folders(&self, space: MailSpace) -> Result<Vec<Folder>> {
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(
             "SELECT f.id, f.account, f.name, f.role, \
@@ -577,17 +609,34 @@ impl Store {
 
     /// One row a conversation, newest first.
     pub(crate) fn rows(&self, view: &View, range: std::ops::Range<usize>) -> Result<Vec<Row>> {
+        Ok(self.listed(view)?.iter().skip(range.start).take(range.len()).cloned().collect())
+    }
+
+    pub(crate) fn count(&self, view: &View) -> Result<usize> {
+        Ok(self.listed(view)?.len())
+    }
+
+    // ponytail: the whole list is read on each change; a 100k-thread folder syncing costs one
+    // read per sync batch. Page it (LIMIT around the visible range) if that shows.
+    fn listed(&self, view: &View) -> Result<Arc<Vec<Row>>> {
+        let mut cache = self.cache()?;
+        if let Some((_, rows)) = cache.listed.as_ref().filter(|(v, _)| v == view) {
+            return Ok(rows.clone());
+        }
+        let rows = Arc::new(self.read_rows(view)?);
+        cache.listed = Some((view.clone(), rows.clone()));
+        Ok(rows)
+    }
+
+    fn read_rows(&self, view: &View) -> Result<Vec<Row>> {
         let sql = format!(
             "{} SELECT thread, account, from_name, from_email, subject, snippet, newest, all_seen, any_flagged, any_attachment \
-             FROM listed ORDER BY newest DESC, thread DESC LIMIT ? OFFSET ?",
+             FROM listed ORDER BY newest DESC, thread DESC",
             listed(view)
         );
         let conn = self.conn();
         let mut stmt = conn.prepare_cached(&sql)?;
-        let mut args = list_args(view);
-        args.push(rusqlite::types::Value::Integer(range.len() as i64));
-        args.push(rusqlite::types::Value::Integer(range.start as i64));
-        let rows = stmt.query_map(params_from_iter(args), |r| {
+        let rows = stmt.query_map(params_from_iter(list_args(view)), |r| {
             let (name, email): (String, String) = (r.get(2)?, r.get(3)?);
             Ok(Row {
                 thread: ThreadId(r.get(0)?),
@@ -602,13 +651,6 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    pub(crate) fn count(&self, view: &View) -> Result<usize> {
-        let sql = format!("{} SELECT count(*) FROM listed", listed(view));
-        let conn = self.conn();
-        let mut stmt = conn.prepare_cached(&sql)?;
-        Ok(stmt.query_row(params_from_iter(list_args(view)), |r| r.get::<_, i64>(0))? as usize)
     }
 
     /// A conversation's messages, oldest first. A message the server keeps in two folders
@@ -716,7 +758,7 @@ fn listed(view: &View) -> String {
         " AND ?4 IS NULL"
     };
     format!(
-        "WITH scoped AS (SELECT m.*, \
+        "WITH scoped AS (SELECT m.thread, m.account, m.from_name, m.from_email, m.subject, m.snippet, \
            row_number() OVER (PARTITION BY m.thread ORDER BY m.date DESC, m.id DESC) AS n, \
            max(m.date) OVER t AS newest, min(m.seen) OVER t AS all_seen, \
            max(m.flagged) OVER t AS any_flagged, max(m.attachments) OVER t AS any_attachment \

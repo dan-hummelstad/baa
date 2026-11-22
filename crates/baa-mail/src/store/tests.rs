@@ -253,3 +253,26 @@ fn a_newer_file_is_refused_untouched_and_an_older_one_keeps_what_no_server_holds
     drop(store);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn the_list_and_the_folders_are_read_again_after_a_write_on_any_connection() {
+    let dir = temp_dir("cache");
+    let store = Store::open(Some(&dir)).unwrap();
+    let thread = store.another().unwrap();
+    let home = space(1);
+    thread.put_account(&account(1, Some(home))).unwrap();
+    let a = inbox(&thread, AccountId(1));
+    let changes = |new, cursor: &str| Changes { new, cursor: cursor.into(), ..Changes::default() };
+    let unread = |store: &Store| store.folders(home).unwrap().iter().find(|f| f.id == a).unwrap().unread;
+    thread.apply_changes(a, &changes(vec![new("1", header("a1@x", "One", "Sun, 1 Nov 2026 10:00:00 +0000", ""), Flags::default())], "1")).unwrap();
+    assert_eq!((store.count(&view(home)).unwrap(), unread(&store)), (1, 1));
+
+    thread.apply_changes(a, &changes(vec![new("2", header("a2@x", "Two", "Sun, 2 Nov 2026 10:00:00 +0000", ""), Flags::default())], "2")).unwrap();
+    assert_eq!(subjects(&store, &view(home)), ["Two", "One"], "another connection's commit");
+    assert_eq!(unread(&store), 2);
+
+    store.apply_changes(a, &changes(vec![new("3", header("a3@x", "Three", "Sun, 3 Nov 2026 10:00:00 +0000", ""), Flags::default())], "3")).unwrap();
+    assert_eq!((store.count(&view(home)).unwrap(), unread(&store)), (3, 3), "this connection's own write");
+    drop((store, thread));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
