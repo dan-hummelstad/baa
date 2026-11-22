@@ -8,7 +8,7 @@ Basis: `main` at `57ff25b7` (baa 0.1.9, ABI 16, Chromium 158). `file:line` refer
 that commit and drift; search for the name if a line does not match.
 
 Design source: the pen.dev file `baa.pen`, frame `R2fgxx` "3. baa Mail — Take 3". Six screens, the
-same three in each skin: A1/B1 the Archive with its Mailbox door, A2/B2 the Mail section (list and
+same three in each skin: A1/B1 the Archive with its Mailbox door (not built: Mail is a rail item, §5), A2/B2 the Mail section (list and
 reading pane), A3/B3 compose in place with draft tabs. Agents read them with the pencil MCP tools
 (`Get("R2fgxx", …)`, `Export`), never with Read or Grep.
 
@@ -28,8 +28,8 @@ User decisions so far (they win over anything below):
 
 A mail client inside baa. It is a client only: baa talks to the user's mail servers and to nobody
 else, and there is no baa service. Mail accounts belong to a Space (or to every Space). The Archive
-has a Mailbox door; opening it swaps the sidebar for mail navigation and the page area for the mail
-view. Message bodies and the compose editor are Chromium pages; everything around them is GPUI, in
+has a Mail section; choosing it shows mail navigation as the Archive body and the mail view in the
+page area. Message bodies and the compose editor are Chromium pages; everything around them is GPUI, in
 both skins. Mail can be one pane of a split beside browser tabs. Each Space remembers whether it
 showed the browser or mail, and what mail showed.
 
@@ -91,7 +91,7 @@ baa's own UI elements with Chromium rendering the messages; the plan follows the
 | 6 | Which network stack? | IMAP: a Rust library over `rustls`, on one thread an account (IDLE holds a connection open; curl cannot). SMTP, POP3 and every HTTPS call (OAuth, Graph, autoconfig): the system `curl`, as live folders use it (`baa-model/src/live.rs:290`), secrets on stdin. No async runtime, no HTTP client crate. |
 | 7 | How is untrusted HTML shown? | In a sandboxed frame under a content security policy, inside a page that has no URL (§6). The browser's own isolation is the control; baa does not write an HTML sanitizer. |
 | 8 | Which profile holds a message page? | The Space's. A link then opens through the engine's own new-tab path (adopted, never re-issued) in the storage the user is signed in to. Remote images are off by default, so the Space's cookies go nowhere unless the user loads them. |
-| 9 | Mail in incognito? | None. No door, no accounts, no code offers, no writes. |
+| 9 | Mail in incognito? | None. No Mail item, no accounts, no code offers, no writes. |
 | 10 | When does baa sync? | Only while baa runs, and only accounts the user added. INBOX of every account is held with IDLE; other folders are polled every 10 minutes and when opened. |
 | 11 | Microsoft accounts | Microsoft Graph for Outlook.com and Microsoft 365, never IMAP: Graph has shared mailboxes, rules, categories and Focused, and is https. Stage 2. |
 | 12 | Gmail | IMAP and SMTP with XOAUTH2 (scope `https://mail.google.com/`), on the IMAP backend. Stage 1, since codes matter most there. |
@@ -109,7 +109,7 @@ baa's own UI elements with Chromium rendering the messages; the plan follows the
 crates/baa-mail  (no gpui)                      crates/baa-ui/src/mail/  (views)
   account  provider  secrets                      nav · list · reader · compose · tabs
   backend: imap | graph | pop3 | fake             commands · setup · code_offer
-  sync (one thread an account)   ── Event ──►   Browser<H>: showing, panes, sidebar swap
+  sync (one thread an account)   ── Event ──►   Browser<H>: showing, panes, Archive Mail section
   store (mail.db, FTS5)          ◄── reads ──   (UI thread reads mail.db directly)
   mime  send  rules  codes       ◄── Action ─
                                                 crates/baa-web: create_document, code field (ABI 17)
@@ -183,19 +183,28 @@ Owner: `baa-ui` (the files named here), with the model change in `baa-model`.
   mail); Search mail; New message (⌘N); Folders; Search folders (Unread, Flagged). With no account
   the select is the "Add an account" card. The Archive keeps its width (374 px) and its rail.
 - **Keys.** ⌘⇧M and the command bar's "Open Mail" open the Archive on Mail and, when mail shows,
-  collapse it. ⌘⇧L closes the Archive on Mail as it closes it anywhere. Choosing Downloads,
-  Archived Tabs or Chat shows that section and the browser page; choosing Mail again brings mail
-  back as it was left. ⌘⇧A is Archived Tabs, so in mail it leaves mail as the other sections do.
-- **Gesture.** Today the Archive opens by a swipe right past the first Space (`nav.rs:99`). New: a
-  two-finger swipe up over the bottom bar opens it in any Space, and a swipe down over the
-  Archive's bottom closes it. Closing the Archive on Mail (its back arrow, ⌘⇧L, the swipe down, the
-  horizontal swipe that closes it) shows the browser page as it was. The bar does not scroll, so the
-  vertical axis is free there. Horizontal swipes switch Spaces in the browser; in mail, as in any
-  Archive section, a swipe left closes the Archive.
-- **Other Spaces.** While the Archive is open its rail replaces the bottom bar, so the Space dots
-  are not on screen in mail. Spaces switch by keyboard, the command bar, or the select's Go to
-  entries, which list the other Spaces that have accounts. A Space switch shows each Space as it
-  was left.
+  collapse it. ⌘⇧A toggles the Archive (Ctrl+Shift+A on Windows): it collapses it from any section
+  (on Mail that shows the browser page), and when it is closed opens it on the section it was last
+  on (Mail, Downloads, Archived Tabs or Chat), per window. If that section is Mail and the Space
+  cannot have mail, it opens on Downloads. Archived Tabs has no key of its own; it
+  stays in the command bar and the menu. Choosing Downloads, Archived Tabs or Chat shows that
+  section and the browser page; choosing Mail again brings mail back as it was left.
+- **Gesture.** In the Archive, in mail and in every section, a horizontal two-finger swipe switches
+  Space, with the same interactive slide the browser sidebar uses, applied to the Archive's body.
+  A plain horizontal swipe always switches Space; from the first Space, fingers right go to the last
+  Space, as fingers left from the last go to the first. ⌘ held with a horizontal swipe over the
+  sidebar, the Archive or the bottom bar opens the Archive on its last section from any Space; the
+  same while it is open collapses it, either direction. A two-finger swipe up over the bottom bar
+  opens the Archive on its last section in any Space, and a swipe down over the Archive's bottom row
+  closes it. Closing the Archive on Mail (its back arrow, ⌘⇧A, the swipe down, the ⌘ swipe) shows the
+  browser page as it was. The bar does not scroll, so the vertical axis is free there.
+- **Other Spaces.** The Space dots, with the current Space's pill, show while the Archive is open:
+  in a bottom row across the Archive under the rail and the body, with the back arrow at the left
+  where the bottom bar has its Archive button. A click on a dot switches Space. Stepping Spaces from
+  mail stays in mail: the next Space shows its mail if it can have mail (it is not incognito and
+  mail is on), else its browser as it was left. The same rule holds for the swipe, ⌃⌥←/→, ⌃1–9 and
+  a click on a dot (`Browser::go_to_space`, `browser/spaces.rs`). The command bar, Settings, a new
+  Space and the select's Go to entries show a Space as it was left; Go to shows it on mail.
 - **Split.** `Split.panes: Vec<Pane>` replaces `tabs: Vec<TabId>`. ⌃⇧= in mail splits mail with the
   most recent tab; dragging a tab onto the mail view adds it; the pane strip's × takes mail out. The
   Archive follows the focused pane: it opens on Mail while the mail pane has focus (a click on it is
@@ -426,8 +435,9 @@ pub trait Backend: Send { /* sync, wait (IDLE), apply, fetch_body, send: filled 
 
 **baa-ui** (`mail/mod.rs`): `Browser<H>` gains `mail: Option<MailUi<H>>` (`None` in a private window
 or with mail off). `MailUi` holds the `Arc<Mail>`, the Space's view state, the open documents and
-the draft tabs. It exposes `render_nav(&self, theme, window, cx)`, `render_view(&self, theme,
-window, cx)` and `render_door(...)`, methods on `Browser<H>` as the Library's are. Tests build it on
+the draft tabs. It exposes `render_nav(&self, theme, window, cx)`, the Archive body for
+`Section::Mail`, and `render_view(&self, theme, window, cx)`, methods on `Browser<H>` as the
+Library's are. Tests build it on
 `Mail::open` with the `Fake` backend, in-memory secrets and `:memory:`.
 
 **//baa** (`baa.h`, ABI 17): `code_field(ctx, tab, id, origin, top, x, y, w, h, shown)` in
@@ -477,7 +487,7 @@ Each ends runnable, with mail still off by default.
 | 0 | Contracts and proofs | WP-0, WP-P1, WP-P2 | — |
 | 1 | Read, write, manage, codes | WP-A … WP-N (§11). Ends at §1's list. | a Google OAuth client id, to try Gmail for real |
 | 2 | More accounts | Microsoft Graph (Outlook.com, Microsoft 365, shared mailboxes, send as), POP3, Proton Bridge preset, autoconfig from the domain's own records and its MX, codes on Graph, the alias table, share an account to every Space from Settings | an Entra app id (and publisher verification before release) |
-| 3 | Outlook's management | categories, follow-up flags with dates, pin, snooze, scheduled send and outbox, Focused/Other, search folders, sweep, quick steps, rules (local, then the server's on Graph and Gmail), signatures, importance and receipts, tables and pictures in the editor, the full ribbon, contacts completion, `mailto:`, a draft in its own window, new-mail notices and badges, the door's "Waiting for you" and "Recent files", save all to Archive | — |
+| 3 | Outlook's management | categories, follow-up flags with dates, pin, snooze, scheduled send and outbox, Focused/Other, search folders, sweep, quick steps, rules (local, then the server's on Graph and Gmail), signatures, importance and receipts, tables and pictures in the editor, the full ribbon, contacts completion, `mailto:`, a draft in its own window, new-mail notices and badges, "Waiting for you" and "Recent files" in the Mail section, save all to Archive | — |
 | 4 | If asked for | on-premises EWS, ManageSieve, JMAP, S/MIME, calendar invitations, import from Mail.app, mail on by default | a decision each |
 
 ---
@@ -600,10 +610,10 @@ small, lands often and rebases before every push.
 - Tests: P1's, plus the editor policy and a round trip of `set_document` then the read script.
 
 **WP-G Shell** (`baa-ui`, `baa-model`)
-- §5 in full, with `mail/mod.rs` supplying placeholder nav, view and door until wave 2.
+- §5 in full, with `mail/mod.rs` supplying placeholder nav and view until wave 2.
 - Tests (`tests_mail.rs`, on `MockHost` and the `Fake` backend): ⌘⇧M shows mail and comes back to
   the same tab; Space A in mail and Space B in the browser each return as left; a split of mail and
-  a tab renders both and survives a save and load; the Mailbox rail item is absent in an ephemeral
+  a tab renders both and survives a save and load; the Mail rail item is absent in an ephemeral
   Space and a private window, and nothing is written there; a swipe up over the bottom bar opens the
   Archive in the third Space; deleting a Space names its accounts; with mail off nothing is drawn.
 
@@ -682,7 +692,7 @@ Rules for all of them:
 | Chromium does not classify code fields with autofill off | WP-M's first reading | a focused-element check for `autocomplete="one-time-code"` only |
 | The engine build takes days | it is one build, started as soon as WP-M passes the syntax check | codes ship one release after the rest of the spike |
 | `Pane` breaks a saved session | WP-0's round-trip test on a 0.1.9 session | keep `tabs` and add a separate `mail` flag to `Split` |
-| A swipe up over the bottom bar collides with something | WP-G's test; the user tries it | a button only, and the existing swipe past the first Space |
+| A swipe up over the bottom bar collides with something | WP-G's test; the user tries it | a button only |
 | A mail server on a port other than the six | none needed: it is refused with a message that names the rule | the user widens the rule |
 | Dev builds ask for the Keychain on every rebuild (unsigned) | the first run of WP-P2's code | a file-backed `Secrets` for `baa Dev` only, never in a release |
 | Mail HTML written for a white page looks wrong in a dark Space | look at ten real messages | the message card stays paper white, as mock B2 has it |
@@ -750,6 +760,9 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - Mail is the Archive's Mail section, not a second sidebar mode with a switcher and a door: the
   user, on the first build, wanted one sidebar, with mail's mailboxes in the Archive and the
   browser back by collapsing it.
+- In the Archive a horizontal swipe switches Space and stays in mail, the Space dots show under the
+  rail, ⌘⇧A toggles the Archive on its last section (⌘⇧L is gone), and ⌘ with a swipe toggles it:
+  the user's decision, 2026-11-22.
 - The editor is a sandboxed frame (`allow-same-origin`, no scripts) in the document, not an
   editable page body: quoted mail in the page itself could navigate it with `<meta refresh>`.
   The shell reaches it as `baa_web::EDITOR_DOCUMENT`.
@@ -791,7 +804,8 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - The code offer: its place under a real field, and that a click on it still fills (the engine
   fills only while the field has focus in its page).
 - Formatting, attachments, autosave and send in the composer, with a real account.
-- The swipe up over the bottom bar.
+- The swipe up over the bottom bar, the swipe between Spaces in mail, the ⌘ swipe, and the dots in
+  the Archive's bottom row.
 
 **Open**
 - Google sign-in needs the client id and its client secret (`BAA_GOOGLE_CLIENT_ID`,

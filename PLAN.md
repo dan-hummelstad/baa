@@ -225,8 +225,7 @@ The OSR phases below are history: pages are native views (§1). Input still desc
 | Back / forward | ⌘[ / ⌘] , swipe | Alt+← / → , swipe |
 | Find | ⌘F | Ctrl+F |
 | Dev tools | ⌘⌥I | F12 |
-| Archive view | ⌘⇧A | Ctrl+Shift+A |
-| Library, last section | ⌘⇧L | Ctrl+Shift+L |
+| Archive (open on its last section / collapse) | ⌘⇧A, ⌘ + swipe | Ctrl+Shift+A |
 
 Browser-standard keys (⌘R, ⌘+/-/0, ⌘P, ⌘⇧N incognito space) included. Keys the page should get first
 (text fields) are dispatched to Chromium first; unhandled keys bubble to GPUI actions, using Chromium's
@@ -237,7 +236,7 @@ Browser-standard keys (⌘R, ⌘+/-/0, ⌘P, ⌘⇧N incognito space) included. 
 ## 9. Gestures
 
 - **Two-finger swipe left/right over the page** → back/forward with the rubber-band arrow, driven by `ScrollEvent` phases (began/changed/ended/momentum) on macOS. GPUI already handles NSEvent swipes (PR #23332 merged Jan 2025) for mice emulating swipes; we extend to trackpad phases. Only triggers when the page's `scrollLeft` is at the edge, checked via a cheap `eval` cache or by letting Chromium consume the wheel event first and acting on the unconsumed delta.
-- **Two-finger swipe over the sidebar** → previous/next Space, interactive (content tracks finger, springs to nearest).
+- **Two-finger swipe over the sidebar** → previous/next Space, interactive (content tracks finger, springs to nearest). A swipe over the Archive switches Space the same way. ⌘ + a horizontal swipe over the sidebar, the Archive or the bottom bar toggles the Archive.
 - **Peek dismiss** → vertical swipe/drag on the Peek sheet.
 - Pinch-to-zoom → page zoom (`SetZoomLevel`) with a GPUI zoom badge.
 - Windows: precision touchpads deliver `WM_POINTER`/horizontal `WM_MOUSEHWHEEL` with phases via GPUI's Win32 backend; same handlers, verified on a Surface + a Dell XPS in CI's manual checklist.
