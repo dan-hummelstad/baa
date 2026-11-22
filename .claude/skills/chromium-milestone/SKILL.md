@@ -158,6 +158,13 @@ directory a new keychain key ("v11") and makes the old one unavailable, so every
 `prevent-reset-on-keychain-unavailability.patch`. A finding like this is fixed at the highest
 layer that works (here a disabled feature in `baa-privacy`, or making baa's directory the default
 one), and a default-on protection being turned off needs the user's approval.
+That finding was reported as "one sign-out", which was wrong and cost the user's installed
+extensions: the same key also encrypts the hashes of Chrome's protected preferences
+(`services/preferences/tracked`, enforced on macOS), so 0.1.9's first launch reset
+`extensions.settings`, the default search data and the pinned tabs, and Chrome then deleted the
+extensions' files. When a change touches the OS crypt key, list everything that key protects
+before telling the user what it costs: cookies, saved passwords (`Login Data`), the protected
+preferences and with them the installed extensions.
 
 ### 2. Take
 ```sh

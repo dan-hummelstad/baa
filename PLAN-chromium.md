@@ -121,6 +121,11 @@ We own the vendored copies and edit them directly. baa's changes so far (2026-10
   Keychain key's "v11" form and data written by 157 ("v10") cannot be read: the 158 update signs
   everyone out once (the user accepted this, 2026-11-20). Making baa's folder the default one
   (`CrProductDirName`) would switch back to v10 and sign everyone out again.
+  It also removes every installed extension, which was not known when that was accepted: the
+  hashes of Chrome's protected preferences are encrypted with the same key, so 0.1.9's first launch
+  reset `extensions.settings` (and the default search data and pinned tabs) and Chrome deleted the
+  extensions' files. Their stored data stays, so installing them again brings their settings back.
+  Any change of this key does the same again.
 - **Dropped:** 9 `helium/ui/*` patches that only touch views code and that nothing else depends on. The
   other 95 UI patches are tangled with prefs, strings and the WebUI pages baa still shows, so they stay.
 - **Dropped too:** `helium/ui/crash-dialog.patch` (offers to send a report; nothing is sent).
