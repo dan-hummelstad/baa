@@ -585,6 +585,15 @@ impl Mail {
         }
     }
 
+    /// The account's "Offer verification codes" switch; an unknown id is left alone. Its
+    /// thread keeps running: [`Mail::codes`] reads the switch from mail.db each time.
+    pub fn set_codes(&self, account: AccountId, on: bool) {
+        let Some(store) = self.store.get() else { return };
+        if let Ok(Some(found)) = store.account(account) {
+            let _ = store.put_account(&Account { codes: on, ..found });
+        }
+    }
+
     /// The user chose "always for this sender": remote images of mail from `sender` load.
     pub fn trusts_images(&self, sender: &str) -> bool {
         self.read(|s| s.local(&images_key(sender))).is_some()
@@ -729,6 +738,27 @@ mod tests {
         assert!(again.trusts_images("news@shop.example"), "kept across a restart");
         drop(again);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_account_s_codes_switch_turns_its_codes_off_and_on() {
+        let home = space(1);
+        // No server: a Fake one would list no folders, and a sync of that empties the inbox.
+        let connect: Connect = Box::new(|_, _| Err(Error::Offline));
+        let mail = Mail::open_with(None, Box::new(MemorySecrets::default()), Box::new(|_| {}), connect).unwrap();
+        mail.store().unwrap().put_account(&account(1, Some(home))).unwrap();
+        inbox(mail.store().unwrap(), AccountId(1));
+        let raw = format!("From: no-reply@bank.example\r\nTo: dan1@example.com\r\nSubject: Sign in\r\nDate: {}\r\nMessage-ID: <c@x>\r\n\r\nYour verification code is 482913.\r\n", now());
+        deliver(&mail, "1", raw.as_bytes());
+        let earlier = SystemTime::now() - std::time::Duration::from_secs(60);
+        assert_eq!(mail.codes(home, earlier).len(), 1);
+        mail.set_codes(AccountId(1), false);
+        assert!(!mail.accounts(home)[0].codes);
+        assert!(mail.codes(home, earlier).is_empty());
+        mail.set_codes(AccountId(1), true);
+        assert_eq!(mail.codes(home, earlier).len(), 1);
+        mail.set_codes(AccountId(9), false);
+        assert_eq!(mail.accounts(home).len(), 1, "an unknown id is left alone");
     }
 
     #[test]
