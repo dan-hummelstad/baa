@@ -571,7 +571,6 @@ impl<H: WebHost> Browser<H> {
         self.active_space()?.active_tab
     }
 
-    /// The pane the user is on in the active Space: mail, or its active tab.
     pub(crate) fn front(&self) -> Option<Pane> {
         self.active_space()?.front()
     }
@@ -604,8 +603,9 @@ impl<H: WebHost> Browser<H> {
         self.unshared = true;
         cx.set_reduce_motion(self.settings.reduce_motion);
         self.host.apply_settings(&self.settings);
-        if self.mail.is_some() != self.settings.mail.enabled {
-            self.sync_mail(cx);
+        let had_mail = self.mail.is_some();
+        self.sync_mail(cx);
+        if self.mail.is_some() != had_mail {
             self.show_pages(cx);
             self.save();
         }

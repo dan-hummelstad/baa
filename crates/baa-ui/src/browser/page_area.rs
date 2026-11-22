@@ -410,12 +410,10 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// The pages on screen: the tabs of [`Self::panes_on_screen`].
     pub(crate) fn shown_panes(&self) -> Vec<TabId> {
         self.panes_on_screen().into_iter().filter_map(Pane::tab).collect()
     }
 
-    /// A click on a pane (its strip, or mail) makes it the focused one.
     fn focus_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         match pane {
             Pane::Tab(id) => self.on_page_focused(id, window, cx),

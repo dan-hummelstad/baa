@@ -1103,54 +1103,6 @@ impl<H: WebHost> Browser<H> {
             .children(self.mail_here().then(|| self.render_section_switcher(theme, cx)))
             .child(row)
     }
-
-    /// Browser · Archive · Mail, above the Space strip (mocks A2/B2). Archive is never lit
-    /// here: while it is open the Library has the sidebar.
-    fn render_section_switcher(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let mail = self.mail_in_front();
-        let item = |id: &'static str, name: &'static str, label: &'static str, ascii_label: &'static str, on: bool, cx: &mut Context<Self>| {
-            let key = (id, 0);
-            let h = self.motion.get(key, Feel::Hover);
-            let el = div()
-                .id(id)
-                .flex_1()
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(5.))
-                .text_size(px(11.))
-                .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
-                .on_click(cx.listener(move |this, _, window, cx| match id {
-                    "section-browser" => this.show_mail(false, window, cx),
-                    "section-archive" => this.open_library_last(window, cx),
-                    _ => this.show_mail(true, window, cx),
-                }));
-            let el = if ascii() {
-                el.border_1()
-                    .border_color(if on { theme.accent } else { crate::theme::ascii::rule().into() })
-                    .when(on, |d| d.bg(fade(theme.accent, 0.15)))
-                    .child(ascii_label)
-            } else {
-                el.rounded(r(8.))
-                    .when(on, |d| d.bg(theme.glass_strong))
-                    .when(!on, |d| d.bg(fade(theme.hover, h)))
-                    .child(icon(name, 13., if on { theme.accent } else { theme.ink_muted }))
-                    .child(label)
-            };
-            feel(el, key, cx)
-        };
-        div()
-            .debug_selector(|| "section-switcher".into())
-            .h(px(if ascii() { 24. } else { 34. }))
-            .mb(px(6.))
-            .flex()
-            .gap(px(3.))
-            .when(!ascii(), |d| d.p(px(3.)).rounded(r(10.)).bg(theme.glass))
-            .child(item("section-browser", "globe", "Browser", "▦ BROWSER", !mail, cx))
-            .child(item("section-archive", "archive", "Archive", "▤ ARCHIVE", false, cx))
-            .child(item("section-mail", "mail", "Mail", "✉ MAIL", mail, cx))
-    }
 }
 
 /// Rows 6px apart, each `(shown, row)` bringing the gap above it scaled by

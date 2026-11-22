@@ -12,9 +12,11 @@ use gpui::{div, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter, 
 
 use crate::{
     actions::{DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
-    browser::Browser,
+    browser::{feel, Browser},
+    icons::icon,
     library::Section,
-    theme::Theme,
+    motion::Feel,
+    theme::{ascii, fade, mix, r, Theme},
 };
 
 /// The process's one `Mail` and where its events arrive on the UI thread; set once by
@@ -113,7 +115,6 @@ impl<H: WebHost> Browser<H> {
         Some((&mail.mail, MailSpace::of(self.session.space(space)?)?))
     }
 
-    /// [`Self::mail_of`] the active Space.
     pub(crate) fn mail_space(&self) -> Option<(&Arc<Mail>, MailSpace)> {
         self.mail_of(self.session.active_space()?)
     }
@@ -139,7 +140,6 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    /// The Archive (Library) at its Mailbox door.
     pub(crate) fn open_mailbox(&mut self, cx: &mut Context<Self>) {
         if self.mail_here() {
             self.open_library(Section::Mailbox, cx);
@@ -185,34 +185,80 @@ impl<H: WebHost> Browser<H> {
             .into_any_element()
     }
 
-    /// The mail view with its key context and focus, and the mail actions bound to `MailUi`.
+    /// Browser · Archive · Mail, above the Space strip (mocks A2/B2). Archive is never lit
+    /// here: while it is open the Library has the sidebar.
+    pub(crate) fn render_section_switcher(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        type Go<H> = fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>);
+        let mail = self.mail_in_front();
+        let item = |id: &'static str, name: &'static str, label: &'static str, ascii_label: &'static str, on: bool, go: Go<H>, cx: &mut Context<Self>| {
+            let key = (id, 0);
+            let h = self.motion.get(key, Feel::Hover);
+            let el = div()
+                .id(id)
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(5.))
+                .text_size(px(11.))
+                .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
+                .on_click(cx.listener(move |this, _, window, cx| go(this, window, cx)));
+            let el = if ascii() {
+                el.border_1()
+                    .border_color(if on { theme.accent } else { crate::theme::ascii::rule().into() })
+                    .when(on, |d| d.bg(fade(theme.accent, 0.15)))
+                    .child(ascii_label)
+            } else {
+                el.rounded(r(8.))
+                    .when(on, |d| d.bg(theme.glass_strong))
+                    .when(!on, |d| d.bg(fade(theme.hover, h)))
+                    .child(icon(name, 13., if on { theme.accent } else { theme.ink_muted }))
+                    .child(label)
+            };
+            feel(el, key, cx)
+        };
+        div()
+            .debug_selector(|| "section-switcher".into())
+            .h(px(if ascii() { 24. } else { 34. }))
+            .mb(px(6.))
+            .flex()
+            .gap(px(3.))
+            .when(!ascii(), |d| d.p(px(3.)).rounded(r(10.)).bg(theme.glass))
+            .child(item("section-browser", "globe", "Browser", "▦ BROWSER", !mail, |b, w, cx| b.show_mail(false, w, cx), cx))
+            .child(item("section-archive", "archive", "Archive", "▤ ARCHIVE", false, |b, w, cx| b.open_library_last(w, cx), cx))
+            .child(item("section-mail", "mail", "Mail", "✉ MAIL", mail, |b, w, cx| b.show_mail(true, w, cx), cx))
+    }
+
     pub(crate) fn mail_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(mail) = &self.mail else { return div().into_any_element() };
-        macro_rules! hook {
-            ($action:ty, $m:ident, $w:ident, $cx:ident => $call:expr) => {
-                cx.listener(|this, _: &$action, $w, $cx| {
-                    if let Some($m) = &mut this.mail {
-                        $call
-                    }
-                })
-            };
-        }
         div()
             .id("mail-view")
             .debug_selector(|| "mail-view".into())
             .key_context("Mail")
             .track_focus(&mail.focus)
             .size_full()
-            .on_action(hook!(NewMessage, m, w, cx => m.new_message(w, cx)))
-            .on_action(hook!(Reply, m, w, cx => m.reply(false, w, cx)))
-            .on_action(hook!(ReplyAll, m, w, cx => m.reply(true, w, cx)))
-            .on_action(hook!(ForwardMessage, m, w, cx => m.forward(w, cx)))
-            .on_action(hook!(SendMessage, m, w, cx => m.send(w, cx)))
-            .on_action(hook!(DeleteMessage, m, w, cx => m.delete(w, cx)))
-            .on_action(hook!(SearchMail, m, w, cx => m.search(w, cx)))
+            .on_action(hook::<H, NewMessage>(|m, w, cx| m.new_message(w, cx), cx))
+            .on_action(hook::<H, Reply>(|m, w, cx| m.reply(false, w, cx), cx))
+            .on_action(hook::<H, ReplyAll>(|m, w, cx| m.reply(true, w, cx), cx))
+            .on_action(hook::<H, ForwardMessage>(|m, w, cx| m.forward(w, cx), cx))
+            .on_action(hook::<H, SendMessage>(|m, w, cx| m.send(w, cx), cx))
+            .on_action(hook::<H, DeleteMessage>(|m, w, cx| m.delete(w, cx), cx))
+            .on_action(hook::<H, SearchMail>(|m, w, cx| m.search(w, cx), cx))
             .child(self.render_view(theme, window, cx))
             .into_any_element()
     }
+}
+
+type Hook<H> = fn(&mut MailUi<H>, &mut Window, &mut Context<Browser<H>>);
+type Listener<A> = Box<dyn Fn(&A, &mut Window, &mut App)>;
+
+fn hook<H: WebHost, A: gpui::Action>(on: Hook<H>, cx: &mut Context<Browser<H>>) -> Listener<A> {
+    Box::new(cx.listener(move |this, _: &A, window, cx| {
+        if let Some(mail) = &mut this.mail {
+            on(mail, window, cx);
+        }
+    }))
 }
 
 /// What a Space's delete confirmation adds for its mail accounts (`Browser::mail_lost_with`).
