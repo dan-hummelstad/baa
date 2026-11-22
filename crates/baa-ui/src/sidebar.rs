@@ -988,7 +988,6 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    /// One dot a Space, under the browser sidebar and the Archive alike.
     pub(crate) fn render_space_dots(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let dots: Vec<_> = self
             .session

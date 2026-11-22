@@ -187,7 +187,6 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// ⌘⇧A and the ⌘-swipe: collapsed from any section, Mail included, or opened on the last.
     pub(crate) fn toggle_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.library.is_some() {
             self.close_library(window, cx);
