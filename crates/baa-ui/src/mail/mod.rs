@@ -26,7 +26,7 @@ mod tests_tabs;
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use baa_mail::{AccountId, DraftId, Event, Filter, Mail, MailSpace, Preview, SyncState, Tab, View, ViewState};
+use baa_mail::{AccountId, DraftId, Event, Filter, Mail, MailSpace, SyncState, Tab, View, ViewState};
 use baa_model::{Pane, Showing, SpaceId};
 use baa_web::{PageHandle, WebHost};
 use futures::StreamExt;
@@ -160,7 +160,6 @@ impl<H: WebHost> MailUi<H> {
         self.wide.unwrap_or(true)
     }
 
-    /// The reader is on screen when mail is: beside the list, or as the preview tab.
     fn reader_drawn(&self) -> bool {
         match self.state.tab() {
             Tab::List => self.wide(),
@@ -174,10 +173,7 @@ impl<H: WebHost> MailUi<H> {
     pub(crate) fn drop_reader(&mut self) {
         self.reader = None;
         self.state.selected = None;
-        if self.state.tab() == Tab::Preview {
-            self.state.set_tab(Tab::List);
-        }
-        self.state.preview = Preview::Closed;
+        self.state.close_preview();
     }
 
     pub(crate) fn front_draft(&self) -> Option<&compose::Composer<H>> {
@@ -542,7 +538,7 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn render_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(mail) = &self.mail else { return div().into_any_element() };
         let tab = mail.state.tab();
-        let commands = (!matches!(tab, Tab::Draft(_))).then(|| self.render_commands(tab, theme, window, cx)).flatten();
+        let commands = self.render_commands(tab, theme, window, cx);
         let body = match tab {
             Tab::Draft(_) => self.render_composer(theme, window, cx),
             Tab::Preview => self.render_reader(theme, window, cx),

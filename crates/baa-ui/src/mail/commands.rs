@@ -64,11 +64,12 @@ impl<H: WebHost> Browser<H> {
             .collect()
     }
 
-    /// The commands for the conversation `tab` shows, `None` with none shown. The list's tab
+    /// The commands for the conversation `tab` shows, `None` with none shown (a draft has its
+    /// own toolbar). The list's tab
     /// beside no reading pane leaves the message's own commands to the preview, which also
     /// has the way back to the list. A narrow row wraps.
     pub(crate) fn render_commands(&self, tab: Tab, _theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let ui = self.mail.as_ref()?;
+        let ui = self.mail.as_ref().filter(|_| !matches!(tab, Tab::Draft(_)))?;
         let message = ui.reader.as_ref().and_then(|r| r.message())?;
         let preview = tab == Tab::Preview;
         let list_only = !preview && !ui.wide();

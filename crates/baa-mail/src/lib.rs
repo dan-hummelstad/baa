@@ -300,14 +300,18 @@ impl ViewState {
         };
     }
 
+    pub fn close_preview(&mut self) {
+        if self.tab() == Tab::Preview {
+            self.set_tab(Tab::List);
+        }
+        self.preview = Preview::Closed;
+    }
+
     /// A wide mail view has no preview tab: its conversation shows in the reading pane beside
-    /// the list, and the list's tab takes the preview's place in front.
+    /// the list.
     pub fn fit(&mut self, wide: bool) {
-        if wide && self.preview != Preview::Closed {
-            if self.tab() == Tab::Preview {
-                self.set_tab(Tab::List);
-            }
-            self.preview = Preview::Closed;
+        if wide {
+            self.close_preview();
         }
     }
 }

@@ -18,7 +18,6 @@ fn deliver(mail: &Mail, inbox: FolderId, age: u64, subject: &str, body: &str) {
     mail.seed_message(inbox, &age.to_string(), &raw, Flags::default(), true);
 }
 
-/// The thread on row `n` of the list.
 fn thread(mail: &Mail, b: &B, cx: &mut VisualTestContext, n: usize) -> ThreadId {
     let view: View = b.read_with(cx, |b, _| b.mail.as_ref().unwrap().view().unwrap());
     mail.rows(&view, n..n + 1)[0].thread
@@ -318,4 +317,26 @@ fn a_split_pane_at_half_a_wide_window_is_narrow(cx: &mut gpui::TestAppContext) {
     let t = thread(&mail, &b, cx, 0);
     select(&b, cx, t);
     assert_eq!(tab(&b, cx), Tab::Preview);
+}
+
+#[gpui::test]
+fn a_tabs_x_closes_it_without_choosing_it(cx: &mut gpui::TestAppContext) {
+    let (b, cx, mail, _) = narrow(cx);
+    let t = thread(&mail, &b, cx, 0);
+    select(&b, cx, t);
+    b.update_in(cx, |b, window, cx| b.reply_to_selected(false, window, cx));
+    let Tab::Draft(draft) = tab(&b, cx) else { panic!("the reply is in front") };
+    let x = Box::leak(format!("mail-draft-tab-x-{}", draft.0).into_boxed_str());
+    drawn(cx, x);
+    let at = cx.debug_bounds(x).unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(tab(&b, cx), Tab::Preview, "the tab on its left");
+    b.read_with(cx, |b, _| assert!(b.mail.as_ref().unwrap().drafts.is_empty()));
+
+    drawn(cx, "mail-tab-preview-x-0");
+    let at = cx.debug_bounds("mail-tab-preview-x-0").unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!((tab(&b, cx), preview(&b, cx)), (Tab::List, Preview::Closed));
 }

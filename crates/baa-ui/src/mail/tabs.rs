@@ -64,17 +64,6 @@ impl<H: WebHost> Browser<H> {
             }
         };
         let label = |text: String| div().min_w_0().overflow_hidden().whitespace_nowrap().child(text);
-        let close = |id: (&'static str, u64), cx: &mut Context<Self>, run: fn(&mut Self, u64, &mut Context<Self>)| {
-            div()
-                .id(id)
-                .flex_none()
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    run(this, id.1, cx)
-                }))
-                .child(icon("x", 11., dim))
-        };
         let (title, count, _) = self.list_title();
         let list = tab(front == Tab::List)
             .id("mail-tab-list")
@@ -95,7 +84,7 @@ impl<H: WebHost> Browser<H> {
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| this.show_tab(Tab::Preview, cx)))
                 .child(label(subject))
-                .child(close(("mail-tab-preview-x", 0), cx, |this, _, cx| this.close_preview(cx)))
+                .child(close_button(("mail-tab-preview-x", 0), dim, cx, |this, cx| this.close_preview(cx)))
         });
         let drafts = ui.drafts.iter().map(|draft| {
             let id = draft.id;
@@ -111,7 +100,7 @@ impl<H: WebHost> Browser<H> {
                 .on_click(cx.listener(move |this, _, _, cx| this.show_tab(Tab::Draft(id), cx)))
                 .child(label(name))
                 .when(draft.dirty, |d| d.child(div().flex_none().text_color(dim).child("●")))
-                .child(close(("mail-draft-tab-x", id.0), cx, |this, id, cx| this.request_close_draft(baa_mail::DraftId(id), cx)))
+                .child(close_button(("mail-draft-tab-x", id.0), dim, cx, move |this, cx| this.request_close_draft(id, cx)))
         }).collect::<Vec<_>>();
         let plus = div()
             .id("mail-new-message")
@@ -136,4 +125,23 @@ impl<H: WebHost> Browser<H> {
             .child(plus)
             .into_any_element()
     }
+}
+
+/// A tab's ×: a click closes it without also choosing it.
+fn close_button<H: WebHost>(
+    id: (&'static str, u64),
+    dim: Hsla,
+    cx: &mut Context<Browser<H>>,
+    run: impl Fn(&mut Browser<H>, &mut Context<Browser<H>>) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || format!("{}-{}", id.0, id.1))
+        .flex_none()
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            cx.stop_propagation();
+            run(this, cx)
+        }))
+        .child(icon("x", 11., dim))
 }
