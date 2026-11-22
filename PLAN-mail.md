@@ -1,7 +1,8 @@
 # baa Mail — plan
 
-Status: **approved** (user, 2026-11-22); stage 0 is under way. §14 records the answers and the one
-question that is still open.
+Status: **stages 0 and 1 are built** and on `main` (`9a6418d8`, 2026-11-22), off by default behind
+Settings › Mail. Nobody has run the app yet: the walk-through of §1's list on a bundled build is
+the user's, and §16 lists what to look at. §14 records the user's answers and what is still open.
 
 Basis: `main` at `57ff25b7` (baa 0.1.9, ABI 16, Chromium 158). `file:line` references were read at
 that commit and drift; search for the name if a line does not match.
@@ -717,3 +718,63 @@ What each needs, since baa has no server of its own.
 | Importance, read receipts | headers | the recipient's client decides | 3 |
 | Contacts completion | addresses seen in mail | no directory lookup until Graph People | 3 |
 | Groups, Loop, Draw, Translate, Encrypt | — | not planned | — |
+
+---
+
+## 16. Outcome of stages 0 and 1 (2026-11-22)
+
+All of §11's packages are on `main`. `cargo test --workspace` passes (baa-mail 114, baa-ui 333,
+baa-web 116, baa-model 59, baa 8), clippy is clean with `-D warnings`, `security-lint.sh` is ok.
+The engine is ABI 17: `chromium.yml` run 44976842341 built it on the 158 tree, its privacy job
+passed, and `harness.yml` run 44981543411 passed 31/31 on it, `codes` and `mail-document` among
+them. No test connects to a mail server or touches the Keychain, and nobody has run the app.
+
+**Built differently from the plan, and why**
+- The editor is a sandboxed frame (`allow-same-origin`, no scripts) in the document, not an
+  editable page body: quoted mail in the page itself could navigate it with `<meta refresh>`.
+  The shell reaches it as `baa_web::EDITOR_DOCUMENT`.
+- A document drops `<link>` and starts with `x-dns-prefetch-control: off`: preconnect and link
+  prefetch are outside every policy directive, and would tell a sender the mail was opened.
+- A code field is found by a focused-element check in the browser process
+  (`chromium/baa/codes.mm`), read in an isolated world. Chromium never classifies forms with
+  Helium's autofill and password manager off, so its one-time-code type never appears.
+- Sync fetches the bodies of new mail dated in the last 10 minutes, since a code is read from
+  the body and nobody opens that mail (found in the final review).
+- `Mail` gained `open_with`, `draft`, `discard_draft`, `reply`, `forward`, `check_folder`,
+  `set_codes`, `trusts_images`, `trust_images`; `Connect` takes the secrets as well.
+- IMAP is `imap-next` 0.3.4 on `imap-codec`, TLS is `rustls` on `ring` with the platform
+  verifier, the Keychain is `security-framework`. `imap-next`'s last release is nine months old
+  (the plan asked for six); its codec is current and the fallback dates from 2021.
+- The Keychain service is named after the data directory, since account ids repeat between
+  directories.
+
+**Not built in stage 1**
+- Gmail's own thread id (`X-GM-THRID`): the IMAP codec cannot decode it; Gmail threads by
+  headers as other servers do.
+- The reading pane's quick-reply strip; Reply opens the composer.
+- A forward does not carry the original's attachments; every outgoing attachment is
+  `application/octet-stream`.
+- A code offer in a split or beside docked DevTools, and a code field inside a shadow root.
+- SMTP settings are first tried at the first send, not when the account is added.
+- The other shortcuts are marked `ponytail:` in `crates/baa-mail` and `crates/baa-ui/src/mail`.
+
+**For the user to look at on a bundled build** (no test can show these)
+- All six screens against the mocks, in both skins; the message card in a dark Space; Settings ›
+  Mail at its width with 13 tabs.
+- The message page and the editor page fill their rectangles and hide when leaving mail,
+  switching drafts or switching Space; nothing gpui draws sits under a native page.
+- ⌫ types in every mail text field and deletes only in the list; ⌘N, ⌘R and ⌘F inside mail.
+- A link in a message opens a tab; a cmd-click opens one in the background.
+- The code offer: its place under a real field, and that a click on it still fills (the engine
+  fills only while the field has focus in its page).
+- Formatting, attachments, autosave and send in the composer, with a real account.
+- The swipe up over the bottom bar.
+
+**Open**
+- Google sign-in needs the client id and its client secret (`BAA_GOOGLE_CLIENT_ID`,
+  `BAA_GOOGLE_CLIENT_SECRET`, or the constants in `baa-mail/src/oauth.rs`); a Desktop client's
+  secret is not confidential, by Google's own description.
+- Proton Mail Bridge (§14).
+- With Chrome's "Preload pages" turned on by the user, hovering a link in a message can
+  preconnect to its host. Helium ships with it off; no in-page control exists.
+- Stage 2 (§10) gets its work packages when the user has walked through stage 1.
