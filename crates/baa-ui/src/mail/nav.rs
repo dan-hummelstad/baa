@@ -192,7 +192,6 @@ impl<H: WebHost> Browser<H> {
         root.flex().flex_col().pt(px(8.)).child(select).child(search.mt(px(8.))).child(new_message).child(body).into_any_element()
     }
 
-    /// The account select's menu: the scope, then the other Spaces with mail.
     pub(crate) fn mail_scope_menu(&self) -> Vec<MenuEntry<H>> {
         let Some((mail, space)) = self.mail_space() else { return Vec::new() };
         let scope = self.mail.as_ref().and_then(|m| m.state.account);

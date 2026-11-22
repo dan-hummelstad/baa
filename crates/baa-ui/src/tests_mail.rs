@@ -79,7 +79,6 @@ fn show_mail(b: &B, cx: &mut VisualTestContext, on: bool) {
     b.update_in(cx, |b, window, cx| b.show_mail(on, window, cx));
 }
 
-/// The Archive on Mail in a window with one open tab.
 fn mail_over_a_tab(cx: &mut TestAppContext) -> (B, &mut VisualTestContext, TabId) {
     let (b, cx) = with_mail(cx);
     let tab = open(&b, cx, "https://a.com/");
@@ -278,7 +277,6 @@ fn a_split_of_mail_and_a_tab_keeps_both_on_screen_while_the_archive_follows_focu
     assert!(visible(&b, cx, tab) && drawn(cx, "mail-view"));
 }
 
-/// The Archive has no Mail item and ⌘⇧M does nothing where mail is not offered.
 fn assert_no_mail_in_the_archive(b: &B, cx: &mut VisualTestContext, what: &str) {
     b.update_in(cx, |b, window, cx| b.open_library(Section::Mail, window, cx));
     assert_eq!(section(b, cx), Some(Section::Downloads), "{what}: Mail lands on Downloads");
