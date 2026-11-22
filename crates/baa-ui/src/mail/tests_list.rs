@@ -193,3 +193,31 @@ fn go_to_in_the_picker_opens_another_spaces_mail(cx: &mut TestAppContext) {
         assert_eq!(b.library.as_ref().map(|l| l.section), Some(crate::library::Section::Mail));
     });
 }
+
+/// `cargo test -p baa-ui mail_view_frame_time -- --ignored --nocapture`
+#[gpui::test]
+#[ignore = "timing, run by hand"]
+fn mail_view_frame_time(cx: &mut TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    let space = mail_space(&b, cx);
+    let second = mail.seed_account(&testing::account(2, Some(space), "dan@work.example"));
+    for i in 0..4000u64 {
+        let inbox = if i % 2 == 0 { folders[0] } else { second[0] };
+        let flags = Flags { seen: i % 3 != 0, ..Flags::default() };
+        mail.seed_message(inbox, &i.to_string(), &mail_in(1_763_800_000 - i * 7_919, &format!("p{}@x.example", i % 97), &format!("Subject number {i}")), flags, false);
+    }
+    let frames = |cx: &mut gpui::VisualTestContext, n: u32| {
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            b.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        start.elapsed() / n
+    };
+    frames(cx, 5);
+    let with_mail = frames(cx, 60);
+    b.update_in(cx, |b, window, cx| b.show_mail(false, window, cx));
+    frames(cx, 5);
+    let without = frames(cx, 60);
+    eprintln!("frame: mail view {with_mail:?}, without mail {without:?}");
+}

@@ -45,7 +45,8 @@ pub(crate) struct Store {
 #[derive(Default)]
 struct Cache {
     stamp: (i64, i64),
-    listed: Option<(View, Arc<Vec<Row>>)>,
+    /// Several at once: a frame reads the list's view and the nav's Unread and Flagged counts.
+    listed: Vec<(View, Arc<Vec<Row>>)>,
     folders: Option<(MailSpace, Vec<Folder>)>,
 }
 
@@ -620,11 +621,15 @@ impl Store {
     // read per sync batch. Page it (LIMIT around the visible range) if that shows.
     fn listed(&self, view: &View) -> Result<Arc<Vec<Row>>> {
         let mut cache = self.cache()?;
-        if let Some((_, rows)) = cache.listed.as_ref().filter(|(v, _)| v == view) {
+        if let Some((_, rows)) = cache.listed.iter().find(|(v, _)| v == view) {
             return Ok(rows.clone());
         }
         let rows = Arc::new(self.read_rows(view)?);
-        cache.listed = Some((view.clone(), rows.clone()));
+        // Typing a search makes a view a key; between two changes of mail.db that could pile up.
+        if cache.listed.len() >= 8 {
+            cache.listed.remove(0);
+        }
+        cache.listed.push((view.clone(), rows.clone()));
         Ok(rows)
     }
 
