@@ -6,7 +6,7 @@ use baa_model::{
 use baa_web::WebHost;
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString};
 
-use super::{key_chips, Field, Item, SettingsView};
+use super::{Field, Item, SettingsView};
 use crate::{
     actions,
     icons::icon,
@@ -34,6 +34,12 @@ fn all_engines(s: &Settings) -> Vec<SearchEngine> {
         .map(|(name, url)| SearchEngine { name: (*name).into(), url: (*url).into() })
         .chain(s.search_engines.iter().cloned())
         .collect()
+}
+
+/// Keys as chips: ⌘ ⇧ M.
+pub(super) fn key_chips(keys: Vec<SharedString>) -> AnyElement {
+    let chip = |k| div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(k);
+    div().flex().gap(px(4.)).children(keys.into_iter().map(chip)).into_any_element()
 }
 
 impl<H: WebHost> SettingsView<H> {
@@ -424,11 +430,17 @@ impl<H: WebHost> SettingsView<H> {
         let mut out = vec![self.row("shortcuts", "What each key does in the browser window.", div().into_any_element())];
         let map = cx.key_bindings();
         let map = map.borrow();
-        for (label, action) in shortcuts() {
-            let keys: Vec<SharedString> = map.bindings_for_action(&*action).next_back().map(crate::command_bar::chips).unwrap_or_default();
-            out.push(self.sub_row(format!("shortcut:{label}"), SharedString::from(label).into_any_element(), key_chips(keys)));
-        }
-        drop(map);
+        let rows = |list: Vec<(&'static str, Box<dyn gpui::Action>)>| {
+            list.into_iter()
+                .map(|(label, action)| {
+                    let keys: Vec<SharedString> = map.bindings_for_action(&*action).next_back().map(crate::command_bar::chips).unwrap_or_default();
+                    self.sub_row(format!("shortcut:{label}"), SharedString::from(label).into_any_element(), key_chips(keys))
+                })
+                .collect::<Vec<_>>()
+        };
+        out.extend(rows(shortcuts()));
+        out.push(self.section("Mail"));
+        out.extend(rows(super::mail::shortcuts()));
         out.push(self.section("Customise"));
         out.push(self.row(
             "keymap",

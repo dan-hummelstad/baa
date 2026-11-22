@@ -9,6 +9,7 @@
 mod claude;
 mod developer;
 mod extensions;
+mod mail;
 mod privacy;
 pub(crate) mod rows;
 pub(crate) mod tabs;
@@ -41,7 +42,7 @@ use crate::{
 /// A row of a tab's body, with its id when the index has it (for jumping to it).
 type Item = (Option<&'static str>, AnyElement);
 
-const TAB_W: f32 = 66.;
+const TAB_W: f32 = 62.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Field {
@@ -56,6 +57,7 @@ pub(crate) enum Field {
     EnvLabel,
     EnvOrigin,
     ClaudePath,
+    Mail(crate::mail::setup::MailField),
 }
 
 pub(crate) struct SettingsView<H: WebHost> {
@@ -64,7 +66,7 @@ pub(crate) struct SettingsView<H: WebHost> {
     pub(crate) tab: Tab,
     /// The Space the per-Space tabs (sites, extensions) are about.
     pub(crate) space: SpaceId,
-    fields: HashMap<Field, TextField>,
+    pub(crate) fields: HashMap<Field, TextField>,
     active: Field,
     /// The Search page is showing, opened from the toolbar button or by typing.
     search_open: bool,
@@ -97,17 +99,13 @@ pub(crate) struct SettingsView<H: WebHost> {
     dns_pending: bool,
     /// Why the exception form could not add its rule.
     add_error: Option<String>,
+    pub(crate) mail_setup: crate::mail::setup::Setup,
     _activation: Subscription,
-}
-
-fn key_chips(keys: Vec<SharedString>) -> AnyElement {
-    let chip = |k| div().h(px(20.)).min_w(px(20.)).px(px(6.)).flex().items_center().justify_center().rounded(r(5.)).bg(surface::key()).text_size(px(11.5)).text_color(surface::icon()).child(k);
-    div().flex().gap(px(4.)).children(keys.into_iter().map(chip)).into_any_element()
 }
 
 pub(crate) fn window_options(cx: &App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(900.), px(640.)), cx))),
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(920.), px(640.)), cx))),
         titlebar: Some(TitlebarOptions { title: Some("Settings".into()), appears_transparent: false, traffic_light_position: None }),
         is_resizable: false,
         is_minimizable: true,
@@ -241,6 +239,7 @@ impl<H: WebHost> SettingsView<H> {
             default_browser,
             dns_pending: false,
             add_error: None,
+            mail_setup: Default::default(),
             _activation: cx.observe_window_activation(window, |this, _, cx| this.on_activate(cx)),
         };
         view.seed_fields(cx);
@@ -351,6 +350,7 @@ impl<H: WebHost> SettingsView<H> {
         self.search_open = false;
         self.focus_field(Field::Search, cx);
         self.add_error = None;
+        self.mail_close_form();
         self.adding = None;
         self.site = None;
         self.reset = None;
@@ -445,7 +445,8 @@ impl<H: WebHost> SettingsView<H> {
         let active = self.active;
         let key = self.field_mut(active).handle(ks, cx);
         match key {
-            Key::Edited => self.edited(active),
+            // A masked field typed the key itself: the input method must not type it again.
+            Key::Edited => (self.edited(active), cx.stop_propagation()).1,
             Key::Cancel => self.escape(window, cx),
             Key::Submit => self.submitted(active, cx),
             Key::Up if active == Field::Search => self.selected = self.selected.saturating_sub(1),
@@ -480,6 +481,9 @@ impl<H: WebHost> SettingsView<H> {
             self.search_open |= !self.text(Field::Search).trim().is_empty();
         }
         self.add_error = None;
+        if field == Field::Mail(crate::mail::setup::MailField::Address) {
+            self.mail_address_edited();
+        }
     }
 
     fn submitted(&mut self, field: Field, cx: &mut Context<Self>) {
@@ -493,6 +497,7 @@ impl<H: WebHost> SettingsView<H> {
             Field::EngineName | Field::EngineUrl => self.add_engine(cx),
             Field::EnvProject | Field::EnvLabel | Field::EnvOrigin => self.add_env(cx),
             Field::Languages | Field::DnsTemplate | Field::ClaudePath => self.commit(field, cx),
+            Field::Mail(_) => self.mail_add_account(cx),
             _ => {}
         }
     }
@@ -656,6 +661,7 @@ impl<H: WebHost> SettingsView<H> {
         let accent = self.theme.accent;
         let shown: AnyElement = match self.fields.get(&field) {
             Some(f) if active => f.render(true, placeholder, surface::ink().into(), surface::muted().into(), Hsla { a: 0.25, ..accent }).into_any_element(),
+            Some(f) if !empty && f.masked => div().truncate().child("\u{2022}".repeat(f.text.chars().count())).into_any_element(),
             Some(f) if !empty => div().truncate().child(SharedString::from(f.text.clone())).into_any_element(),
             _ if active => TextField::default().render(true, placeholder, surface::ink().into(), surface::muted().into(), accent).into_any_element(),
             _ => div().truncate().text_color(surface::muted()).child(placeholder).into_any_element(),
@@ -776,6 +782,7 @@ impl<H: WebHost> SettingsView<H> {
             Tab::Privacy => self.privacy(&s, cx),
             Tab::Sites => self.sites(&s, cx),
             Tab::Passwords => self.passwords(cx),
+            Tab::Mail => self.mail_tab(&s, cx),
             Tab::Extensions => self.extensions_tab(&s, cx),
             Tab::Spaces => self.spaces_tab(cx),
             Tab::Keyboard => self.keyboard(cx),

@@ -279,6 +279,8 @@ impl<H: WebHost> Browser<H> {
                     Box::new(|this, window, cx| this.open_bar(Mode::NewTab, window, cx)),
                 ));
             }
+            MenuKind::MailMove => return self.mail_move_menu(),
+            MenuKind::MailFrom(draft) => return self.mail_from_menu(draft),
             MenuKind::ChatContext => {
                 let shown = self.chat_context();
                 let space = self.active_space().map(|s| s.id);

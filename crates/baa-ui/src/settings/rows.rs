@@ -14,6 +14,7 @@ pub(crate) enum Tab {
     Privacy,
     Sites,
     Passwords,
+    Mail,
     Extensions,
     Spaces,
     Keyboard,
@@ -23,13 +24,14 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    pub(crate) const ALL: [Tab; 12] = [
+    pub(crate) const ALL: [Tab; 13] = [
         Tab::General,
         Tab::Appearance,
         Tab::Search,
         Tab::Privacy,
         Tab::Sites,
         Tab::Passwords,
+        Tab::Mail,
         Tab::Extensions,
         Tab::Spaces,
         Tab::Keyboard,
@@ -46,6 +48,7 @@ impl Tab {
             Tab::Privacy => "Privacy",
             Tab::Sites => "Sites",
             Tab::Passwords => "Passwords",
+            Tab::Mail => "Mail",
             Tab::Extensions => "Extensions",
             Tab::Spaces => "Spaces",
             Tab::Keyboard => "Keyboard",
@@ -72,6 +75,7 @@ impl Tab {
             Tab::Privacy => "lock",
             Tab::Sites => "globe",
             Tab::Passwords => "key-round",
+            Tab::Mail => "mail",
             Tab::Extensions => "puzzle",
             Tab::Spaces => "house",
             Tab::Keyboard => "code-xml",
@@ -154,6 +158,10 @@ pub(crate) static ROWS: &[Row] = &[
     row(Sites, "all_sites", "All sites and storage…", "site data usage"),
     row(Passwords, "pw_managers", "Password managers", "1password bitwarden extension passkeys"),
     row(Passwords, "pw_apple", "Apple Passwords", "icloud keychain"),
+    row(Mail, "mail_enabled", "Mail", "email imap inbox"),
+    row(Mail, "mail_accounts", "Mail accounts", "add account icloud gmail fastmail yahoo imap sign in remove"),
+    row(Mail, "mail_images", "Remote images in mail", "tracking pixels load"),
+    row(Mail, "mail_codes", "Offer verification codes from mail", "one-time code otp 2fa"),
     row(Extensions, "dev_mode", "Developer mode", "unpacked extensions developer"),
     row(Extensions, "load_unpacked", "Load unpacked…", "extension folder developer"),
     row(Extensions, "ext_list", "Installed extensions", "add-ons plugins"),

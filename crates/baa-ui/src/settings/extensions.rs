@@ -6,7 +6,7 @@ use baa_web::ProfileId;
 use baa_web::{ExtensionChange, ExtensionCommand, ExtensionInfo, SiteAccess, WebHost};
 use gpui::{div, prelude::*, px, AnyElement, Context, PathPromptOptions, SharedString, Window};
 
-use super::{key_chips, Item, SettingsView};
+use super::{tabs::key_chips, Item, SettingsView};
 use crate::{
     browser::{ext_actions::{baa_binding, chrome_key, command_keystroke}, plain_text, Browser},
     command_bar::stroke_chips,

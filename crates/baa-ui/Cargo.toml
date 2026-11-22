@@ -20,6 +20,8 @@ url.workspace = true
 futures = "0.3"
 # Already in the graph via gpui: its RenderImage frames, for history swipe pictures.
 image = { version = "0.25", default-features = false }
+# Already in the graph via baa-web: the local time zone for mail times (`localtime_r`).
+libc = "0.2"
 
 [dev-dependencies]
 baa-mail = { workspace = true, features = ["test-support"] }

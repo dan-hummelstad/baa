@@ -637,6 +637,7 @@ dependencies = [
  "futures",
  "gpui",
  "image",
+ "libc",
  "log",
  "objc2 0.6.5",
  "raw-window-handle",

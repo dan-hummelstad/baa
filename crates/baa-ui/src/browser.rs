@@ -31,7 +31,7 @@ pub(crate) mod windows;
 mod nav;
 mod swipe;
 mod toss;
-mod menus;
+pub(crate) mod menus;
 mod spaces;
 mod actions;
 mod page_area;
@@ -118,6 +118,10 @@ pub(crate) enum MenuKind {
     Today,
     /// The chat's "Add context": the Space's other tabs.
     ChatContext,
+    /// The mail command row's Move: the message account's folders.
+    MailMove,
+    /// A draft's From: the accounts it may be sent from.
+    MailFrom(baa_mail::DraftId),
 }
 
 pub struct Browser<H: WebHost> {
@@ -143,7 +147,7 @@ pub struct Browser<H: WebHost> {
     devtools_share: f32,
     devtools_drag: bool,
     /// The page area's bounds, last frame: the seam drag measures against it.
-    page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
+    pub(crate) page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     /// Split view: each shown pane's width (owned springs, in pane order), the seam
     /// being dragged, and the panes' row last frame.
     split_w: Vec<(Pane, Spring)>,
@@ -790,7 +794,8 @@ impl<H: WebHost> Browser<H> {
             self.swipe_landed(id, cx);
         }
         if matches!(event, PageEvent::UrlChanged(_) | PageEvent::LoadingChanged(true)) {
-            self.clear_hover_url(id, cx)
+            self.clear_hover_url(id, cx);
+            self.tab_left_page(id, cx);
         }
         let private = self.session.space(space).is_some_and(|s| s.ephemeral);
         let tab = self.session.tab_mut(id).expect("looked up above");
@@ -883,8 +888,7 @@ impl<H: WebHost> Browser<H> {
             | PageEvent::Dialog(_)
             | PageEvent::AudibleChanged(_) => return self.on_ask(id, event, window, cx),
             PageEvent::GroupChanged { group, title } => return self.on_group_changed(id, *group, title, window, cx),
-            // No code is offered until WP-L.
-            PageEvent::CodeField { .. } => return,
+            PageEvent::CodeField { .. } => return self.on_code_field(id, event, cx),
             PageEvent::ExclusiveAccess { .. } |
             PageEvent::Fullscreen(_) | PageEvent::FindResult { .. } | PageEvent::Crashed(_) => {
                 return self.on_page_state_event(id, event, window, cx)
@@ -1565,6 +1569,7 @@ impl<H: WebHost> Render for Browser<H> {
             .children(history)
             .children(self.space_picker.as_ref().map(|p| p.render()))
             .children(self.render_agent_ask(&theme, cx))
+            .children(self.render_code_offer(cx))
             .children(self.render_tosses(&theme, cx));
         let has_field = self.input_field().is_some();
         let root = input::wire(root, &self.input_focus, has_field, window, cx, Self::input_field, Self::on_input_key);

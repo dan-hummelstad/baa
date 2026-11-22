@@ -11,6 +11,9 @@ pub(crate) type B = Entity<Browser<MockHost>>;
 
 /// A window on `store`, after the app has started the process's `Mail` with mail.db in memory.
 pub(crate) fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) {
+    // An account's thread reports its sync state from its own thread, which gpui's test
+    // scheduler sees as an outside wakeup.
+    cx.executor().allow_parking();
     cx.update(crate::init);
     let connect: baa_mail::Connect = Box::new(|_, _| Err(baa_mail::Error::Other("no server in these tests".into())));
     cx.update(|cx| crate::start_mail(cx, |notify| Mail::open_with(None, Box::new(MemorySecrets::default()), notify, connect)))
@@ -82,10 +85,11 @@ fn cmd_shift_m_shows_mail_and_comes_back_to_the_same_tab(cx: &mut TestAppContext
     });
     assert!(!visible(&b, cx, tab), "a native page under mail would sit over it");
     assert!(drawn(cx, "mail-view") && drawn(cx, "mail-nav"));
-    let windows = cx.windows().len();
+    let browsers = |cx: &mut VisualTestContext| cx.windows().iter().filter(|w| w.downcast::<Browser<MockHost>>().is_some()).count();
+    let windows = browsers(cx);
     cx.simulate_keystrokes("cmd-n");
     cx.run_until_parked();
-    assert_eq!(cx.windows().len(), windows, "in mail, ⌘N is New Message, not New Window");
+    assert_eq!(browsers(cx), windows, "in mail, ⌘N is New Message (here, with no account, Settings › Mail), not New Window");
 
     cx.simulate_keystrokes("cmd-shift-m");
     b.read_with(cx, |b, _| assert_eq!(b.front(), Some(Pane::Tab(tab))));
@@ -93,7 +97,7 @@ fn cmd_shift_m_shows_mail_and_comes_back_to_the_same_tab(cx: &mut TestAppContext
     assert!(!drawn(cx, "mail-view") && !drawn(cx, "mail-nav"));
     cx.simulate_keystrokes("cmd-n");
     cx.run_until_parked();
-    assert_eq!(cx.windows().len(), windows + 1, "outside mail it is New Window again");
+    assert_eq!(browsers(cx), windows + 1, "outside mail it is New Window again");
 }
 
 #[gpui::test]

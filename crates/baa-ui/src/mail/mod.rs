@@ -29,9 +29,8 @@ use baa_mail::{AccountId, Event, Filter, Mail, MailSpace, SyncState, View, ViewS
 use baa_model::{Pane, Showing, SpaceId};
 use baa_web::{PageHandle, WebHost};
 use futures::StreamExt;
-use gpui::{div, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, KeyDownEvent, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Hsla, KeyDownEvent, Stateful, Subscription, Window};
 
-pub(crate) use code_offer::Offer;
 
 use crate::{
     actions::{DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
@@ -71,8 +70,15 @@ pub fn start_mail(
     let events = cx.new(|_| MailEvents);
     let to = events.downgrade();
     cx.spawn(async move |cx| {
-        while let Some(event) = rx.next().await {
-            if to.update(cx, |_, cx| cx.emit(event)).is_err() {
+        // A sync storm (a first sync, a mailbox refilled) is one Changed an account a turn.
+        while let Some(first) = rx.next().await {
+            let mut batch = vec![first];
+            while let Ok(event) = rx.try_recv() {
+                if !batch.contains(&event) {
+                    batch.push(event);
+                }
+            }
+            if to.update(cx, |_, cx| batch.into_iter().for_each(|event| cx.emit(event))).is_err() {
                 break;
             }
         }
@@ -94,7 +100,6 @@ pub(crate) enum Field {
 
 /// Mail in one window: `Browser.mail`, `Some` only with mail on in a window that is not private.
 pub(crate) struct MailUi<H: WebHost> {
-    /// The process's one `Mail`, shared by its windows.
     pub(crate) mail: Arc<Mail>,
     /// The mail view's keyboard focus: its `Mail` key context is active while this has it.
     pub(crate) focus: FocusHandle,
@@ -117,11 +122,11 @@ pub(crate) struct MailUi<H: WebHost> {
     pub(crate) synced_at: Option<Instant>,
     /// Verification codes offered to tabs (PLAN-mail.md §7).
     pub(crate) offers: code_offer::Offers,
-    _events: Subscription,
+    /// Made at the first sync with a window: a document is made in one.
+    events: Option<Subscription>,
 }
 
 impl<H: WebHost> MailUi<H> {
-    /// What the list shows now.
     pub(crate) fn view(&self) -> Option<View> {
         Some(View {
             space: self.space?,
@@ -179,9 +184,8 @@ impl<H: WebHost> Browser<H> {
         match hub {
             Some(_) if self.mail.is_some() => {}
             Some(hub) => {
-                let (mail, events) = (hub.mail.clone(), hub.events.clone());
                 self.mail = Some(MailUi {
-                    mail,
+                    mail: hub.mail.clone(),
                     focus: cx.focus_handle(),
                     field_focus: cx.focus_handle(),
                     field: Field::Search,
@@ -195,7 +199,7 @@ impl<H: WebHost> Browser<H> {
                     status: HashMap::new(),
                     synced_at: None,
                     offers: code_offer::Offers::default(),
-                    _events: cx.subscribe(&events, |this, _, event, cx| this.on_mail_event(event, cx)),
+                    events: None,
                 });
             }
             None => {
@@ -209,6 +213,11 @@ impl<H: WebHost> Browser<H> {
     /// loaded, and mail's pages show only while mail is on screen.
     pub(crate) fn sync_mail_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let space = self.mail_space().map(|(_, space)| space);
+        let hub = cx.try_global::<MailHub>().map(|hub| hub.events.clone());
+        let Some(mail) = &mut self.mail else { return };
+        if let (None, Some(events)) = (&mail.events, hub) {
+            mail.events = Some(cx.subscribe_in(&events, window, |this, _, event, window, cx| this.on_mail_event(event, window, cx)));
+        }
         let Some(mail) = &mut self.mail else { return };
         if mail.space != space {
             mail.space = space;
@@ -235,7 +244,7 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    fn on_mail_event(&mut self, event: &Event, cx: &mut Context<Self>) {
+    fn on_mail_event(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         let ours = |mail: &MailUi<H>, account: &AccountId| {
             mail.space.is_some_and(|space| mail.mail.accounts(space).iter().any(|a| a.id == *account))
@@ -247,14 +256,17 @@ impl<H: WebHost> Browser<H> {
                 if !ours(mail, account) {
                     return;
                 }
-                self.refresh_reader(cx);
+                self.refresh_reader(window, cx);
+                if !self.mail_drawn() {
+                    return;
+                }
             }
             Event::Status { account, state } => {
                 mail.status.insert(*account, *state);
                 if *state == SyncState::Synced {
                     mail.synced_at = Some(Instant::now());
                 }
-                if !ours(mail, account) {
+                if !ours(mail, account) || !self.mail_drawn() {
                     return;
                 }
             }
@@ -269,6 +281,11 @@ impl<H: WebHost> Browser<H> {
             }
         }
         cx.notify();
+    }
+
+    /// Something of mail is on screen: the mail view, or the Mailbox door.
+    fn mail_drawn(&self) -> bool {
+        self.panes_on_screen().contains(&Pane::Mail) || self.library.as_ref().is_some_and(|l| l.section == Section::Mailbox)
     }
 
     /// The one way into `Mail` for a Space: `None` with mail off, in a private window and
@@ -329,7 +346,6 @@ impl<H: WebHost> Browser<H> {
         self.mail.as_mut()?.field_mut()
     }
 
-    /// Gives `field` the keyboard.
     pub(crate) fn focus_mail_field(&mut self, field: Field, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mail) = &mut self.mail else { return };
         mail.field = field;
@@ -345,7 +361,7 @@ impl<H: WebHost> Browser<H> {
         let key = text.handle(&event.keystroke, cx);
         match field {
             Field::Search => self.on_search_key(key, &before, window, cx),
-            field => self.on_compose_key(field, key, &before, window, cx),
+            field => self.on_compose_key(field, key, &event.keystroke.key, &before, window, cx),
         }
         key.stop_unless_typed(cx);
         cx.notify();
@@ -375,6 +391,30 @@ impl<H: WebHost> Browser<H> {
             .on_click(cx.listener(move |this, _, window, cx| this.focus_mail_field(field, window, cx)))
             .child(text.render(focused, placeholder, ink, dim, fade(mix(ink, gpui::blue(), 0.5), 0.3)))
             .into_any_element()
+    }
+
+    /// A button on the mail card: filled when `primary`; `(id, n)` is its element id.
+    pub(crate) fn mail_button(&self, id: &'static str, n: u64, primary: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let key = (id, n);
+        let h = self.motion.get(key, Feel::Hover);
+        let (fg, bg): (Hsla, Hsla) = if primary { (surface::bg().into(), surface::ink().into()) } else { (surface::ink().into(), surface::key().into()) };
+        let el = div()
+            .id((id, n))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .h(px(26.))
+            .px(px(10.))
+            .text_size(px(12.))
+            .text_color(fg)
+            .cursor_pointer();
+        let el = if ascii() {
+            el.border_1().border_color(mix(surface::border().into(), surface::ink().into(), h)).when(primary, |d| d.bg(bg))
+        } else {
+            el.rounded(r(7.)).bg(mix(bg, surface::muted().into(), h * 0.25))
+        };
+        feel(el, key, cx)
     }
 
     pub(crate) fn mail_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -501,7 +541,6 @@ pub(crate) fn delete_warning(lost_accounts: &[String]) -> String {
     }
 }
 
-/// Unix seconds now.
 pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

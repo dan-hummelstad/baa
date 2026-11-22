@@ -45,7 +45,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// A cmd- or middle-clicked link: a tab for later, the current one stays.
-    pub(super) fn open_background_tab(&mut self, space: SpaceId, url: &str) {
+    pub(crate) fn open_background_tab(&mut self, space: SpaceId, url: &str) {
         let current = self.session.space(space).and_then(|s| s.active_tab);
         let id = self.session.open_tab(space, url, now());
         self.supplied.insert(id);
@@ -55,7 +55,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The tab a cmd-click opened stays out of sight; a pill at the top right says it exists (Arc).
-    pub(super) fn cue_new_tab(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn cue_new_tab(&mut self, cx: &mut Context<Self>) {
         self.new_tabs += 1;
         let n = self.new_tabs;
         self.motion.from(("new-tab", 0), Feel::Glide, 0.0, 1.0);
