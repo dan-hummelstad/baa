@@ -4,6 +4,7 @@
 
 mod cdp;
 mod dispatch;
+pub(crate) mod document;
 mod extensions;
 mod ffi;
 mod host;
@@ -202,6 +203,8 @@ enum PageKind {
     Popup,
     /// A DevTools front-end.
     DevTools,
+    /// A page baa writes itself (`document.rs`).
+    Document(crate::DocumentKind),
 }
 
 /// What callbacks and pages share about one tab. Main thread only.

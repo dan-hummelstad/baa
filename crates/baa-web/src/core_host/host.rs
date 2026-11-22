@@ -255,10 +255,12 @@ impl WebHost for CoreWebHost {
         })
     }
 
-    // ponytail: a blank tab of any kind. WP-P1 and WP-F give it the kind's page and policy
-    // (`core_host/document.rs`).
-    fn create_document(&self, profile: ProfileId, _kind: DocumentKind, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
-        self.create_page(profile, "about:blank", true, window, cx)
+    // A fresh tab at about:blank has an opaque origin and no history entry; set_document writes it.
+    fn create_document(&self, profile: ProfileId, kind: DocumentKind, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
+        let handle = self.profile_handle(profile);
+        let tab = if handle.is_null() { 0 } else { (self.core.tab_create)(handle, c"about:blank".as_ptr()) };
+        let dispatch = self.dispatch;
+        cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Document(kind), window, cx))
     }
 
     // ponytail: the host itself, so only the same host is the same site, until WP-M asks

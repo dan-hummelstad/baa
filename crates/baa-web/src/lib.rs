@@ -9,7 +9,9 @@ use gpui::{AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Window};
 pub use baa_model::{Account, Permission, PermissionState, ProfileId};
 #[cfg(target_os = "macos")]
 pub use core_host::{
-    chrome_argv, hide_window,
+    chrome_argv,
+    document::EDITOR_DOCUMENT,
+    hide_window,
     profiles::{migrate_cef_profiles, purge_deleted_profiles, share_native_messaging_hosts},
     window_shown,
     CorePage, CoreRuntime, CoreWebHost,
@@ -185,7 +187,9 @@ pub enum DocumentKind {
     /// A mail message, shown with its scripts dead. `remote_images`: it may load images
     /// over https.
     Message { remote_images: bool },
-    /// The compose body, editable.
+    /// The compose body, editable. The page's script reaches it as [`EDITOR_DOCUMENT`]:
+    /// `execCommand` on it, its `body`'s `innerHTML` and `innerText` read back. It exists once
+    /// the first [`PageHandle::set_document`] (an empty one will do) has run.
     Editor,
 }
 

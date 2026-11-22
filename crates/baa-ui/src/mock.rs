@@ -100,6 +100,8 @@ pub struct MockPage {
     /// The other CDP-backed calls, in order: "click 1 2", "insert_text hi",
     /// "press_key Enter", "emulation Some(Phone)", "media Pause", "watch_console".
     pub cdp: RefCell<Vec<String>>,
+    /// Made by `create_document`.
+    pub document: Cell<bool>,
     /// The html of each `set_document` on a document; the last is what it shows.
     pub set_documents: RefCell<Vec<String>>,
     /// (field id, code) of each `fill_code`.
@@ -211,7 +213,7 @@ impl PageHandle for MockPage {
         self.cdp.borrow_mut().push("watch_console".into());
     }
     fn set_document(&self, html: &str) {
-        if *self.url.borrow() == DOCUMENT_URL {
+        if self.document.get() && *self.url.borrow() == DOCUMENT_URL {
             self.set_documents.borrow_mut().push(html.into());
         }
     }
@@ -268,6 +270,7 @@ impl MockHost {
             evals: RefCell::default(),
             screenshots: RefCell::default(),
             cdp: RefCell::default(),
+            document: Cell::default(),
             set_documents: RefCell::default(),
             filled: RefCell::default(),
             id: Cell::default(),
@@ -371,7 +374,9 @@ impl WebHost for MockHost {
     }
     fn create_document(&self, profile: ProfileId, kind: baa_web::DocumentKind, _: &mut Window, cx: &mut App) -> Entity<MockPage> {
         self.documents.borrow_mut().push((profile, kind));
-        Self::page(DOCUMENT_URL, cx)
+        let page = Self::page(DOCUMENT_URL, cx);
+        page.read(cx).document.set(true);
+        page
     }
     fn site_of(&self, host: &str) -> String {
         self.sites.borrow().get(host).cloned().unwrap_or_else(|| host.into())

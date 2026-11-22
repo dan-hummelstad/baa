@@ -18,6 +18,7 @@ use super::{
     c_string,
     cdp::{self, Incoming},
     dispatch::{Dispatch, Live, MEDIA_ACTIONS},
+    document,
     from_c,
     menu::{present_menu, Row},
     native, settings,
@@ -436,8 +437,22 @@ impl PageHandle for CorePage {
             self.cdp("Runtime.enable", json!({}), None);
         }
     }
-    // ponytail: nothing is written until WP-P1 and WP-F (`core_host/document.rs`).
-    fn set_document(&self, _html: &str) {}
+    fn set_document(&self, html: &str) {
+        let PageKind::Document(kind) = self.shared.kind else {
+            return;
+        };
+        // The script checks this again in the page; here it keeps mail out of the init script of a
+        // page that left about:blank.
+        if !matches!(self.state.url.as_str(), "" | "about:blank") {
+            return;
+        }
+        // Also the init script: a reload or a crashed renderer's next document is written again.
+        let script = c_string(&document::write_script(kind, html));
+        self.shared.run(|core, tab| {
+            (core.tab_set_init_script)(tab, script.as_ptr());
+            (core.tab_eval)(tab, script.as_ptr(), false);
+        });
+    }
     // ponytail: nothing is filled until WP-M (`baa_tab_fill_code`, ABI 17).
     fn fill_code(&self, _id: u64, _code: &str) {}
     fn focus_handle(&self, cx: &App) -> FocusHandle {

@@ -546,6 +546,7 @@ mod adoption;
 mod cdp_tests;
 mod devtools_tests;
 mod dialogs;
+mod document_tests;
 mod extension_tests;
 mod m3;
 mod menus;
