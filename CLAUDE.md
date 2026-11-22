@@ -27,6 +27,7 @@ Read PLAN.md first; it is the spec. Sections are referenced as §N.
 - `chromium/vendor`: archives the engine build takes from the repository instead of downloading (uBlock Origin); engine orchestrator. A file here must match its `sha256` in `chromium/helium/deps.ini`
 - `vendor/gpui_apple`  baa-web orchestrator
 - `crates/baa-ui`      GPUI views, theme, motion
+- `crates/baa-mail`    mail: accounts, sync, `mail.db`, MIME, send, codes (no gpui); with `crates/baa-ui/src/mail` (the mail views): mail orchestrator. Spec: `PLAN-mail.md`
 - `crates/baa`         app shell wiring (integration orchestrator only)
 - `.github/`, `xtask/` CI/release orchestrator only
 - Root `Cargo.toml` `[workspace.dependencies]`: add a dep there only if two crates need it; otherwise in your crate.
@@ -50,6 +51,26 @@ does, it must keep Chrome's check or be stricter. If unsure, ask the engine owne
 - **Network fetches outside Chromium are http(s) only.** Anything that runs curl
   or another fetcher checks `is_web` on *every* URL, including discovered and
   redirected ones, and passes `--proto =http,https --proto-redir =http,https`.
+  The one exception (user, 2026-11-22): `baa-mail` connects by IMAP, POP3 and SMTP
+  to the servers of an account the user added and to no other host, on the standard
+  ports only (IMAP 993 or 143, POP3 995 or 110, SMTP 465 or 587; any other port is
+  refused). Always TLS (implicit, or STARTTLS that must succeed), certificate and
+  host name checked against the system trust store, no "continue anyway". curl for
+  mail passes `--ssl-reqd` and names only its mail schemes in `--proto` and
+  `--proto-redir`.
+- **Mail content is untrusted.** HTML from a message reaches Chromium only through
+  `WebHost::create_document` (a sandboxed frame under a content security policy,
+  `PLAN-mail.md` §6). Nothing loads, fetches or opens a URL, file name or header
+  value taken from a message; a link opens by the user's click, through the
+  engine's adopted tab. An attachment is a download: quarantined, never opened by
+  baa, dangerous types warned about.
+- **Mail secrets are in the Keychain only**, never in `mail.db`, `baa.db`, a log or argv.
+- **No mail in incognito.** No account, no code offer, and no write to `mail.db` or
+  the Keychain from an ephemeral Space or a private window; every `Mail` call that
+  takes a Space has the test.
+- **A verification-code offer is a security prompt** and follows the rules below.
+  The code stays in the browser process until the user's click, is offered only
+  when the sender's site matches the page's, and nothing submits the form.
 - **Security prompts (permission, dialog, auth, external protocol, extension
   install) must:** show the origin the engine supplies (never the tab URL),
   ignore input for 500 ms after they appear or change, ignore key-repeat, never

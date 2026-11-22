@@ -1,7 +1,7 @@
 # baa Mail — plan
 
-Status: **proposed** (2026-11-22). Nothing in it is built. §14 lists what the user must decide or
-supply before stage 0 starts; every question there has a default, so the plan is complete as written.
+Status: **approved** (user, 2026-11-22); stage 0 is under way. §14 records the answers and the one
+question that is still open.
 
 Basis: `main` at `57ff25b7` (baa 0.1.9, ABI 16, Chromium 158). `file:line` references were read at
 that commit and drift; search for the name if a line does not match.
@@ -15,6 +15,11 @@ User decisions so far (they win over anything below):
 - 2026-11-22: baa registers its own OAuth clients with Google and Microsoft.
 - 2026-11-22: verification-code autofill from mail (as Safari does with Apple Mail) is part of the
   first spike (§7).
+- 2026-11-22: the plan's recommendations stand (§14). Mail protocols outside Chromium are allowed
+  on their standard ports only (§9). The engine build for codes is part of the first spike. The
+  OAuth code is built as if the client ids exist; the user registers the clients outside this work.
+- 2026-11-22: who does the work (§12): the orchestrator, up to five Opus 5.5 leads, and up to three
+  Sonnet 5.5 workers under each lead.
 
 ---
 
@@ -78,7 +83,7 @@ baa's own UI elements with Chromium rendering the messages; the plan follows the
 | # | Question | Decision |
 |---|---|---|
 | 1 | What draws the mail surface? | GPUI draws all of it; Chromium draws a message body and the compose body only. The brief says so, the sidebar is GPUI anyway, and one more WebUI would need an engine build for every change. |
-| 2 | Where does the code live? | `crates/baa-mail` holds everything that is not a view: accounts, sync, store, MIME, send, rules, code extraction. No gpui, as `baa-model` has none. The views live in `crates/baa-ui/src/mail/`. A `baa-mail` that held views would need `baa-ui`'s widgets (all private today, `baa-ui/src/lib.rs:3-24`) while `baa-ui`'s `Browser` needs the views: a dependency cycle. It also keeps most of the work in a crate that builds in seconds. The other way (views in `baa-mail`, `baa-ui` exporting its widgets plus a slot for foreign views) costs a slot contract and theme plumbing and gains nothing the user sees. §14 Q1. |
+| 2 | Where does the code live? | `crates/baa-mail` holds everything that is not a view: accounts, sync, store, MIME, send, rules, code extraction. No gpui, as `baa-model` has none. The views live in `crates/baa-ui/src/mail/`. A `baa-mail` that held views would need `baa-ui`'s widgets (all private today, `baa-ui/src/lib.rs:3-24`) while `baa-ui`'s `Browser` needs the views: a dependency cycle. It also keeps most of the work in a crate that builds in seconds. The other way (views in `baa-mail`, `baa-ui` exporting its widgets plus a slot for foreign views) costs a slot contract and theme plumbing and gains nothing the user sees. |
 | 3 | Is Mail a tab? | No. A Space shows the browser or mail (`Space.showing`), and a split pane is a tab or mail (`Pane`). A hidden pseudo-tab would need a guard in every piece of tab code (archive, ⌘W, ⌘1–8, the command bar, the agent's tools), none of which the compiler would find. |
 | 4 | Where does mail data live? | `<data dir>/mail/mail.db`, opened by `baa-mail`. Not `baa.db`: mail is large, is written from sync threads (`Store` is one connection on the UI thread, `store.rs:36`), and is a cache that can be dropped. |
 | 5 | Where do secrets live? | The macOS Keychain, one generic-password item an account and kind, service `me.baa.mail`. Never in `mail.db`, `baa.db`, a log or argv. baa has no Keychain code today; this is the first. |
@@ -90,9 +95,9 @@ baa's own UI elements with Chromium rendering the messages; the plan follows the
 | 11 | Microsoft accounts | Microsoft Graph for Outlook.com and Microsoft 365, never IMAP: Graph has shared mailboxes, rules, categories and Focused, and is https. Stage 2. |
 | 12 | Gmail | IMAP and SMTP with XOAUTH2 (scope `https://mail.google.com/`), on the IMAP backend. Stage 1, since codes matter most there. |
 | 13 | Exchange on-premises | EWS over curl (NTLM or Kerberos), stage 4, optional. Until then such a server works through IMAP where its admin allows it. |
-| 14 | Proton, iCloud | Proton: only through Proton Mail Bridge on 127.0.0.1 (a preset). iCloud: IMAP with an app-specific password (a preset). Neither offers third parties anything else. |
+| 14 | Proton, iCloud | Proton: only through Proton Mail Bridge on 127.0.0.1 (a preset; its ports are not the standard ones, so it waits for §14's open question). iCloud: IMAP with an app-specific password (a preset). Neither offers third parties anything else. |
 | 15 | Trunk and releases | All of it lands on `main` behind `Settings.mail.enabled`, off by default, so releases go on. The default changes when the user says the spike is good. |
-| 16 | Keys | ⌘⇧M browser ⇄ mail (free today). Inside mail: ⌘N new message, ⌘R reply, ⌘⇧R reply all, ⌘⇧F forward, ⌘↩ send, ⌫ delete, ⌘F search mail. Mail has its own key context, so ⌘N and ⌘R mean New Window and Reload only outside it. §14 Q5. |
+| 16 | Keys | ⌘⇧M browser ⇄ mail (free today). Inside mail: ⌘N new message, ⌘R reply, ⌘⇧R reply all, ⌘⇧F forward, ⌘↩ send, ⌫ delete, ⌘F search mail. Mail has its own key context, so ⌘N and ⌘R mean New Window and Reload only outside it. |
 | 17 | Skins | No mail theme. The views take `&Theme` and branch on `theme::ascii()` as the rest of `baa-ui` does (`sidebar.rs:24`). ASCII draws the ribbon, Arc draws pills, from one command table. |
 
 ---
@@ -142,8 +147,9 @@ older one drops and refills the cache tables and migrates `draft`, `outbox`, `op
 probably signed in already. Authorization code with PKCE (S256) and `state`; the redirect is
 `http://127.0.0.1:<port>/` on a `std::net::TcpListener` that binds loopback only, takes one request,
 checks `state`, and closes after 5 minutes. The token exchange and refresh are curl to https. The
-client ids are constants in `baa-mail/src/oauth.rs` (`BAA_GOOGLE_CLIENT_ID` and
-`BAA_MICROSOFT_CLIENT_ID` in the environment override them, for development).
+client ids are constants in `baa-mail/src/oauth.rs`, empty until the user has registered the
+clients (`BAA_GOOGLE_CLIENT_ID` and `BAA_MICROSOFT_CLIENT_ID` in the environment override them). With
+no id the provider's sign-in button says so and does nothing; no test needs a real client.
 
 **Dependencies to add** (all in `crates/baa-mail`; each is confirmed and its licence checked against
 `about.toml` in WP-P2, since `cargo about` runs only in `release.yml`):
@@ -174,7 +180,7 @@ Owner: `baa-ui` (the files named here), with the model change in `baa-model`.
 - **Gesture.** Today the Archive opens by a swipe right past the first Space (`nav.rs:99`). New: a
   two-finger swipe up over the bottom bar opens it in any Space, and a swipe down closes it. The bar
   does not scroll, so the vertical axis is free there. Horizontal swipes keep switching Spaces, in
-  mail too: the nav slides as the tab list does and the mail view follows the Space. §14 Q4.
+  mail too: the nav slides as the tab list does and the mail view follows the Space.
 - **Other Spaces.** The mail nav lists the other Spaces that have accounts, with unread counts; a
   click goes to that Space with mail showing. The door lists them too.
 - **Split.** `Split.panes: Vec<Pane>` replaces `tabs: Vec<TabId>`. ⌃⇧= in mail splits mail with the
@@ -307,7 +313,8 @@ WP-0 lands these as stubs with defaults; after that only the orchestrator change
 /// What one pane of a split holds. A bare number is a tab, so sessions saved before mail load.
 #[serde(untagged)]
 pub enum Pane { Tab(TabId), Mail(MailPane) }          // MailPane: a unit marker that serializes as "mail"
-pub struct Split { #[serde(alias = "tabs")] pub panes: Vec<Pane>, pub widths: Vec<f32> }
+// The JSON key stays `tabs`: a session with no mail pane is what 0.1.9 wrote, and 0.1.9 can read it.
+pub struct Split { #[serde(rename = "tabs")] pub panes: Vec<Pane>, pub widths: Vec<f32> }
 
 pub enum Showing { Browser, Mail }                    // tolerant: unknown → Browser
 pub struct Space { /* … */ #[serde(default)] pub showing: Showing }
@@ -391,12 +398,13 @@ window, cx)` and `render_door(...)`, methods on `Browser<H>` as the Library's ar
 
 ## 9. Security and privacy rules for this work
 
-Proposed additions to CLAUDE.md "Security invariants". The first changes an existing invariant, so
-it needs the user's approval (§14 Q2); until then no code opens a mail connection.
+Additions to CLAUDE.md "Security invariants". The first changes an existing invariant; the user
+approved it on 2026-11-22, for the standard ports only.
 
 - **Mail connections are the one exception to "http(s) only".** `baa-mail` connects by IMAP, POP3
-  and SMTP to the servers of an account the user added, and to no other host. Always TLS (implicit,
-  or STARTTLS that must succeed); the certificate and host name are checked against the system
+  and SMTP to the servers of an account the user added, and to no other host, on the standard ports
+  only: IMAP 993 or 143, POP3 995 or 110, SMTP 465 or 587. Any other port is refused. Always TLS
+  (implicit, or STARTTLS that must succeed); the certificate and host name are checked against the system
   trust store; there is no "continue anyway". curl for SMTP and POP3 passes `--proto` and
   `--proto-redir` naming only those schemes, and `--ssl-reqd`. Every other fetch in `baa-mail` is
   https, checked on every URL.
@@ -427,8 +435,8 @@ Each ends runnable, with mail still off by default.
 
 | Stage | Name | Holds | Needs from the user |
 |---|---|---|---|
-| 0 | Contracts and proofs | WP-0, WP-P1, WP-P2 | approval of §9's first rule; answers or defaults for §14 |
-| 1 | Read, write, manage, codes | WP-A … WP-N (§11). Ends at §1's list. | a Google OAuth client id; a go-ahead for one engine build |
+| 0 | Contracts and proofs | WP-0, WP-P1, WP-P2 | — |
+| 1 | Read, write, manage, codes | WP-A … WP-N (§11). Ends at §1's list. | a Google OAuth client id, to try Gmail for real |
 | 2 | More accounts | Microsoft Graph (Outlook.com, Microsoft 365, shared mailboxes, send as), POP3, Proton Bridge preset, autoconfig from the domain's own records and its MX, codes on Graph, the alias table, share an account to every Space from Settings | an Entra app id (and publisher verification before release) |
 | 3 | Outlook's management | categories, follow-up flags with dates, pin, snooze, scheduled send and outbox, Focused/Other, search folders, sweep, quick steps, rules (local, then the server's on Graph and Gmail), signatures, importance and receipts, tables and pictures in the editor, the full ribbon, contacts completion, `mailto:`, a draft in its own window, new-mail notices and badges, the door's "Waiting for you" and "Recent files", save all to Archive | — |
 | 4 | If asked for | on-premises EWS, ManageSieve, JMAP, S/MIME, calendar invitations, import from Mail.app, mail on by default | a decision each |
@@ -437,9 +445,19 @@ Each ends runnable, with mail still off by default.
 
 ## 11. Work packages
 
-Order: **WP-0**, then **P1, P2 side by side**. Stage 1 then runs in two waves. Wave 1: **A, B, C, D,
-E** (all in `baa-mail`, no shared files), **F** (`baa-web`), **G** (the shell), **M** (engine).
-Wave 2, once A–G are on `main`: **H, I, J, K, L**, then **N**.
+Order: **WP-0**, then four lanes side by side, then the fifth, then **N**. A lane is one lead with
+its workers in one worktree (§12); the packages of a lane run in the order given.
+
+| Lane | Packages | Starts |
+|---|---|---|
+| 1 Mail core | P2, then C, D, E | after WP-0 |
+| 2 Mail data | A, B, and L's extractor (`codes.rs`, `codes.toml`) | after WP-0 |
+| 3 Web and engine | P1, then F; M | after WP-0 |
+| 4 Shell | G | after WP-0 |
+| 5 Mail views | H, I, J, K, and L's offer (`code_offer.rs`) | once A, B, F and G are on `main` |
+
+Lanes 1 and 2 share `crates/baa-mail/Cargo.toml` and `src/lib.rs`: each keeps its changes to them
+small, lands often and rebases before every push.
 
 | WP | Owner (CLAUDE.md) | Depends on | Files |
 |---|---|---|---|
@@ -589,18 +607,28 @@ Stages 2 to 4 get their work packages when the stage before them ends; §15 is t
 
 ## 12. How the agents work
 
-- The orchestrator (the session that wrote this plan) starts each package as one agent with a brief
-  made of: the package's text, §8, §9, the files it owns, and the mock frames to read.
-- An agent works in its own worktree and lands on `main` itself (CLAUDE.md "Git"): small commits,
-  each passing `cargo test` for the crates it touches, fast-forward only. It removes its worktree.
-- An agent edits only its package's files. A contract that does not fit is reported, not changed.
-- No agent runs the app, the harness or a GUI check. Proof is `cargo test`, clippy and the build.
-- At most two `baa-ui` agents build at once (each worktree compiles gpui); `baa-mail` agents are
-  not limited, since the crate has no gpui.
-- Each agent ends with the quality review and the comment pass on its own changes, then reports:
-  commits, tests added, dependencies added, shortcuts taken (`ponytail:`), anything left open.
-- The orchestrator reads every landed diff, runs the workspace tests at the end of a wave, and
-  writes the stage's outcome into this file.
+Three levels (user, 2026-11-22):
+- **The orchestrator** (the session that wrote this plan) owns the contracts (§8), starts the lanes,
+  answers their questions, and does the final review of the whole change. It does WP-0 and WP-N.
+- **A lead** (Opus 5.5, at most five at once) owns one lane of §11. It splits its packages into
+  pieces with separate files, gives each piece to a worker, reviews every line a worker wrote
+  before it is committed, and does itself whatever needs judgment (a security policy, a library
+  choice, a contract question).
+- **A worker** (Sonnet 5.5, at most three under a lead) writes the code and tests of one piece.
+
+Rules for all of them:
+- One worktree a lane. The lead's workers edit in that worktree, each in its own files; the lead
+  runs the builds and makes the commits. So a lane compiles gpui once, not once a worker.
+- A lane lands on `main` itself (CLAUDE.md "Git"): small commits, each passing `cargo test` for the
+  crates it touches, fast-forward only.
+- A lane edits only its packages' files. A contract that does not fit is reported to the
+  orchestrator, not changed.
+- Nobody runs the app, the harness or a GUI check. Proof is `cargo test`, clippy and the build.
+- A lead ends each package with the quality review and the comment pass on the package's changes,
+  then reports: commits, tests added, dependencies added, shortcuts taken (`ponytail:`), what is
+  left open. It deletes its build output; the orchestrator removes the worktree.
+- The orchestrator reads every landed diff, runs the workspace tests when a lane ends, and writes
+  the stage's outcome into this file.
 
 ---
 
@@ -616,32 +644,31 @@ Stages 2 to 4 get their work packages when the stage before them ends; §15 is t
 | The engine build takes days | it is one build, started as soon as WP-M passes the syntax check | codes ship one release after the rest of the spike |
 | `Pane` breaks a saved session | WP-0's round-trip test on a 0.1.9 session | keep `tabs` and add a separate `mail` flag to `Split` |
 | A swipe up over the bottom bar collides with something | WP-G's test; the user tries it | a button only, and the existing swipe past the first Space |
+| A mail server on a port other than the six | none needed: it is refused with a message that names the rule | the user widens the rule |
 | Dev builds ask for the Keychain on every rebuild (unsigned) | the first run of WP-P2's code | a file-backed `Secrets` for `baa Dev` only, never in a release |
 | Mail HTML written for a white page looks wrong in a dark Space | look at ten real messages | the message card stays paper white, as mock B2 has it |
 
 ---
 
-## 14. Open decisions for the user
+## 14. Decisions the user took, and what is open
 
-1. **Views in `baa-ui`, the rest in `baa-mail`** (recommended, decision 2), or everything in
-   `baa-mail` with `baa-ui` exporting its widgets and a slot?
-2. **The network rule.** Approve §9's first rule: mail protocols outside Chromium, TLS always,
-   only to the servers of accounts the user added. Without it stage 0 cannot open a connection.
-3. **One engine build in the first spike** for codes (ABI 17) (recommended, since codes are in the
-   spike), or codes one release later?
-4. **"A gesture to open in any Space"** was read two ways and both are planned: a swipe up over
-   the bottom bar opens the Archive in any Space, and the mail nav lists the other Spaces' mailboxes
-   to jump to. Is the swipe the gesture you meant?
-5. **⌘N and ⌘R inside mail** mean New Message and Reply (recommended, as the mocks have ⌘N), so New
-   Window and Reload need the menu there. Or keep them and use other keys for mail?
-6. **OAuth clients.** A Google Cloud client (type "Desktop", scope `https://mail.google.com/`,
-   test users for now) before WP-E can be tried on Gmail; an Entra app (any organisation and
-   personal accounts, public client, loopback redirect) before stage 2. The ids are not secrets and
-   would sit in the source (recommended), or be given at build time.
-7. **Remote images** default to asking a message, with "always for this sender" (recommended), or
-   never?
-8. **Exchange on-premises** stays optional in stage 4 (recommended) unless you have such a server
-   in mind.
+Answered on 2026-11-22:
+1. Views in `baa-ui`, everything else in `baa-mail`.
+2. Mail protocols outside Chromium are allowed, on their standard ports only (§9).
+3. The engine build for codes (ABI 17) is part of the first spike.
+4. The gesture is a two-finger swipe up over the bottom bar, in any Space; the mail nav also lists
+   the other Spaces' mailboxes.
+5. Inside mail ⌘N is New Message and ⌘R is Reply.
+6. The OAuth code is built as if the client ids exist. The user registers the clients outside this
+   work and gives the ids later: a Google Cloud client (type "Desktop", scope
+   `https://mail.google.com/`), and an Entra app (any organisation and personal accounts, public
+   client, loopback redirect).
+7. Remote images: ask a message, with "always for this sender".
+8. Exchange on-premises stays optional, in stage 4.
+
+Open, and not needed before stage 2:
+- **Proton Mail Bridge** listens on 127.0.0.1 at ports 1143 and 1025, which answer 2 does not
+  allow. Either loopback gets its own exception, or Proton is not supported.
 
 ---
 
