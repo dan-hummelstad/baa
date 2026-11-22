@@ -582,6 +582,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "baa-mail"
+version = "0.1.9"
+dependencies = [
+ "baa-model",
+ "serde",
+]
+
+[[package]]
 name = "baa-model"
 version = "0.1.9"
 dependencies = [

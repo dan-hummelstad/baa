@@ -5,6 +5,7 @@ members = [
   "crates/baa-ui",
   "crates/baa-web",
   "crates/baa-model",
+  "crates/baa-mail",
   "crates/baa-privacy",
   "crates/baa-chromium",
   "xtask",
@@ -24,6 +25,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ef075910
 baa-ui = { path = "crates/baa-ui" }
 baa-web = { path = "crates/baa-web" }
 baa-model = { path = "crates/baa-model" }
+baa-mail = { path = "crates/baa-mail" }
 baa-privacy = { path = "crates/baa-privacy" }
 log = "0.4"
 env_logger = "0.11"

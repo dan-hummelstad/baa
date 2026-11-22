@@ -1,0 +1,10 @@
+[package]
+name = "baa-mail"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+baa-model.workspace = true
+serde.workspace = true
