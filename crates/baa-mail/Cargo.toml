@@ -22,6 +22,8 @@ ring = "0.17"
 rustls-platform-verifier = "0.7"
 # Already in the graph via imap-codec: SASL XOAUTH2 and PKCE's base64url.
 base64 = "0.22"
+# Already in the graph via imap-codec, whose SEARCH SINCE takes its date type.
+chrono = { version = "0.4", default-features = false }
 
 # mail.db; the bundled SQLite has FTS5 for search.
 rusqlite.workspace = true

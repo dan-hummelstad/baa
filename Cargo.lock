@@ -596,6 +596,7 @@ version = "0.1.9"
 dependencies = [
  "baa-model",
  "base64 0.22.1",
+ "chrono",
  "imap-next",
  "log",
  "mail-builder",

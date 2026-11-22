@@ -51,6 +51,11 @@ impl Provider {
         let server = |(host, port): (&str, u16)| Server { host: host.into(), port };
         Some(Servers { imap: server(imap), smtp: server(smtp), login: address.into() })
     }
+
+    /// Gmail files a sent message in Sent itself; appending it too would show it twice.
+    pub(crate) fn files_sent_mail(self) -> bool {
+        self == Provider::Gmail
+    }
 }
 
 #[cfg(test)]

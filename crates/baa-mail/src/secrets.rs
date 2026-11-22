@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, sync::Mutex};
+use std::{collections::HashMap, sync::Mutex};
 
 use crate::{AccountId, Result};
 
@@ -17,22 +17,8 @@ pub trait Secrets: Send + Sync {
     fn delete(&self, account: AccountId);
 }
 
-/// So [`crate::Mail::open`] can give the store and the connector the same secrets.
-impl<S: Secrets + ?Sized> Secrets for Arc<S> {
-    fn get(&self, account: AccountId, kind: Secret) -> Option<String> {
-        (**self).get(account, kind)
-    }
-
-    fn set(&self, account: AccountId, kind: Secret, value: &str) -> Result<()> {
-        (**self).set(account, kind, value)
-    }
-
-    fn delete(&self, account: AccountId) {
-        (**self).delete(account)
-    }
-}
-
-/// Secrets that are gone when it is dropped, for tests.
+/// Secrets that are gone when it is dropped: for tests, and for trying a sign-in before
+/// anything is kept.
 #[derive(Default)]
 pub struct MemorySecrets(Mutex<HashMap<(AccountId, Secret), String>>);
 

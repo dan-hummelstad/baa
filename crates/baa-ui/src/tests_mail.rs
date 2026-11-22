@@ -12,7 +12,7 @@ type B = Entity<Browser<MockHost>>;
 /// A window on `store`, after the app has started the process's `Mail` with mail.db in memory.
 fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) {
     cx.update(crate::init);
-    let connect: baa_mail::Connect = Box::new(|_| Err(baa_mail::Error::Other("no server in these tests".into())));
+    let connect: baa_mail::Connect = Box::new(|_, _| Err(baa_mail::Error::Other("no server in these tests".into())));
     cx.update(|cx| crate::start_mail(cx, |notify| Mail::open_with(None, Box::new(MemorySecrets::default()), notify, connect)))
         .unwrap();
     cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), store, window, cx))

@@ -3,6 +3,7 @@
 //! every call may block.
 
 pub mod fake;
+pub(crate) mod imap;
 
 use std::time::Duration;
 
@@ -64,7 +65,7 @@ pub enum Op {
 pub trait Backend: Send {
     fn folders(&mut self) -> Result<Vec<RemoteFolder>>;
     /// What changed in `folder` since `cursor`, the [`Changes::cursor`] of the call before.
-    /// `None` is a first sync: every message is new.
+    /// `None` is a first sync: the messages of the last 30 days are new (the `Fake` gives all).
     fn changes(&mut self, folder: &str, cursor: Option<&str>) -> Result<Changes>;
     /// The whole message, as RFC 822 bytes.
     fn fetch_body(&mut self, folder: &str, uid: &str) -> Result<Vec<u8>>;

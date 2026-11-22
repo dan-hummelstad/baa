@@ -9,14 +9,17 @@ mod mime;
 pub mod oauth;
 pub mod provider;
 mod secrets;
+mod send;
 mod store;
+mod sync;
 mod thread;
 
 use std::{
+    collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
-    sync::OnceLock,
-    time::SystemTime,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime},
 };
 
 use baa_model::SpaceId;
@@ -64,6 +67,8 @@ pub enum Error {
     NoTls,
     /// The stored sign-in no longer works; the account's mail stays.
     SignInAgain,
+    /// The server could not be reached, or the connection to it was lost.
+    Offline,
     /// This build has no OAuth client for the provider.
     NotSetUp,
     Other(String),
@@ -77,6 +82,7 @@ impl std::fmt::Display for Error {
             Error::Port(port) => write!(f, "Port {port} is not a standard mail port, and baa uses only those"),
             Error::NoTls => f.write_str("The server offered no secure connection, so baa did not connect"),
             Error::SignInAgain => f.write_str("Sign in to this account again"),
+            Error::Offline => f.write_str("The mail server could not be reached"),
             Error::NotSetUp => f.write_str("Sign-in with this provider is not set up in this build"),
             Error::Other(what) => f.write_str(what),
         }
@@ -285,11 +291,9 @@ pub enum Event {
     Failed { account: AccountId, what: String },
 }
 
-const NOT_BUILT: &str = "Mail is not built yet";
-
-/// Makes the backend of an account. [`Mail::open`] gives the real one; a test gives a
-/// [`Fake`] through [`Mail::open_with`].
-pub type Connect = Box<dyn Fn(&Account) -> Result<Box<dyn Backend>> + Send + Sync>;
+/// Makes the backend of an account, signed in with its secret from the `Secrets` given.
+/// [`Mail::open`] gives the real one; a test gives a [`Fake`] through [`Mail::open_with`].
+pub type Connect = Box<dyn Fn(&Account, &dyn Secrets) -> Result<Box<dyn Backend>> + Send + Sync>;
 
 /// One a process, shared by its windows. `Send + Sync`.
 pub struct Mail {
@@ -298,21 +302,17 @@ pub struct Mail {
     /// Made when mail.db is there or first written, so a Mail that is never used leaves no
     /// file behind.
     store: OnceLock<Store>,
-    // ponytail: kept for the account threads of WP-C and WP-E, which nothing starts yet.
-    #[allow(dead_code)]
-    secrets: Box<dyn Secrets>,
-    #[allow(dead_code)]
-    notify: Box<dyn Fn(Event) + Send + Sync>,
-    #[allow(dead_code)]
-    connect: Connect,
+    shared: Arc<sync::Shared>,
+    /// The account threads started so far. A thread stops when its entry goes.
+    threads: Mutex<HashMap<AccountId, sync::AccountThread>>,
+    /// When each account last took a [`Mail::check_now`].
+    checked: Mutex<HashMap<AccountId, Instant>>,
 }
 
 impl Mail {
     /// Starts nothing: an account's thread starts when the account is first needed.
     pub fn open(dir: &Path, secrets: Box<dyn Secrets>, notify: Box<dyn Fn(Event) + Send + Sync>) -> Result<Mail> {
-        // ponytail: lane 1's connector replaces this one with WP-C.
-        let connect: Connect = Box::new(|_| Err(Error::Other(NOT_BUILT.into())));
-        Self::open_with(Some(dir), secrets, notify, connect)
+        Self::open_with(Some(dir), secrets, notify, backend::imap::connector(dir.to_owned()))
     }
 
     /// `dir: None` keeps mail.db in memory, for tests. A mail.db written by a newer baa is an
@@ -323,7 +323,13 @@ impl Mail {
         notify: Box<dyn Fn(Event) + Send + Sync>,
         connect: Connect,
     ) -> Result<Mail> {
-        let mail = Mail { dir: dir.map(Path::to_owned), store: OnceLock::new(), secrets, notify, connect };
+        let mail = Mail {
+            dir: dir.map(Path::to_owned),
+            store: OnceLock::new(),
+            shared: Arc::new(sync::Shared { connect, secrets, notify }),
+            threads: Mutex::default(),
+            checked: Mutex::default(),
+        };
         if dir.is_none_or(|dir| dir.join("mail.db").exists()) {
             mail.store()?;
         }
@@ -345,22 +351,88 @@ impl Mail {
         self.store.get().and_then(|store| read(store).ok()).unwrap_or_default()
     }
 
-    /// The Space's own accounts and those of every Space.
+    /// The Space's own accounts and those of every Space. Their threads start here, the
+    /// first time a view asks for them, so mail syncs once mail is shown.
     pub fn accounts(&self, space: MailSpace) -> Vec<Account> {
-        self.read(|s| s.accounts(Some(space)))
+        let accounts = self.read(|s| s.accounts(Some(space)));
+        for account in &accounts {
+            self.thread(account.id);
+        }
+        accounts
     }
 
-    /// Tests the sign-in first, and stores nothing if it fails.
-    pub fn add_account(&self, _new: NewAccount) -> Result<AccountId> {
-        Err(Error::Other(NOT_BUILT.into()))
+    /// Tests the sign-in first, and stores nothing if it fails: the secret is tried from
+    /// memory and reaches [`Secrets`] only once the server took it.
+    pub fn add_account(&self, new: NewAccount) -> Result<AccountId> {
+        new.servers.imap.check(Protocol::Imap)?;
+        new.servers.smtp.check(Protocol::Smtp)?;
+        let (kind, secret) = match &new.sign_in {
+            NewSignIn::Password(password) => (Secret::Password, password.clone()),
+            NewSignIn::Google(tokens) => (Secret::RefreshToken, tokens.refresh.clone()),
+        };
+        let store = self.store()?;
+        let account = Account {
+            id: store.next_account_id()?,
+            space: new.space.map(MailSpace::id),
+            name: new.name,
+            address: new.address,
+            codes: true,
+            provider: new.provider,
+            servers: new.servers,
+            sign_in: match new.sign_in {
+                NewSignIn::Password(_) => SignIn::Password,
+                NewSignIn::Google(_) => SignIn::Google,
+            },
+        };
+        let trial = MemorySecrets::default();
+        trial.set(account.id, kind, &secret)?;
+        drop((self.shared.connect)(&account, &trial)?);
+        self.shared.secrets.set(account.id, kind, &secret)?;
+        if let Err(error) = store.put_account(&account) {
+            self.shared.secrets.delete(account.id);
+            return Err(error);
+        }
+        self.thread(account.id);
+        Ok(account.id)
     }
 
-    pub fn remove_account(&self, _id: AccountId) {}
+    /// The account with its mail, queued changes, outbox and secrets.
+    pub fn remove_account(&self, id: AccountId) {
+        self.threads.lock().unwrap().remove(&id);
+        if let Some(store) = self.store.get() {
+            let _ = store.delete_account(id);
+        }
+        self.shared.secrets.delete(id);
+    }
 
     /// Removes the accounts that belong to `space` alone, with their mail and secrets, and
     /// returns them. Accounts of every Space stay.
-    pub fn remove_accounts_of(&self, _space: MailSpace) -> Vec<Account> {
-        Vec::new()
+    pub fn remove_accounts_of(&self, space: MailSpace) -> Vec<Account> {
+        let own: Vec<Account> = self.read(|s| s.accounts(Some(space))).into_iter().filter(|a| a.space == Some(space.id())).collect();
+        for account in &own {
+            self.remove_account(account.id);
+        }
+        own
+    }
+
+    /// Sends `job` to the account's thread, started now if it is not running.
+    fn job(&self, account: AccountId, job: sync::Job) {
+        if let Some(jobs) = self.thread(account) {
+            let _ = jobs.send(job);
+        }
+    }
+
+    fn thread(&self, id: AccountId) -> Option<std::sync::mpsc::Sender<sync::Job>> {
+        let mut threads = self.threads.lock().unwrap();
+        if let Some(thread) = threads.get(&id).filter(|t| t.running()) {
+            return Some(thread.jobs.clone());
+        }
+        let store = self.store.get()?;
+        let account = store.account(id).ok()??;
+        let thread = sync::AccountThread::start(account, store.another().ok()?, self.shared.clone());
+        let jobs = thread.jobs.clone();
+        threads.insert(id, thread);
+        Some(jobs)
     }
 
     /// The other Spaces that have accounts of their own, with their unread counts.
@@ -386,18 +458,47 @@ impl Mail {
         self.read(|s| s.conversation(id))
     }
 
-    /// `None`: not here yet.
-    // ponytail: nothing asks the server for it until lane 1's account threads do (WP-C).
+    /// `None`: not here yet. It is asked for, and [`Event::Changed`] follows.
     pub fn body(&self, id: MessageId) -> Option<Body> {
-        self.read(|s| s.raw(id)).map(|raw| mime::body(&raw))
+        let body = self.read(|s| s.raw(id)).map(|raw| mime::body(&raw));
+        if body.is_none() {
+            if let Some(at) = self.read(|s| s.locate(id)) {
+                self.job(at.account, sync::Job::Body(id));
+            }
+        }
+        body
     }
 
     pub fn search(&self, space: MailSpace, text: &str) -> View {
         View { space, folder: None, account: None, filter: Filter::All, search: text.into() }
     }
 
-    /// Applied to mail.db at once, then to the server.
-    pub fn act(&self, _on: &[MessageId], _action: Action) {}
+    /// Applied to mail.db at once, then to the server. Delete moves to Trash, and deletes for
+    /// good what is in Trash already or where the account has no Trash; Archive and Move do
+    /// nothing where there is no such folder of the message's account.
+    pub fn act(&self, on: &[MessageId], action: Action) {
+        let Some(store) = self.store.get() else { return };
+        let mut woken = Vec::new();
+        for &id in on {
+            let Ok(Some(at)) = store.locate(id) else { continue };
+            let role = |role| store.folder_by_role(at.account, role).ok().flatten().filter(|f| f.id != at.folder);
+            let moved = |to: Option<store::StoredFolder>| to.map(|to| store.remove_message(id).map(|()| Op::Move(to.path)));
+            let op = match action {
+                Action::Read(on) => Some(store.set_seen_flagged(id, Some(on), None).map(|()| Op::Seen(on))),
+                Action::Flag(on) => Some(store.set_seen_flagged(id, None, Some(on)).map(|()| Op::Flagged(on))),
+                Action::Move(to) => moved(store.folder(to).ok().flatten().filter(|f| f.account == at.account && f.id != at.folder)),
+                Action::Archive => moved(role(Role::Archive)),
+                Action::Delete => moved(role(Role::Trash)).or_else(|| Some(store.remove_message(id).map(|()| Op::Delete))),
+            };
+            let queued = op.is_some_and(|op| op.and_then(|op| store.push_op(at.account, &at.path, &at.uid, &op)).is_ok());
+            if queued && !woken.contains(&at.account) {
+                woken.push(at.account);
+            }
+        }
+        for account in woken {
+            self.job(account, sync::Job::Wake);
+        }
+    }
 
     /// Private mode: a draft is of an account, which only a [`MailSpace`] has.
     pub fn save_draft(&self, draft: &Draft) -> Result<DraftId> {
@@ -443,8 +544,19 @@ impl Mail {
         Some((account, original))
     }
 
-    /// [`Event::Sent`] or [`Event::Failed`] follows.
-    pub fn send(&self, _draft: DraftId) {}
+    /// Into the outbox, which the account's thread sends. [`Event::Sent`] or
+    /// [`Event::Failed`] follows.
+    pub fn send(&self, draft: DraftId) {
+        let Some(saved) = self.read(|s| s.draft(draft)) else { return };
+        let queued = self.store().and_then(|store| {
+            let (raw, from, to) = compose::outgoing(store, &saved, SystemTime::now())?;
+            store.push_outbox(saved.from, Some(draft), &from, &to, &raw)
+        });
+        match queued {
+            Ok(_) => self.job(saved.from, sync::Job::Wake),
+            Err(error) => (self.shared.notify)(Event::Failed { account: saved.from, what: error.to_string() }),
+        }
+    }
 
     /// Into `dir`, under the last component of the attachment's name; a file already there
     /// is never replaced. The file is quarantined as a download is. Returns where it is.
@@ -465,8 +577,20 @@ impl Mail {
         }
     }
 
-    /// Asks the Space's accounts for one INBOX check now, at most one every 10 s an account.
-    pub fn check_now(&self, _space: MailSpace) {}
+    /// Asks the Space's accounts for one INBOX check now, at most one every 10 s an account,
+    /// so a page cannot make baa hammer a server (PLAN-mail.md §7).
+    pub fn check_now(&self, space: MailSpace) {
+        for account in self.accounts(space) {
+            {
+                let mut checked = self.checked.lock().unwrap();
+                if checked.get(&account.id).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                    continue;
+                }
+                checked.insert(account.id, Instant::now());
+            }
+            self.job(account.id, sync::Job::Check);
+        }
+    }
 
     /// The codes in mail of the Space's accounts that offer codes, from messages that came in
     /// during the last 10 minutes and at `since` or later, newest first. Which may be offered
@@ -485,7 +609,7 @@ mod tests {
     use crate::store::tests::{account, header, inbox, new, space, temp_dir};
 
     fn memory() -> Mail {
-        let connect: Connect = Box::new(|_| Ok(Box::new(Fake::default())));
+        let connect: Connect = Box::new(|_, _| Ok(Box::new(Fake::default())));
         Mail::open_with(None, Box::new(MemorySecrets::default()), Box::new(|_| {}), connect).unwrap()
     }
 
