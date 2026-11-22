@@ -177,7 +177,7 @@ impl<H: baa_web::WebHost> crate::Browser<H> {
                 None => self.open_settings_at(Some(Tab::Sites), None, cx),
             },
             Route::History => self.open_bar(crate::command_bar::Mode::History, window, cx),
-            Route::Downloads => self.open_library(crate::library::Section::Downloads, cx),
+            Route::Downloads => self.open_library(crate::library::Section::Downloads, window, cx),
             Route::WebUi => return false,
         }
         true

@@ -5,7 +5,7 @@ use baa_model::SpaceId;
 use gpui::TestAppContext;
 
 use super::{nav::inbox_unread, Field};
-use crate::{library::Section, tests_mail::*};
+use crate::tests_mail::*;
 
 fn mail_in(ts: u64, from: &str, subject: &str) -> Vec<u8> {
     testing::message(from, "dan@example.com", subject, ts, "", "Hei")
@@ -80,15 +80,4 @@ fn a_folder_and_the_scope_come_back_after_a_space_switch(cx: &mut TestAppContext
         b.activate_space(first, w, cx);
     });
     b.read_with(cx, |b, _| assert_eq!(b.mail.as_ref().unwrap().state.folder, Some(folders[3])));
-}
-
-#[gpui::test]
-fn the_door_shows_the_add_an_account_card_without_an_account(cx: &mut TestAppContext) {
-    let (b, cx) = with_mail(cx);
-    b.update(cx, |b, cx| b.open_library(Section::Mailbox, cx));
-    assert!(drawn(cx, "mail-add-account") && !drawn(cx, "mail-door-card"));
-    let space = mail_space(&b, cx);
-    mail(&b, cx).seed_account(&testing::account(1, Some(space), "dan@example.com"));
-    b.update(cx, |_, cx| cx.notify());
-    assert!(drawn(cx, "mail-door-card") && !drawn(cx, "mail-add-account"));
 }

@@ -1,7 +1,8 @@
 //! Arc's Library, in the sidebar: what lives outside any Space. Opened from
 //! the archive button or by swiping right past the first Space. Sections:
-//! Downloads (kept across launches, grouped by age, searchable and filtered by
-//! kind), Archived Tabs, and Chat (the Claude panel, ⌘J).
+//! Mail (the mail nav, while the page area shows the mail view), Downloads
+//! (kept across launches, grouped by age, searchable and filtered by kind),
+//! Archived Tabs, and Chat (the Claude panel, ⌘J).
 
 use crate::theme::r;
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ const NAV_W: f32 = 96.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Section {
-    Mailbox,
+    Mail,
     Downloads,
     Archive,
     Chat,
@@ -140,9 +141,21 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    pub(crate) fn open_library(&mut self, section: Section, cx: &mut Context<Self>) {
-        // library_last may be the Mailbox of a Space that has mail, and this one may not.
-        let section = if section == Section::Mailbox && !self.mail_here() { Section::Downloads } else { section };
+    /// Mail is the active Space showing mail ([`Browser::show_mail`]); any other section
+    /// leaves mail for the browser.
+    pub(crate) fn open_library(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
+        // library_last may be the Mail of a Space that has mail, and this one may not.
+        match section {
+            Section::Mail if self.mail_here() => return self.show_mail(true, window, cx),
+            Section::Mail => self.set_library(Section::Downloads, cx),
+            section => self.set_library(section, cx),
+        }
+        if self.mail_in_front() {
+            self.show_mail(false, window, cx);
+        }
+    }
+
+    fn set_library(&mut self, section: Section, cx: &mut Context<Self>) {
         self.library_last = section;
         match &mut self.library {
             Some(library) => library.section = section,
@@ -155,12 +168,23 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
+    /// After every session change: the Archive is open on Mail exactly while the active
+    /// Space shows mail, so a Space switch, a split's focus and ⌘⇧M all move it.
+    pub(crate) fn sync_library(&mut self, cx: &mut Context<Self>) {
+        let on_mail = self.library.as_ref().is_some_and(|l| l.section == Section::Mail);
+        if self.mail_in_front() && !on_mail {
+            self.set_library(Section::Mail, cx);
+        } else if !self.mail_in_front() && on_mail {
+            self.collapse_library();
+        }
+    }
+
     /// The section it was last on (⌘⇧L and the sidebar's Library button).
     pub(crate) fn open_library_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.library_last {
             // Chat also takes focus for its field.
             Section::Chat => self.open_chat(window, cx),
-            last => self.open_library(last, cx),
+            last => self.open_library(last, window, cx),
         }
     }
 
@@ -169,15 +193,22 @@ impl<H: WebHost> Browser<H> {
         self.sidebar_open || self.library.is_some()
     }
 
-    /// Back to the Spaces; the first comes in from the right, as it lies.
+    /// Back to the Spaces; the first comes in from the right, as it lies. Closed on Mail,
+    /// the page the Space was on comes back.
     pub(crate) fn close_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.library.take().is_none() {
-            return;
+        let Some(library) = self.collapse_library() else { return };
+        self.close_overlays(window, cx);
+        if library.section == Section::Mail && self.mail_in_front() {
+            self.show_mail(false, window, cx);
         }
+    }
+
+    fn collapse_library(&mut self) -> Option<Library> {
+        let library = self.library.take()?;
         self.sidebar_w.set_target(if self.sidebar_open { SIDEBAR_WIDTH } else { 0. });
         self.slide.snap(1.0);
         self.slide.set_target(0.0);
-        self.close_overlays(window, cx);
+        Some(library)
     }
 
     /// Finished downloads go into the store, so the Library keeps them.
@@ -246,7 +277,7 @@ impl<H: WebHost> Browser<H> {
                 .text_color(color)
                 .on_click(cx.listener(move |this, _, window, cx| match section {
                     Section::Chat => this.open_chat(window, cx),
-                    _ => this.open_library(section, cx),
+                    _ => this.open_library(section, window, cx),
                 }))
                 .child(icon(name, 19., color))
                 .child(label);
@@ -297,7 +328,7 @@ impl<H: WebHost> Browser<H> {
                     .flex_col()
                     .justify_center()
                     .gap(px(10.))
-                    .children(self.mail_here().then(|| nav_item(Section::Mailbox, "mail", "Mailbox", cx)))
+                    .children(self.mail_here().then(|| nav_item(Section::Mail, "mail", "Mail", cx)))
                     .child(nav_item(Section::Downloads, "circle-arrow-down", "Downloads", cx))
                     .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx))
                     .child(nav_item(Section::Chat, "message-circle", "Chat", cx)),
@@ -328,9 +359,9 @@ impl<H: WebHost> Browser<H> {
         let placeholder = match library.section {
             Section::Downloads => "Search Downloads…",
             Section::Archive => "Search Archived Tabs…",
-            Section::Chat | Section::Mailbox => {
-                let body = if library.section == Section::Mailbox {
-                    self.render_door(theme, window, cx)
+            Section::Chat | Section::Mail => {
+                let body = if library.section == Section::Mail {
+                    self.render_nav(theme, window, cx)
                 } else {
                     self.render_agent_panel(theme, window, cx).unwrap_or_else(|| div().into_any_element())
                 };
@@ -389,7 +420,7 @@ impl<H: WebHost> Browser<H> {
         let list = match library.section {
             Section::Downloads => self.download_rows(library, theme, cx),
             Section::Archive => self.archive_rows(library, theme, cx),
-            Section::Chat | Section::Mailbox => Vec::new(),
+            Section::Chat | Section::Mail => Vec::new(),
         };
         let empty = list.is_empty();
         let body = div()
@@ -419,7 +450,7 @@ impl<H: WebHost> Browser<H> {
                                 .child(match library.section {
                                     Section::Downloads => "No downloads",
                                     Section::Archive => "No archived tabs",
-                                    Section::Chat | Section::Mailbox => "",
+                                    Section::Chat | Section::Mail => "",
                                 }),
                         )
                     }),
@@ -625,8 +656,7 @@ impl<H: WebHost> Browser<H> {
                 .library_row(("library-archived", id.0), thumb, (title, host_of(&url)), false, theme, cx)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(tab) = this.session.restore_archived(id, now as u64) {
-                        this.library = None;
-                        this.sidebar_w.set_target(if this.sidebar_open { SIDEBAR_WIDTH } else { 0. });
+                        this.collapse_library();
                         this.activate_tab(tab, window, cx);
                     }
                 }));

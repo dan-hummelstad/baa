@@ -178,7 +178,7 @@ impl<H: WebHost> Browser<H> {
                     .border_1()
                     .border_color(surface::border())
                     .shadow(vec![lift()])
-                    .on_click(cx.listener(|this, _, _, cx| this.open_library(crate::library::Section::Downloads, cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_library(crate::library::Section::Downloads, window, cx)))
                     .into_any_element(),
             );
         }

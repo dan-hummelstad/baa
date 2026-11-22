@@ -68,27 +68,6 @@ impl<H: WebHost> Browser<H> {
         let Some(space) = self.active_space().map(|s| s.id) else {
             return div().into_any_element();
         };
-        if self.mail_in_front() {
-            // Slides with a Space switch as the tab lists do.
-            let nav = div()
-                .flex_1()
-                .min_h_0()
-                .relative()
-                .left(px(self.slide.value() * SIDEBAR_WIDTH))
-                .opacity(1.0 - self.slide.value().abs().min(1.0) * 0.6)
-                .child(self.render_nav(theme, window, cx));
-            return div()
-                .w(px(SIDEBAR_WIDTH))
-                .h_full()
-                .flex()
-                .flex_col()
-                .px(px(8.))
-                .pb(px(4.))
-                .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_chrome_scroll(e, window, cx)))
-                .child(nav)
-                .child(self.render_bottom_bar(space, theme, cx))
-                .into_any_element();
-        }
         let (space_icon, space_name) = self
             .active_space()
             .map(|s| (s.icon.clone(), s.name.clone()))
@@ -296,7 +275,7 @@ impl<H: WebHost> Browser<H> {
             .children(self.render_agent_strip(theme, cx))
             .children(self.render_data_notice(theme, cx))
             .children(self.render_update_card(theme, cx))
-            .child(self.render_bottom_bar(space, theme, cx))
+            .child(self.render_bottom_bar(theme, cx))
             .into_any_element()
     }
 
@@ -533,7 +512,7 @@ impl<H: WebHost> Browser<H> {
         div().relative().flex().gap(px(2.)).rounded(r(10.)).bg(theme.glass).children(rows).children(line).into_any_element()
     }
 
-    /// A split's mail pane in its sidebar row. The sidebar is the mail nav while mail is in
+    /// A split's mail pane in its sidebar row. The Archive is open on Mail while mail is in
     /// front, so this row only shows with one of the tabs in front.
     fn render_mail_cell(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let key = ("mail-cell", 0);
@@ -1010,13 +989,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// Library, the Space dots, and New Space.
-    fn render_bottom_bar(
-        &self,
-        active: SpaceId,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let _ = active;
+    fn render_bottom_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let dots: Vec<_> = self
             .session
             .spaces()
@@ -1100,7 +1073,6 @@ impl<H: WebHost> Browser<H> {
             .flex()
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
-            .children(self.mail_here().then(|| self.render_section_switcher(theme, cx)))
             .child(row)
     }
 }

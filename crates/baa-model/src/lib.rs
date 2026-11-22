@@ -98,7 +98,8 @@ pub struct Space {
     pub showing: Showing,
 }
 
-/// What a Space has on screen (PLAN-mail.md §5).
+/// What a Space has on screen (PLAN-mail.md §5). `Mail`: the Archive is open on Mail and the
+/// page area shows the mail view; closing the Archive is `Browser` again.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(remote = "Self")]
 pub enum Showing {

@@ -99,7 +99,7 @@ impl<H: WebHost> Browser<H> {
                 } else if swipe > 0.25 && first {
                     // Past the first Space lies the Library (Arc).
                     self.slide.set_target(0.0);
-                    self.open_library(crate::library::Section::Downloads, cx);
+                    self.open_library(crate::library::Section::Downloads, window, cx);
                 } else if swipe.abs() > 0.25 {
                     // Fingers left: the next Space comes in from the right.
                     self.step_space(if swipe < 0.0 { 1 } else { -1 }, window, cx);

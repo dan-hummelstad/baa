@@ -61,7 +61,6 @@ gpui::actions!(
         Redo,
         ToggleMail,
         ShowMail,
-        OpenMailbox,
         NewMessage,
         Reply,
         ReplyAll,

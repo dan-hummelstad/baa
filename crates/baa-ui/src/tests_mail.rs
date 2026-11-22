@@ -75,7 +75,6 @@ pub(crate) fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool 
 fn cmd_shift_m_shows_mail_and_comes_back_to_the_same_tab(cx: &mut TestAppContext) {
     let (b, cx) = with_mail(cx);
     let tab = open(&b, cx, "https://a.com/");
-    assert!(drawn(cx, "section-switcher"), "mail on: Browser · Archive · Mail above the Spaces");
     assert!(!drawn(cx, "mail-view"));
 
     cx.simulate_keystrokes("cmd-shift-m");
@@ -151,12 +150,11 @@ fn an_incognito_space_or_window_has_no_mail(cx: &mut TestAppContext) {
         assert!(b.mail.is_some() && !b.mail_here() && b.mail_space().is_none());
         b.show_mail(true, window, cx);
         assert!(!b.mail_in_front());
-        b.open_library(Section::Mailbox, cx);
-        assert_eq!(b.library.as_ref().map(|l| l.section), Some(Section::Downloads), "no Mailbox in the rail");
+        b.open_library(Section::Mail, window, cx);
+        assert_eq!(b.library.as_ref().map(|l| l.section), Some(Section::Downloads), "no Mail in the rail");
         b.close_library(window, cx);
         id
     });
-    assert!(!drawn(cx, "section-switcher"));
     cx.simulate_keystrokes("cmd-shift-m");
     b.read_with(cx, |b, _| {
         assert!(!b.mail_in_front());
@@ -168,7 +166,6 @@ fn an_incognito_space_or_window_has_no_mail(cx: &mut TestAppContext) {
     let p = h.root(pcx).unwrap();
     pcx.run_until_parked();
     p.read_with(pcx, |p, _| assert!(p.private && p.settings.mail.enabled && p.mail.is_none() && !p.mail_here()));
-    assert!(!drawn(pcx, "section-switcher"));
     pcx.simulate_keystrokes("cmd-shift-m");
     p.read_with(pcx, |p, _| assert!(!p.mail_in_front()));
 }
@@ -191,23 +188,9 @@ fn with_mail_off_nothing_of_it_is_drawn_and_a_mail_session_loads_as_the_browser(
         let s = b.active_space().unwrap();
         assert_eq!((s.showing, s.split.is_none()), (Showing::Browser, true), "a split of mail and one tab is no split");
     });
-    assert!(!drawn(cx, "section-switcher") && !drawn(cx, "mail-view") && !drawn(cx, "mail-nav"));
+    assert!(!drawn(cx, "mail-view") && !drawn(cx, "mail-nav"));
     cx.simulate_keystrokes("cmd-shift-m");
-    cx.dispatch_action(OpenMailbox);
     b.read_with(cx, |b, _| assert!(!b.mail_in_front() && b.library.is_none()));
-}
-
-#[gpui::test]
-fn the_door_opens_mail_with_the_sidebar_back_at_its_width(cx: &mut TestAppContext) {
-    let (b, cx) = with_mail(cx);
-    open(&b, cx, "https://a.com/");
-    cx.dispatch_action(OpenMailbox);
-    b.update_in(cx, |b, window, cx| {
-        assert_eq!(b.library.as_ref().map(|l| l.section), Some(Section::Mailbox));
-        b.open_mail_from_door(window, cx);
-        assert!(b.library.is_none() && b.mail_in_front());
-        assert_eq!(b.sidebar_width(), crate::browser::SIDEBAR_WIDTH);
-    });
 }
 
 #[test]
@@ -292,8 +275,8 @@ fn the_mailbox_rail_item_needs_mail(cx: &mut TestAppContext) {
     use crate::library::Section;
     cx.update(crate::init);
     let (b, cx) = cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), Store::open(":memory:").unwrap(), window, cx));
-    b.update(cx, |b, cx| {
-        b.open_library(Section::Mailbox, cx);
+    b.update_in(cx, |b, window, cx| {
+        b.open_library(Section::Mail, window, cx);
         assert_eq!(b.library.as_ref().map(|l| l.section), Some(Section::Downloads));
         assert_eq!(b.library_last, Section::Downloads);
     });

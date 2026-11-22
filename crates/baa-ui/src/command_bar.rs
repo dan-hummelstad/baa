@@ -79,11 +79,10 @@ pub enum Command {
     SplitView,
     ResponsiveView,
     OpenMail,
-    OpenMailbox,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 35] = [
+const COMMANDS: [(Command, &str); 34] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -118,7 +117,6 @@ const COMMANDS: [(Command, &str); 35] = [
     (Command::SplitView, "Split View"),
     (Command::ResponsiveView, "Responsive View"),
     (Command::OpenMail, "Open Mail"),
-    (Command::OpenMailbox, "Open Archive: Mailbox"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -148,7 +146,6 @@ impl Command {
             Command::SplitView => Box::new(actions::SplitView),
             Command::ResponsiveView => Box::new(actions::ResponsiveView),
             Command::OpenMail => Box::new(actions::ShowMail),
-            Command::OpenMailbox => Box::new(actions::OpenMailbox),
             _ => return None,
         })
     }
@@ -179,7 +176,7 @@ impl Command {
             Command::SetUpPasswords => "key-round",
             Command::ClearToday | Command::Archive => "archive",
             Command::SplitView | Command::ResponsiveView => "columns-2",
-            Command::OpenMail | Command::OpenMailbox => "mail",
+            Command::OpenMail => "mail",
             _ => "sliders-horizontal",
         }
     }
@@ -247,7 +244,7 @@ impl Bar {
             return self.history.iter().take(MAX_ROWS).map(history_row).collect();
         }
         let mut out = rows(&self.field.text, session, settings, &self.matches);
-        out.retain(|r| mail || !matches!(r.item, Item::Command(Command::OpenMail | Command::OpenMailbox)));
+        out.retain(|r| mail || !matches!(r.item, Item::Command(Command::OpenMail)));
         out
     }
 }

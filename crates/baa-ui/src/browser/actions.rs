@@ -33,7 +33,6 @@ impl<H: WebHost> Browser<H> {
         }))
         .on_action(cx.listener(|this, _: &ToggleMail, window, cx| this.show_mail(!this.mail_in_front(), window, cx)))
         .on_action(cx.listener(|this, _: &ShowMail, window, cx| this.show_mail(true, window, cx)))
-        .on_action(cx.listener(|this, _: &OpenMailbox, _, cx| this.open_mailbox(cx)))
         .on_action(
             cx.listener(|this, _: &ReopenClosedTab, window, cx| this.reopen_closed(window, cx)),
         )
@@ -109,7 +108,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &ShowDownloads, window, cx| {
             match this.library.as_ref().map(|l| l.section) {
                 Some(crate::library::Section::Downloads) => this.close_library(window, cx),
-                _ => this.open_library(crate::library::Section::Downloads, cx),
+                _ => this.open_library(crate::library::Section::Downloads, window, cx),
             }
         }))
         .on_action(cx.listener(|this, _: &ToggleAgent, window, cx| this.toggle_agent_panel(window, cx)))
@@ -125,7 +124,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &ShowArchive, window, cx| {
             match this.library.as_ref().map(|l| l.section) {
                 Some(crate::library::Section::Archive) => this.close_library(window, cx),
-                _ => this.open_library(crate::library::Section::Archive, cx),
+                _ => this.open_library(crate::library::Section::Archive, window, cx),
             }
         }))
         .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings_at(None, None, cx)))

@@ -301,7 +301,7 @@ impl<H: WebHost> Browser<H> {
                 items.push(MenuEntry::item("Clear Today", Box::new(|this, window, cx| this.clear_today(window, cx))));
                 items.push(MenuEntry::item(
                     "Archived Tabs",
-                    Box::new(|this, _, cx| this.open_library(crate::library::Section::Archive, cx)),
+                    Box::new(|this, window, cx| this.open_library(crate::library::Section::Archive, window, cx)),
                 ));
             }
         }

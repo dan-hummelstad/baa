@@ -1,12 +1,11 @@
 //! Mail in the shell (PLAN-mail.md §2, §5): the process's `Mail` and its events, what a window
 //! holds of mail, and the frame of the mail view. The parts are in the files beside this one:
-//! `nav` and `list` (WP-H), `door`, `reader` and `commands` (WP-I), `compose` and `tabs`
-//! (WP-J), `setup` (WP-K) and `code_offer` (WP-L).
+//! `nav` (the Archive's Mail section) and `list` (WP-H), `reader` and `commands` (WP-I),
+//! `compose` and `tabs` (WP-J), `setup` (WP-K) and `code_offer` (WP-L).
 
 mod code_offer;
 mod commands;
 pub(crate) mod compose;
-mod door;
 mod list;
 mod nav;
 pub(crate) mod reader;
@@ -35,9 +34,7 @@ use gpui::{div, prelude::*, px, AnyElement, App, Context, Div, Entity, EventEmit
 use crate::{
     actions::{DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
     browser::{feel, Browser},
-    icons::icon,
     input::{self, TextField},
-    library::Section,
     motion::Feel,
     theme::{ascii, fade, mix, r, surface, Theme},
 };
@@ -315,9 +312,8 @@ impl<H: WebHost> Browser<H> {
         cx.notify();
     }
 
-    /// Something of mail is on screen: the mail view, or the Mailbox door.
     fn mail_drawn(&self) -> bool {
-        self.panes_on_screen().contains(&Pane::Mail) || self.library.as_ref().is_some_and(|l| l.section == Section::Mailbox)
+        self.panes_on_screen().contains(&Pane::Mail)
     }
 
     /// The one way into `Mail` for a Space: `None` with mail off, in a private window and
@@ -331,18 +327,19 @@ impl<H: WebHost> Browser<H> {
         self.mail_of(self.session.active_space()?)
     }
 
-    /// The active Space can have mail: the switcher, the Mailbox door and ⌘⇧M are there.
+    /// The active Space can have mail: the Archive's Mail item and ⌘⇧M are there.
     pub(crate) fn mail_here(&self) -> bool {
         self.mail_space().is_some()
     }
 
-    /// The active Space has mail in front: the sidebar is the mail nav, and the page area
+    /// The active Space has mail in front: the Archive is open on Mail, and the page area
     /// draws the mail view where the page was.
     pub(crate) fn mail_in_front(&self) -> bool {
         self.front() == Some(Pane::Mail)
     }
 
-    /// Mail (`true`) or the browser in front, in the active Space. ⌘⇧M, the switcher and the door.
+    /// Mail (`true`) or the browser in front, in the active Space; the Archive opens on Mail or
+    /// closes with it (`sync_library`).
     pub(crate) fn show_mail(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = self.session.active_space() else { return };
         if on && !self.mail_here() {
@@ -352,24 +349,12 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    /// Another Space, with mail in front: the nav's and the door's Other Spaces.
+    /// Another Space, with mail in front: the account picker's Go to entries.
     pub(crate) fn show_mail_of(&mut self, space: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
         if self.mail_of(space).is_none() {
             return;
         }
         self.activate_space(space, window, cx);
-        self.show_mail(true, window, cx);
-    }
-
-    pub(crate) fn open_mailbox(&mut self, cx: &mut Context<Self>) {
-        if self.mail_here() {
-            self.open_library(Section::Mailbox, cx);
-        }
-    }
-
-    /// The door's Open Mailbox: the Library closes, the sidebar is the Space's again, mail in front.
-    pub(crate) fn open_mail_from_door(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_library(window, cx);
         self.show_mail(true, window, cx);
     }
 
@@ -505,51 +490,6 @@ impl<H: WebHost> Browser<H> {
                     .child(div().flex_1().min_w_0().h_full().child(right)),
             )
             .into_any_element()
-    }
-
-    /// Browser · Archive · Mail, above the Space strip (mocks A2/B2). Archive is never lit
-    /// here: while it is open the Library has the sidebar.
-    pub(crate) fn render_section_switcher(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        type Go<H> = fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>);
-        let mail = self.mail_in_front();
-        let item = |id: &'static str, name: &'static str, label: &'static str, ascii_label: &'static str, on: bool, go: Go<H>, cx: &mut Context<Self>| {
-            let key = (id, 0);
-            let h = self.motion.get(key, Feel::Hover);
-            let el = div()
-                .id(id)
-                .flex_1()
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(5.))
-                .text_size(px(11.))
-                .text_color(if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) })
-                .on_click(cx.listener(move |this, _, window, cx| go(this, window, cx)));
-            let el = if ascii() {
-                el.border_1()
-                    .border_color(if on { theme.accent } else { crate::theme::ascii::rule().into() })
-                    .when(on, |d| d.bg(fade(theme.accent, 0.15)))
-                    .child(ascii_label)
-            } else {
-                el.rounded(r(8.))
-                    .when(on, |d| d.bg(theme.glass_strong))
-                    .when(!on, |d| d.bg(fade(theme.hover, h)))
-                    .child(icon(name, 13., if on { theme.accent } else { theme.ink_muted }))
-                    .child(label)
-            };
-            feel(el, key, cx)
-        };
-        div()
-            .debug_selector(|| "section-switcher".into())
-            .h(px(if ascii() { 24. } else { 34. }))
-            .mb(px(6.))
-            .flex()
-            .gap(px(3.))
-            .when(!ascii(), |d| d.p(px(3.)).rounded(r(10.)).bg(theme.glass))
-            .child(item("section-browser", "globe", "Browser", "▦ BROWSER", !mail, |b, w, cx| b.show_mail(false, w, cx), cx))
-            .child(item("section-archive", "archive", "Archive", "▤ ARCHIVE", false, |b, w, cx| b.open_library_last(w, cx), cx))
-            .child(item("section-mail", "mail", "Mail", "✉ MAIL", mail, |b, w, cx| b.show_mail(true, w, cx), cx))
     }
 }
 

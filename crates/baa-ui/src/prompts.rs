@@ -915,7 +915,7 @@ impl<H: WebHost> Browser<H> {
                 button(("downloads-all", 0), "Show All", false, theme, self, cx).on_click(cx.listener(
                     |this, _, window, cx| {
                         this.close_overlays(window, cx);
-                        this.open_library(crate::library::Section::Downloads, cx);
+                        this.open_library(crate::library::Section::Downloads, window, cx);
                     },
                 )),
             )

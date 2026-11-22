@@ -698,6 +698,7 @@ impl<H: WebHost> Browser<H> {
         self.pip_on_screen_change(&before, cx);
         self.show_pages(cx);
         self.sync_mail_view(window, cx);
+        self.sync_library(cx);
         self.retarget_mini_player();
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
             self.focus_page(window, cx);
