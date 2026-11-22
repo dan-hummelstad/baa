@@ -86,7 +86,9 @@ impl<H: WebHost> Browser<H> {
                 }
                 *cmd |= event.modifiers.platform;
                 *swipe = (*swipe + dx / SIDEBAR_WIDTH).clamp(-1.0, 1.0);
-                self.slide.snap(if *cmd { 0.0 } else { *swipe });
+                // With one Space there is nowhere to go, so the content stays put.
+                let follows = !*cmd && self.session.spaces().len() > 1;
+                self.slide.snap(if follows { *swipe } else { 0.0 });
                 cx.notify();
             }
             gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {

@@ -669,6 +669,19 @@ fn links_lil_baa_opens_become_adopted_tabs_and_are_never_loaded(cx: &mut TestApp
 fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
     use gpui::{point, px, Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase};
     let (b, cx) = browser(cx);
+    // One Space: the content does not follow the fingers, there being nowhere to go.
+    b.update_in(cx, |b, window, cx| {
+        let at = |phase, dx: f32| ScrollWheelEvent {
+            position: point(px(100.), px(300.)),
+            delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+            modifiers: Modifiers::none(),
+            touch_phase: phase,
+        };
+        b.on_chrome_scroll(&at(TouchPhase::Started, 0.), window, cx);
+        b.on_chrome_scroll(&at(TouchPhase::Moved, -120.), window, cx);
+        assert_eq!(b.slide.value(), 0.0);
+        b.on_chrome_scroll(&at(TouchPhase::Ended, 0.), window, cx);
+    });
     cx.dispatch_action(NewSpace);
     cx.simulate_keystrokes("escape");
     let spaces = b.read_with(cx, |b, _| {

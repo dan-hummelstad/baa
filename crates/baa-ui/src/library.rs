@@ -368,18 +368,19 @@ impl<H: WebHost> Browser<H> {
                 .opacity(t.clamp(0., 1.))
                 .child(
                     div().flex_1().min_h_0().flex().child(nav).child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .pl(px(10.))
-                            .pr(px(16.))
-                            .flex()
-                            // A Space switch slides the body as it does the browser sidebar's lists.
-                            .relative()
-                            .left(px(slide * SIDEBAR_WIDTH))
-                            .opacity(1.0 - slide.abs().min(1.0) * 0.6)
-                            .child(body),
+                        // Clipped, so the sliding body never passes over the rail.
+                        div().flex_1().min_w_0().h_full().overflow_hidden().child(
+                            div()
+                                .size_full()
+                                .pl(px(10.))
+                                .pr(px(16.))
+                                .flex()
+                                // A Space switch slides the body as it does the browser sidebar's lists.
+                                .relative()
+                                .left(px(slide * SIDEBAR_WIDTH))
+                                .opacity(1.0 - slide.abs().min(1.0) * 0.6)
+                                .child(body),
+                        ),
                     ),
                 )
                 .child(bottom)
