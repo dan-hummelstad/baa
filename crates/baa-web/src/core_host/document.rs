@@ -59,14 +59,19 @@ fn script_parts(kind: DocumentKind) -> (String, String) {
          const d=new DOMParser().parseFromString(",
         serde_json::Value::from(page_html(kind))
     );
-    // `<link>` goes because preconnect and DNS prefetch are outside every directive. A message's
-    // links leave as new tabs: a `<base>` the mail brings comes after this one and does not win.
+    // `<link>` goes because preconnect and DNS prefetch are outside every directive. For the same
+    // reason link hosts are never prefetched: Blink lets a mail's own `x-dns-prefetch-control: on`
+    // turn that on in a frame, but not after an "off" (Document::ParseDNSPrefetchControlHeader), so
+    // this one comes first. A message's links leave as new tabs: a `<base>` the mail brings comes
+    // after this one and does not win.
     let finish = match kind {
-        DocumentKind::Message { .. } => "const b=d.createElement(\"base\");b.target=\"_blank\";d.head.prepend(b);",
-        DocumentKind::Editor => "d.body.contentEditable=\"true\";",
+        DocumentKind::Message { .. } => "const b=d.createElement(\"base\");b.target=\"_blank\";d.head.prepend(m,b);",
+        DocumentKind::Editor => "d.head.prepend(m);d.body.contentEditable=\"true\";",
     };
     let tail = format!(
-        ",\"text/html\");d.querySelectorAll(\"link\").forEach(e=>e.remove());{finish}f.srcdoc=d.documentElement.outerHTML}})()"
+        ",\"text/html\");d.querySelectorAll(\"link\").forEach(e=>e.remove());\
+         const m=d.createElement(\"meta\");m.httpEquiv=\"x-dns-prefetch-control\";m.content=\"off\";\
+         {finish}f.srcdoc=d.documentElement.outerHTML}})()"
     );
     (head, tail)
 }
@@ -137,8 +142,10 @@ mod tests {
     fn the_script_writes_only_into_a_blank_opaque_page() {
         let script = write_script(MESSAGE, "<p>hi</p>");
         assert!(script.starts_with("(()=>{if(location.href!==\"about:blank\"||origin!==\"null\")return;"));
-        assert!(script.contains("d.head.prepend(b);f.srcdoc="));
-        assert!(write_script(DocumentKind::Editor, "").contains("d.body.contentEditable=\"true\""));
+        let off = "const m=d.createElement(\"meta\");m.httpEquiv=\"x-dns-prefetch-control\";m.content=\"off\";";
+        assert!(script.contains(&format!("{off}const b=d.createElement(\"base\");b.target=\"_blank\";d.head.prepend(m,b);f.srcdoc=")));
+        let editor = write_script(DocumentKind::Editor, "");
+        assert!(editor.contains(&format!("{off}d.head.prepend(m);d.body.contentEditable=\"true\";f.srcdoc=")));
     }
 
     /// `crates/baa-chromium/tests/mail-document.txt` runs the exact scripts this module writes.

@@ -1,7 +1,9 @@
 # A mail message in a document (PLAN-mail.md §6, WP-P1): its script, onerror, meta refresh, form,
 # nested frame, remote image, background image and stylesheet do nothing and fetch nothing, the
 # target=_top link does not navigate, and the link opens one new tab. The editor's quoted meta refresh
-# does not take its frame away, and the page's script can reach the editable body.
+# does not take its frame away, and the page's script can reach the editable body. The frame's head
+# starts with x-dns-prefetch-control off; whether a link's host is resolved is not seen here (DNS goes
+# through --host-resolver-rules, not to the test server).
 script: mail-document.txt
 must: baa: get_state ok=true url=about:blank title="editor:true:quoted" .* origin=null$
 must: baa: get_state ok=true url=about:blank title="frames:1:true:true" .* origin=null$
