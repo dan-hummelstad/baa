@@ -98,7 +98,6 @@ fn check_address(addr: &str) -> Result<()> {
     Ok(())
 }
 
-/// A new 0600 file holding the message, removed when dropped.
 struct PrivateFile {
     path: PathBuf,
 }

@@ -136,7 +136,6 @@ impl Backend for Imap {
 }
 
 
-/// One signed-in IMAP connection.
 pub(crate) struct Session {
     conn: Box<dyn Conn>,
     client: Client,

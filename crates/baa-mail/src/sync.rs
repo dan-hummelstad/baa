@@ -39,7 +39,6 @@ pub(crate) enum Job {
     Stop,
 }
 
-/// What an account thread shares with [`crate::Mail`].
 pub(crate) struct Shared {
     pub connect: Connect,
     pub secrets: Box<dyn Secrets>,
@@ -117,42 +116,42 @@ fn run(t: &Thread) {
             }
             _ => {
                 t.status(SyncState::Offline);
-                Some(backoff)
+                let wait = backoff;
+                backoff = (backoff * 2).min(BACKOFF.1);
+                Some(wait)
             }
         };
-        if let Some(wait) = wait {
-            backoff = (backoff * 2).min(BACKOFF.1);
-            if offline(t, wait).is_err() {
-                return;
-            }
-        } else if offline(t, Duration::MAX).is_err() {
+        if offline(t, wait).is_err() {
             return;
         }
     }
 }
 
-/// Waits out `wait` while offline. A check ends it early; the queue and the outbox wait in
-/// mail.db, and a body asked for is asked for again by the next read.
-fn offline(t: &Thread, wait: Duration) -> std::result::Result<(), Stopped> {
-    let until = Instant::now().checked_add(wait);
+/// Waits out `wait` (`None`: until asked) while offline. A check ends it early; the queue
+/// and the outbox wait in mail.db, and a body asked for is asked for again by the next read.
+fn offline(t: &Thread, wait: Option<Duration>) -> std::result::Result<(), Stopped> {
+    let until = wait.map(|wait| Instant::now() + wait);
     loop {
-        let left = until.map_or(Duration::from_secs(3600), |u| u.saturating_duration_since(Instant::now()));
-        if left.is_zero() {
-            return Ok(());
-        }
-        match t.jobs.recv_timeout(left) {
-            Ok(Job::Stop) | Err(RecvTimeoutError::Disconnected) => return Err(Stopped),
+        let job = match until {
+            Some(until) => match t.jobs.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                Err(RecvTimeoutError::Timeout) => return Ok(()),
+                job => job.map_err(|_| ()),
+            },
+            None => t.jobs.recv().map_err(|_| ()),
+        };
+        match job {
+            Ok(Job::Stop) | Err(()) => return Err(Stopped),
             Ok(Job::Check) => return Ok(()),
             Ok(_) => {}
-            Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }
 
 fn online(t: &Thread, backend: &mut dyn Backend) -> Result<Stopped> {
     replay(t, backend)?;
-    send_outbox(t, backend)?;
+    // Folders first: a message waiting from before is filed in a Sent folder mail.db knows.
     sync_all(t, backend)?;
+    send_outbox(t, backend)?;
     t.status(SyncState::Synced);
     let mut polled = Instant::now();
     loop {
@@ -173,10 +172,8 @@ fn online(t: &Thread, backend: &mut dyn Backend) -> Result<Stopped> {
             polled = Instant::now();
         }
         let Some(inbox) = t.store.folder_by_role(t.account.id, Role::Inbox)? else {
-            // No INBOX to IDLE on: wait for jobs and the next poll.
-            if let Ok(job) = t.jobs.recv_timeout(STEP) {
-                let _ = job;
-            }
+            // No INBOX to IDLE on: the jobs and the next poll still come.
+            std::thread::sleep(STEP);
             continue;
         };
         if backend.wait(&inbox.path, STEP)? {
@@ -269,3 +266,6 @@ fn fetch_body(t: &Thread, backend: &mut dyn Backend, id: MessageId) -> Result<()
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

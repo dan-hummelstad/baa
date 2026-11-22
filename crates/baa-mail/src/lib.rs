@@ -400,6 +400,9 @@ impl Mail {
 
     /// The account with its mail, queued changes, outbox and secrets.
     pub fn remove_account(&self, id: AccountId) {
+        // ponytail: the thread stops at its next step; a sync it is in the middle of may
+        // still write the account's folders once. The ceiling is a check of the account row
+        // inside the store's writes.
         self.threads.lock().unwrap().remove(&id);
         if let Some(store) = self.store.get() {
             let _ = store.delete_account(id);
