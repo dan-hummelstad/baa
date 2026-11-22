@@ -88,7 +88,7 @@ impl Server {
         self.messages
             .iter()
             .position(|m| m.folder == folder && m.message.uid == uid)
-            .ok_or_else(|| Error(format!("no message {uid} in {folder}")))
+            .ok_or_else(|| Error::Other(format!("no message {uid} in {folder}")))
     }
 
     /// To change them: the change is stamped `now`.
@@ -121,7 +121,7 @@ impl Backend for Fake {
     fn changes(&mut self, folder: &str, cursor: Option<&str>) -> Result<Changes> {
         let server = self.server.0.lock().unwrap();
         let since: u64 = match cursor {
-            Some(cursor) => cursor.parse().map_err(|_| Error(format!("not a cursor of this server: {cursor}")))?,
+            Some(cursor) => cursor.parse().map_err(|_| Error::Other(format!("not a cursor of this server: {cursor}")))?,
             None => 0,
         };
         self.asked = server.clock;

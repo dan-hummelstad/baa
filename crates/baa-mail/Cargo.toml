@@ -8,3 +8,21 @@ publish = false
 [dependencies]
 baa-model.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+url.workspace = true
+# IMAP as a sans-I/O state machine over imap-codec: it runs on a blocking std TcpStream, so no
+# async runtime. Without its default `stream` feature it has no tokio.
+imap-next = { version = "0.3.4", default-features = false, features = ["starttls", "ext_condstore_qresync"] }
+# TLS for IMAP; ring as its crypto (aws-lc-sys carries the OpenSSL licence). ring also gives
+# PKCE its SHA-256 and random bytes.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+ring = "0.17"
+# Certificates and host names checked by the system trust store, as Safari checks them.
+rustls-platform-verifier = "0.7"
+# Already in the graph via imap-codec: SASL XOAUTH2 and PKCE's base64url.
+base64 = "0.22"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Keychain items for passwords and tokens; the `security` CLI would put the secret on argv.
+security-framework = "3"

@@ -6,6 +6,8 @@
 
 mod account;
 mod backend;
+pub mod oauth;
+pub mod provider;
 mod secrets;
 
 use std::{
@@ -17,11 +19,13 @@ use std::{
 use baa_model::SpaceId;
 use serde::{Deserialize, Serialize};
 
-pub use account::{Account, NewAccount};
+pub use account::{check_port, Account, NewAccount, NewSignIn, Protocol, Server, Servers, SignIn, Tls};
 pub use backend::{
     fake::{Fake, SentMessage},
     Backend, Changes, Flags, Op, RemoteFolder, RemoteMessage,
 };
+#[cfg(target_os = "macos")]
+pub use secrets::Keychain;
 pub use secrets::{MemorySecrets, Secret, Secrets};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,13 +44,37 @@ pub struct ThreadId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DraftId(pub u64);
 
-/// Why a mail call failed, in words the user can be shown. Never holds a secret.
+/// Why a mail call failed. The kinds are the cases the UI tells apart; `Display` is the words
+/// it shows. Never holds a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Error(pub String);
+pub enum Error {
+    /// The server refused the user name or password.
+    SignIn,
+    /// The server takes no password for this account: it wants an app password, or its own
+    /// sign-in ("basic authentication is off").
+    BasicAuthOff,
+    /// Not one of the standard mail ports (PLAN-mail.md §9).
+    Port(u16),
+    /// The server offered no TLS, or TLS failed. Nothing goes on in plain text.
+    NoTls,
+    /// The stored sign-in no longer works; the account's mail stays.
+    SignInAgain,
+    /// This build has no OAuth client for the provider.
+    NotSetUp,
+    Other(String),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            Error::SignIn => f.write_str("The server did not accept the user name or password"),
+            Error::BasicAuthOff => f.write_str("The server does not take this password: use an app password, or the provider's own sign-in"),
+            Error::Port(port) => write!(f, "Port {port} is not a standard mail port, and baa uses only those"),
+            Error::NoTls => f.write_str("The server offered no secure connection, so baa did not connect"),
+            Error::SignInAgain => f.write_str("Sign in to this account again"),
+            Error::NotSetUp => f.write_str("Sign-in with this provider is not set up in this build"),
+            Error::Other(what) => f.write_str(what),
+        }
     }
 }
 
@@ -269,7 +297,7 @@ impl Mail {
 
     /// Tests the sign-in first, and stores nothing if it fails.
     pub fn add_account(&self, _new: NewAccount) -> Result<AccountId> {
-        Err(Error(NOT_BUILT.into()))
+        Err(Error::Other(NOT_BUILT.into()))
     }
 
     pub fn remove_account(&self, _id: AccountId) {}
@@ -316,7 +344,7 @@ impl Mail {
     pub fn act(&self, _on: &[MessageId], _action: Action) {}
 
     pub fn save_draft(&self, _draft: &Draft) -> Result<DraftId> {
-        Err(Error(NOT_BUILT.into()))
+        Err(Error::Other(NOT_BUILT.into()))
     }
 
     /// [`Event::Sent`] or [`Event::Failed`] follows.
@@ -324,7 +352,7 @@ impl Mail {
 
     /// Into `dir`, under the last component of the attachment's name. Returns where it is.
     pub fn save_attachment(&self, _of: MessageId, _part: usize, _dir: &Path) -> Result<PathBuf> {
-        Err(Error(NOT_BUILT.into()))
+        Err(Error::Other(NOT_BUILT.into()))
     }
 
     pub fn view_state(&self, _space: MailSpace) -> ViewState {
@@ -380,8 +408,15 @@ mod tests {
         mail.set_view_state(space, &ViewState { scroll: 3, ..ViewState::default() });
         assert_eq!(mail.view_state(space), ViewState::default());
 
-        let new = NewAccount { space: Some(space), name: "Dan".into(), address: "dan@example.com".into(), password: "app-password".into() };
-        assert_eq!(mail.add_account(new), Err(Error("Mail is not built yet".into())));
+        let new = NewAccount {
+            space: Some(space),
+            name: "Dan".into(),
+            address: "dan@example.com".into(),
+            provider: provider::Provider::Fastmail,
+            servers: provider::Provider::Fastmail.servers("dan@example.com").unwrap(),
+            sign_in: NewSignIn::Password("app-password".into()),
+        };
+        assert_eq!(mail.add_account(new), Err(Error::Other("Mail is not built yet".into())));
         let draft = Draft {
             id: None,
             from: AccountId(1),
