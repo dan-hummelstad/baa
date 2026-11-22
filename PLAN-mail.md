@@ -484,8 +484,8 @@ approved it on 2026-11-22, for the standard ports only.
 - **A code offer is a security prompt** and follows those rules (origin from the engine, 500 ms,
   no Enter, ids from the request).
 - **Attachments are downloads**: quarantined, never opened by baa, dangerous types warned about.
-- **Inbox categories run on the Mac only** (§17): Apple's Foundation Models, guided to one of
-  three values; a category never causes an action, a fetch or a log line.
+- **Inbox categories run on the Mac only** (§17): Apple's on-device `SystemLanguageModel`, never
+  `PrivateCloudComputeLanguageModel`, guided to one of three values; a category never causes an action, a fetch or a log line.
 
 `security-lint.sh` gains: a `Command::new("curl")` in `crates/baa-mail` must sit beside
 `--ssl-reqd` or `=https`; no `danger`/`dangerous` rustls configuration anywhere.
@@ -895,14 +895,21 @@ gains `category` (0 Primary, 1 Social, 2 Promotions) and `category_by` (rule, mo
 row the model has not classified yet shows in Primary and All Mail. It moves when its category
 arrives (`Event::Changed`).
 
-**The model.** `SystemLanguageModel(useCase: .contentTagging)` with guided generation: an
-`@Generable enum Category { primary, social, promotions }`. The model cannot return anything other
-than one of the three values. There is one `LanguageModelSession` for each message, so no message
-can see another message. The instructions are fixed in the bridge. The message goes in the prompt
-as data: From (name and address), To, Subject, the bulk headers by name, and at most 1,000
-characters of snippet, which keeps the prompt far below the 4,096-token context. If the model
-gives an error, refuses or runs past a 5-second time limit, the result is Primary, and the
-message is not tried again until baa restarts.
+**The model.** `SystemLanguageModel.default` (the general on-device model) with guided
+generation: an `@Generable enum Category { primary, social, promotions }`. The model cannot return
+anything other than one of the three values. The `.contentTagging` model is not used: Apple says
+it writes free tags for actions, objects, emotions and topics, and that other tagging should use
+the general model. There is one `LanguageModelSession` for each message, so no message can see
+another message. The instructions are fixed in the bridge. The message goes in the prompt as
+data: From (name and address), To, Subject, the bulk headers by name, and at most 1,000
+characters of snippet. The on-device context is 4,096 tokens (Apple's documentation; some OS 27
+models have more), shared by the instructions, the prompt and the answer. The bridge measures the
+prompt with `tokenCount(for:)` against `contextSize` and cuts the snippet until it fits.
+
+When a call fails, the result is Primary, and the message is not tried again until baa restarts.
+A call fails when the session throws (`LanguageModelSession.GenerationError`: a guardrail
+violation, a refusal, `exceededContextWindowSize`) or runs past a 5-second time limit. A
+rate-limit error is different: the message goes back in the queue, and the queue waits a minute.
 
 - One classifier thread for all of Mail. It is started on the first bulk message, and takes the
   newest message first, so a first sync of thousands of messages shows the newest classified
@@ -911,24 +918,32 @@ message is not tried again until baa restarts.
   `ponytail: 500, raise it if older mail matters`.
 - No model call on battery under 20 % (the Energy Saver rule Chromium uses), and none while
   `ProcessInfo.thermalState` is serious or critical. The queue waits for those to clear.
-- Availability: `SystemLanguageModel.default.availability`. "Not eligible" (no Apple silicon or an
-  older macOS), "Apple Intelligence is off" and "the model is still downloading" each have their
-  own text in Settings. Steps 1 to 3 still run without the model.
+- Availability: `SystemLanguageModel.default.availability`, from macOS 26.0. Settings has a text
+  for each reason: `.deviceNotEligible` (no Apple silicon, or Apple Intelligence is not offered
+  in the Mac's region), `.appleIntelligenceNotEnabled` (macOS 26 only; on 27 it cannot be turned
+  off) and `.modelNotReady` (still downloading; checked again each minute). An `@unknown default`
+  reads "not available". Steps 1 to 3 run without the model.
 
-**The Swift bridge.** The Foundation Models framework is Swift only, and baa has no Swift. It
-gains one file, `crates/baa-mail/swift/categorize.swift`, with one `@_cdecl` function:
-`baa_categorize(json: *const c_char) -> i32` (−1 is unavailable or failed) and
-`baa_model_status() -> i32`. The function blocks on the async call with a semaphore, so it is
-called only from the classifier thread. `baa-mail/build.rs` compiles the file with `swiftc` into
+**The Swift bridge.** Apple gives Foundation Models a Swift API and a Python SDK, and no C or
+Objective-C API. baa has no Swift. It gains one file, `crates/baa-mail/swift/categorize.swift`,
+with two `@_cdecl` functions: `baa_categorize(json: *const c_char) -> i32` (−1 is unavailable or
+failed, −2 is rate-limited) and `baa_model_status() -> i32`. `baa_categorize` blocks on the async
+call with a semaphore, so it is called only from the classifier thread. `baa-mail/build.rs` compiles the file with `swiftc` into
 a static library. The library weak-links `FoundationModels` and is guarded with
 `#available(macOS 26, *)`, so baa still starts on an older macOS. There is no `swift-rs` or
-`swift-bridge`: one C function does not need a crate. Tests in `baa-mail` run the rules against a
+`swift-bridge`, and none of the crates that wrap Foundation Models (`foundation-models`, `fm-rs`):
+two C functions do not need a dependency, and a wrapper would bring the cloud model's API with
+it. Tests in `baa-mail` run the rules against a
 corpus of headers, with a fake classifier instead of the model. One `#[ignore]` test calls the
 real model on ten fixed messages and prints its choices. The user runs it by hand.
 
 **Privacy and security** (additions to §9).
-- The model runs on the Mac. Foundation Models does not use Private Cloud Compute, so no mail
-  leaves the Mac for classification. PRIVACY.md says this in the mail entry.
+- The model runs on the Mac. Since OS 27, Foundation Models can also run a request on Private
+  Cloud Compute, but only through its own type, `PrivateCloudComputeLanguageModel`, and with an
+  entitlement. `SystemLanguageModel` is the on-device model and never sends a request to the
+  cloud. baa uses `SystemLanguageModel` only and does not request the Private Cloud Compute
+  entitlement, so no mail leaves the Mac for classification. `security-lint.sh` fails on
+  `PrivateCloudCompute` anywhere in the repository. PRIVACY.md says this in the mail entry.
 - Mail content is untrusted, and prompt injection is expected. Guided generation lets the model
   answer only with one of three values. The worst result of a hostile message is a wrong
   category for that one message. A category never deletes, archives, marks read, sends, fetches
