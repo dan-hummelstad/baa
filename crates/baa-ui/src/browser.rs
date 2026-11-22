@@ -120,6 +120,8 @@ pub(crate) enum MenuKind {
     ChatContext,
     /// The mail command row's Move: the message account's folders.
     MailMove,
+    /// The mail nav's account select: All inboxes, each account of the Space, and Go to the other Spaces with mail.
+    MailScope,
     /// A draft's From: the accounts it may be sent from.
     MailFrom(baa_mail::DraftId),
 }

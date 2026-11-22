@@ -262,6 +262,7 @@ impl<H: WebHost> Browser<H> {
             let color = if on { theme.ink } else { mix(theme.ink_muted, theme.ink, h) };
             let el = div()
                 .id(("library-nav", section as u64))
+                .when(section == Section::Mail, |d| d.debug_selector(|| "library-mail".into()))
                 .h(px(58.))
                 .mx(px(5. + 2. * p))
                 .flex()

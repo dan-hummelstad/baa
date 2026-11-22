@@ -280,6 +280,7 @@ impl<H: WebHost> Browser<H> {
                 ));
             }
             MenuKind::MailMove => return self.mail_move_menu(),
+            MenuKind::MailScope => return self.mail_scope_menu(),
             MenuKind::MailFrom(draft) => return self.mail_from_menu(draft),
             MenuKind::ChatContext => {
                 let shown = self.chat_context();

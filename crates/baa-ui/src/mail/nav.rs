@@ -7,7 +7,7 @@ use gpui::{div, prelude::*, px, AnyElement, Context, Hsla, SharedString, Window}
 
 use super::Field;
 use crate::{
-    browser::{feel, Browser},
+    browser::{feel, menus::MenuEntry, Browser, MenuKind},
     icons::icon,
     motion::{Feel, Key},
     theme::{ascii, fade, mix, r, Theme},
@@ -78,16 +78,62 @@ impl<H: WebHost> Browser<H> {
             .child(self.render_mail_field(Field::Search, "Search mail", ink, muted, window, cx))
             .child(div().text_size(px(10.)).text_color(theme.ink_faint).child("⌘F"));
 
-        let header = div()
-            .flex_none()
-            .mt(px(8.))
-            .px(px(10.))
-            .py(px(7.))
-            .rounded(r(10.))
-            .when(ascii(), |d| d.border_1().border_color(crate::theme::ascii::rule()))
-            .when(!ascii(), |d| d.bg(theme.glass))
-            .child(div().text_size(px(12.5)).text_color(ink).child("All inboxes"))
-            .child(div().text_size(px(10.5)).text_color(muted).truncate().child(format!("{} mailboxes · {space_name}", accounts.len())));
+        let select = if accounts.is_empty() {
+            div()
+                .debug_selector(|| "mail-add-account".into())
+                .flex_none()
+                .p(px(10.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .rounded(r(12.))
+                .text_size(px(12.5))
+                .text_color(ink)
+                .when(ascii(), |d| d.border_1().border_color(crate::theme::ascii::rule()))
+                .when(!ascii(), |d| d.bg(theme.glass_strong))
+                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Add an account"))
+                .child(div().text_size(px(11.)).text_color(muted).child("Read and send mail here, next to your tabs. Accounts are kept in this Space, or in all of them."))
+                .child(
+                    div()
+                        .id("mail-add-account-button")
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(r(8.))
+                        .bg(theme.accent)
+                        .text_color(if ascii() { crate::theme::surface::bg().into() } else { gpui::white() })
+                        .on_click(cx.listener(|this, _, _, cx| this.open_mail_settings(cx)))
+                        .child("Add an account"),
+                )
+                .into_any_element()
+        } else {
+            let key = ("mail-account-select", 0);
+            let h = self.motion.get(key, Feel::Hover);
+            let first = scope.and_then(|s| accounts.iter().find(|a| a.id == s)).map_or("All inboxes".to_string(), |a| a.address.clone());
+            let el = div()
+                .id("mail-account-select")
+                .debug_selector(|| "mail-account-select".into())
+                .flex_none()
+                .px(px(10.))
+                .py(px(7.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(r(10.))
+                .when(ascii(), |d| d.border_1().border_color(crate::theme::ascii::rule()))
+                .when(!ascii(), |d| d.bg(mix(theme.glass, theme.glass_strong, 0.5 * h)))
+                .on_click(cx.listener(|this, e: &gpui::ClickEvent, window, cx| this.open_menu(MenuKind::MailScope, e.position(), window, cx)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_size(px(12.5)).text_color(ink).truncate().child(first))
+                        .child(div().text_size(px(10.5)).text_color(muted).truncate().child(format!("{} mailboxes · {space_name}", accounts.len()))),
+                )
+                .child(if ascii() { div().text_color(muted).child("▾").into_any_element() } else { icon("chevron-down", 12., muted).into_any_element() });
+            feel(el, key, cx).into_any_element()
+        };
 
         let new_message = {
             let key = ("nav-new", 0);
@@ -143,25 +189,32 @@ impl<H: WebHost> Browser<H> {
             body = body.child(self.nav_row(theme, row, cx, move |this, _, cx| this.open_list(None, filter, cx)));
         }
 
-        let others = self.mail_other_spaces();
-        if !others.is_empty() {
-            body = body.child(heading(theme, "OTHER SPACES"));
-            for (id, name, unread) in others {
-                let row = NavRow { key: ("nav-space", id.0), icon: "mail", label: name, count: unread as usize, selected: false };
-                body = body.child(self.nav_row(theme, row, cx, move |this, window, cx| this.show_mail_of(id, window, cx)));
-            }
-        }
-
-        root.flex().flex_col().p(px(8.)).child(search).child(header).child(new_message).child(body).into_any_element()
+        root.flex().flex_col().pt(px(8.)).child(select).child(search.mt(px(8.))).child(new_message).child(body).into_any_element()
     }
 
-    /// The other Spaces that have mail, with their names and unread counts.
-    pub(crate) fn mail_other_spaces(&self) -> Vec<(SpaceId, SharedString, u32)> {
+    /// The account select's menu: the scope, then the other Spaces with mail.
+    pub(crate) fn mail_scope_menu(&self) -> Vec<MenuEntry<H>> {
         let Some((mail, space)) = self.mail_space() else { return Vec::new() };
-        mail.other_spaces(space)
-            .into_iter()
-            .filter_map(|(id, unread)| Some((id, self.session.space(id)?.name.clone().into(), unread)))
-            .collect()
+        let scope = self.mail.as_ref().and_then(|m| m.state.account);
+        let pick = |label: String, account: Option<AccountId>| MenuEntry::Item {
+            label,
+            checked: scope == account,
+            enabled: true,
+            run: Box::new(move |this: &mut Browser<H>, _: &mut Window, cx: &mut Context<Browser<H>>| this.set_scope(account, cx)),
+        };
+        let mut items = vec![pick("All inboxes".into(), None)];
+        items.extend(mail.accounts(space).into_iter().map(|a| pick(a.address, Some(a.id))));
+        let others: Vec<(SpaceId, String)> = mail.other_spaces(space).into_iter().filter_map(|(id, _)| Some((id, self.session.space(id)?.name.clone()))).collect();
+        if !others.is_empty() {
+            items.push(MenuEntry::Separator);
+        }
+        items.extend(others.into_iter().map(|(id, name)| MenuEntry::Item {
+            label: format!("Go to {name}"),
+            checked: false,
+            enabled: true,
+            run: Box::new(move |this: &mut Browser<H>, window: &mut Window, cx: &mut Context<Browser<H>>| this.show_mail_of(id, window, cx)),
+        }));
+        items
     }
 
     fn nav_row(&self, theme: &Theme, row: NavRow, cx: &mut Context<Self>, go: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> AnyElement {
