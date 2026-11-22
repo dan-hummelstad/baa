@@ -693,6 +693,7 @@ impl<H: WebHost> Browser<H> {
         }
         self.pip_on_screen_change(&before, cx);
         self.show_pages(cx);
+        self.sync_mail_view(window, cx);
         self.retarget_mini_player();
         if self.bar.is_none() && self.find.is_none() && self.peek.is_none() && self.renaming.is_none() && self.space_picker.is_none() {
             self.focus_page(window, cx);
@@ -745,6 +746,10 @@ impl<H: WebHost> Browser<H> {
             return window.focus(&self.input_focus, cx);
         }
         let mail = self.mail.as_ref().filter(|_| self.mail_in_front()).map(|m| m.focus.clone());
+        // A mail text field keeps the keyboard; the mail view holds it.
+        if mail.as_ref().is_some_and(|m| m.contains_focused(window, cx)) {
+            return;
+        }
         let target = self
             .active_page()
             .map(|p| p.read(cx).focus_handle(cx))

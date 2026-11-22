@@ -7,10 +7,10 @@ use gpui::{Entity, TestAppContext, VisualTestContext};
 
 use crate::{actions::*, library::Section, mock::MockHost, Browser};
 
-type B = Entity<Browser<MockHost>>;
+pub(crate) type B = Entity<Browser<MockHost>>;
 
 /// A window on `store`, after the app has started the process's `Mail` with mail.db in memory.
-fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) {
+pub(crate) fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) {
     cx.update(crate::init);
     let connect: baa_mail::Connect = Box::new(|_, _| Err(baa_mail::Error::Other("no server in these tests".into())));
     cx.update(|cx| crate::start_mail(cx, |notify| Mail::open_with(None, Box::new(MemorySecrets::default()), notify, connect)))
@@ -18,7 +18,29 @@ fn window(cx: &mut TestAppContext, store: Store) -> (B, &mut VisualTestContext) 
     cx.add_window_view(|window, cx| Browser::new(MockHost::new(cx), store, window, cx))
 }
 
-fn store_with_mail(on: bool) -> Store {
+/// The process's `Mail`, for a test to seed (`baa_mail::testing`).
+pub(crate) fn mail(b: &B, cx: &mut VisualTestContext) -> std::sync::Arc<Mail> {
+    b.read_with(cx, |b, _| b.mail.as_ref().expect("mail on").mail.clone())
+}
+
+/// The active Space as mail knows it.
+pub(crate) fn mail_space(b: &B, cx: &mut VisualTestContext) -> baa_mail::MailSpace {
+    b.read_with(cx, |b, _| b.mail_space().expect("a Space with mail").1)
+}
+
+/// A window with mail in front and one account of the active Space (`dan@example.com`, id 1),
+/// whose folders are Inbox, Drafts, Sent, Archive and Trash in that order.
+pub(crate) fn with_account(cx: &mut TestAppContext) -> (B, &mut VisualTestContext, std::sync::Arc<Mail>, Vec<baa_mail::FolderId>) {
+    let (b, cx) = with_mail(cx);
+    let mail = mail(&b, cx);
+    let space = mail_space(&b, cx);
+    let folders = mail.seed_account(&baa_mail::testing::account(1, Some(space), "dan@example.com"));
+    b.update_in(cx, |b, window, cx| b.show_mail(true, window, cx));
+    cx.run_until_parked();
+    (b, cx, mail, folders)
+}
+
+pub(crate) fn store_with_mail(on: bool) -> Store {
     let store = Store::open(":memory:").unwrap();
     let mut settings = Settings::default();
     settings.mail.enabled = on;
@@ -26,11 +48,11 @@ fn store_with_mail(on: bool) -> Store {
     store
 }
 
-fn with_mail(cx: &mut TestAppContext) -> (B, &mut VisualTestContext) {
+pub(crate) fn with_mail(cx: &mut TestAppContext) -> (B, &mut VisualTestContext) {
     window(cx, store_with_mail(true))
 }
 
-fn open(b: &B, cx: &mut VisualTestContext, url: &str) -> TabId {
+pub(crate) fn open(b: &B, cx: &mut VisualTestContext, url: &str) -> TabId {
     b.update_in(cx, |b, window, cx| {
         b.open_url(url, window, cx);
         b.active_tab().unwrap()
@@ -41,7 +63,7 @@ fn visible(b: &B, cx: &mut VisualTestContext, tab: TabId) -> bool {
     b.read_with(cx, |b, cx| b.pages[&tab].0.read(cx).visible.get())
 }
 
-fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+pub(crate) fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     cx.run_until_parked();
     cx.debug_bounds(selector).is_some()
 }

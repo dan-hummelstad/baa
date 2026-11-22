@@ -1,22 +1,46 @@
 //! Mail in the shell (PLAN-mail.md §2, §5): the process's `Mail` and its events, what a window
-//! holds of mail, and the nav, view and door the shell draws. The three renderers are
-//! placeholders that lane 5 (WP-H to WP-K) fills.
+//! holds of mail, and the frame of the mail view. The parts are in the files beside this one:
+//! `nav` and `list` (WP-H), `door`, `reader` and `commands` (WP-I), `compose` and `tabs`
+//! (WP-J), `setup` (WP-K) and `code_offer` (WP-L).
 
-use std::sync::Arc;
+mod code_offer;
+mod commands;
+pub(crate) mod compose;
+mod door;
+mod list;
+mod nav;
+pub(crate) mod reader;
+pub(crate) mod setup;
+mod tabs;
+#[cfg(test)]
+mod tests_codes;
+#[cfg(test)]
+mod tests_compose;
+#[cfg(test)]
+mod tests_list;
+#[cfg(test)]
+mod tests_reader;
+#[cfg(test)]
+mod tests_setup;
 
-use baa_mail::{Event, Mail, MailSpace};
+use std::{collections::HashMap, sync::Arc, time::Instant};
+
+use baa_mail::{AccountId, Event, Filter, Mail, MailSpace, SyncState, View, ViewState};
 use baa_model::{Pane, Showing, SpaceId};
-use baa_web::WebHost;
+use baa_web::{PageHandle, WebHost};
 use futures::StreamExt;
-use gpui::{div, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Subscription, Window};
+use gpui::{div, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, KeyDownEvent, Subscription, Window};
+
+pub(crate) use code_offer::Offer;
 
 use crate::{
     actions::{DeleteMessage, ForwardMessage, NewMessage, Reply, ReplyAll, SearchMail, SendMessage},
     browser::{feel, Browser},
     icons::icon,
+    input::{self, TextField},
     library::Section,
     motion::Feel,
-    theme::{ascii, fade, mix, r, Theme},
+    theme::{ascii, fade, mix, r, surface, Theme},
 };
 
 /// The process's one `Mail` and where its events arrive on the UI thread; set once by
@@ -58,26 +82,93 @@ pub fn start_mail(
     Ok(())
 }
 
+/// A text field of the mail view. They share [`MailUi::field_focus`]: the one in `field` has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Field {
+    Search,
+    To,
+    Cc,
+    Bcc,
+    Subject,
+}
+
 /// Mail in one window: `Browser.mail`, `Some` only with mail on in a window that is not private.
 pub(crate) struct MailUi<H: WebHost> {
     /// The process's one `Mail`, shared by its windows.
     pub(crate) mail: Arc<Mail>,
-    /// The message and editor pages on screen.
-    #[allow(dead_code)] // lane 5's reader and composer (WP-I, WP-J) keep their pages here
-    pub(crate) documents: Vec<Entity<H::Page>>,
     /// The mail view's keyboard focus: its `Mail` key context is active while this has it.
     pub(crate) focus: FocusHandle,
+    /// Every text field of the mail view: while it has focus the `MailField` key context is
+    /// on, where ⌫ edits text instead of deleting mail.
+    pub(crate) field_focus: FocusHandle,
+    pub(crate) field: Field,
+    pub(crate) search: TextField,
+    /// The Space whose view `state` is; another Space's is read when it becomes active.
+    pub(crate) space: Option<MailSpace>,
+    pub(crate) state: ViewState,
+    /// The Unread and Flagged search folders; not kept across a Space switch.
+    pub(crate) filter: Filter,
+    pub(crate) list: gpui::UniformListScrollHandle,
+    pub(crate) reader: Option<reader::Reader<H>>,
+    /// The open drafts, as the tab strip shows them; `state.front` is the one in front.
+    pub(crate) drafts: Vec<compose::Composer<H>>,
+    /// The last state each account reported, and when the last sync finished.
+    pub(crate) status: HashMap<AccountId, SyncState>,
+    pub(crate) synced_at: Option<Instant>,
+    /// Verification codes offered to tabs (PLAN-mail.md §7).
+    pub(crate) offers: code_offer::Offers,
     _events: Subscription,
 }
 
-// The mail view's keys (`Mail` key context); lane 5 fills them.
 impl<H: WebHost> MailUi<H> {
-    pub(crate) fn new_message(&mut self, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
-    pub(crate) fn reply(&mut self, _all: bool, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
-    pub(crate) fn forward(&mut self, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
-    pub(crate) fn send(&mut self, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
-    pub(crate) fn delete(&mut self, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
-    pub(crate) fn search(&mut self, _window: &mut Window, _cx: &mut Context<Browser<H>>) {}
+    /// What the list shows now.
+    pub(crate) fn view(&self) -> Option<View> {
+        Some(View {
+            space: self.space?,
+            folder: self.state.folder,
+            account: self.state.account,
+            filter: self.filter,
+            search: self.search.text.trim().to_owned(),
+        })
+    }
+
+    /// Keeps what mail shows, for the next Space switch or launch.
+    pub(crate) fn save_view(&self) {
+        if let Some(space) = self.space {
+            self.mail.set_view_state(space, &self.state);
+        }
+    }
+
+    pub(crate) fn front_draft(&self) -> Option<&compose::Composer<H>> {
+        let front = self.state.front?;
+        self.drafts.iter().find(|d| d.id == front)
+    }
+
+    pub(crate) fn front_draft_mut(&mut self) -> Option<&mut compose::Composer<H>> {
+        let front = self.state.front?;
+        self.drafts.iter_mut().find(|d| d.id == front)
+    }
+
+    fn field_mut(&mut self) -> Option<&mut TextField> {
+        match self.field {
+            Field::Search => Some(&mut self.search),
+            field => self.front_draft_mut().and_then(|d| d.field_mut(field)),
+        }
+    }
+
+    /// The pages of mail: hidden unless mail is on screen, and then only the one in front.
+    fn show_documents(&self, on_screen: bool, cx: &App) {
+        let front = self.front_draft().and_then(|d| d.page.as_ref());
+        let reader = self.reader.as_ref().and_then(|r| r.page.as_ref()).filter(|_| self.state.front.is_none());
+        for draft in &self.drafts {
+            if let Some(page) = &draft.page {
+                page.read(cx).set_visible(on_screen && front.is_some_and(|f| f == page));
+            }
+        }
+        if let Some(page) = self.reader.as_ref().and_then(|r| r.page.as_ref()) {
+            page.read(cx).set_visible(on_screen && reader.is_some());
+        }
+    }
 }
 
 impl<H: WebHost> Browser<H> {
@@ -91,8 +182,19 @@ impl<H: WebHost> Browser<H> {
                 let (mail, events) = (hub.mail.clone(), hub.events.clone());
                 self.mail = Some(MailUi {
                     mail,
-                    documents: Vec::new(),
                     focus: cx.focus_handle(),
+                    field_focus: cx.focus_handle(),
+                    field: Field::Search,
+                    search: TextField::default(),
+                    space: None,
+                    state: ViewState::default(),
+                    filter: Filter::All,
+                    list: gpui::UniformListScrollHandle::new(),
+                    reader: None,
+                    drafts: Vec::new(),
+                    status: HashMap::new(),
+                    synced_at: None,
+                    offers: code_offer::Offers::default(),
                     _events: cx.subscribe(&events, |this, _, event, cx| this.on_mail_event(event, cx)),
                 });
             }
@@ -103,8 +205,69 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    // ponytail: every event redraws the window; lane 5 narrows it to the views it touches.
-    fn on_mail_event(&mut self, _event: &Event, cx: &mut Context<Self>) {
+    /// After every session change (`Browser::sync`): the active Space's view is the one
+    /// loaded, and mail's pages show only while mail is on screen.
+    pub(crate) fn sync_mail_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let space = self.mail_space().map(|(_, space)| space);
+        let Some(mail) = &mut self.mail else { return };
+        if mail.space != space {
+            mail.space = space;
+            mail.state = space.map(|s| mail.mail.view_state(s)).unwrap_or_default();
+            mail.filter = Filter::All;
+            mail.search = TextField::default();
+            mail.reader = None;
+            mail.drafts.clear();
+            mail.list.scroll_to_item(mail.state.scroll, gpui::ScrollStrategy::Top);
+            self.restore_drafts(window, cx);
+            if let Some(thread) = self.mail.as_ref().and_then(|m| m.state.selected) {
+                self.select_thread(thread, window, cx);
+            }
+        }
+        self.show_mail_documents(cx);
+        self.drop_hidden_offers(cx);
+    }
+
+    /// After the page in front of mail changed (a draft opened or closed, a message selected).
+    pub(crate) fn show_mail_documents(&self, cx: &App) {
+        let on_screen = self.panes_on_screen().contains(&Pane::Mail);
+        if let Some(mail) = &self.mail {
+            mail.show_documents(on_screen, cx);
+        }
+    }
+
+    fn on_mail_event(&mut self, event: &Event, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        let ours = |mail: &MailUi<H>, account: &AccountId| {
+            mail.space.is_some_and(|space| mail.mail.accounts(space).iter().any(|a| a.id == *account))
+        };
+        match event {
+            Event::Changed { account } => {
+                self.on_codes_changed(cx);
+                let Some(mail) = &self.mail else { return };
+                if !ours(mail, account) {
+                    return;
+                }
+                self.refresh_reader(cx);
+            }
+            Event::Status { account, state } => {
+                mail.status.insert(*account, *state);
+                if *state == SyncState::Synced {
+                    mail.synced_at = Some(Instant::now());
+                }
+                if !ours(mail, account) {
+                    return;
+                }
+            }
+            Event::Sent(draft) => return self.on_sent(*draft, cx),
+            // `what` is for the user: it may name a host or an address, so it is not logged.
+            Event::Failed { account, what } => {
+                if !ours(mail, account) {
+                    return;
+                }
+                let what = what.clone();
+                self.show_toast(what, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -140,6 +303,15 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
+    /// Another Space, with mail in front: the nav's and the door's Other Spaces.
+    pub(crate) fn show_mail_of(&mut self, space: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mail_of(space).is_none() {
+            return;
+        }
+        self.activate_space(space, window, cx);
+        self.show_mail(true, window, cx);
+    }
+
     pub(crate) fn open_mailbox(&mut self, cx: &mut Context<Self>) {
         if self.mail_here() {
             self.open_library(Section::Mailbox, cx);
@@ -152,35 +324,113 @@ impl<H: WebHost> Browser<H> {
         self.show_mail(true, window, cx);
     }
 
-    /// The mail nav, in the sidebar's place above the bottom bar while mail is in front.
-    /// `other_spaces` are the other Spaces with accounts of their own and their unread counts.
-    pub(crate) fn render_nav(&self, theme: &Theme, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
-        let other_spaces = self.mail_space().map(|(mail, space)| mail.other_spaces(space)).unwrap_or_default();
-        placeholder("Mail navigation", theme)
-            .debug_selector(|| "mail-nav".into())
-            .child(format!("{} other Spaces with mail", other_spaces.len()))
+    /// The text field with the keyboard, for the input method.
+    fn mail_field(&mut self) -> Option<&mut TextField> {
+        self.mail.as_mut()?.field_mut()
+    }
+
+    /// Gives `field` the keyboard.
+    pub(crate) fn focus_mail_field(&mut self, field: Field, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        mail.field = field;
+        window.focus(&mail.field_focus, cx);
+        cx.notify();
+    }
+
+    fn on_mail_field_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mail) = &mut self.mail else { return };
+        let field = mail.field;
+        let Some(text) = mail.field_mut() else { return };
+        let before = text.text.clone();
+        let key = text.handle(&event.keystroke, cx);
+        match field {
+            Field::Search => self.on_search_key(key, &before, window, cx),
+            field => self.on_compose_key(field, key, &before, window, cx),
+        }
+        key.stop_unless_typed(cx);
+        cx.notify();
+    }
+
+    /// Esc in a field: the keyboard goes back to the mail view, where the mail keys are.
+    pub(crate) fn leave_mail_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(mail) = &self.mail {
+            window.focus(&mail.focus, cx);
+        }
+    }
+
+    /// A text field of the mail view, drawn with its own placeholder; a click gives it the keyboard.
+    pub(crate) fn render_mail_field(&self, field: Field, placeholder: &'static str, ink: gpui::Hsla, dim: gpui::Hsla, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(mail) = &self.mail else { return div().into_any_element() };
+        let text = match field {
+            Field::Search => Some(&mail.search),
+            field => mail.front_draft().and_then(|d| d.field(field)),
+        };
+        let Some(text) = text else { return div().into_any_element() };
+        let focused = mail.field == field && mail.field_focus.is_focused(window);
+        div()
+            .id(("mail-field", field as u64))
+            .flex_1()
+            .min_w_0()
+            .cursor_text()
+            .on_click(cx.listener(move |this, _, window, cx| this.focus_mail_field(field, window, cx)))
+            .child(text.render(focused, placeholder, ink, dim, fade(mix(ink, gpui::blue(), 0.5), 0.3)))
             .into_any_element()
     }
 
-    /// The mail view: the page area's content (or a split pane's) while mail shows.
-    pub(crate) fn render_view(&self, theme: &Theme, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
-        placeholder("Mail", theme).into_any_element()
+    pub(crate) fn mail_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(mail) = &self.mail else { return div().into_any_element() };
+        // The fields' keyboard: no area of its own, so a click elsewhere in mail never lands
+        // in a field (a click on a field gives it the keyboard, `render_mail_field`).
+        let fields = div()
+            .absolute()
+            .size_0()
+            .key_context("MailField")
+            .track_focus(&mail.field_focus)
+            .on_key_down(cx.listener(Self::on_mail_field_key));
+        let fields = input::wire(fields, &mail.field_focus, true, window, cx, Self::mail_field, Self::on_mail_field_key);
+        div()
+            .id("mail-view")
+            .debug_selector(|| "mail-view".into())
+            .key_context("Mail")
+            .track_focus(&mail.focus)
+            .size_full()
+            .on_action(hook::<H, NewMessage>(|b, w, cx| b.new_message(w, cx), cx))
+            .on_action(hook::<H, Reply>(|b, w, cx| b.reply_to_selected(false, w, cx), cx))
+            .on_action(hook::<H, ReplyAll>(|b, w, cx| b.reply_to_selected(true, w, cx), cx))
+            .on_action(hook::<H, ForwardMessage>(|b, w, cx| b.forward_selected(w, cx), cx))
+            .on_action(hook::<H, SendMessage>(|b, w, cx| b.send_front_draft(w, cx), cx))
+            .on_action(hook::<H, DeleteMessage>(|b, w, cx| b.delete_selected(w, cx), cx))
+            .on_action(hook::<H, SearchMail>(|b, w, cx| b.focus_mail_field(Field::Search, w, cx), cx))
+            .child(self.render_view(theme, window, cx))
+            .child(fields)
+            .into_any_element()
     }
 
-    /// The Archive's Mailbox section: the door into mail.
-    pub(crate) fn render_door(&self, theme: &Theme, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        placeholder("Mailbox", theme)
+    /// The mail view: the page area's content (or a split pane's) while mail shows. The tab
+    /// strip, then the command row, then the list beside the reading pane or the draft in front.
+    pub(crate) fn render_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(mail) = &self.mail else { return div().into_any_element() };
+        let right = match mail.state.front {
+            Some(_) => self.render_composer(theme, window, cx),
+            None => self.render_reader(theme, window, cx),
+        };
+        let commands = mail.state.front.is_none().then(|| self.render_commands(theme, window, cx));
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(surface::bg())
+            .text_color(surface::ink())
+            .child(self.render_mail_tabs(theme, window, cx))
+            .children(commands)
             .child(
                 div()
-                    .id("open-mailbox")
-                    .px(px(12.))
-                    .py(px(6.))
-                    .rounded(px(8.))
-                    .bg(theme.accent)
-                    .text_color(gpui::white())
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.open_mail_from_door(window, cx)))
-                    .child("Open Mailbox"),
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.render_list(theme, window, cx))
+                    .child(div().w(px(1.)).h_full().bg(surface::line()))
+                    .child(div().flex_1().min_w_0().h_full().child(right)),
             )
             .into_any_element()
     }
@@ -229,34 +479,15 @@ impl<H: WebHost> Browser<H> {
             .child(item("section-archive", "archive", "Archive", "▤ ARCHIVE", false, |b, w, cx| b.open_library_last(w, cx), cx))
             .child(item("section-mail", "mail", "Mail", "✉ MAIL", mail, |b, w, cx| b.show_mail(true, w, cx), cx))
     }
-
-    pub(crate) fn mail_view(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(mail) = &self.mail else { return div().into_any_element() };
-        div()
-            .id("mail-view")
-            .debug_selector(|| "mail-view".into())
-            .key_context("Mail")
-            .track_focus(&mail.focus)
-            .size_full()
-            .on_action(hook::<H, NewMessage>(|m, w, cx| m.new_message(w, cx), cx))
-            .on_action(hook::<H, Reply>(|m, w, cx| m.reply(false, w, cx), cx))
-            .on_action(hook::<H, ReplyAll>(|m, w, cx| m.reply(true, w, cx), cx))
-            .on_action(hook::<H, ForwardMessage>(|m, w, cx| m.forward(w, cx), cx))
-            .on_action(hook::<H, SendMessage>(|m, w, cx| m.send(w, cx), cx))
-            .on_action(hook::<H, DeleteMessage>(|m, w, cx| m.delete(w, cx), cx))
-            .on_action(hook::<H, SearchMail>(|m, w, cx| m.search(w, cx), cx))
-            .child(self.render_view(theme, window, cx))
-            .into_any_element()
-    }
 }
 
-type Hook<H> = fn(&mut MailUi<H>, &mut Window, &mut Context<Browser<H>>);
+type Hook<H> = fn(&mut Browser<H>, &mut Window, &mut Context<Browser<H>>);
 type Listener<A> = Box<dyn Fn(&A, &mut Window, &mut App)>;
 
 fn hook<H: WebHost, A: gpui::Action>(on: Hook<H>, cx: &mut Context<Browser<H>>) -> Listener<A> {
     Box::new(cx.listener(move |this, _: &A, window, cx| {
-        if let Some(mail) = &mut this.mail {
-            on(mail, window, cx);
+        if this.mail.is_some() {
+            on(this, window, cx);
         }
     }))
 }
@@ -270,15 +501,7 @@ pub(crate) fn delete_warning(lost_accounts: &[String]) -> String {
     }
 }
 
-// ponytail: plain names in the middle of their place until lane 5 draws mocks A2/B2.
-fn placeholder(name: &'static str, theme: &Theme) -> gpui::Div {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .items_center()
-        .justify_center()
-        .text_color(theme.ink_muted)
-        .child(name)
+/// Unix seconds now.
+pub(crate) fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

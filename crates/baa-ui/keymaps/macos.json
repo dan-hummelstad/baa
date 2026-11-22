@@ -123,8 +123,13 @@
       "cmd-shift-r": "baa::ReplyAll",
       "cmd-shift-f": "baa::ForwardMessage",
       "cmd-enter": "baa::SendMessage",
-      "backspace": "baa::DeleteMessage",
       "cmd-f": "baa::SearchMail"
+    }
+  },
+  {
+    "context": "Mail && !MailField",
+    "bindings": {
+      "backspace": "baa::DeleteMessage"
     }
   },
   {
