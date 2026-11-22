@@ -466,6 +466,31 @@ fn in_mail_a_swipe_switches_space_and_stays_in_mail_where_the_next_space_can_hav
 }
 
 #[gpui::test]
+fn the_fold_shows_the_spaces_a_dot_switches_and_a_swipe_on_downloads_moves_on(cx: &mut TestAppContext) {
+    let (b, cx, _) = three_spaces(cx);
+    let ids = spaces(&b, cx);
+    assert_eq!(section(&b, cx), Some(Section::Mail));
+    assert!(drawn(cx, "library-bottom"), "the Fold's bottom row");
+    let dot = |id: SpaceId| -> &'static str { format!("space-{}", id.0).leak() };
+    for id in &ids {
+        assert!(drawn(cx, dot(*id)), "a dot for each Space");
+    }
+    let at = cx.debug_bounds(dot(ids[1])).unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(active(&b, cx), Some(ids[1]), "the click switches Space");
+    let pill = b.read_with(cx, |b, _| b.motion.target(("space-pill", 0), crate::motion::Feel::Glide));
+    assert_eq!(pill, Some(crate::browser::SPACE_DOT), "the pill goes to the second dot");
+    assert_eq!(section(&b, cx), Some(Section::Mail), "from mail, to the next Space's mail");
+
+    b.update_in(cx, |b, window, cx| b.open_library(Section::Downloads, window, cx));
+    chrome_swipe(&b, cx, -300., false);
+    assert_eq!(active(&b, cx), Some(ids[2]), "fingers left: the next Space");
+    assert_eq!(section(&b, cx), Some(Section::Downloads), "the Fold stays open on Downloads");
+    assert!(drawn(cx, dot(ids[2])), "with the dots under it");
+}
+
+#[gpui::test]
 fn cmd_shift_a_collapses_the_archive_from_each_section_and_reopens_it_on_the_last(cx: &mut TestAppContext) {
     let (b, cx, tab) = mail_over_a_tab(cx);
     for last in [Section::Mail, Section::Downloads, Section::Archive, Section::Chat, Section::Mail] {

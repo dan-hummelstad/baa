@@ -375,6 +375,20 @@ impl<H: WebHost> Browser<H> {
                         .child(body),
                 ),
             )
+            // The Spaces stay in sight under every section: a dot switches, a swipe down closes.
+            .child(
+                div()
+                    .id("library-bottom")
+                    .debug_selector(|| "library-bottom".into())
+                    .flex_none()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(ascii(), |d| d.border_t_1().border_color(crate::theme::ascii::rule()))
+                    .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
+                    .child(self.render_space_dots(theme, cx)),
+            )
             .into_any_element()
     }
 
@@ -474,9 +488,7 @@ impl<H: WebHost> Browser<H> {
         div().flex_none().h(px(50.)).px(px(10.)).flex().items_center().gap(px(3.)).children(segs).child(div().flex_1()).child(settings)
     }
 
-    /// The Fold's last row, where the bottom bar was: what the section holds and the one
-    /// action that goes with it. A swipe down here closes the Fold.
-    pub(crate) fn fold_footer(&self, summary: String, action: Option<AnyElement>, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn fold_footer(summary: String, action: Option<AnyElement>, theme: &Theme) -> AnyElement {
         div()
             .flex_none()
             .flex()
@@ -484,8 +496,6 @@ impl<H: WebHost> Browser<H> {
             .child(fold_rule(theme))
             .child(
                 div()
-                    .id("library-bottom")
-                    .debug_selector(|| "library-bottom".into())
                     .h(px(46.))
                     .px(px(14.))
                     .flex()
@@ -493,7 +503,6 @@ impl<H: WebHost> Browser<H> {
                     .gap(px(8.))
                     .bg(theme.glass)
                     .text_size(px(11.5))
-                    .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
                     .child(div().flex_1().min_w_0().truncate().text_color(ink_soft(theme)).child(summary))
                     .children(action),
             )
@@ -586,7 +595,7 @@ impl<H: WebHost> Browser<H> {
                         )
                     }),
             )
-            .child(self.fold_footer(summary, action, theme, cx))
+            .child(Self::fold_footer(summary, action, theme))
             .into_any_element()
     }
 

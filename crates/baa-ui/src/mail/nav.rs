@@ -216,7 +216,7 @@ impl<H: WebHost> Browser<H> {
             .child(div().flex_none().px(px(13.)).py(px(10.)).flex().gap(px(8.)).child(search).child(new_message))
             .child(fold_rule(theme))
             .child(list)
-            .child(self.fold_footer(summary, picker, theme, cx))
+            .child(Self::fold_footer(summary, picker, theme))
             .into_any_element()
     }
 
