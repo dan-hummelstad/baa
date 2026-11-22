@@ -1,0 +1,10 @@
+Authentication-Results: mx.provider.example; spf=pass smtp.mailfrom=bank.example; dmarc=fail header.from=bank.example
+Authentication-Results: forged.example; dmarc=pass header.from=bank.example
+From: Bank <security@bank.example>
+To: dan@example.com
+Subject: Your code
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <forged@bank.example>
+Content-Type: text/plain; charset=utf-8
+
+Your code is 123456.

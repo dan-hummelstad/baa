@@ -23,6 +23,13 @@ rustls-platform-verifier = "0.7"
 # Already in the graph via imap-codec: SASL XOAUTH2 and PKCE's base64url.
 base64 = "0.22"
 
+# mail.db; the bundled SQLite has FTS5 for search.
+rusqlite.workspace = true
+# Parses untrusted mail (PLAN-mail.md §4): MIME, charsets, HTML to text.
+mail-parser = { version = "1.0", default-features = false, features = ["full_encoding"] }
+# Builds outgoing MIME without bringing an SMTP client.
+mail-builder = { version = "2.0", default-features = false }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Keychain items for passwords and tokens; the `security` CLI would put the secret on argv.
 security-framework = "3"

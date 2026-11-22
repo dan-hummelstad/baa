@@ -1,0 +1,18 @@
+From: Ola <ola@example.com>
+To: dan@example.com
+Subject: Cut off
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <truncated@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="cut"
+
+--cut
+Content-Type: text/plain; charset=utf-8
+
+The first part is whole.
+--cut
+Content-Type: application/pdf; name="half.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="half.pdf"
+
+JVBERi0xLjQKYmFhIHRl

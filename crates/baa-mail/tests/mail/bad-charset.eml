@@ -1,0 +1,9 @@
+From: Ola <ola@example.com>
+To: dan@example.com
+Subject: Bad charset
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <charset@example.com>
+Content-Type: text/plain; charset="x-no-such-charset"
+Content-Transfer-Encoding: 8bit
+
+Café ÿþ still readable.

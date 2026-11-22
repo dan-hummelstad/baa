@@ -1,29 +1,34 @@
 //! Mail without its views (PLAN-mail.md §4): accounts, sync, the store, MIME, sending and
 //! verification codes. No gpui; the views are `baa-ui/src/mail`.
-//!
-//! So far this is the contract of PLAN-mail.md §8 with nothing behind it: [`Mail`] keeps
-//! nothing, opens no file and contacts nobody.
 
 mod account;
 mod backend;
+mod codes;
+mod compose;
+mod mime;
 pub mod oauth;
 pub mod provider;
 mod secrets;
+mod store;
+mod thread;
 
 use std::{
     ops::Range,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::SystemTime,
 };
 
 use baa_model::SpaceId;
 use serde::{Deserialize, Serialize};
+use store::Store;
 
 pub use account::{check_port, Account, NewAccount, NewSignIn, Protocol, Server, Servers, SignIn, Tls};
 pub use backend::{
     fake::{Fake, SentMessage},
     Backend, Changes, Flags, Op, RemoteFolder, RemoteMessage,
 };
+pub use compose::parse_addresses;
 #[cfg(target_os = "macos")]
 pub use secrets::Keychain;
 pub use secrets::{MemorySecrets, Secret, Secrets};
@@ -159,7 +164,7 @@ pub struct Row {
     pub attachments: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Address {
     /// Empty when the message gave none.
     pub name: String,
@@ -200,9 +205,12 @@ pub struct Attachment {
     pub name: String,
     pub mime: String,
     pub size: u64,
+    /// A type the download tray warns about (an app, an installer, a script, a disk image):
+    /// the UI warns the same way before it saves one.
+    pub dangerous: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draft {
     /// `None` until [`Mail::save_draft`] has saved it once.
     pub id: Option<DraftId>,
@@ -279,20 +287,67 @@ pub enum Event {
 
 const NOT_BUILT: &str = "Mail is not built yet";
 
+/// Makes the backend of an account. [`Mail::open`] gives the real one; a test gives a
+/// [`Fake`] through [`Mail::open_with`].
+pub type Connect = Box<dyn Fn(&Account) -> Result<Box<dyn Backend>> + Send + Sync>;
+
 /// One a process, shared by its windows. `Send + Sync`.
-pub struct Mail(());
+pub struct Mail {
+    /// `None`: in memory.
+    dir: Option<PathBuf>,
+    /// Made when mail.db is there or first written, so a Mail that is never used leaves no
+    /// file behind.
+    store: OnceLock<Store>,
+    // ponytail: kept for the account threads of WP-C and WP-E, which nothing starts yet.
+    #[allow(dead_code)]
+    secrets: Box<dyn Secrets>,
+    #[allow(dead_code)]
+    notify: Box<dyn Fn(Event) + Send + Sync>,
+    #[allow(dead_code)]
+    connect: Connect,
+}
 
 impl Mail {
     /// Starts nothing: an account's thread starts when the account is first needed.
-    // ponytail: nothing is kept, so nothing is on disk or in the Keychain. WP-A opens
-    // `dir`/mail.db, WP-E keeps `secrets`, WP-C calls `notify`.
-    pub fn open(_dir: &Path, _secrets: Box<dyn Secrets>, _notify: Box<dyn Fn(Event) + Send + Sync>) -> Result<Mail> {
-        Ok(Mail(()))
+    pub fn open(dir: &Path, secrets: Box<dyn Secrets>, notify: Box<dyn Fn(Event) + Send + Sync>) -> Result<Mail> {
+        // ponytail: lane 1's connector replaces this one with WP-C.
+        let connect: Connect = Box::new(|_| Err(Error::Other(NOT_BUILT.into())));
+        Self::open_with(Some(dir), secrets, notify, connect)
+    }
+
+    /// `dir: None` keeps mail.db in memory, for tests. A mail.db written by a newer baa is an
+    /// error, and is left as it is.
+    pub fn open_with(
+        dir: Option<&Path>,
+        secrets: Box<dyn Secrets>,
+        notify: Box<dyn Fn(Event) + Send + Sync>,
+        connect: Connect,
+    ) -> Result<Mail> {
+        let mail = Mail { dir: dir.map(Path::to_owned), store: OnceLock::new(), secrets, notify, connect };
+        if dir.is_none_or(|dir| dir.join("mail.db").exists()) {
+            mail.store()?;
+        }
+        Ok(mail)
+    }
+
+    /// mail.db, made now if it is not there yet. An account thread takes
+    /// [`Store::another`] of it.
+    pub(crate) fn store(&self) -> Result<&Store> {
+        if let Some(store) = self.store.get() {
+            return Ok(store);
+        }
+        let _ = self.store.set(Store::open(self.dir.as_deref())?);
+        Ok(self.store.get().expect("set above"))
+    }
+
+    /// A read: empty while there is no mail.db, or when it cannot be read.
+    fn read<T: Default>(&self, read: impl FnOnce(&Store) -> Result<T>) -> T {
+        self.store.get().and_then(|store| read(store).ok()).unwrap_or_default()
     }
 
     /// The Space's own accounts and those of every Space.
-    pub fn accounts(&self, _space: MailSpace) -> Vec<Account> {
-        Vec::new()
+    pub fn accounts(&self, space: MailSpace) -> Vec<Account> {
+        self.read(|s| s.accounts(Some(space)))
     }
 
     /// Tests the sign-in first, and stores nothing if it fails.
@@ -309,31 +364,32 @@ impl Mail {
     }
 
     /// The other Spaces that have accounts of their own, with their unread counts.
-    pub fn other_spaces(&self, _than: MailSpace) -> Vec<(SpaceId, u32)> {
-        Vec::new()
+    pub fn other_spaces(&self, than: MailSpace) -> Vec<(SpaceId, u32)> {
+        self.read(|s| s.other_spaces(than))
     }
 
-    pub fn folders(&self, _space: MailSpace) -> Vec<Folder> {
-        Vec::new()
+    pub fn folders(&self, space: MailSpace) -> Vec<Folder> {
+        self.read(|s| s.folders(space))
     }
 
     /// One row a conversation, newest first.
-    pub fn rows(&self, _view: &View, _range: Range<usize>) -> Vec<Row> {
-        Vec::new()
+    pub fn rows(&self, view: &View, range: Range<usize>) -> Vec<Row> {
+        self.read(|s| s.rows(view, range))
     }
 
-    pub fn count(&self, _view: &View) -> usize {
-        0
+    pub fn count(&self, view: &View) -> usize {
+        self.read(|s| s.count(view))
     }
 
     /// Oldest first.
-    pub fn conversation(&self, _id: ThreadId) -> Vec<Message> {
-        Vec::new()
+    pub fn conversation(&self, id: ThreadId) -> Vec<Message> {
+        self.read(|s| s.conversation(id))
     }
 
-    /// `None`: not here yet. It has been asked for, and [`Event::Changed`] follows.
-    pub fn body(&self, _id: MessageId) -> Option<Body> {
-        None
+    /// `None`: not here yet.
+    // ponytail: nothing asks the server for it until lane 1's account threads do (WP-C).
+    pub fn body(&self, id: MessageId) -> Option<Body> {
+        self.read(|s| s.raw(id)).map(|raw| mime::body(&raw))
     }
 
     pub fn search(&self, space: MailSpace, text: &str) -> View {
@@ -343,39 +399,126 @@ impl Mail {
     /// Applied to mail.db at once, then to the server.
     pub fn act(&self, _on: &[MessageId], _action: Action) {}
 
-    pub fn save_draft(&self, _draft: &Draft) -> Result<DraftId> {
-        Err(Error::Other(NOT_BUILT.into()))
+    /// Private mode: a draft is of an account, which only a [`MailSpace`] has.
+    pub fn save_draft(&self, draft: &Draft) -> Result<DraftId> {
+        self.store()?.save_draft(draft)
+    }
+
+    pub fn draft(&self, id: DraftId) -> Option<Draft> {
+        self.read(|s| s.draft(id))
+    }
+
+    pub fn discard_draft(&self, id: DraftId) {
+        self.read(|s| s.discard_draft(id))
+    }
+
+    /// A reply to message `to`, from the account it came to. `None` while it is not in
+    /// mail.db. The quote is empty until its body is here.
+    pub fn reply(&self, to: MessageId, all: bool) -> Option<Draft> {
+        let (account, original) = self.original(to)?;
+        let me = self.read(|s| s.account(account))?.address;
+        Some(compose::reply(&original, to, account, &me, all))
+    }
+
+    pub fn forward(&self, id: MessageId) -> Option<Draft> {
+        let (account, original) = self.original(id)?;
+        Some(compose::forward(&original, account))
+    }
+
+    fn original(&self, id: MessageId) -> Option<(AccountId, compose::Original)> {
+        let (account, e) = self.read(|s| s.envelope(id))?;
+        let body = self.body(id);
+        let original = compose::Original {
+            from: e.from,
+            reply_to: e.reply_to,
+            to: e.to,
+            cc: e.cc,
+            subject: e.subject,
+            date: e.date,
+            text: body.as_ref().map(|b| b.text.clone()).unwrap_or_default(),
+            html: body.map(|b| b.html).unwrap_or_default(),
+        };
+        Some((account, original))
     }
 
     /// [`Event::Sent`] or [`Event::Failed`] follows.
     pub fn send(&self, _draft: DraftId) {}
 
-    /// Into `dir`, under the last component of the attachment's name. Returns where it is.
-    pub fn save_attachment(&self, _of: MessageId, _part: usize, _dir: &Path) -> Result<PathBuf> {
-        Err(Error::Other(NOT_BUILT.into()))
+    /// Into `dir`, under the last component of the attachment's name; a file already there
+    /// is never replaced. The file is quarantined as a download is. Returns where it is.
+    pub fn save_attachment(&self, of: MessageId, part: usize, dir: &Path) -> Result<PathBuf> {
+        let raw = self.read(|s| s.raw(of)).ok_or_else(|| Error::Other("The message is not downloaded yet".into()))?;
+        let (name, bytes) = mime::attachment(&raw, part).ok_or_else(|| Error::Other("The message has no such attachment".into()))?;
+        mime::save(dir, &mime::file_name(&name), &bytes).map_err(|e| Error::Other(format!("The attachment cannot be saved: {e}")))
     }
 
-    pub fn view_state(&self, _space: MailSpace) -> ViewState {
-        ViewState::default()
+    pub fn view_state(&self, space: MailSpace) -> ViewState {
+        self.read(|s| s.view_state(space))
     }
 
-    // ponytail: not kept until WP-A's store has the `view` row.
-    pub fn set_view_state(&self, _space: MailSpace, _state: &ViewState) {}
+    /// Private mode: it takes a [`MailSpace`], which an ephemeral Space cannot make.
+    pub fn set_view_state(&self, space: MailSpace, state: &ViewState) {
+        if let Ok(store) = self.store() {
+            let _ = store.set_view_state(space, state);
+        }
+    }
 
     /// Asks the Space's accounts for one INBOX check now, at most one every 10 s an account.
     pub fn check_now(&self, _space: MailSpace) {}
 
-    pub fn codes(&self, _space: MailSpace, _since: SystemTime) -> Vec<Code> {
-        Vec::new()
+    /// The codes in mail of the Space's accounts that offer codes, from messages that came in
+    /// during the last 10 minutes and at `since` or later, newest first. Which may be offered
+    /// on a page is [`Code::offered_on`].
+    pub fn codes(&self, space: MailSpace, since: SystemTime) -> Vec<Code> {
+        let secs = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let after = secs(since).max(secs(SystemTime::now()) - 600);
+        let offering: Vec<AccountId> = self.accounts(space).into_iter().filter(|a| a.codes).map(|a| a.id).collect();
+        let mut out: Vec<Code> = Vec::new();
+        for m in self.read(|s| s.code_candidates(space, after)) {
+            if !offering.contains(&m.account) {
+                continue;
+            }
+            let text = m.raw.as_deref().map(mime::plain_text).unwrap_or_default();
+            let token = mime::header_text(&m.header, "OTP-Token");
+            let Some((code, bound_host)) = codes::extract(&m.subject, &text, token.as_deref()) else { continue };
+            if !out.iter().any(|c| c.code == code) {
+                out.push(Code { code, sender: m.from, account: m.account, bound_host, dmarc_failed: m.dmarc_failed });
+            }
+        }
+        out
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::tests::{account, header, inbox, new, space, temp_dir};
 
-    fn space(session: &baa_model::Session) -> MailSpace {
-        MailSpace::of(session.space(session.active_space().unwrap()).unwrap()).unwrap()
+    fn memory() -> Mail {
+        let connect: Connect = Box::new(|_| Ok(Box::new(Fake::default())));
+        Mail::open_with(None, Box::new(MemorySecrets::default()), Box::new(|_| {}), connect).unwrap()
+    }
+
+    fn now() -> String {
+        mail_parser::DateTime::from_timestamp(SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).to_rfc822()
+    }
+
+    /// Delivers `raw` to account 1's inbox and keeps its body, as sync will.
+    fn deliver(mail: &Mail, uid: &str, raw: &[u8]) -> MessageId {
+        let store = mail.store().unwrap();
+        let folder = store.folder_by_role(AccountId(1), Role::Inbox).unwrap().unwrap().id;
+        let end = raw.windows(4).position(|w| w == b"\r\n\r\n").map_or(raw.len(), |at| at + 4);
+        let id = store.apply_changes(folder, &Changes { new: vec![new(uid, raw[..end].to_vec(), Flags::default())], ..Changes::default() }).unwrap()[0];
+        store.put_body(id, raw).unwrap();
+        id
+    }
+
+    fn with_account(space: MailSpace) -> Mail {
+        let mail = memory();
+        let store = mail.store().unwrap();
+        store.put_account(&account(1, Some(space))).unwrap();
+        inbox(store, AccountId(1));
+        mail
     }
 
     #[test]
@@ -388,52 +531,183 @@ mod tests {
     }
 
     #[test]
-    fn open_writes_nothing_and_every_read_is_empty() {
+    fn open_writes_nothing_until_something_is_kept_and_reads_are_empty_before() {
         fn shared<T: Send + Sync>() {}
         shared::<Mail>();
 
-        let dir = std::env::temp_dir().join(format!("baa-mail-{}-open", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = temp_dir("open");
         let mail = Mail::open(&dir, Box::new(MemorySecrets::default()), Box::new(|_| panic!("nothing has happened"))).unwrap();
-        assert!(!dir.exists(), "nothing on disk before there is an account");
-
-        let space = space(&baa_model::Session::first_run());
+        assert!(!dir.exists(), "nothing on disk before anything is kept");
+        let space = space(1);
         let view = mail.search(space, "invoice");
         assert_eq!(view, View { space, folder: None, account: None, filter: Filter::All, search: "invoice".into() });
         assert!(mail.accounts(space).is_empty() && mail.folders(space).is_empty() && mail.other_spaces(space).is_empty());
         assert!(mail.rows(&view, 0..50).is_empty() && mail.count(&view) == 0);
         assert!(mail.conversation(ThreadId(1)).is_empty() && mail.body(MessageId(1)).is_none());
-        assert!(mail.codes(space, SystemTime::now()).is_empty());
-        assert!(mail.remove_accounts_of(space).is_empty());
-        mail.set_view_state(space, &ViewState { scroll: 3, ..ViewState::default() });
-        assert_eq!(mail.view_state(space), ViewState::default());
+        assert!(mail.codes(space, SystemTime::now()).is_empty() && mail.draft(DraftId(1)).is_none());
+        assert!(mail.save_attachment(MessageId(1), 0, &dir).is_err() && mail.reply(MessageId(1), false).is_none());
+        assert!(!dir.exists());
 
-        let new = NewAccount {
-            space: Some(space),
-            name: "Dan".into(),
-            address: "dan@example.com".into(),
-            provider: provider::Provider::Fastmail,
-            servers: provider::Provider::Fastmail.servers("dan@example.com").unwrap(),
-            sign_in: NewSignIn::Password("app-password".into()),
-        };
-        assert_eq!(mail.add_account(new), Err(Error::Other("Mail is not built yet".into())));
-        let draft = Draft {
+        let state = ViewState { scroll: 3, drafts: vec![DraftId(2)], ..ViewState::default() };
+        mail.set_view_state(space, &state);
+        assert!(dir.join("mail.db").exists());
+        drop(mail);
+        let again = Mail::open(&dir, Box::new(MemorySecrets::default()), Box::new(|_| {})).unwrap();
+        assert_eq!(again.view_state(space), state, "kept across a restart");
+        drop(again);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_draft_is_kept_found_and_discarded() {
+        let mail = with_account(space(1));
+        let mut draft = Draft {
             id: None,
             from: AccountId(1),
-            to: vec![Address { name: String::new(), email: "ola@example.com".into() }],
+            to: parse_addresses("Ola <ola@example.com>"),
             cc: Vec::new(),
             bcc: Vec::new(),
             subject: "Hei".into(),
             html: "<p>Hei</p>".into(),
             text: "Hei".into(),
-            attachments: Vec::new(),
+            attachments: vec!["/tmp/a.pdf".into()],
             in_reply_to: None,
         };
-        assert!(mail.save_draft(&draft).is_err() && mail.save_attachment(MessageId(1), 0, &dir).is_err());
-        mail.act(&[MessageId(1)], Action::Archive);
-        mail.send(DraftId(1));
-        mail.check_now(space);
-        mail.remove_account(AccountId(1));
-        assert!(!dir.exists());
+        let id = mail.save_draft(&draft).unwrap();
+        draft.id = Some(id);
+        assert_eq!(mail.draft(id), Some(draft.clone()));
+        draft.subject = "Hei igjen".into();
+        assert_eq!(mail.save_draft(&draft).unwrap(), id, "saving again keeps its id");
+        assert_eq!(mail.draft(id).unwrap().subject, "Hei igjen");
+        mail.discard_draft(id);
+        assert_eq!(mail.draft(id), None);
+    }
+
+    #[test]
+    fn a_reply_answers_the_message_and_its_bytes_thread() {
+        let mail = with_account(space(1));
+        let raw = [header("root@x", "Plans", "Sun, 1 Nov 2026 10:00:00 +0000", "References: <older@x>\r\nCc: dan1@example.com, kari@example.org\r\n"), b"See you.\r\n".to_vec()].concat();
+        let id = deliver(&mail, "1", &raw);
+        let reply = mail.reply(id, true).unwrap();
+        assert_eq!((reply.subject.as_str(), reply.in_reply_to, reply.from), ("Re: Plans", Some(id), AccountId(1)));
+        let emails = |list: &[Address]| list.iter().map(|a| a.email.clone()).collect::<Vec<_>>();
+        assert_eq!((emails(&reply.to), emails(&reply.cc)), (vec!["ola@example.com".to_owned(), "dan@example.com".into()], vec!["kari@example.org".to_owned()]));
+        assert!(reply.text.contains("> See you."));
+
+        let (bytes, from, to) = compose::outgoing(mail.store().unwrap(), &reply, SystemTime::now()).unwrap();
+        let sent = mail_parser::MessageParser::new().parse(&bytes).unwrap();
+        assert_eq!(sent.in_reply_to().and_then(|l| l.first()), Some("root@x"));
+        assert_eq!(sent.references().map(|l| l.iter().collect::<Vec<_>>()), Some(vec!["older@x", "root@x"]));
+        assert_eq!((from.as_str(), to.len()), ("dan1@example.com", 3));
+        assert_eq!(mail.forward(id).unwrap().subject, "Fwd: Plans");
+    }
+
+    #[test]
+    fn a_saved_attachment_is_its_last_name_component_never_overwrites_and_is_quarantined() {
+        let mail = with_account(space(1));
+        let raw = b"From: a@example.com\r\nMessage-ID: <att@x>\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n\
+            --b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"../../.ssh/authorized_keys\"\r\n\r\nkey\r\n--b--\r\n";
+        let id = deliver(&mail, "1", raw);
+        let body = mail.body(id).unwrap();
+        assert_eq!(body.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["../../.ssh/authorized_keys"]);
+
+        let dir = temp_dir("attachment");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = mail.save_attachment(id, 0, &dir).unwrap();
+        assert_eq!(first, dir.join("authorized_keys"));
+        let second = mail.save_attachment(id, 0, &dir).unwrap();
+        assert_eq!(second, dir.join("authorized_keys (2)"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"key");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 2, "nothing written outside, nothing replaced");
+        #[cfg(target_os = "macos")]
+        {
+            let out = std::process::Command::new("/usr/bin/xattr").arg("-p").arg("com.apple.quarantine").arg(&first).output().unwrap();
+            assert!(String::from_utf8_lossy(&out.stdout).contains(";baa;"), "quarantined");
+        }
+        assert!(mail.save_attachment(id, 5, &dir).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hostile_attachment_names_come_out_as_their_last_component() {
+        for (sender, saved) in [
+            ("../../.ssh/authorized_keys", "authorized_keys"),
+            ("..\\..\\evil.bat", "evil.bat"),
+            ("nul\0.txt", "nul.txt"),
+            (".hidden", "hidden"),
+            ("..", "attachment"),
+            ("a/b/", "attachment"),
+            ("report:2026.pdf", "report_2026.pdf"),
+            ("", "attachment"),
+        ] {
+            assert_eq!(mime::file_name(sender), saved, "{sender:?}");
+        }
+        assert!(mime::file_name(&"é".repeat(300)).len() <= 200);
+    }
+
+    #[test]
+    fn codes_come_from_new_mail_of_the_spaces_accounts_and_the_origin_bound_line_wins() {
+        let home = space(1);
+        let mail = with_account(home);
+        let date = now();
+        let bound = format!("From: Bank <no-reply@bank.example>\r\nSubject: Sign in\r\nDate: {date}\r\nMessage-ID: <b@x>\r\n\r\nYour verification code is 111111.\r\n\r\n@login.bank.example #222222\r\n");
+        let header_code = format!("From: shop@shop.example\r\nSubject: Hi\r\nDate: {date}\r\nOTP-Token: 333333\r\nMessage-ID: <s@x>\r\n\r\nYour verification code is 444444.\r\n");
+        let old = "From: old@old.example\r\nSubject: Your verification code is 555555\r\nDate: Sun, 1 Nov 2026 10:00:00 +0000\r\nMessage-ID: <o@x>\r\n\r\n.\r\n";
+        let no_code = format!("From: ola@example.com\r\nSubject: Lunch\r\nDate: {date}\r\nMessage-ID: <l@x>\r\n\r\nSee you in 2026.\r\n");
+        deliver(&mail, "1", bound.as_bytes());
+        deliver(&mail, "2", header_code.as_bytes());
+        deliver(&mail, "3", old.as_bytes());
+        deliver(&mail, "4", no_code.as_bytes());
+
+        let earlier = SystemTime::now() - std::time::Duration::from_secs(60);
+        let codes = mail.codes(home, earlier);
+        let got: Vec<(&str, &str, Option<&str>)> = codes.iter().map(|c| (c.code.as_str(), c.sender.as_str(), c.bound_host.as_deref())).collect();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&("222222", "no-reply@bank.example", Some("login.bank.example"))));
+        assert!(got.contains(&("333333", "shop@shop.example", None)));
+        assert!(codes.iter().all(|c| c.account == AccountId(1) && !c.dmarc_failed));
+        assert!(mail.codes(home, SystemTime::now() + std::time::Duration::from_secs(60)).is_empty(), "nothing before `since`");
+        assert!(mail.codes(space(2), earlier).is_empty(), "another Space's account");
+
+        let store = mail.store().unwrap();
+        store.put_account(&Account { codes: false, ..account(1, Some(home)) }).unwrap();
+        assert!(mail.codes(home, earlier).is_empty(), "the account's switch is off");
+    }
+
+    #[test]
+    fn a_code_is_offered_only_where_its_sender_or_bound_host_matches_and_never_after_a_dmarc_failure() {
+        // The engine's registrable domain, for these hosts.
+        let site_of = |host: &str| host.rsplitn(3, '.').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(".");
+        let code = |sender: &str, bound: Option<&str>, dmarc_failed| Code {
+            code: "123456".into(),
+            sender: sender.into(),
+            account: AccountId(1),
+            bound_host: bound.map(str::to_owned),
+            dmarc_failed,
+        };
+        assert!(code("no-reply@accounts.bank.example", None, false).offered_on("bank.example", &site_of));
+        assert!(!code("no-reply@bank-example.evil", None, false).offered_on("bank.example", &site_of), "another site");
+        assert!(!code("no-reply@bank.example.evil.example", None, false).offered_on("bank.example", &site_of));
+        assert!(code("account-security-noreply@accountprotection.microsoft.com", None, false).offered_on("live.com", &site_of), "an alias");
+        assert!(!code("x@live.com", None, false).offered_on("microsoft.com", &site_of), "an alias goes one way");
+        assert!(!code("no-reply@bank.example", None, true).offered_on("bank.example", &site_of), "DMARC failed");
+        assert!(code("x@mailer.example", Some("login.bank.example"), false).offered_on("bank.example", &site_of), "the bound host decides");
+        assert!(!code("x@bank.example", Some("other.example"), false).offered_on("bank.example", &site_of));
+        assert!(!code("not an address", None, false).offered_on("bank.example", &site_of));
+        assert!(!code("x@", None, false).offered_on("", &site_of));
+    }
+
+    #[test]
+    fn the_corpus_under_mutation_never_panics_the_code_path() {
+        for (_, raw) in mime::corpus() {
+            for seed in 0..200 {
+                let raw = mime::mutate(&raw, seed);
+                let text = mime::plain_text(&raw);
+                let token = mime::header_text(&raw, "OTP-Token");
+                let e = mime::envelope(&raw);
+                let _ = codes::extract(&e.subject, &text, token.as_deref());
+            }
+        }
     }
 }

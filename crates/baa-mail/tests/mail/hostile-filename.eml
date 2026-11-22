@@ -1,0 +1,43 @@
+From: Mallory <m@example.com>
+To: dan@example.com
+Subject: Files
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <hostile@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b"
+
+--b
+Content-Type: text/plain; charset=utf-8
+
+See attached.
+--b
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="../../.ssh/authorized_keys"
+
+YQ==
+--b
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="..\\..\\evil.bat"
+
+Yg==
+--b
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename*=utf-8''nul%00.txt
+
+Yw==
+--b
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename=".hidden"
+
+ZA==
+--b
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="invoice.pdf.app"
+
+ZQ==
+--b--

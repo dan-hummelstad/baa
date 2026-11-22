@@ -1,0 +1,27 @@
+{
+  "phrases": [
+    "verification code", "security code", "one-time code", "one time code",
+    "one-time password", "one time password", "login code", "log-in code",
+    "sign-in code", "sign in code", "confirmation code", "your code",
+    "code:", "passcode", "otp", "2fa", "two-factor", "authentication code",
+    "access code",
+    "bekreftelseskode", "engangskode", "engangspassord", "sikkerhetskode",
+    "verifiseringskode", "innloggingskode", "din kode", "koden din",
+    "verifieringskod", "engångskod", "engångslösenord", "säkerhetskod",
+    "bekräftelsekod", "din kod",
+    "bekræftelseskode", "sikkerhedskode", "verificeringskode",
+    "bestätigungscode", "sicherheitscode", "verifizierungscode",
+    "einmalpasswort", "einmalcode", "anmeldecode", "ihr code",
+    "code de vérification", "code de sécurité", "code de confirmation",
+    "code à usage unique", "mot de passe à usage unique", "votre code",
+    "código de verificación", "código de seguridad", "código de confirmación",
+    "contraseña de un solo uso", "tu código", "su código"
+  ],
+  "aliases": {
+    "microsoft.com": ["live.com", "outlook.com", "office.com", "microsoftonline.com", "xbox.com", "skype.com"],
+    "google.com": ["youtube.com", "gmail.com"],
+    "apple.com": ["icloud.com"],
+    "facebookmail.com": ["facebook.com", "messenger.com"],
+    "amazon.com": ["amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.ca", "amazon.co.jp"]
+  }
+}

