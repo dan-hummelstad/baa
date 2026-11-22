@@ -1,0 +1,10 @@
+# A mail message in a document (PLAN-mail.md §6, WP-P1): its script, onerror, meta refresh, form,
+# nested frame, remote image, background image and stylesheet do nothing and fetch nothing, the
+# target=_top link does not navigate, and the link opens one new tab. The editor's quoted meta refresh
+# does not take its frame away, and the page's script can reach the editable body.
+script: mail-document.txt
+must: baa: get_state ok=true url=about:blank title="editor:true:quoted" .* origin=null$
+must: baa: get_state ok=true url=about:blank title="frames:1:true:true" .* origin=null$
+must: baa: tab_created tab=2 opener=0 .* url=https://example\.com/mail-link
+count: 1 baa: tab_created .*url=https://example\.com/mail-
+must: title="mail-seen:/mail-link"

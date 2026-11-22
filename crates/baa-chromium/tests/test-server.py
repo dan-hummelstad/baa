@@ -1,11 +1,23 @@
 # The harness tests' server, one for a whole run (ci.py starts it): /small and /slow are attachments, /auth wants Basic u:p,
-# anything else is a page. Usage: test-server.py <cert> <key>. It serves the same over plain HTTP and over TLS (where ci.py
-# maps the sites tests load by name) and prints the two ports once both listen.
+# /mail-seen lists the /mail-* paths asked for so far (mail-document.expect), anything else is a page.
+# Usage: test-server.py <cert> <key>. It serves the same over plain HTTP and over TLS (where ci.py maps the sites tests
+# load by name) and prints the two ports once both listen.
 import http.server, socketserver, ssl, sys, threading, time
+
+MAIL_SEEN = []
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith('/slow'):
+        if self.path.startswith('/mail-') and self.path != '/mail-seen':
+            MAIL_SEEN.append(self.path)
+        if self.path == '/mail-seen':
+            body = f'<html><head><title>mail-seen:{",".join(MAIL_SEEN)}</title></head></html>'.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path.startswith('/slow'):
             total = 20 * 1024 * 1024
             self.send_response(200)
             self.send_header('Content-Type', 'application/octet-stream')
