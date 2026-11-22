@@ -88,6 +88,11 @@ impl GoogleSignIn {
         &self.url
     }
 
+    /// The loopback address Google sends the tab back to, with the one-time code in its query.
+    pub fn redirect(&self) -> &str {
+        &self.redirect
+    }
+
     /// Blocks until Google sends the browser back, or 5 minutes pass, then exchanges the code
     /// for tokens. Call it off the UI thread.
     pub fn finish(self) -> Result<Tokens> {
@@ -140,7 +145,7 @@ fn listen(listener: TcpListener, state: &str, deadline: Instant) -> Result<Strin
     };
     drop(listener);
     let answer = redirect_code(&mut stream, state);
-    let page = if answer.is_ok() { "Signed in. You can close this tab." } else { "baa did not sign in." };
+    let page = if answer.is_ok() { "Signed in." } else { "baa did not sign in." };
     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n{page}");
     answer
 }

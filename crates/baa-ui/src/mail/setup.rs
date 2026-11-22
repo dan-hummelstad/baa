@@ -3,7 +3,8 @@
 
 use baa_mail::{oauth::GoogleSignIn, provider::Provider, AccountId, MailSpace, NewAccount, NewSignIn, Server, Servers, SignIn};
 use baa_web::WebHost;
-use gpui::{AppContext, Context};
+use baa_model::SpaceId;
+use gpui::{AppContext, Context, Window};
 
 use crate::{
     browser::Browser,
@@ -23,11 +24,34 @@ pub(crate) struct Setup {
     pub(crate) confirm_remove: Option<AccountId>,
     /// Google's sign-in, made when Gmail is chosen so that "not set up" shows before a click.
     pub(crate) google: Option<baa_mail::Result<GoogleSignIn>>,
+    /// The Space of the tab Google's sign-in is in, and the address Google sends it back to.
+    pub(crate) google_tab: Option<(SpaceId, String)>,
 }
 
 impl Default for Setup {
     fn default() -> Self {
-        Self { open: false, provider: Provider::ICloud, every_space: false, busy: false, error: None, confirm_remove: None, google: None }
+        Self { open: false, provider: Provider::ICloud, every_space: false, busy: false, error: None, confirm_remove: None, google: None, google_tab: None }
+    }
+}
+
+impl<H: WebHost> Browser<H> {
+    /// The sign-in tab's address holds Google's one-time code: the tab goes as a page that no
+    /// longer exists (not archived) and its visit leaves baa's history.
+    // ponytail: a tab closed by the user before the token exchange ends is still archived; filter the archive too if that happens.
+    pub(crate) fn drop_google_sign_in(&mut self, space: SpaceId, redirect: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let at_redirect = |t: &baa_model::Tab| t.space == space && t.url.starts_with(redirect);
+        let urls: Vec<String> = self.session.space_tabs(space).filter(|t| at_redirect(t)).map(|t| t.url.clone()).collect();
+        // A private Space recorded no visit, and writes nothing to baa.db.
+        let private = self.session.space(space).is_none_or(|s| s.ephemeral);
+        if let (false, Some(store)) = (private, self.store()) {
+            for url in &urls {
+                if let Err(e) = store.remove_history(url) {
+                    log::error!("forgetting the sign-in visit: {e}");
+                }
+            }
+        }
+        self.session.drop_tabs(at_redirect);
+        self.sync(window, cx);
     }
 }
 
@@ -176,6 +200,7 @@ impl<H: WebHost> SettingsView<H> {
                 let Some(Ok(google)) = self.mail_setup.google.take() else { return };
                 let url = google.url().to_owned();
                 let space = space.id();
+                self.mail_setup.google_tab = Some((space, google.redirect().to_owned()));
                 // The URL is baa's own, built by `GoogleSignIn`: a user-initiated load.
                 self.in_browser(cx, true, move |b, window, cx| b.open_url_in(space, &url, window, cx));
                 // ponytail: `finish` cannot be cancelled, so a form waiting on Google stays
@@ -210,6 +235,17 @@ impl<H: WebHost> SettingsView<H> {
 
     fn mail_added(&mut self, result: baa_mail::Result<AccountId>, cx: &mut Context<Self>) {
         self.mail_setup.busy = false;
+        if let Some((space, redirect)) = self.mail_setup.google_tab.take() {
+            let ok = result.is_ok();
+            self.in_browser(cx, ok, move |b, window, cx| {
+                b.drop_google_sign_in(space, &redirect, window, cx);
+                if ok {
+                    b.show_mail_of(space, window, cx);
+                } else {
+                    b.open_settings_at(Some(Tab::Mail), None, cx);
+                }
+            });
+        }
         match result {
             Ok(_) => {
                 self.mail_close_form();

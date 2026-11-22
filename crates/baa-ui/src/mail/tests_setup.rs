@@ -250,3 +250,20 @@ fn removing_an_account_takes_its_message_and_drafts_off_the_mail_view(cx: &mut T
         assert!(ui.drafts.is_empty() && ui.state.drafts.is_empty(), "its drafts' tabs closed");
     });
 }
+
+#[gpui::test]
+fn the_google_sign_in_tab_leaves_no_trace(cx: &mut TestAppContext) {
+    let (b, cx) = window(cx, store_with_mail(true), accepting());
+    let callback = "http://127.0.0.1:5555/?state=s&code=one-time";
+    b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        b.session.open_tab(space, "https://example.com/", 1);
+        b.session.open_tab(space, callback, 2);
+        b.store().unwrap().record_visit(callback, "", 2).unwrap();
+        b.drop_google_sign_in(space, "http://127.0.0.1:5555/", window, cx);
+        let urls: Vec<&str> = b.session.space_tabs(space).map(|t| t.url.as_str()).collect();
+        assert_eq!(urls, ["https://example.com/"]);
+        assert!(b.session.archived().is_empty(), "dropped, not archived");
+        assert!(b.store().unwrap().recent_history(10).unwrap().iter().all(|h| h.url != callback), "the code is not in history");
+    });
+}
