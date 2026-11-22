@@ -114,12 +114,12 @@ fn choosing_mail_in_the_archive_shows_the_mail_nav_and_the_mail_view(cx: &mut Te
 fn closing_the_archive_shows_the_browser_page_each_way_it_closes(cx: &mut TestAppContext) {
     use gpui::TouchPhase::{Ended, Moved, Started};
     let (b, cx, tab) = mail_over_a_tab(cx);
-    let ways = ["the back arrow", "cmd-shift-l", "cmd-shift-m", "a swipe down over the bottom", "a swipe left over the sidebar"];
+    let ways = ["the back arrow", "cmd-shift-a", "cmd-shift-m", "a swipe down over the bottom", "a cmd-swipe over the sidebar"];
     for way in ways {
         assert_eq!(section(&b, cx), Some(Section::Mail), "{way}: starts on Mail");
         match way {
             "the back arrow" => b.update_in(cx, |b, window, cx| b.close_library(window, cx)),
-            "cmd-shift-l" => cx.simulate_keystrokes("cmd-shift-l"),
+            "cmd-shift-a" => cx.simulate_keystrokes("cmd-shift-a"),
             "cmd-shift-m" => cx.simulate_keystrokes("cmd-shift-m"),
             "a swipe down over the bottom" => b.update_in(cx, |b, window, cx| {
                 b.on_bottom_bar_scroll(&scroll(Started, 0., 0.), window, cx);
@@ -127,11 +127,7 @@ fn closing_the_archive_shows_the_browser_page_each_way_it_closes(cx: &mut TestAp
                 b.on_bottom_bar_scroll(&scroll(Moved, 0., 30.), window, cx);
                 b.on_bottom_bar_scroll(&scroll(Ended, 0., 0.), window, cx);
             }),
-            _ => b.update_in(cx, |b, window, cx| {
-                b.on_chrome_scroll(&scroll(Started, 0., 0.), window, cx);
-                b.on_chrome_scroll(&scroll(Moved, -300., 0.), window, cx);
-                b.on_chrome_scroll(&scroll(Ended, 0., 0.), window, cx);
-            }),
+            _ => chrome_swipe(&b, cx, -300., true),
         }
         browser_page_is_back(&b, cx, tab, way);
         show_mail(&b, cx, true);
@@ -407,4 +403,133 @@ fn a_swipe_up_over_the_bottom_bar_opens_the_archive_in_the_third_space(cx: &mut 
     b.read_with(cx, |b, _| assert!(b.library.is_some(), "fingers up"));
     swipe(cx, 0., 30.);
     b.read_with(cx, |b, _| assert!(b.library.is_none(), "fingers down"));
+}
+
+/// A two-finger horizontal swipe over the chrome, `dx` px a step over two steps; `cmd` with ⌘ held.
+fn chrome_swipe(b: &B, cx: &mut VisualTestContext, dx: f32, cmd: bool) {
+    use gpui::TouchPhase::{Ended, Moved, Started};
+    let modifiers = gpui::Modifiers { platform: cmd, ..Default::default() };
+    b.update_in(cx, |b, window, cx| {
+        for (phase, dx) in [(Started, 0.), (Moved, dx), (Moved, dx), (Ended, 0.)] {
+            b.on_chrome_scroll(&gpui::ScrollWheelEvent { modifiers, ..scroll(phase, dx, 0.) }, window, cx);
+        }
+    });
+    cx.run_until_parked();
+}
+
+fn spaces(b: &B, cx: &mut VisualTestContext) -> Vec<SpaceId> {
+    b.read_with(cx, |b, _| b.session.spaces().iter().map(|s| s.id).collect())
+}
+
+fn active(b: &B, cx: &mut VisualTestContext) -> Option<SpaceId> {
+    b.read_with(cx, |b, _| b.session.active_space())
+}
+
+/// Space A on mail over a tab, Space B (which can have mail) left on its tab, and an incognito
+/// Space C; A is active.
+fn three_spaces(cx: &mut TestAppContext) -> (B, &mut VisualTestContext, [TabId; 2]) {
+    let (b, cx) = with_mail(cx);
+    let a_tab = open(&b, cx, "https://a.com/");
+    cx.dispatch_action(NewSpace);
+    cx.simulate_keystrokes("escape");
+    let b_tab = open(&b, cx, "https://b.com/");
+    let a = spaces(&b, cx)[0];
+    b.update_in(cx, |b, window, cx| {
+        b.session.add_ephemeral_space("Incognito", b.host.ephemeral_profile());
+        b.activate_space(a, window, cx);
+        b.show_mail(true, window, cx);
+    });
+    cx.run_until_parked();
+    (b, cx, [a_tab, b_tab])
+}
+
+#[gpui::test]
+fn in_mail_a_swipe_switches_space_and_stays_in_mail_where_the_next_space_can_have_it(cx: &mut TestAppContext) {
+    let (b, cx, [_, b_tab]) = three_spaces(cx);
+    let ids = spaces(&b, cx);
+
+    chrome_swipe(&b, cx, -300., false);
+    assert_eq!(active(&b, cx), Some(ids[1]), "fingers left: the next Space");
+    b.read_with(cx, |b, _| assert!(b.mail_in_front(), "Space B, left on its tab, shows its mail"));
+    assert_eq!(section(&b, cx), Some(Section::Mail), "the Archive stays open on Mail");
+    assert!(drawn(cx, "mail-view") && drawn(cx, "mail-nav"));
+
+    chrome_swipe(&b, cx, -300., false);
+    assert_eq!(active(&b, cx), Some(ids[2]), "on to the incognito Space");
+    b.read_with(cx, |b, _| assert!(!b.mail_in_front(), "it cannot have mail"));
+    assert!(section(&b, cx).is_none() && !drawn(cx, "mail-view"), "its browser, with the Archive collapsed");
+
+    b.update_in(cx, |b, window, cx| b.activate_space(ids[1], window, cx));
+    assert_eq!(section(&b, cx), Some(Section::Mail), "Space B is still on mail");
+    show_mail(&b, cx, false);
+    b.read_with(cx, |b, _| assert_eq!(b.front(), Some(Pane::Tab(b_tab)), "and its tab is as it was left"));
+}
+
+#[gpui::test]
+fn a_space_dot_under_the_open_archive_switches_space_on_a_click(cx: &mut TestAppContext) {
+    let (b, cx, _) = three_spaces(cx);
+    let ids = spaces(&b, cx);
+    assert_eq!(section(&b, cx), Some(Section::Mail));
+    assert!(drawn(cx, "library-bottom"), "the Archive's bottom row");
+    let dot = |id: SpaceId| -> &'static str { format!("space-{}", id.0).leak() };
+    for id in &ids {
+        assert!(drawn(cx, dot(*id)), "a dot for each Space");
+    }
+    let at = cx.debug_bounds(dot(ids[1])).unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(active(&b, cx), Some(ids[1]), "the click switches Space");
+    let pill = b.read_with(cx, |b, _| b.motion.target(("space-pill", 0), crate::motion::Feel::Glide));
+    assert_eq!(pill, Some(crate::browser::SPACE_DOT), "the pill goes to the second dot");
+    assert_eq!(section(&b, cx), Some(Section::Mail), "from mail, to the next Space's mail");
+}
+
+#[gpui::test]
+fn cmd_shift_a_collapses_the_archive_from_each_section_and_reopens_it_on_the_last(cx: &mut TestAppContext) {
+    let (b, cx, tab) = mail_over_a_tab(cx);
+    for last in [Section::Mail, Section::Downloads, Section::Archive, Section::Chat, Section::Mail] {
+        b.update_in(cx, |b, window, cx| match last {
+            Section::Chat => b.open_chat(window, cx),
+            last => b.open_library(last, window, cx),
+        });
+        assert_eq!(section(&b, cx), Some(last));
+        cx.simulate_keystrokes("cmd-shift-a");
+        browser_page_is_back(&b, cx, tab, &format!("cmd-shift-a on {last:?}"));
+        cx.simulate_keystrokes("cmd-shift-a");
+        assert_eq!(section(&b, cx), Some(last), "cmd-shift-a opens it on {last:?} again");
+        b.read_with(cx, |b, _| assert_eq!(b.mail_in_front(), last == Section::Mail, "mail is in front only on Mail"));
+    }
+}
+
+#[gpui::test]
+fn a_cmd_swipe_opens_the_archive_on_its_last_section_and_collapses_it(cx: &mut TestAppContext) {
+    let (b, cx, [a_tab, _]) = three_spaces(cx);
+    let a = active(&b, cx);
+    chrome_swipe(&b, cx, -300., true);
+    browser_page_is_back(&b, cx, a_tab, "a cmd-swipe in mail");
+    assert_eq!(active(&b, cx), a, "it switches no Space");
+
+    chrome_swipe(&b, cx, 300., true);
+    assert_eq!(section(&b, cx), Some(Section::Mail), "either way, it opens on the last section, Mail");
+    b.read_with(cx, |b, _| assert!(b.mail_in_front()));
+
+    b.update_in(cx, |b, window, cx| b.open_library(Section::Downloads, window, cx));
+    chrome_swipe(&b, cx, -300., true);
+    cx.dispatch_action(GoToSpace(2));
+    assert!(section(&b, cx).is_none(), "in the incognito Space, in its browser");
+    chrome_swipe(&b, cx, 300., true);
+    assert_eq!(section(&b, cx), Some(Section::Downloads), "from any Space, on Downloads, the last chosen");
+    chrome_swipe(&b, cx, 20., true);
+    assert_eq!(section(&b, cx), Some(Section::Downloads), "a short one does nothing");
+}
+
+#[gpui::test]
+fn the_last_section_mail_opens_on_downloads_in_a_space_that_cannot_have_mail(cx: &mut TestAppContext) {
+    let (b, cx, _) = three_spaces(cx);
+    let c = spaces(&b, cx)[2];
+    cx.simulate_keystrokes("cmd-shift-a");
+    b.update_in(cx, |b, window, cx| b.activate_space(c, window, cx));
+    cx.simulate_keystrokes("cmd-shift-a");
+    assert_eq!(section(&b, cx), Some(Section::Downloads));
+    b.read_with(cx, |b, _| assert!(!b.mail_in_front()));
 }

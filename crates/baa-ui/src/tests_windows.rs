@@ -181,7 +181,7 @@ fn a_swipe_with_one_space_springs_back(cx: &mut TestAppContext) {
         cx.dispatch_action(NextSpace);
         cx.dispatch_action(PrevSpace);
         cx.dispatch_action(GoToSpace(3));
-        // Fingers left: towards a next Space there is not (right, from the first, is the Library).
+        // Fingers left: towards a next Space there is not.
         for phase in [TouchPhase::Started, TouchPhase::Moved, TouchPhase::Moved, TouchPhase::Ended] {
             let delta = ScrollDelta::Pixels(point(px(-200.), px(0.)));
             let e = ScrollWheelEvent { position: point(px(100.), px(100.)), delta, touch_phase: phase, ..Default::default() };

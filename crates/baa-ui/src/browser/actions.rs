@@ -52,7 +52,7 @@ impl<H: WebHost> Browser<H> {
         .on_action(cx.listener(|this, _: &PrevSpace, window, cx| this.step_space(-1, window, cx)))
         .on_action(cx.listener(|this, GoToSpace(n): &GoToSpace, window, cx| {
             if let Some(id) = this.session.spaces().get(*n).map(|s| s.id) {
-                this.activate_space(id, window, cx);
+                this.go_to_space(id, window, cx);
             }
         }))
         .on_action(cx.listener(|this, _: &TogglePin, window, cx| {
@@ -112,13 +112,7 @@ impl<H: WebHost> Browser<H> {
             }
         }))
         .on_action(cx.listener(|this, _: &ToggleAgent, window, cx| this.toggle_agent_panel(window, cx)))
-        .on_action(cx.listener(|this, _: &ToggleLibrary, window, cx| {
-            if this.library.is_some() {
-                this.close_library(window, cx);
-            } else {
-                this.open_library_last(window, cx);
-            }
-        }))
+        .on_action(cx.listener(|this, _: &ToggleLibrary, window, cx| this.toggle_library(window, cx)))
         .on_action(cx.listener(|this, _: &ShowHistory, window, cx| this.open_bar(Mode::History, window, cx)))
         .on_action(cx.listener(|this, _: &ClearToday, window, cx| this.clear_today(window, cx)))
         .on_action(cx.listener(|this, _: &ShowArchive, window, cx| {

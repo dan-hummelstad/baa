@@ -64,8 +64,9 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// Two-finger horizontal swipe across the chrome switches Spaces; the list
-    /// follows the fingers and a quarter width commits.
+    /// Two-finger horizontal swipe across the chrome, the Archive's too, switches Spaces; the
+    /// list follows the fingers and a quarter width commits. With ⌘ held it opens or collapses
+    /// the Archive instead.
     pub(crate) fn on_chrome_scroll(
         &mut self,
         event: &gpui::ScrollWheelEvent,
@@ -76,36 +77,28 @@ impl<H: WebHost> Browser<H> {
             return;
         };
         match event.touch_phase {
-            gpui::TouchPhase::Started => self.swipe = Some(0.0),
+            gpui::TouchPhase::Started => self.swipe = Some((0.0, event.modifiers.platform)),
             gpui::TouchPhase::Moved => {
-                let Some(swipe) = &mut self.swipe else { return };
+                let Some((swipe, cmd)) = &mut self.swipe else { return };
                 let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
                 if dx.abs() <= dy.abs() {
                     return;
                 }
+                *cmd |= event.modifiers.platform;
                 *swipe = (*swipe + dx / SIDEBAR_WIDTH).clamp(-1.0, 1.0);
-                self.slide.snap(*swipe);
+                self.slide.snap(if *cmd { 0.0 } else { *swipe });
                 cx.notify();
             }
             gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
-                let Some(swipe) = self.swipe.take() else { return };
-                let first = self.session.spaces().first().map(|s| s.id) == self.session.active_space();
-                if self.library.is_some() {
-                    // Fingers left: back to the first Space, which lies to the right.
-                    if swipe < -0.25 {
-                        self.close_library(window, cx);
-                    }
-                    self.slide.set_target(0.0);
-                } else if swipe > 0.25 && first {
-                    // Past the first Space lies the Library (Arc).
-                    self.slide.set_target(0.0);
-                    self.open_library(crate::library::Section::Downloads, window, cx);
-                } else if swipe.abs() > 0.25 {
-                    // Fingers left: the next Space comes in from the right.
-                    self.step_space(if swipe < 0.0 { 1 } else { -1 }, window, cx);
-                } else {
+                let Some((swipe, cmd)) = self.swipe.take() else { return };
+                if swipe.abs() <= 0.25 {
                     self.slide.set_target(0.0);
                     cx.notify();
+                } else if cmd {
+                    self.toggle_library(window, cx);
+                } else {
+                    // Fingers left: the next Space comes in from the right.
+                    self.step_space(if swipe < 0.0 { 1 } else { -1 }, window, cx);
                 }
             }
         }

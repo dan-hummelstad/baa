@@ -244,6 +244,15 @@ impl<H: WebHost> Browser<H> {
             self.slide.set_target(0.0);
             return cx.notify();
         }
-        self.activate_space(spaces[next], window, cx);
+        self.go_to_space(spaces[next], window, cx);
+    }
+
+    /// A Space chosen from the Spaces' own controls (a swipe, a dot, ⌃⌥←/→, ⌃1–9): moving
+    /// through Spaces from mail stays in mail, in each Space that can have it.
+    pub(crate) fn go_to_space(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mail_in_front() && self.mail_of(id).is_some() {
+            self.session.set_showing(id, baa_model::Showing::Mail);
+        }
+        self.activate_space(id, window, cx);
     }
 }

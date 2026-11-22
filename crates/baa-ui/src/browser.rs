@@ -271,8 +271,9 @@ pub struct Browser<H: WebHost> {
     /// Back/forward pressed and held: which way, and when.
     pub(crate) nav_press: Option<(bool, Instant)>,
     pub(crate) history_menu: Option<HistoryMenu>,
-    /// Two-finger swipe across the chrome, in sidebar widths, while one is on.
-    swipe: Option<f32>,
+    /// Two-finger swipe across the chrome, in sidebar widths, while one is on, and whether ⌘
+    /// was down at some point in it.
+    swipe: Option<(f32, bool)>,
     /// Two-finger swipe up or down over the bottom bar, in px, while one is on.
     bar_swipe: Option<f32>,
     /// A two-finger history swipe over the page (Safari's sheet).

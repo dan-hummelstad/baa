@@ -1,5 +1,5 @@
-//! Arc's Library, in the sidebar: what lives outside any Space. Opened from
-//! the archive button or by swiping right past the first Space. Sections:
+//! Arc's Library, in the sidebar: what lives outside any Space. Opened from the archive
+//! button, ⌘⇧A, a swipe up over the bottom bar or a ⌘-swipe, on the section it was last on. Sections:
 //! Mail (the mail nav, while the page area shows the mail view), Downloads
 //! (kept across launches, grouped by age, searchable and filtered by kind),
 //! Archived Tabs, and Chat (the Claude panel, ⌘J).
@@ -179,12 +179,20 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// The section it was last on (⌘⇧L and the sidebar's Library button).
     pub(crate) fn open_library_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.library_last {
             // Chat also takes focus for its field.
             Section::Chat => self.open_chat(window, cx),
             last => self.open_library(last, window, cx),
+        }
+    }
+
+    /// ⌘⇧A and the ⌘-swipe: collapsed from any section, Mail included, or opened on the last.
+    pub(crate) fn toggle_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.library.is_some() {
+            self.close_library(window, cx);
+        } else {
+            self.open_library_last(window, cx);
         }
     }
 
@@ -295,7 +303,6 @@ impl<H: WebHost> Browser<H> {
             .relative()
             .flex()
             .flex_col()
-            .pb(px(4.))
             .when(ascii(), |d| d.border_r_1().border_color(crate::theme::ascii::rule()))
             .when(!ascii(), |d| {
                 // Both fade in under the top bar instead of starting at full strength.
@@ -333,29 +340,50 @@ impl<H: WebHost> Browser<H> {
                     .child(nav_item(Section::Downloads, "circle-arrow-down", "Downloads", cx))
                     .child(nav_item(Section::Archive, "archive", "Archived Tabs", cx))
                     .child(nav_item(Section::Chat, "message-circle", "Chat", cx)),
-            )
-            // Where the bottom bar was: a swipe down here closes the Archive it opened.
-            .child(
-                div()
-                    .id("library-bottom")
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
-                    .child(back),
             );
+        // Where the bottom bar was, laid out as it is: a swipe down here closes the Archive it opened.
+        let bottom = div()
+            .id("library-bottom")
+            .debug_selector(|| "library-bottom".into())
+            .flex_none()
+            .h(px(32.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .when(ascii(), |d| d.border_t_1().border_color(crate::theme::ascii::rule()))
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.on_bottom_bar_scroll(e, window, cx)))
+            .child(back)
+            .child(div().flex_1().flex().justify_center().child(self.render_space_dots(theme, cx)))
+            .child(div().w(px(24.)));
 
+        let slide = self.slide.value();
         let library_box = |body: AnyElement| {
             div()
                 .w(px(LIBRARY_WIDTH))
                 .h_full()
+                .pb(px(4.))
                 .flex()
+                .flex_col()
                 // Comes in from the left, where it sits before the first Space.
                 .ml(px(-40. * (1. - t)))
                 .opacity(t.clamp(0., 1.))
-                .child(nav)
-                .child(div().flex_1().min_w_0().h_full().pl(px(10.)).pr(px(16.)).flex().child(body))
+                .child(
+                    div().flex_1().min_h_0().flex().child(nav).child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .pl(px(10.))
+                            .pr(px(16.))
+                            .flex()
+                            // A Space switch slides the body as it does the browser sidebar's lists.
+                            .relative()
+                            .left(px(slide * SIDEBAR_WIDTH))
+                            .opacity(1.0 - slide.abs().min(1.0) * 0.6)
+                            .child(body),
+                    ),
+                )
+                .child(bottom)
         };
         let placeholder = match library.section {
             Section::Downloads => "Search Downloads…",

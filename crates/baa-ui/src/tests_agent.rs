@@ -404,7 +404,7 @@ fn chat_is_a_library_section_toggled_by_cmd_j(cx: &mut TestAppContext) {
     b.update_in(cx, |b, window, cx| b.open_library(Section::Downloads, window, cx));
     b.update_in(cx, |b, window, cx| b.toggle_agent_panel(window, cx));
     assert_eq!(section(&b, cx), Some(Section::Chat));
-    // ⌘⇧L closes it, and opens it again on the section it was last on.
+    // ⌘⇧A closes it, and opens it again on the section it was last on.
     cx.dispatch_action(crate::actions::ToggleLibrary);
     assert_eq!(section(&b, cx), None);
     cx.dispatch_action(crate::actions::ToggleLibrary);

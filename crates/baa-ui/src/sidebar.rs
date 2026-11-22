@@ -988,8 +988,8 @@ impl<H: WebHost> Browser<H> {
         self.sync(window, cx);
     }
 
-    /// Library, the Space dots, and New Space.
-    fn render_bottom_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// One dot a Space, under the browser sidebar and the Archive alike.
+    pub(crate) fn render_space_dots(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let dots: Vec<_> = self
             .session
             .spaces()
@@ -1002,6 +1002,7 @@ impl<H: WebHost> Browser<H> {
                 let hover = theme.glass;
                 let dot = div()
                     .id(("space", id.0))
+                    .debug_selector(move || format!("space-{}", id.0))
                     .size(px(SPACE_DOT))
                     .flex()
                     .items_center()
@@ -1009,7 +1010,7 @@ impl<H: WebHost> Browser<H> {
                     .rounded(r(6.))
                     .bg(fade(theme.hover, h * (1. - sel)))
                     .on_click(
-                        cx.listener(move |this, _, window, cx| this.activate_space(id, window, cx)),
+                        cx.listener(move |this, _, window, cx| this.go_to_space(id, window, cx)),
                     )
                     .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(hover))
                     .on_drop(cx.listener(move |this, d: &DraggedTab, window, cx| {
@@ -1039,6 +1040,11 @@ impl<H: WebHost> Browser<H> {
                     .child(bracket("[").left(px(-4.)))
                     .child(bracket("]").right(px(-4.)))
             });
+        div().relative().flex().child(pill).children(dots)
+    }
+
+    /// Library, the Space dots, and New Space.
+    fn render_bottom_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let plus_turn = self.motion.get(("add-space", 0), Feel::Hover) * std::f32::consts::FRAC_PI_2;
         // A download's icon is thrown at this button; it hops when one sinks in.
         let at = self.library_at.clone();
@@ -1059,13 +1065,7 @@ impl<H: WebHost> Browser<H> {
             .items_center()
             .when(ascii(), |d| d.border_t_1().border_color(crate::theme::ascii::rule()))
             .child(library)
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .justify_center()
-                    .child(div().relative().flex().child(pill).children(dots)),
-            )
+            .child(div().flex_1().flex().justify_center().child(self.render_space_dots(theme, cx)))
             .child(add);
         div()
             .id("bottom-bar")

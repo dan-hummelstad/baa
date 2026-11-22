@@ -680,12 +680,26 @@ fn a_two_finger_swipe_switches_spaces(cx: &mut TestAppContext) {
         modifiers: Modifiers::none(),
         touch_phase: phase,
     };
-    b.update_in(cx, |b, window, cx| {
-        b.on_chrome_scroll(&swipe(TouchPhase::Started, 0.), window, cx);
-        b.on_chrome_scroll(&swipe(TouchPhase::Moved, 120.), window, cx);
-        b.on_chrome_scroll(&swipe(TouchPhase::Ended, 0.), window, cx);
-    });
+    let right = |cx: &mut VisualTestContext| {
+        b.update_in(cx, |b, window, cx| {
+            b.on_chrome_scroll(&swipe(TouchPhase::Started, 0.), window, cx);
+            b.on_chrome_scroll(&swipe(TouchPhase::Moved, 120.), window, cx);
+            b.on_chrome_scroll(&swipe(TouchPhase::Ended, 0.), window, cx);
+        })
+    };
+    right(cx);
     assert_eq!(b.read_with(cx, |b, _| b.session().active_space()), Some(spaces[0]));
+    right(cx);
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.session().active_space(), Some(spaces[1]), "past the first Space, the last, as ⌃⌥← goes");
+        assert!(b.library.is_none(), "no Library past the first Space");
+    });
+    cx.dispatch_action(ShowDownloads);
+    right(cx);
+    b.read_with(cx, |b, _| {
+        assert_eq!(b.session().active_space(), Some(spaces[0]), "in the Library too");
+        assert_eq!(b.library.as_ref().map(|l| l.section), Some(crate::library::Section::Downloads), "which stays open");
+    });
 }
 
 #[gpui::test]
