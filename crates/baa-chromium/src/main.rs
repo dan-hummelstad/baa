@@ -159,7 +159,9 @@ mod app {
             wait(500).await;
             for &(code, chars, command) in PAGE {
                 harness::post_key(window_number, code, chars, if command { 1 << 20 } else { 0 });
-                wait(150).await;
+                // ⌘A and ⌘Z go to the page and come back before they act: at 150 ms a slow runner
+                // once left the "x" in place (harness run 44946096770).
+                wait(400).await;
             }
             wait(500).await;
             spike.update(cx, |spike, _, _| eprintln!("spike: gpui bar text {:?}", spike.typed)).ok();
