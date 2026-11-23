@@ -231,15 +231,13 @@ impl WebHost for CoreWebHost {
             // tab, so baa takes no risk: only http(s) is opened again; data:,
             // baa://, file:, chrome-extension:// and the rest show a blank page.
             let url = if user_initiated || pending.is_some() || is_web_or_blank(&url) { url } else { "about:blank".into() };
-            // Chrome's own pages start blank: the skin script has to be in before their first document.
-            let tab = pending.unwrap_or_else(|| {
-                let first = if skin::is_webui(&url) { "about:blank" } else { &url };
-                (self.core.tab_create)(handle, c_string(first).as_ptr())
-            });
-            if tab != 0 {
-                self.dispatch.prepare_tab(tab, &url, &css, pending.is_some());
+            match pending {
+                Some(tab) => {
+                    self.dispatch.prepare_tab(tab, &url, &css, true);
+                    tab
+                }
+                None => self.dispatch.open_tab(handle, &url, &css),
             }
-            tab
         };
         let dispatch = self.dispatch;
         cx.new(|cx| CorePage::new(dispatch, profile, handle, tab, PageKind::Tab, window, cx))

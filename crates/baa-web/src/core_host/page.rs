@@ -140,12 +140,7 @@ impl CorePage {
     /// changes, when the Space has no WebKit store.
     pub(super) fn to_webkit(&self, url: &str) -> bool {
         let Some(store) = self.dispatch.webkit.store(self.profile) else { return false };
-        let tab = self.shared.tab.get();
-        if tab != 0 {
-            self.dispatch.tabs.borrow_mut().remove(&tab);
-            self.shared.release();
-            (self.dispatch.core.tab_close)(tab);
-        }
+        self.close_tab();
         let view = webkit::View::new(&store);
         self.shared.container.swap_page(view.as_ptr());
         view.load(url);
@@ -159,18 +154,15 @@ impl CorePage {
         if handle.is_null() {
             return false;
         }
-        let url = skin::to_baa(url.to_string());
-        let first = if skin::is_webui(&url) { "about:blank" } else { &url };
-        let tab = (self.dispatch.core.tab_create)(handle, c_string(first).as_ptr());
+        // ponytail: no skin css here, so a Chrome page opened this way looks plain until
+        // the Space's skin changes. Upgrade: keep the skins in `Dispatch`.
+        let tab = self.dispatch.open_tab(handle, &skin::to_baa(url.to_string()), "");
         if tab == 0 {
             return false;
         }
         self.wk_generation.set(self.wk_generation.get() + 1);
         self.shared.container.swap_page(std::ptr::null_mut());
         self.wk.borrow_mut().take();
-        // ponytail: no skin css here, so a Chrome page opened this way looks plain until
-        // the Space's skin changes. Upgrade: keep the skins in `Dispatch`.
-        self.dispatch.prepare_tab(tab, &url, "", false);
         self.shared.tab.set(tab);
         self.dispatch.tabs.borrow_mut().insert(tab, Live { shared: self.shared.clone(), page: Some(self.this.clone()) });
         let mut raw: TabState = unsafe { std::mem::zeroed() };
@@ -178,6 +170,16 @@ impl CorePage {
             self.shared.container.swap_page(Snapshot::from_c(&raw).view);
         }
         true
+    }
+
+    /// Lets go of the Chrome tab, if any: its view leaves the container first.
+    fn close_tab(&self) {
+        let tab = self.shared.tab.get();
+        self.shared.release();
+        if tab != 0 {
+            self.dispatch.tabs.borrow_mut().remove(&tab);
+            (self.dispatch.core.tab_close)(tab);
+        }
     }
 
     fn poll_webkit(&self) {
@@ -362,12 +364,7 @@ impl Drop for CorePage {
     fn drop(&mut self) {
         // The view leaves the window before Chrome destroys it.
         self.shared.container.set_visible(false);
-        let tab = self.shared.tab.get();
-        self.shared.release();
-        if tab != 0 {
-            self.dispatch.tabs.borrow_mut().remove(&tab);
-            (self.dispatch.core.tab_close)(tab);
-        }
+        self.close_tab();
     }
 }
 

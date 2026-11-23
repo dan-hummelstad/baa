@@ -67,6 +67,17 @@ impl Dispatch {
     /// blank so the script is in before its first document; one Chrome made
     /// (`adopted`) is on its way already and gets the skin once. An unadopted
     /// `baa://` url is always the user's: `create_page` blanks page-supplied ones.
+    /// A new tab of `profile` at `url`. Chrome's own pages start blank: the skin script has
+    /// to be in before their first document. 0 when Chrome refused.
+    pub(super) fn open_tab(&self, profile: *mut Profile, url: &str, css: &str) -> TabId {
+        let first = if is_webui(url) { "about:blank" } else { url };
+        let tab = (self.core.tab_create)(profile, c_string(first).as_ptr());
+        if tab != 0 {
+            self.prepare_tab(tab, url, css, false);
+        }
+        tab
+    }
+
     pub(super) fn prepare_tab(&self, tab: TabId, url: &str, css: &str, adopted: bool) {
         let script = loader(css);
         (self.core.tab_set_init_script)(tab, c_string(&script).as_ptr());

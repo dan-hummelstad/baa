@@ -181,24 +181,11 @@ impl<H: WebHost> SettingsView<H> {
         ));
         if s.web.webkit_drm {
             for site in &s.web.webkit_sites {
-                let remove = div()
-                    .id(SharedString::from(format!("webkit-remove:{site}")))
-                    .debug_selector({
-                        let site = site.clone();
-                        move || format!("webkit-remove:{site}")
-                    })
-                    .size(px(22.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(r(6.))
-                    .hover(|d| d.bg(surface::key()))
-                    .on_click({
-                        let site = site.clone();
-                        cx.listener(move |this, _, _, cx| this.change(cx, |s| s.web.webkit_sites.retain(|x| *x != site)))
-                    })
-                    .child(crate::icons::icon("x", 13., surface::icon().into()))
-                    .into_any_element();
+                let gone = site.clone();
+                let remove = remove_button(
+                    format!("webkit-remove:{site}"),
+                    cx.listener(move |this, _, _, cx| this.change(cx, |s| s.web.webkit_sites.retain(|x| *x != gone))),
+                );
                 out.push(self.sub_row(format!("webkit-site:{site}"), SharedString::from(site.clone()).into_any_element(), remove));
             }
             out.push(self.sub_row(
@@ -332,27 +319,14 @@ impl<H: WebHost> SettingsView<H> {
             };
             out.push(self.row(id, "", control));
             for (m, (pattern, state)) in rules.iter().filter(|(p, _)| p != "*").enumerate() {
-                let (p, p2) = (pattern.clone(), pattern.clone());
+                let p = pattern.clone();
                 let buttons = self.state_buttons(kind, Some(*state), "rule", n as u64 * 64 + m as u64, cx, move |this, st, cx| {
                     this.set_rule(kind, &p, Some(st), cx);
                 });
-                let remove = div()
-                    .id(("rule-remove", n as u64 * 64 + m as u64))
-                    .debug_selector(|| format!("rule-remove:{id}:{p2}"))
-                    .size(px(22.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(r(6.))
-                    .hover(|d| d.bg(surface::key()))
-                    .on_click({
-                        let p = pattern.clone();
-                        cx.listener(move |this, _, _, cx| {
-                            this.set_rule(kind, &p, None, cx);
-                        })
-                    })
-                    .child(crate::icons::icon("x", 13., surface::icon().into()))
-                    .into_any_element();
+                let p = pattern.clone();
+                let remove = remove_button(format!("rule-remove:{id}:{pattern}"), cx.listener(move |this, _, _, cx| {
+                    this.set_rule(kind, &p, None, cx);
+                }));
                 out.push(self.sub_row(
                     format!("rule:{id}:{pattern}"),
                     SharedString::from(pattern.clone()).into_any_element(),
@@ -619,6 +593,22 @@ impl<H: WebHost> Browser<H> {
         self.save_settings(cx);
         self.show_toast("Settings reset", cx);
     }
+}
+
+/// The ✕ that removes one line of a list; `selector` is also its element id.
+fn remove_button(selector: String, on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static) -> AnyElement {
+    div()
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector)
+        .size(px(22.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(r(6.))
+        .hover(|d| d.bg(surface::key()))
+        .on_click(on_click)
+        .child(crate::icons::icon("x", 13., surface::icon().into()))
+        .into_any_element()
 }
 
 /// The host of what was typed into the WebKit site list ("netflix.com", "https://x.y/z").
