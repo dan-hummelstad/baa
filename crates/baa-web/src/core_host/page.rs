@@ -506,6 +506,11 @@ impl PageHandle for CorePage {
         self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(script).as_ptr(), true));
     }
     fn set_visible(&self, visible: bool) {
+        // AppKit hands a hidden first responder's place to the window, not to gpui's view, so
+        // the window then gets no typing (mail over a page: ⌘T opened a bar nothing typed into).
+        if !visible && native::has_first_responder(self.shared.container.page()) {
+            native::make_first_responder(self.gpui_view);
+        }
         self.shared.container.set_visible(visible);
     }
     fn activate(&self) {

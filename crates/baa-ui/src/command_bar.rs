@@ -1,6 +1,7 @@
 //! ⌘T / ⌘L command bar (PLAN.md §3, pen.dev "Arc — Command Bar"): URL or
 //! search with the engine's suggestions as you type, fuzzy matches over open
-//! tabs, Spaces and quick commands, each with its keyboard shortcut.
+//! tabs, Spaces and quick commands, each with its keyboard shortcut. Every action the keymap
+//! binds can be typed too, where it would run.
 
 use crate::theme::r;
 use crate::{
@@ -20,6 +21,9 @@ use crate::{
     motion::{Feel, Spring},
     theme::{fade, mix, surface, Theme},
 };
+
+mod keys;
+pub(crate) use keys::{chips, keyed, stroke_chips, Keyed};
 
 const MAX_ROWS: usize = 9;
 const MAX_SUGGESTIONS: usize = 4;
@@ -79,10 +83,11 @@ pub enum Command {
     SplitView,
     ResponsiveView,
     OpenMail,
+    ClearDownloads,
 }
 
 /// In the order an empty bar lists them.
-const COMMANDS: [(Command, &str); 34] = [
+const COMMANDS: [(Command, &str); 35] = [
     (Command::NewSpace, "New Space"),
     (Command::ToggleSidebar, "Toggle Sidebar"),
     (Command::CopyUrl, "Copy URL"),
@@ -117,6 +122,7 @@ const COMMANDS: [(Command, &str); 34] = [
     (Command::SplitView, "Split View"),
     (Command::ResponsiveView, "Responsive View"),
     (Command::OpenMail, "Open Mail"),
+    (Command::ClearDownloads, "Clear Downloads List"),
 ];
 /// How many an empty bar shows, after recent tabs.
 const QUICK_COMMANDS: usize = 6;
@@ -175,6 +181,7 @@ impl Command {
             Command::ImportFromArc => "import",
             Command::SetUpPasswords => "key-round",
             Command::ClearToday | Command::Archive => "archive",
+            Command::ClearDownloads => "arrow-down-to-line",
             Command::SplitView | Command::ResponsiveView => "columns-2",
             Command::OpenMail => "mail",
             _ => "sliders-horizontal",
@@ -198,6 +205,8 @@ pub(crate) enum Item {
     Setting(&'static SettingRow),
     /// `env <label>`: the active tab on this env of its project.
     Env(String),
+    /// `Bar::keyed[i]`.
+    Keyed(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -220,6 +229,7 @@ pub struct Bar {
     pub matches: Vec<Suggestion>,
     /// History mode: visited pages matching `field`, from baa-model.
     pub history: Vec<HistoryItem>,
+    pub keyed: Vec<Keyed>,
     /// Bumped per edit, so a late answer for older text is dropped.
     seq: u64,
 }
@@ -235,15 +245,17 @@ impl Bar {
             scale,
             matches: Vec::new(),
             history: Vec::new(),
+            keyed: Vec::new(),
             seq: 0,
         }
     }
 
-    fn rows(&self, session: &Session, settings: &Settings, mail: bool) -> Vec<Row> {
+    pub(crate) fn rows(&self, session: &Session, settings: &Settings, mail: bool) -> Vec<Row> {
         if self.mode == Mode::History {
             return self.history.iter().take(MAX_ROWS).map(history_row).collect();
         }
-        let mut out = rows(&self.field.text, session, settings, &self.matches);
+        let keyed: Vec<&str> = self.keyed.iter().map(|k| k.label.as_str()).collect();
+        let mut out = rows(&self.field.text, session, settings, &self.matches, &keyed);
         out.retain(|r| mail || !matches!(r.item, Item::Command(Command::OpenMail)));
         out
     }
@@ -275,6 +287,7 @@ pub(crate) fn rows(
     session: &Session,
     settings: &Settings,
     matches: &[Suggestion],
+    keyed: &[&str],
 ) -> Vec<Row> {
     let query = query.trim();
     let active = session.active_space();
@@ -353,6 +366,11 @@ pub(crate) fn rows(
     for (command, label) in COMMANDS {
         if let Some(score) = fuzzy::score(query, label) {
             scored.push((score, row(Item::Command(command), label, "")));
+        }
+    }
+    for (i, label) in keyed.iter().enumerate() {
+        if let Some(score) = fuzzy::score(query, label) {
+            scored.push((score, row(Item::Keyed(i), *label, "")));
         }
     }
     // After commands, so equal scores keep: tabs, Spaces, commands, pages, settings.
@@ -531,6 +549,10 @@ fn submit<H: WebHost>(
     let Some(row) = rows.into_iter().nth(row.unwrap_or(bar.selected)) else {
         return;
     };
+    let keyed = match row.item {
+        Item::Keyed(i) => bar.keyed.get(i).map(|k| k.action.boxed_clone()),
+        _ => None,
+    };
     this.close_overlays(window, cx);
     match row.item {
         Item::Open(url) => this.navigate(&url, mode == Mode::Address, window, cx),
@@ -544,6 +566,12 @@ fn submit<H: WebHost>(
         Item::Page(page) => this.navigate(page.url, mode == Mode::Address, window, cx),
         Item::Setting(r) => this.open_settings_at(Some(r.tab), Some(r.id), cx),
         Item::Env(label) => this.switch_env(Some(&label), window, cx),
+        // Dispatched from where close_overlays put the focus, as its shortcut would be.
+        Item::Keyed(_) => {
+            if let Some(action) = keyed {
+                window.dispatch_action(action, cx);
+            }
+        }
     }
 }
 
@@ -583,42 +611,11 @@ impl<H: WebHost> Browser<H> {
             Command::ClearHistory => self.open_settings_at(Some(crate::settings::Tab::Privacy), Some("clear_data"), cx),
             Command::ImportFromArc => self.import_arc(window, cx),
             Command::SetUpPasswords => self.set_up_passwords(window, cx),
+            Command::ClearDownloads => self.clear_downloads(cx),
             // The rest have actions, dispatched above.
             _ => {}
         }
     }
-}
-
-/// A shortcut as the mock draws it: one chip per modifier, then the key.
-pub(crate) fn chips(binding: &gpui::KeyBinding) -> Vec<SharedString> {
-    binding.keystrokes().iter().flat_map(|s| stroke_chips(s.inner())).collect()
-}
-
-pub(crate) fn stroke_chips(k: &gpui::Keystroke) -> Vec<SharedString> {
-    let m = &k.modifiers;
-    let mac = cfg!(target_os = "macos");
-    let mut out: Vec<SharedString> = [
-        (m.control, "⌃", "Ctrl"),
-        (m.alt, "⌥", "Alt"),
-        (m.shift, "⇧", "Shift"),
-        (m.platform, "⌘", "Win"),
-    ]
-    .into_iter()
-    .filter(|(on, ..)| *on)
-    .map(|(_, mac_label, other)| if mac { mac_label } else { other }.into())
-    .collect();
-    let key = match k.key.as_str() {
-        "enter" => "↩".to_string(),
-        "left" => "←".into(),
-        "right" => "→".into(),
-        "up" => "↑".into(),
-        "down" => "↓".into(),
-        "tab" => "⇥".into(),
-        "escape" => "esc".into(),
-        other => other.to_uppercase(),
-    };
-    out.push(key.into());
-    out
 }
 
 impl<H: WebHost> Browser<H> {
@@ -680,20 +677,24 @@ impl<H: WebHost> Browser<H> {
                 }
                 Item::Open(_) => icon("globe", 18., icon_color).into_any_element(),
                 Item::Env(_) => icon("terminal", 18., icon_color).into_any_element(),
+                Item::Keyed(_) => icon("sliders-horizontal", 18., icon_color).into_any_element(),
             };
             let binding = match &row.item {
                 Item::Command(c) => c.action().and_then(|a| window.highest_precedence_binding_for_action(&*a)),
                 Item::Space(_, n) => window.highest_precedence_binding_for_action(&actions::GoToSpace(*n)),
                 _ => None,
             };
-            let keys = binding.map(|b| chips(&b)).unwrap_or_default();
+            let keys = match &row.item {
+                Item::Keyed(i) => bar.keyed.get(*i).map(|k| k.keys.clone()).unwrap_or_default(),
+                _ => binding.map(|b| chips(&b)).unwrap_or_default(),
+            };
             let hint = match &row.item {
                 Item::Open(_) if row.detail.starts_with("— Search") || row.suggestion => "Search",
                 Item::Open(_) => "Open",
                 Item::Tab(_) => "Switch to Tab",
                 Item::Archived(_) => "Restore",
                 Item::Space(..) => "Switch",
-                Item::Command(_) => "Run",
+                Item::Command(_) | Item::Keyed(_) => "Run",
                 Item::Page(_) => "Open",
                 Item::Setting(_) => "Show",
                 Item::Env(_) => "Switch",
@@ -872,7 +873,7 @@ mod tests {
     #[test]
     fn empty_query_lists_recent_tabs_then_quick_commands() {
         let (s, gh, ls) = session();
-        let r = rows("", &s, &Settings::default(), &[]);
+        let r = rows("", &s, &Settings::default(), &[], &[]);
         assert_eq!(r[0].item, Item::Tab(ls), "most recent first");
         assert_eq!(r[1].item, Item::Tab(gh));
         assert_eq!(r[2].item, Item::Command(Command::NewSpace));
@@ -896,7 +897,7 @@ mod tests {
     fn typed_search_then_suggestions_then_best_tab() {
         let (s, gh, _) = session();
         let matches = [search("gh cli"), search("gh")];
-        let r = rows("gh", &s, &Settings::default(), &matches);
+        let r = rows("gh", &s, &Settings::default(), &matches, &[]);
         assert_eq!(r[0].item, Item::Open("https://www.google.com/search?q=gh".into()));
         assert_eq!((r[0].label.as_str(), r[0].detail.as_str()), ("gh", "— Search Google"));
         assert!(r[1].suggestion);
@@ -907,10 +908,10 @@ mod tests {
     #[test]
     fn urls_spaces_and_commands() {
         let (s, ..) = session();
-        assert_eq!(rows("example.com", &s, &Settings::default(), &[])[0].label, "https://example.com/");
-        let r = rows("new space", &s, &Settings::default(), &[]);
+        assert_eq!(rows("example.com", &s, &Settings::default(), &[], &[])[0].label, "https://example.com/");
+        let r = rows("new space", &s, &Settings::default(), &[], &[]);
         assert!(r.iter().any(|r| r.item == Item::Command(Command::NewSpace)));
-        let r = rows("personal", &s, &Settings::default(), &[]);
+        let r = rows("personal", &s, &Settings::default(), &[], &[]);
         assert!(r.iter().any(|r| matches!(r.item, Item::Space(_, 0))));
     }
 
@@ -918,7 +919,7 @@ mod tests {
     fn page_matches_become_history_rows_unless_open() {
         let (s, ..) = session();
         let matches = [search("gh cli"), page("https://github.com/", "GitHub"), page("https://docs.rs/gpui", "gpui docs")];
-        let r = rows("gh", &s, &Settings::default(), &matches);
+        let r = rows("gh", &s, &Settings::default(), &matches, &[]);
         assert!(r[0].detail.starts_with("— Search"));
         assert!(r[1].suggestion);
         let from_history: Vec<&str> = r.iter().filter(|r| r.history).map(|r| r.label.as_str()).collect();
@@ -935,7 +936,7 @@ mod tests {
         let dup = s.open_tab(sp, "https://github.com", 4);
         s.close_tab(old, 5);
         s.close_tab(dup, 6);
-        let r = rows("github", &s, &Settings::default(), &[]);
+        let r = rows("github", &s, &Settings::default(), &[], &[]);
         let at = |item: Item| r.iter().position(|r| r.item == item);
         assert!(at(Item::Archived(old)).unwrap() > at(Item::Tab(gh)).unwrap());
         assert_eq!(at(Item::Archived(dup)), None, "GitHub is open as a tab already");
@@ -967,10 +968,10 @@ mod tests {
             }],
             ..Default::default()
         };
-        let r = rows("env ", &s, &settings, &[]);
+        let r = rows("env ", &s, &settings, &[], &[]);
         assert_eq!(r.iter().map(|r| r.item.clone()).collect::<Vec<_>>(), [Item::Env("Local".into()), Item::Env("Prod".into())]);
-        assert_eq!(rows("ENV pr", &s, &settings, &[]).iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Switch to Prod"]);
-        assert!(!rows("env qa", &s, &settings, &[]).iter().any(|r| matches!(r.item, Item::Env(_))), "falls back to a search");
-        assert!(!rows("env prod", &s, &Settings::default(), &[]).iter().any(|r| matches!(r.item, Item::Env(_))));
+        assert_eq!(rows("ENV pr", &s, &settings, &[], &[]).iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Switch to Prod"]);
+        assert!(!rows("env qa", &s, &settings, &[], &[]).iter().any(|r| matches!(r.item, Item::Env(_))), "falls back to a search");
+        assert!(!rows("env prod", &s, &Settings::default(), &[], &[]).iter().any(|r| matches!(r.item, Item::Env(_))));
     }
 }

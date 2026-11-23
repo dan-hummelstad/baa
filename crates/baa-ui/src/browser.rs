@@ -753,17 +753,20 @@ impl<H: WebHost> Browser<H> {
         if self.active_dialog().is_some() || !self.agent.asks.is_empty() {
             return window.focus(&self.input_focus, cx);
         }
-        let mail = self.mail.as_ref().filter(|_| self.mail_in_front()).map(|m| m.focus.clone());
+        let mail = self.mail.as_ref().filter(|_| self.mail_in_front());
         // A mail text field keeps the keyboard; the mail view holds it.
-        if mail.as_ref().is_some_and(|m| m.contains_focused(window, cx)) {
+        if mail.is_some_and(|m| m.focus.contains_focused(window, cx)) {
             return;
         }
-        let target = self
-            .active_page()
+        window.focus(&self.page_focus(cx), cx);
+    }
+
+    /// Where `focus_page` puts the keyboard: the page in front, else mail, else the window.
+    pub(crate) fn page_focus(&self, cx: &gpui::App) -> FocusHandle {
+        self.active_page()
             .map(|p| p.read(cx).focus_handle(cx))
-            .or(mail)
-            .unwrap_or_else(|| self.focus.clone());
-        window.focus(&target, cx);
+            .or_else(|| self.mail.as_ref().filter(|_| self.mail_in_front()).map(|m| m.focus.clone()))
+            .unwrap_or_else(|| self.focus.clone())
     }
 
     pub(crate) fn create_page(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
@@ -1066,7 +1069,9 @@ impl<H: WebHost> Browser<H> {
             ),
             Mode::NewTab | Mode::History => TextField::default(),
         };
-        self.bar = Some(Bar::new(mode, field));
+        let mut bar = Bar::new(mode, field);
+        bar.keyed = command_bar::keyed(window, &self.page_focus(cx), cx);
+        self.bar = Some(bar);
         command_bar::refresh_history(self);
         self.closing_bar = None;
         self.find = None;

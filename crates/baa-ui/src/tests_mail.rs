@@ -554,3 +554,62 @@ fn the_last_section_mail_opens_on_downloads_in_a_space_that_cannot_have_mail(cx:
     assert_eq!(section(&b, cx), Some(Section::Downloads));
     b.read_with(cx, |b, _| assert!(!b.mail_in_front()));
 }
+
+fn bar_labels(b: &B, cx: &mut VisualTestContext) -> Vec<String> {
+    b.read_with(cx, |b, _| b.bar.as_ref().unwrap().rows(&b.session, &b.settings, b.mail_here()).into_iter().map(|r| r.label).collect())
+}
+
+#[gpui::test]
+fn cmd_t_from_mail_types_into_the_bar_and_opens_the_tab_in_front(cx: &mut TestAppContext) {
+    let (b, cx, _) = mail_over_a_tab(cx);
+    for focus_search in [false, true] {
+        if focus_search {
+            b.update_in(cx, |b, window, cx| b.focus_mail_field(crate::mail::Field::Search, window, cx));
+        }
+        cx.simulate_keystrokes("cmd-t");
+        cx.simulate_input("c.example");
+        assert_eq!(b.read_with(cx, |b, _| b.bar.as_ref().map(|x| x.field.text.clone())), Some("c.example".into()));
+        b.read_with(cx, |b, _| assert_eq!(b.mail.as_ref().unwrap().search.text, "", "nothing went to mail's search"));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        b.read_with(cx, |b, _| {
+            let tab = b.front().and_then(|p| p.tab()).and_then(|t| b.session.tab(t)).expect("a tab in front");
+            assert_eq!(tab.url, "https://c.example/");
+            assert!(b.library.is_none(), "the Fold closed with mail");
+        });
+        show_mail(&b, cx, true);
+    }
+}
+
+#[gpui::test]
+fn the_bar_runs_every_bound_action_by_name_where_it_would_run(cx: &mut TestAppContext) {
+    let (b, cx, _mail, _) = with_account(cx);
+    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_input("new message");
+    assert_eq!(bar_labels(&b, cx).get(1).map(String::as_str), Some("New Message"), "a Mail shortcut, with mail in front");
+    let keys = |b: &B, cx: &mut VisualTestContext, label: &str| {
+        b.read_with(cx, |b, _| b.bar.as_ref().unwrap().keyed.iter().find(|k| k.label == label).map(|k| k.keys.join("")))
+    };
+    assert_eq!(keys(&b, cx, "Reply").as_deref(), Some("⌘R"));
+    assert_eq!(keys(&b, cx, "Reload").as_deref(), Some(""), "in mail ⌘R is Reply's");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    b.read_with(cx, |b, _| assert!(b.mail.as_ref().unwrap().front_draft().is_some(), "it ran in the mail view"));
+
+    show_mail(&b, cx, false);
+    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_input("new message");
+    assert!(!bar_labels(&b, cx).iter().any(|l| l == "New Message"), "not without mail in front");
+    cx.simulate_keystrokes("escape");
+
+    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_input("fold");
+    let labels = bar_labels(&b, cx);
+    let i = labels.iter().position(|l| l == "Open or Close the Fold").expect("the Fold by name");
+    for _ in 0..i {
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(section(&b, cx).is_some(), "the Fold opened");
+}
