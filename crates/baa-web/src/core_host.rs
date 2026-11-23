@@ -15,6 +15,7 @@ pub(crate) mod profiles;
 mod settings;
 mod skin;
 mod slot;
+mod webkit;
 #[cfg(test)]
 mod tests;
 

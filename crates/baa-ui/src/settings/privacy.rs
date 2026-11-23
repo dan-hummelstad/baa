@@ -173,6 +173,43 @@ impl<H: WebHost> SettingsView<H> {
             self.toggle("pref-widevine", s.web.widevine, |s, v| s.web.widevine = v, cx),
         ));
         out.push(self.row(
+            "webkit_drm",
+            "Netflix, Disney+, Max, Prime Video, Apple TV+, Hulu, Paramount+, Peacock and the sites you add open in WebKit, \
+             which plays their video as Safari does. Those tabs have no extensions (no ad blocker or password manager), \
+             no downloads, and sign-ins of their own. Needs macOS 14.",
+            self.toggle("pref-webkit-drm", s.web.webkit_drm, |s, v| s.web.webkit_drm = v, cx),
+        ));
+        if s.web.webkit_drm {
+            for site in &s.web.webkit_sites {
+                let remove = div()
+                    .id(SharedString::from(format!("webkit-remove:{site}")))
+                    .debug_selector({
+                        let site = site.clone();
+                        move || format!("webkit-remove:{site}")
+                    })
+                    .size(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(r(6.))
+                    .hover(|d| d.bg(surface::key()))
+                    .on_click({
+                        let site = site.clone();
+                        cx.listener(move |this, _, _, cx| this.change(cx, |s| s.web.webkit_sites.retain(|x| *x != site)))
+                    })
+                    .child(crate::icons::icon("x", 13., surface::icon().into()))
+                    .into_any_element();
+                out.push(self.sub_row(format!("webkit-site:{site}"), SharedString::from(site.clone()).into_any_element(), remove));
+            }
+            out.push(self.sub_row(
+                "webkit-add".into(),
+                self.field(Field::WebKitSite, "webkit-site", "example.com", 220., cx),
+                self.button("webkit-add-button", "Add site", false, cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.add_webkit_site(cx)))
+                    .into_any_element(),
+            ));
+        }
+        out.push(self.row(
             "extension_updates",
             "On by default. About every five hours baa asks Google's Web Store update server for new versions, sending the ids and versions of your extensions. Off: extensions stay at the version you installed.",
             self.toggle("pref-extension-updates", s.extension_updates, |s, v| s.extension_updates = v, cx),
@@ -380,6 +417,17 @@ impl<H: WebHost> SettingsView<H> {
     }
 
     /// Applies the DNS address typed so far, if it is valid.
+    pub(super) fn add_webkit_site(&mut self, cx: &mut Context<Self>) {
+        let Some(host) = webkit_host(self.text(Field::WebKitSite)) else { return };
+        *self.field_mut(Field::WebKitSite) = Default::default();
+        self.change(cx, |s| {
+            if !s.web.webkit_sites.contains(&host) {
+                s.web.webkit_sites.push(host);
+            }
+        });
+        cx.notify();
+    }
+
     pub(super) fn commit_dns(&mut self, cx: &mut Context<Self>) {
         self.commit(Field::DnsTemplate, cx);
     }
@@ -570,5 +618,26 @@ impl<H: WebHost> Browser<H> {
         };
         self.save_settings(cx);
         self.show_toast("Settings reset", cx);
+    }
+}
+
+/// The host of what was typed into the WebKit site list ("netflix.com", "https://x.y/z").
+fn webkit_host(text: &str) -> Option<String> {
+    let text = text.trim().trim_start_matches("*.");
+    let url = if text.contains("://") { text.to_string() } else { format!("https://{text}") };
+    let host = url::Url::parse(&url).ok()?.host_str()?.trim_end_matches('.').to_string();
+    host.contains('.').then_some(host)
+}
+
+#[cfg(test)]
+mod webkit_site_tests {
+    #[test]
+    fn a_typed_site_becomes_its_host() {
+        assert_eq!(super::webkit_host(" Netflix.com "), Some("netflix.com".into()));
+        assert_eq!(super::webkit_host("https://www.crunchyroll.com/watch/1"), Some("www.crunchyroll.com".into()));
+        assert_eq!(super::webkit_host("*.example.org"), Some("example.org".into()));
+        assert_eq!(super::webkit_host("localhost"), None);
+        assert_eq!(super::webkit_host(""), None);
+        assert_eq!(super::webkit_host("not a site"), None);
     }
 }

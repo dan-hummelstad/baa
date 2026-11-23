@@ -57,6 +57,7 @@ pub(crate) enum Field {
     EnvLabel,
     EnvOrigin,
     ClaudePath,
+    WebKitSite,
     Mail(crate::mail::setup::MailField),
 }
 
@@ -498,6 +499,7 @@ impl<H: WebHost> SettingsView<H> {
             Field::EnvProject | Field::EnvLabel | Field::EnvOrigin => self.add_env(cx),
             Field::Languages | Field::DnsTemplate | Field::ClaudePath => self.commit(field, cx),
             Field::Mail(_) => self.mail_add_account(cx),
+            Field::WebKitSite => self.add_webkit_site(cx),
             _ => {}
         }
     }

@@ -15,6 +15,7 @@ pub use permission::{Permission, PermissionState};
 pub use settings::{
     Account, ChromeStyle, Claude, Cookies, DevToolsDock, ExternalLinks, Https, MailSettings, PageScheme, Preload,
     RemoteImages, SearchEngine, SecureDns, Settings, SidebarSide, WebPrefs, SEARCH_ENGINES,
+    WEBKIT_DRM_SITES,
 };
 pub use live::{LiveItem, LiveSource};
 pub use settings::{Env, Project};

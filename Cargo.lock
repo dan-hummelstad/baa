@@ -653,6 +653,7 @@ version = "0.2.0"
 dependencies = [
  "baa-model",
  "baa-privacy",
+ "block2 0.6.2",
  "core-foundation 0.10.1",
  "core-video",
  "gpui",

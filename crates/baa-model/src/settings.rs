@@ -196,6 +196,11 @@ pub struct WebPrefs {
     /// Widevine, for DRM video. Off by default: on, the engine fetches Google's CDM from
     /// Google's update server. Applies when baa restarts.
     pub widevine: bool,
+    /// [`WEBKIT_DRM_SITES`] and `webkit_sites` open in a WebKit view, which plays FairPlay DRM.
+    /// Off by default.
+    pub webkit_drm: bool,
+    /// Hosts the user added; each covers its subdomains.
+    pub webkit_sites: Vec<String>,
     /// Off: it discards hidden tabs, which baa's page views do not expect yet.
     pub memory_saver: bool,
     /// Extension developer mode (load unpacked, reload).
@@ -213,6 +218,35 @@ fn site_defaults<'de, D: serde::Deserializer<'de>>(
     let mut v: Vec<(crate::Permission, crate::PermissionState)> = crate::known(d)?;
     v.retain(|&(kind, state)| kind.takes_default(state));
     Ok(v)
+}
+
+/// Streaming sites that refuse Widevine without Google's VMP signature but play FairPlay.
+pub const WEBKIT_DRM_SITES: &[&str] = &[
+    "netflix.com",
+    "disneyplus.com",
+    "max.com",
+    "hbomax.com",
+    "primevideo.com",
+    "tv.apple.com",
+    "hulu.com",
+    "paramountplus.com",
+    "peacocktv.com",
+];
+
+impl WebPrefs {
+    /// Whether `url` opens in WebKit: the switch is on and it is an https page of a listed host.
+    pub fn uses_webkit(&self, url: &str) -> bool {
+        if !self.webkit_drm {
+            return false;
+        }
+        let Ok(url) = url::Url::parse(url) else { return false };
+        let Some(host) = url.host_str().filter(|_| url.scheme() == "https") else { return false };
+        let user = self.webkit_sites.iter().map(String::as_str);
+        WEBKIT_DRM_SITES.iter().copied().chain(user).any(|site| {
+            let site = site.trim().trim_start_matches("*.").trim_end_matches('.').to_ascii_lowercase();
+            !site.is_empty() && (host == site || host.strip_suffix(site.as_str()).is_some_and(|sub| sub.ends_with('.')))
+        })
+    }
 }
 
 impl Default for WebPrefs {
@@ -236,6 +270,8 @@ impl Default for WebPrefs {
             global_privacy_control: false,
             hardware_acceleration: true,
             widevine: false,
+            webkit_drm: false,
+            webkit_sites: Vec::new(),
             memory_saver: false,
             developer_mode: false,
             site_defaults: Vec::new(),
@@ -483,6 +519,25 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webkit_only_for_https_pages_of_listed_hosts_when_on() {
+        let mut web = WebPrefs { webkit_sites: vec!["*.Example.org".into(), " ".into()], ..WebPrefs::default() };
+        assert!(!web.uses_webkit("https://www.netflix.com/"), "off by default");
+        web.webkit_drm = true;
+        assert!(web.uses_webkit("https://www.netflix.com/watch/1"));
+        assert!(web.uses_webkit("https://netflix.com"));
+        assert!(web.uses_webkit("https://a.example.org/"));
+        assert!(web.uses_webkit("https://tv.apple.com/"));
+        assert!(!web.uses_webkit("https://apple.com/"), "a listed subdomain does not cover its parent");
+        assert!(!web.uses_webkit("http://www.netflix.com/"), "https only");
+        assert!(!web.uses_webkit("https://evilnetflix.com/"));
+        assert!(!web.uses_webkit("https://netflix.com.evil.io/"));
+        assert!(!web.uses_webkit("https://www.netflix.com@evil.io/"));
+        assert!(!web.uses_webkit("baa://settings"));
+        assert!(!web.uses_webkit("netflix.com"));
+        assert!(!web.uses_webkit("https://com/"), "the blank user entry matches nothing");
+    }
 
     #[test]
     fn resolve_input() {

@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     ffi::{c_char, c_void},
     rc::Rc,
+    time::Duration,
 };
 
 use gpui::{
@@ -24,10 +25,15 @@ use super::{
     native, settings,
     skin,
     slot::PageSlot,
-    ffi::{self, Profile, TabId},
+    ffi::{self, Profile, TabId, TabState},
+    webkit,
     PageKind, Shared, Snapshot,
 };
 use crate::{Callback, Device, MediaAction, PageEvent, PageHandle, ProfileId};
+
+/// How often a WebKit page's url, title and history are read.
+// ponytail: polled, so the UI hears of a change up to this late. Upgrade: KVO on the WKWebView.
+const WEBKIT_POLL: Duration = Duration::from_millis(250);
 
 const PHONE_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
@@ -58,6 +64,10 @@ pub struct CorePage {
     square_corners: Cell<u8>,
     this: WeakEntity<CorePage>,
     _focus: [Subscription; 2],
+    /// Set while WebKit shows the page instead of Chrome (`webkit.rs`); the tab is 0 then.
+    wk: RefCell<Option<webkit::View>>,
+    /// Bumped on each change of engine, so only the newest poll keeps running.
+    wk_generation: Cell<u64>,
 }
 
 impl CorePage {
@@ -111,7 +121,90 @@ impl CorePage {
             square_corners: Cell::new(0),
             this: cx.weak_entity(),
             _focus: focus,
+            wk: RefCell::default(),
+            wk_generation: Cell::new(0),
         }
+    }
+
+    /// A URL the user typed or picked moves the tab to the engine it belongs in, keeping
+    /// the page entity. True when it did; the URL is then loaded.
+    fn switch_engine(&self, url: &str) -> bool {
+        let wants_webkit = self.shared.kind == PageKind::Tab && self.dispatch.webkit.uses(url);
+        if wants_webkit == self.wk.borrow().is_some() {
+            return false;
+        }
+        if wants_webkit { self.to_webkit(url) } else { self.to_chrome(url) }
+    }
+
+    /// Closes the Chrome tab, if any, and shows `url` in WebKit. False, and nothing
+    /// changes, when the Space has no WebKit store.
+    pub(super) fn to_webkit(&self, url: &str) -> bool {
+        let Some(store) = self.dispatch.webkit.store(self.profile) else { return false };
+        let tab = self.shared.tab.get();
+        if tab != 0 {
+            self.dispatch.tabs.borrow_mut().remove(&tab);
+            self.shared.release();
+            (self.dispatch.core.tab_close)(tab);
+        }
+        let view = webkit::View::new(&store);
+        self.shared.container.swap_page(view.as_ptr());
+        view.load(url);
+        *self.wk.borrow_mut() = Some(view);
+        self.poll_webkit();
+        true
+    }
+
+    fn to_chrome(&self, url: &str) -> bool {
+        let handle = self.shared.profile;
+        if handle.is_null() {
+            return false;
+        }
+        let url = skin::to_baa(url.to_string());
+        let first = if skin::is_webui(&url) { "about:blank" } else { &url };
+        let tab = (self.dispatch.core.tab_create)(handle, c_string(first).as_ptr());
+        if tab == 0 {
+            return false;
+        }
+        self.wk_generation.set(self.wk_generation.get() + 1);
+        self.shared.container.swap_page(std::ptr::null_mut());
+        self.wk.borrow_mut().take();
+        // ponytail: no skin css here, so a Chrome page opened this way looks plain until
+        // the Space's skin changes. Upgrade: keep the skins in `Dispatch`.
+        self.dispatch.prepare_tab(tab, &url, "", false);
+        self.shared.tab.set(tab);
+        self.dispatch.tabs.borrow_mut().insert(tab, Live { shared: self.shared.clone(), page: Some(self.this.clone()) });
+        let mut raw: TabState = unsafe { std::mem::zeroed() };
+        if (self.dispatch.core.tab_get_state)(tab, &mut raw) {
+            self.shared.container.swap_page(Snapshot::from_c(&raw).view);
+        }
+        true
+    }
+
+    fn poll_webkit(&self) {
+        let generation = self.wk_generation.get() + 1;
+        self.wk_generation.set(generation);
+        let Some(app) = self.dispatch.app.borrow().clone() else { return };
+        let page = self.this.clone();
+        app.spawn(async move |cx| loop {
+            cx.background_executor().timer(WEBKIT_POLL).await;
+            let alive = page.update(cx, |page, cx| page.read_webkit(generation, cx)).unwrap_or(false);
+            if !alive {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn read_webkit(&mut self, generation: u64, cx: &mut Context<Self>) -> bool {
+        if self.wk_generation.get() != generation {
+            return false;
+        }
+        let Some(new) = self.wk.borrow().as_ref().map(webkit::View::snapshot) else { return false };
+        if new != self.state {
+            let old = std::mem::replace(&mut self.state, new.clone());
+            self.emit_changes(&old, &new, cx);
+        }
+        true
     }
 
     /// Diffs a tab snapshot against the last one and reports what changed.
@@ -240,6 +333,9 @@ impl CorePage {
     fn set_browser_focus(&self, focused: bool) {
         let view = self.shared.container.page();
         if focused {
+            if let Some(wk) = &*self.wk.borrow() {
+                wk.focus();
+            }
             self.shared.run(|core, tab| {
                 (core.tab_focus)(tab);
             });
@@ -298,12 +394,24 @@ impl Render for CorePage {
 
 impl PageHandle for CorePage {
     fn load_url(&self, url: &str) {
+        if self.switch_engine(url) {
+            return;
+        }
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.load(url);
+        }
         self.shared.run(|core, tab| (core.tab_load_url)(tab, c_string(&skin::to_chrome(url)).as_ptr()));
     }
     fn reload(&self, bypass_cache: bool) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.reload(bypass_cache);
+        }
         self.shared.run(|core, tab| (core.tab_reload)(tab, bypass_cache));
     }
     fn stop(&self) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.stop();
+        }
         self.shared.run(|core, tab| (core.tab_stop)(tab));
     }
     fn go_back(&self) {
@@ -332,6 +440,9 @@ impl PageHandle for CorePage {
         self.state.can_go_forward
     }
     fn history(&self) -> (Vec<(String, String)>, usize) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.history();
+        }
         extern "C" fn visit(entries: *mut c_void, title: *const c_char, url: *const c_char) {
             let entries = unsafe { &mut *entries.cast::<Vec<(String, String)>>() };
             entries.push(unsafe { (from_c(title), skin::to_baa(from_c(url))) });
@@ -344,12 +455,21 @@ impl PageHandle for CorePage {
         (entries, current.max(0) as usize)
     }
     fn go_to_offset(&self, offset: i32) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.go_to_offset(offset);
+        }
         self.shared.run(|core, tab| (core.tab_go_to_offset)(tab, offset));
     }
     fn eval(&self, script: &str) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.eval(script);
+        }
         self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(script).as_ptr(), false));
     }
     fn set_zoom(&self, level: f64) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.set_zoom(level);
+        }
         self.shared.run(|core, tab| (core.tab_set_zoom)(tab, level));
     }
     fn find(&self, text: &str, forward: bool) {
@@ -385,6 +505,9 @@ impl PageHandle for CorePage {
         self.state.secure
     }
     fn eval_with_gesture(&self, script: &str) {
+        if let Some(wk) = &*self.wk.borrow() {
+            return wk.eval(script);
+        }
         self.shared.run(|core, tab| (core.tab_eval)(tab, c_string(script).as_ptr(), true));
     }
     fn set_visible(&self, visible: bool) {

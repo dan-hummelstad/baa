@@ -211,6 +211,15 @@ impl WebHost for CoreWebHost {
 
     fn create_page(&self, profile: ProfileId, url: &str, user_initiated: bool, window: &mut Window, cx: &mut App) -> Entity<CorePage> {
         let handle = self.profile_handle(profile);
+        // A page-supplied URL stays with the Chrome tab Chrome checked it in.
+        if user_initiated && self.dispatch.webkit.uses(url) && self.dispatch.webkit.store(profile).is_some() {
+            let dispatch = self.dispatch;
+            return cx.new(|cx| {
+                let page = CorePage::new(dispatch, profile, handle, 0, PageKind::Tab, window, cx);
+                page.to_webkit(url);
+                page
+            });
+        }
         let tab = if handle.is_null() {
             0
         } else {
@@ -280,6 +289,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn delete_profile(&self, profile: ProfileId) {
+        self.dispatch.webkit.forget(profile);
         self.skins.borrow_mut().remove(&profile);
         if let Some(handle) = self.profiles.borrow_mut().remove(&profile) {
             self.dispatch.profile_ids.borrow_mut().remove(&handle);
@@ -404,6 +414,7 @@ impl WebHost for CoreWebHost {
     fn apply_settings(&self, settings: &baa_model::Settings) {
         // Reduce motion: Chrome's own swipe, an arrow that fills, instead of baa's sliding sheet.
         (self.core.set_swipe_sheet)(!settings.reduce_motion);
+        self.dispatch.webkit.set_prefs(&settings.web);
         let new = settings::writes(settings);
         let old = self.applied.replace(Some(new.clone())).unwrap_or_default();
         for write in new.local.iter().filter(|w| !old.local.contains(w)) {
@@ -449,6 +460,7 @@ impl WebHost for CoreWebHost {
     }
 
     fn clear_data(&self, profile: ProfileId, since: Option<std::time::SystemTime>, what: ClearData, _cx: &mut App, done: Callback<()>) {
+        self.dispatch.webkit.clear(profile, since, what);
         let id = self.dispatch.clears.add(done);
         let handle = self.profile_handle(profile);
         if handle.is_null() {

@@ -28,6 +28,13 @@ Settings › Privacy › Update certificate revocation list (applies after a res
 downloads the Widevine module from Google's update server. Turn it off: Settings › Privacy ›
 Play DRM-protected content (applies after a restart).
 
+**Streaming sites in WebKit (Apple).** Only when "Play streaming sites in WebKit" is on (it is off
+by default), the listed streaming sites and the sites you add open in macOS's WebKit instead of
+Chromium. WebKit then does what it does in Safari for those pages: FairPlay licence requests go to
+the site, and WebKit may check the pages against its fraudulent website list. Their cookies and
+storage are kept by WebKit, one store per Space, in memory for a private Space. Turn it off:
+Settings › Privacy › Play streaming sites in WebKit.
+
 **Live folders (the sites you chose).** A live folder fetches the feed or page you added every
 ten minutes, and when you choose Refresh. A GitHub live folder calls GitHub's API with your own
 GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the GitHub CLI's login, `gh auth token`). The token

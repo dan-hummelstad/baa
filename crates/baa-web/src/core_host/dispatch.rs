@@ -133,6 +133,7 @@ pub(super) struct Dispatch {
     pub(super) root: OnceCell<PathBuf>,
     /// `Settings::page_scheme`, kept as the user chose it until it is sent to the engine.
     pub(super) page_scheme: Cell<baa_model::PageScheme>,
+    pub(super) webkit: super::webkit::Engine,
 }
 
 impl Dispatch {
@@ -158,6 +159,7 @@ impl Dispatch {
             next_autocomplete: Cell::new(1),
             root: OnceCell::new(),
             page_scheme: Cell::default(),
+            webkit: Default::default(),
         }
     }
 

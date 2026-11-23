@@ -574,3 +574,4 @@ mod pages;
 mod profile_tests;
 mod settings_tests;
 mod webui_tests;
+mod webkit_tests;

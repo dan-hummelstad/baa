@@ -148,7 +148,7 @@ Mapping each item to what a *binary* CEF Alloy build lets us do:
 | Translate, spellcheck dictionary download | Yes | translate off; spellcheck uses OS (mac) / Hunspell local (win) or off |
 | Media router / Cast | Yes | `--disable-features=MediaRouter` + host block |
 | Google Fonts / Google domains in web content | web content, not browser | not our business (that is the page) |
-| Widevine CDM | downloaded via component updater | opt-in, off by default: Settings › Privacy "Play DRM-protected content" fetches only WidevineCdm from `update.googleapis.com` at the next launch (`chromium/patches/baa/widevine-opt-in.patch`). No VMP signature, so Netflix-class sites may still refuse. |
+| Widevine CDM | downloaded via component updater | opt-in, off by default: Settings › Privacy "Play DRM-protected content" fetches only WidevineCdm from `update.googleapis.com` at the next launch (`chromium/patches/baa/widevine-opt-in.patch`). No VMP signature, so Netflix-class sites may still refuse. Those sites (a built-in list and the user's) can open in a WKWebView instead, which plays FairPlay: Settings › Privacy "Play streaming sites in WebKit", off by default (`baa-web/src/core_host/webkit.rs`). |
 
 Implementation = three mechanisms, all in `baa-privacy`:
 1. **Switches** appended in `OnBeforeCommandLineProcessing`.

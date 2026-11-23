@@ -19,6 +19,8 @@ raw-window-handle = "0.6"
 core-video = "0.5.2"
 core-foundation = "0.10"
 objc2 = "0.6"
+# WebKit's completion handlers (already in the tree through gpui).
+block2 = "0.6"
 # dlopen/dlsym for BaaCore.
 libc = "0.2"
 
