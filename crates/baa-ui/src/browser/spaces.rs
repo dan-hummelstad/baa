@@ -247,12 +247,12 @@ impl<H: WebHost> Browser<H> {
         self.go_to_space(spaces[next], window, cx);
     }
 
-    /// A Space chosen from the Spaces' own controls (a swipe, a dot, ⌃⌥←/→, ⌃1–9): moving
-    /// through Spaces from mail stays in mail, in each Space that can have it.
+    /// A Space chosen from the Spaces' own controls (a swipe, a dot, ⌃⌥←/→, ⌃1–9) shows what
+    /// is in front now: mail in each Space that can have it, else the browser. A Space left on
+    /// mail would otherwise reopen the Fold on Mail after the user had closed it.
     pub(crate) fn go_to_space(&mut self, id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mail_in_front() && self.mail_of(id).is_some() {
-            self.session.set_showing(id, baa_model::Showing::Mail);
-        }
+        let mail = self.mail_in_front() && self.mail_of(id).is_some();
+        self.session.set_showing(id, if mail { baa_model::Showing::Mail } else { baa_model::Showing::Browser });
         self.activate_space(id, window, cx);
     }
 }

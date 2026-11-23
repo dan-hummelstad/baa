@@ -530,6 +530,21 @@ fn a_cmd_swipe_opens_the_archive_on_its_last_section_and_collapses_it(cx: &mut T
 }
 
 #[gpui::test]
+fn after_a_cmd_swipe_out_of_mail_a_swipe_into_a_space_left_on_mail_shows_its_browser(cx: &mut TestAppContext) {
+    let (b, cx, [_, b_tab]) = three_spaces(cx);
+    let [a, b_space, _] = spaces(&b, cx)[..] else { panic!() };
+    chrome_swipe(&b, cx, -300., false);
+    assert_eq!((active(&b, cx), section(&b, cx)), (Some(b_space), Some(Section::Mail)), "from mail, B shows its mail");
+    chrome_swipe(&b, cx, 300., true);
+    browser_page_is_back(&b, cx, b_tab, "a cmd-swipe out");
+    chrome_swipe(&b, cx, 300., false);
+    assert_eq!(active(&b, cx), Some(a));
+    assert!(section(&b, cx).is_none(), "A, left on mail, shows its browser: the Fold stays closed");
+    chrome_swipe(&b, cx, -300., false);
+    browser_page_is_back(&b, cx, b_tab, "and so does B");
+}
+
+#[gpui::test]
 fn the_last_section_mail_opens_on_downloads_in_a_space_that_cannot_have_mail(cx: &mut TestAppContext) {
     let (b, cx, _) = three_spaces(cx);
     let c = spaces(&b, cx)[2];
