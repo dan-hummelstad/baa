@@ -31,7 +31,6 @@ use super::{
 };
 use crate::{Callback, Device, MediaAction, PageEvent, PageHandle, ProfileId};
 
-/// How often a WebKit page's url, title and history are read.
 // ponytail: polled, so the UI hears of a change up to this late. Upgrade: KVO on the WKWebView.
 const WEBKIT_POLL: Duration = Duration::from_millis(250);
 
@@ -172,7 +171,6 @@ impl CorePage {
         true
     }
 
-    /// Lets go of the Chrome tab, if any: its view leaves the container first.
     fn close_tab(&self) {
         let tab = self.shared.tab.get();
         self.shared.release();

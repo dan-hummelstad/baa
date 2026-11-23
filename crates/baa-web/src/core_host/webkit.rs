@@ -33,7 +33,6 @@ pub(super) fn loads(scheme: &str) -> bool {
     matches!(scheme.to_ascii_lowercase().as_str(), "https" | "http" | "about" | "blob" | "data")
 }
 
-/// The WebKit side of the host: the switch and site list, and each Space's data store.
 #[derive(Default)]
 pub(super) struct Engine {
     prefs: RefCell<baa_model::WebPrefs>,
@@ -126,7 +125,6 @@ fn uuid(profile: ProfileId) -> Option<Retained<AnyObject>> {
     }
 }
 
-/// One WKWebView, delegate set, ready for a [`super::native::Container`].
 pub(super) struct View {
     web: Retained<AnyObject>,
 }
@@ -297,7 +295,6 @@ fn string(s: &AnyObject) -> String {
     }
 }
 
-/// The scheme of `action`'s request, lowercased by NSURL; empty when it has none.
 unsafe fn scheme_of(action: &AnyObject) -> String {
     let request: Retained<AnyObject> = msg_send![action, request];
     let url: Option<Retained<AnyObject>> = msg_send![&*request, URL];
