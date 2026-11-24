@@ -101,6 +101,15 @@ impl Imap {
     }
 }
 
+impl Imap {
+    fn login(&self) -> Login<'_> {
+        match &self.credential {
+            Credential::Password(password) => Login::Password { user: &self.user, password },
+            Credential::Bearer(token) => Login::Bearer { user: &self.user, token },
+        }
+    }
+}
+
 impl Backend for Imap {
     fn folders(&mut self) -> Result<Vec<RemoteFolder>> {
         self.session.folders()
@@ -127,11 +136,11 @@ impl Backend for Imap {
     }
 
     fn send(&mut self, from: &str, to: &[String], raw: &[u8]) -> Result<()> {
-        let login = match &self.credential {
-            Credential::Password(password) => Login::Password { user: &self.user, password },
-            Credential::Bearer(token) => Login::Bearer { user: &self.user, token },
-        };
-        send::smtp(&self.smtp, &login, from, to, raw, &self.dir)
+        send::smtp(&self.smtp, &self.login(), from, to, raw, &self.dir)
+    }
+
+    fn check_send(&mut self) -> Result<()> {
+        send::smtp_check(&self.smtp, &self.login())
     }
 }
 

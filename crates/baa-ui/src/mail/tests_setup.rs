@@ -148,6 +148,27 @@ fn a_failed_sign_in_shows_the_servers_reason(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_refused_smtp_sign_in_shows_in_the_form_and_adds_nothing(cx: &mut TestAppContext) {
+    let smtp_refusing: Connect = Box::new(|_, _| {
+        let server = Fake::default();
+        server.refuse_send(Error::SignIn);
+        Ok(Box::new(server))
+    });
+    let (b, vcx) = window(cx, store_with_mail(true), smtp_refusing);
+    let h = open_mail_settings(&b, vcx);
+    let mut s = tall(h, cx);
+    filled_form(&mut s);
+    click(&mut s, "mail-add-account");
+
+    let error = setup(h, &mut s, |f| f.error.clone()).expect("the SMTP refusal shows");
+    assert!(error.starts_with("Outgoing mail (SMTP)") && error.ends_with(&Error::SignIn.to_string()), "{error}");
+    assert!(drawn(&mut s, "mail-error"));
+    assert!(setup(h, &mut s, |f| f.open && !f.busy));
+    let space = mail_space(&b, &mut s);
+    assert!(mail(&b, &mut s).accounts(space).is_empty());
+}
+
+#[gpui::test]
 fn google_without_a_client_says_it_is_not_set_up(cx: &mut TestAppContext) {
     let (b, vcx) = window(cx, store_with_mail(true), accepting());
     let h = open_mail_settings(&b, vcx);

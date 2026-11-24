@@ -443,8 +443,9 @@ impl Mail {
         accounts
     }
 
-    /// Tests the sign-in first, and stores nothing if it fails: the secret is tried from
-    /// memory and reaches [`Secrets`] only once the server took it.
+    /// Tests the sign-in first, at the IMAP server and then the SMTP server (which is sent
+    /// nothing), and stores nothing if either fails: the secret is tried from memory and
+    /// reaches [`Secrets`] only once both servers took it.
     pub fn add_account(&self, new: NewAccount) -> Result<AccountId> {
         new.servers.imap.check(Protocol::Imap)?;
         new.servers.smtp.check(Protocol::Smtp)?;
@@ -468,7 +469,9 @@ impl Mail {
         };
         let trial = MemorySecrets::default();
         trial.set(account.id, kind, &secret)?;
-        drop((self.shared.connect)(&account, &trial)?);
+        let mut server = (self.shared.connect)(&account, &trial)?;
+        server.check_send().map_err(|e| Error::Other(format!("Outgoing mail (SMTP): {e}")))?;
+        drop(server);
         self.shared.secrets.set(account.id, kind, &secret)?;
         if let Err(error) = store.put_account(&account) {
             self.shared.secrets.delete(account.id);

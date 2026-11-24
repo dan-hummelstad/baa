@@ -77,4 +77,6 @@ pub trait Backend: Send {
     fn append(&mut self, folder: &str, raw: &[u8], flags: Flags) -> Result<()>;
     /// `to` holds every recipient, Bcc too, which `raw` does not name.
     fn send(&mut self, from: &str, to: &[String], raw: &[u8]) -> Result<()>;
+    /// Signs in to the server [`Self::send`] uses, and sends nothing.
+    fn check_send(&mut self) -> Result<()>;
 }

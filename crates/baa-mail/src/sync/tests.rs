@@ -142,6 +142,11 @@ impl Backend for Link {
         }
         self.fake.send(from, to, raw)
     }
+
+    fn check_send(&mut self) -> Result<()> {
+        self.up()?;
+        self.fake.check_send()
+    }
 }
 
 /// The test keeps a handle on the secrets the `Mail` owns.
@@ -499,6 +504,20 @@ fn add_account_tries_the_sign_in_before_anything_is_kept() {
     new.servers.smtp.port = 25;
     assert_eq!(never.mail.add_account(new), Err(Error::Port(25)));
     assert_eq!(calls.load(SeqCst), 0);
+}
+
+#[test]
+fn add_account_tries_the_smtp_sign_in_too_and_keeps_nothing_when_it_fails() {
+    let net = Net::new();
+    net.fake.refuse_send(Error::SignIn);
+    let rig = Rig::new(net.clone(), net.connector());
+    let refused = rig.mail.add_account(new_account(Some(rig.space), "dan@example.com", "imap-only"));
+    let Err(Error::Other(what)) = refused else { panic!("{refused:?}") };
+    assert!(what.starts_with("Outgoing mail (SMTP): ") && what.ends_with(&Error::SignIn.to_string()), "{what}");
+    assert!(!what.contains("imap-only"));
+    assert!(rig.mail.accounts(rig.space).is_empty());
+    assert_eq!(rig.secrets.get(AccountId(1), Secret::Password), None);
+    assert!(net.fake.sent().is_empty(), "a check mails nothing");
 }
 
 #[test]

@@ -26,6 +26,8 @@ struct Server {
     /// Counts every change. A cursor is its value at that `changes`.
     clock: u64,
     sent: Vec<SentMessage>,
+    /// What its SMTP side answers a sign-in with; `None` takes it.
+    send_refusal: Option<Error>,
 }
 
 struct Held {
@@ -59,6 +61,11 @@ impl Fake {
     /// A message arrives in `folder`. Returns its uid.
     pub fn deliver(&self, folder: &str, raw: &[u8], flags: Flags) -> String {
         self.change(|server, now| server.hold(folder, raw.to_vec(), flags, None, now))
+    }
+
+    /// Its SMTP side refuses the sign-in with `error` from now on.
+    pub fn refuse_send(&self, error: Error) {
+        self.server.0.lock().unwrap().send_refusal = Some(error);
     }
 
     pub fn sent(&self) -> Vec<SentMessage> {
@@ -175,8 +182,13 @@ impl Backend for Fake {
     }
 
     fn send(&mut self, from: &str, to: &[String], raw: &[u8]) -> Result<()> {
+        self.check_send()?;
         self.change(|server, _| server.sent.push(SentMessage { from: from.into(), to: to.to_vec(), raw: raw.to_vec() }));
         Ok(())
+    }
+
+    fn check_send(&mut self) -> Result<()> {
+        self.server.0.lock().unwrap().send_refusal.clone().map_or(Ok(()), Err)
     }
 }
 
