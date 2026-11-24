@@ -111,36 +111,30 @@ date pickers, tooltips, the cursor.
 flowchart TB
     subgraph app["baa process"]
         ui["crates/baa-ui<br/>asks WebHost::supports(profile, capability)"]
-        subgraph web["crates/baa-web"]
-            host["WebHost / PageHandle"]
-            core["core_host<br/>profile to engine, one Core table<br/>and one Dispatch an engine"]
-            tr["translations in Rust<br/>prefs dialects, automation,<br/>download danger list, internal pages"]
-        end
-        abi1{{"baa.h"}}
-        abi2{{"baa.h"}}
+        host{{"WebHost · PageHandle"}}
+        core["crates/baa-web core_host<br/>profile to engine; one Core table and one Dispatch an engine<br/>translations in Rust: prefs dialects, automation,<br/>download danger list, internal pages"]
         chromium["BaaCore.framework<br/>//baa + Chromium<br/>owns NSApp and the run loop"]
-        binding["BaaLadybird.framework<br/>ladybird/baa: Hub IPC client on its own thread,<br/>page NSView, NSEvent and IME translation,<br/>pickers, validation of all the Hub sends"]
-        gpui["GPUI: holes over page views"]
+        binding["BaaLadybird.framework: ladybird/baa<br/>Hub IPC client on its own thread, page NSView,<br/>NSEvent and IME translation, pickers,<br/>validation of all the Hub sends"]
     end
 
-    subgraph chromeprocs["Chromium helpers"]
-        cr["renderer, GPU, network"]
-    end
+    cr["Chromium helpers<br/>renderer, GPU, network"]
 
-    subgraph lady["engines/ladybird-KEY/: one tree a Space"]
+    subgraph lady["engines/ladybird-KEY: one process tree a Ladybird Space"]
         hub["Hub<br/>LibWebView, cookies, downloads<br/>--profile-path ladybird/space-ID"]
-        helpers["WebContent, Compositor, RequestServer,<br/>ImageDecoder, media: Seatbelt sandboxed"]
+        helpers["WebContent, Compositor, RequestServer,<br/>ImageDecoder, media<br/>Seatbelt sandboxed"]
     end
 
-    ui --> host --> core
-    core --- tr
-    core --> abi1 --- chromium --> cr
-    core --> abi2 --- binding
-    binding <-- "HubServer.ipc / HubClient.ipc<br/>Mach ports" --> hub
+    ui --> host
+    host --> core
+    core -- "baa.h" --> chromium
+    core -- "baa.h" --> binding
+    chromium --> cr
+    binding -- "HubServer.ipc ↓ · HubClient.ipc ↑<br/>Mach ports" --> hub
     hub --> helpers
-    cr -. "NSViews" .-> gpui
-    helpers -. "IOSurface or remote layer<br/>into the binding's NSView" .-> gpui
 ```
+
+Both engines' pages end as `NSView`s under GPUI's layer, seen through its holes: Chromium's own
+view, and the binding's view showing an IOSurface or a remote layer from Ladybird's Compositor.
 
 On disk: `<data>/chromium/space-<id>` as now, `<data>/ladybird/space-<id>` for a Ladybird Space, and
 `<data>/engines/ladybird-<key>/` for the engine. A Space that changes engine keeps both directories,

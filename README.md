@@ -354,70 +354,48 @@ tests run anywhere.
 
 ## Architecture
 
+Read it from the top: each arrow goes one step down. Dashed boxes are outside baa's process.
+
 ```mermaid
 flowchart TB
-    subgraph outside["Outside the process"]
-        launch["a second launch,<br/>links from other apps"]
-        claude["Claude Code<br/>baa mcp over stdio"]
-        servers["mail servers<br/>IMAP, POP3, SMTP over TLS"]
-        feed["GitHub Releases<br/>Sparkle appcast"]
-    end
+    launch["a second launch,<br/>links from other apps"]:::outside
+    feed["GitHub Releases<br/>update feed"]:::outside
 
-    subgraph app["baa process: Rust"]
-        main["crates/baa<br/>lock, dlopen BaaCore, Chrome's argv,<br/>menus, Sparkle, ipc.sock, agent.sock"]
-        subgraph ui["crates/baa-ui: GPUI views, generic over WebHost"]
-            browser["browser<br/>sidebar, Spaces, tabs, command bar,<br/>Peek, lil-baa, Library, settings"]
-            prompts["prompts<br/>permission, dialog, auth,<br/>install, code offer"]
-            mailui["mail views<br/>list, reader, compose"]
-            agent["agent<br/>MCP tools, approvals per origin"]
-        end
+    subgraph rust["baa process: Rust"]
+        main["crates/baa<br/>entry: lock, engine load, menus, updates"]
+        ui["crates/baa-ui<br/>GPUI views: sidebar, Spaces, command bar,<br/>prompts, settings, mail views, Claude's tools"]
         model[("crates/baa-model<br/>Session, Settings, history<br/>baa.db")]
-        mail[("crates/baa-mail<br/>accounts, sync threads, MIME,<br/>send, codes: mail.db")]
-        keychain[("Keychain<br/>mail secrets")]
-        privacy["crates/baa-privacy<br/>switches, prefs, allowlist"]
-        subgraph web["crates/baa-web"]
-            host["WebHost trait<br/>PageHandle, PageEvent"]
-            core["core_host<br/>ffi, dispatch, host, page"]
-            docs["document.rs<br/>sandboxed mail pages"]
-            wk["webkit.rs<br/>WKWebView tab"]
-        end
-        gpui["GPUI + vendor/gpui_apple<br/>Metal layer with punch holes"]
+        host{{"WebHost · PageHandle · PageEvent<br/>the contract: crates/baa-web/src/lib.rs"}}
+        mail[("crates/baa-mail<br/>accounts, sync, MIME, send, codes<br/>mail.db, secrets in the Keychain")]
+        core["crates/baa-web core_host<br/>ffi · dispatch · host · page · native<br/>switches and prefs from crates/baa-privacy"]
     end
 
-    subgraph engine["BaaCore.framework: baa's Chromium build"]
-        abi{{"C ABI: chromium/baa/baa.h<br/>BAA_ABI_VERSION,<br/>functions + callbacks"}}
-        layer["//baa: chromium/baa<br/>one Browser per Space profile,<br/>tabs, request registry, downloads,<br/>extensions, autocomplete, CDP gate"]
-        chrome["Chrome browser code<br/>Helium patches + chromium/patches<br/>profiles, extensions, network"]
-        procs["renderer, GPU,<br/>utility processes"]
+    claude["Claude Code<br/>baa mcp"]:::outside
+    servers["mail servers<br/>IMAP, POP3, SMTP"]:::outside
+
+    subgraph engine["BaaCore.framework: baa's Chromium build, loaded into the same process"]
+        abi{{"C ABI: chromium/baa/baa.h<br/>versioned by BAA_ABI_VERSION"}}
+        layer["//baa: chromium/baa<br/>one Browser per Space profile, tabs,<br/>requests, downloads, extensions"]
+        chrome["Chrome browser code<br/>Helium patches + chromium/patches"]
     end
+
+    procs["renderer, GPU and utility processes<br/>each page draws into an NSView under GPUI's layer"]:::outside
 
     launch -- "ipc.sock" --> main
-    claude -- "agent.sock" --> agent
-    feed --> main
-    main --> browser
-    main -- "dlopen, baa_install_app" --> abi
-    browser --> model
-    browser --> prompts
-    mailui --> mail
-    mail --> keychain
-    mail <--> servers
-    mail --> model
-    browser -- "codes against" --> host
-    prompts --> host
-    agent -- "typed calls: eval, click,<br/>screenshot" --> host
-    mailui -- "create_document" --> host
-    host --- core
-    core --- docs
-    core --- wk
-    core --> privacy
-    core -- "baa_* calls" --> abi
-    abi -- "callbacks: tab state, dialogs,<br/>permissions, downloads" --> core
-    abi --- layer
+    feed -- "Sparkle" --> main
+    main -- "starts" --> ui
+    claude -- "agent.sock" --> ui
+    ui --> model
+    ui -- "codes against" --> host
+    ui --> mail
+    host -- "implemented by" --> core
+    mail -- "sync and send, TLS" --> servers
+    core -- "baa_* calls ↓ · callbacks ↑" --> abi
+    abi --> layer
     layer --> chrome
     chrome --> procs
-    ui --> gpui
-    procs -. "page NSViews below GPUI's layer,<br/>shown through its holes" .-> gpui
-    wk -. "a WKWebView in the same place" .-> gpui
+
+    classDef outside stroke-dasharray: 5 4
 ```
 
 Chromium owns the run loop (`[NSApp run]`): `crates/baa` loads `BaaCore.framework`, installs
