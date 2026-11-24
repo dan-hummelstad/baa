@@ -153,6 +153,8 @@ pub(crate) struct Session {
     selected: Option<Selected>,
     /// The IDLE under way, with when it began.
     idle: Option<(Tag<'static>, Instant)>,
+    /// While `Some`, the responses the codec could not read are kept here.
+    skipped: Option<Vec<Vec<u8>>>,
 }
 
 #[derive(Clone)]
@@ -206,7 +208,7 @@ impl Session {
         let mut options = Options::default();
         options.discard_greeting = greeted;
         let client = Client::new(options);
-        let mut session = Session { conn, client, capabilities: Vec::new(), tag: 0, selected: None, idle: None };
+        let mut session = Session { conn, client, capabilities: Vec::new(), tag: 0, selected: None, idle: None, skipped: None };
         if !greeted {
             loop {
                 if let Event::GreetingReceived { greeting } = session.next(ANSWER)?.ok_or_else(lost)? {
@@ -259,6 +261,9 @@ impl Session {
                 }
                 // The codec dropped a response it could not read (a server's own extension):
                 // the next one starts after it.
+                Err(Interrupt::Error(imap_next::client::Error::MalformedMessage { discarded_bytes })) if self.skipped.is_some() => {
+                    self.skipped.as_mut().expect("checked").push(discarded_bytes.declassify().to_vec());
+                }
                 Err(Interrupt::Error(e)) => log::debug!("imap: skipped a response: {e:?}"),
             }
         }
@@ -463,7 +468,7 @@ impl Session {
 
     fn headers(&mut self, set: &str) -> Result<Vec<RemoteMessage>> {
         let items = vec![MessageDataItemName::Uid, MessageDataItemName::Flags, MessageDataItemName::Rfc822Header];
-        Ok(self
+        let mut messages: Vec<RemoteMessage> = self
             .fetch(set, items, Vec::new())?
             .into_iter()
             .filter_map(|items| {
@@ -478,7 +483,41 @@ impl Session {
                 }
                 (!message.uid.is_empty()).then_some(message)
             })
-            .collect())
+            .collect();
+        if self.has("X-GM-EXT-1") && !messages.is_empty() {
+            let threads = self.gmail_threads(set)?;
+            for message in &mut messages {
+                message.thread = threads.get(&message.uid).cloned();
+            }
+        }
+        Ok(messages)
+    }
+
+    /// Gmail's conversation id (`X-GM-THRID`) of each uid in `set`. imap-codec has no Gmail
+    /// extension, so the command goes out as bytes, and each answer comes back as a response
+    /// the codec cannot read, whose bytes are read here.
+    fn gmail_threads(&mut self, set: &str) -> Result<std::collections::HashMap<String, String>> {
+        if set.is_empty() || !set.bytes().all(|b| b.is_ascii_digit() || b":,*".contains(&b)) {
+            return Err(Error::Other(format!("not a uid set: {set}")));
+        }
+        self.stop_idle()?;
+        let tag = self.next_tag();
+        let command = format!("{} UID FETCH {set} (UID X-GM-THRID)\r\n", tag.inner());
+        self.conn.write_all(command.as_bytes()).and_then(|()| self.conn.flush()).map_err(|_| lost())?;
+        self.skipped = Some(Vec::new());
+        let done = loop {
+            match self.next(ANSWER) {
+                Ok(Some(Event::StatusReceived { status: Status::Tagged(done) })) if done.tag == tag => break Ok(done.body.kind),
+                Ok(Some(Event::StatusReceived { status: Status::Bye(_) })) | Ok(None) => break Err(lost()),
+                Ok(Some(_)) => {}
+                Err(e) => break Err(e),
+            }
+        };
+        let skipped = self.skipped.take().unwrap_or_default();
+        if done? != StatusKind::Ok {
+            return Ok(Default::default());
+        }
+        Ok(skipped.iter().filter_map(|line| gmail_thread(line)).collect())
     }
 
     fn flags(&mut self, set: &str, since: Option<NonZeroU64>) -> Result<Vec<(String, Flags)>> {
@@ -603,6 +642,18 @@ impl Session {
 enum Answer {
     Data(Data<'static>),
     Code(Code<'static>),
+}
+
+/// The uid and the thread id of `* n FETCH (UID u X-GM-THRID t)`, the items in any order.
+fn gmail_thread(line: &[u8]) -> Option<(String, String)> {
+    let line = std::str::from_utf8(line).ok()?.to_ascii_uppercase();
+    let (_, items) = line.split_once(" FETCH (")?;
+    let number = |name: &str| {
+        let at = items.find(name)? + name.len();
+        let digits: String = items[at..].chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u64>().ok().map(|n| n.to_string())
+    };
+    Some((number("UID ")?, number("X-GM-THRID ")?))
 }
 
 fn status_text(status: &Status) -> String {

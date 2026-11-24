@@ -453,3 +453,40 @@ fn small_helpers_hold() {
     assert_eq!(decode_utf7("Sent Items"), "Sent Items");
     assert_eq!(decode_utf7("&ZeV"), "&ZeV");
 }
+
+#[test]
+fn gmail_gives_each_new_message_its_thread_id_past_the_codec() {
+    const GMAIL: &str = "CAPABILITY IMAP4rev1 IDLE UIDPLUS MOVE CONDSTORE X-GM-EXT-1";
+    let (mut session, done) = signed_in(GMAIL, |s| {
+        let fetch = s.answer("UID FETCH", &[&header_of(5, ""), &header_of(6, r"\Seen"), &header_of(7, "")]);
+        assert_eq!(fetch, "UID FETCH 5:7 (UID FLAGS RFC822.HEADER)");
+        let threads = s.answer(
+            "UID FETCH",
+            &["1 FETCH (UID 5 X-GM-THRID 1700000000000000001)", "2 FETCH (X-GM-THRID 42 UID 6)", "3 FETCH (UID 7)"],
+        );
+        assert_eq!(threads, "UID FETCH 5:7 (UID X-GM-THRID)");
+        s.answer("NOOP", &[]);
+    });
+    let messages = session.headers("5:7").unwrap();
+    let threads: Vec<Option<&str>> = messages.iter().map(|m| m.thread.as_deref()).collect();
+    assert_eq!(threads, [Some("1700000000000000001"), Some("42"), None]);
+    assert_eq!(messages[1].flags, SEEN);
+    session.run(CommandBody::Noop).unwrap();
+    done.join().unwrap();
+}
+
+#[test]
+fn a_gmail_thread_line_is_read_strictly() {
+    assert_eq!(gmail_thread(b"* 1 FETCH (UID 5 X-GM-THRID 9)\r\n"), Some(("5".into(), "9".into())));
+    assert_eq!(gmail_thread(b"* 1 fetch (x-gm-thrid 9 uid 5)\r\n"), Some(("5".into(), "9".into())));
+    let refused: [&[u8]; 5] = [
+        b"* 1 FETCH (UID 5)\r\n",
+        b"* 1 FETCH (X-GM-THRID 9)",
+        b"* 1 FETCH (UID 5 X-GM-THRID 99999999999999999999999)",
+        b"* OK UID 5 X-GM-THRID 9",
+        b"\xff\xfe",
+    ];
+    for line in refused {
+        assert_eq!(gmail_thread(line), None, "{:?}", String::from_utf8_lossy(line));
+    }
+}
