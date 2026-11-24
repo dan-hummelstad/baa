@@ -813,14 +813,21 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - The Keychain service is named after the data directory, since account ids repeat between
   directories.
 
-**Not built in stage 1**
-- Gmail's own thread id (`X-GM-THRID`): the IMAP codec cannot decode it; Gmail threads by
-  headers as other servers do.
-- The reading pane's quick-reply strip; Reply opens the composer.
-- A forward does not carry the original's attachments; every outgoing attachment is
+**Closed after stage 1 (2026-11-24)**
+- A forward carries the original's attachments: copies in a 0700 folder under the mail
+  directory's `forwards/`, named by `mime::file_name` and quarantined; a launch removes those
+  no saved draft attaches.
+- An outgoing attachment's type comes from its extension (a short table); others are
   `application/octet-stream`.
+- Adding an account signs in to its SMTP server too (curl, NOOP, nothing mailed), and the form
+  shows a refusal as "Outgoing mail (SMTP): …".
+- Gmail threads by `X-GM-THRID`. The codec cannot read it, so that one `UID FETCH` goes out as
+  bytes and its answers, which the codec drops, are read by `imap.rs` (digits only). No fork, no
+  new dependency. Not yet seen against Gmail itself.
+
+**Not built in stage 1**
+- The reading pane's quick-reply strip; Reply opens the composer.
 - A code offer in a split or beside docked DevTools, and a code field inside a shadow root.
-- SMTP settings are first tried at the first send, not when the account is added.
 - The other shortcuts are marked `ponytail:` in `crates/baa-mail` and `crates/baa-ui/src/mail`.
 
 **For the user to look at on a bundled build** (no test can show these)
@@ -989,5 +996,6 @@ Not seen yet: the pills on a bundled build, in both skins.
 **Open.**
 - Gmail sorts its own mail into these categories, and IMAP can search them
   (`X-GM-RAW "category:social"`). Using Gmail's result for Gmail accounts would match the
-  Gmail web app exactly, but the IMAP codec has no Gmail extensions (§16). For now, the model
+  Gmail web app exactly, but the IMAP codec has no Gmail extensions (§16; `X-GM-THRID` goes
+  around it, and a search could the same way). For now, the model
   sorts Gmail mail as it sorts other mail.
