@@ -150,6 +150,12 @@ pub(crate) fn plain_text(raw: &[u8]) -> String {
     MessageParser::new().parse(raw).map(|m| text_of(&m)).unwrap_or_default()
 }
 
+/// Every attachment, as [`attachment`] gives one.
+pub(crate) fn attachments(raw: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let Some(message) = MessageParser::new().parse(raw) else { return Vec::new() };
+    message.attachments().map(|p| (p.attachment_name().unwrap_or("attachment").to_owned(), p.decoded().into_owned())).collect()
+}
+
 pub(crate) fn attachment(raw: &[u8], part: usize) -> Option<(String, Vec<u8>)> {
     let message = MessageParser::new().parse(raw)?;
     let p = message.attachments().nth(part)?;

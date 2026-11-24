@@ -410,7 +410,10 @@ impl Mail {
             folders_checked: Mutex::default(),
         };
         if dir.is_none_or(|dir| dir.join("mail.db").exists()) {
-            mail.store()?;
+            let store = mail.store()?;
+            if let Some(dir) = dir {
+                sweep_forwards(&dir.join(FORWARDS), store);
+            }
         }
         Ok(mail)
     }
@@ -609,9 +612,42 @@ impl Mail {
         Some(compose::reply(&original, to, account, &me, all))
     }
 
+    /// With the original's attachments when its body is here.
     pub fn forward(&self, id: MessageId) -> Option<Draft> {
         let (account, original) = self.original(id)?;
-        Some(compose::forward(&original, account))
+        let mut draft = compose::forward(&original, account);
+        draft.attachments = self.copy_attachments(id);
+        Some(draft)
+    }
+
+    /// The message's attachments as files baa writes itself, for a draft to attach: in a new
+    /// 0700 folder under `forwards`, each under its name's last component and quarantined,
+    /// as a saved attachment is. Empty in memory, before the body is here, or if writing
+    /// fails.
+    // ponytail: the copies stay until the next launch, which removes those no saved draft
+    // attaches; the ceiling is removing them when their draft is sent or discarded.
+    fn copy_attachments(&self, id: MessageId) -> Vec<PathBuf> {
+        use std::os::unix::fs::DirBuilderExt;
+        let (Some(dir), Some(raw)) = (self.dir.as_deref(), self.read(|s| s.raw(id))) else { return Vec::new() };
+        let parts = mime::attachments(&raw);
+        if parts.is_empty() {
+            return Vec::new();
+        }
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let folder = dir.join(FORWARDS).join(format!("{nanos}-{n}"));
+        let written = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir.join(FORWARDS))
+            .and_then(|()| std::fs::DirBuilder::new().mode(0o700).create(&folder))
+            .and_then(|()| parts.iter().map(|(name, bytes)| mime::save(&folder, &mime::file_name(name), bytes)).collect());
+        written.unwrap_or_else(|e| {
+            log::warn!("forward: the attachments could not be copied: {e}");
+            let _ = std::fs::remove_dir_all(&folder);
+            Vec::new()
+        })
     }
 
     fn original(&self, id: MessageId) -> Option<(AccountId, compose::Original)> {
@@ -723,6 +759,20 @@ fn due<K: Eq + std::hash::Hash>(checked: &Mutex<HashMap<K, Instant>>, key: K) ->
     }
     checked.insert(key, Instant::now());
     true
+}
+
+/// Where a forward's copies of attachments go, in the mail directory.
+const FORWARDS: &str = "forwards";
+
+/// Removes the forward folders that no saved draft attaches a file from. A draft that cannot
+/// be read keeps them all.
+fn sweep_forwards(forwards: &Path, store: &Store) {
+    let (Ok(entries), Ok(kept)) = (std::fs::read_dir(forwards), store.draft_attachments()) else { return };
+    for path in entries.flatten().map(|e| e.path()) {
+        if !kept.iter().any(|k| k.starts_with(&path)) {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 }
 
 fn images_key(sender: &str) -> String {

@@ -555,6 +555,18 @@ impl Store {
         Ok(row.and_then(|row| serde_json::from_str(&row).ok()))
     }
 
+    /// The files every saved draft attaches.
+    pub(crate) fn draft_attachments(&self) -> Result<Vec<std::path::PathBuf>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT json FROM draft")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.extend(from_json::<Draft>(&row?)?.attachments);
+        }
+        Ok(out)
+    }
+
     pub(crate) fn discard_draft(&self, id: DraftId) -> Result<()> {
         self.conn().execute("DELETE FROM draft WHERE id = ?1", [id.0])?;
         Ok(())

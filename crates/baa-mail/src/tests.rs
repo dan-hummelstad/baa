@@ -203,6 +203,47 @@ fn a_saved_attachment_is_its_last_name_component_never_overwrites_and_is_quarant
 }
 
 #[test]
+fn a_forward_carries_the_attachments_as_private_copies_until_no_draft_holds_them() {
+    use std::os::unix::fs::PermissionsExt;
+    let raw = b"From: a@example.com\r\nMessage-ID: <fwd@x>\r\nSubject: Files\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n\
+        --b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"../../.ssh/report.pdf\"\r\n\r\npdf\r\n\
+        --b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"report.pdf\"\r\n\r\nmore\r\n--b--\r\n";
+    let in_memory = with_account(space(1));
+    let id = deliver(&in_memory, "1", raw);
+    assert!(in_memory.forward(id).unwrap().attachments.is_empty(), "nowhere to write in memory");
+
+    let dir = temp_dir("forward");
+    let offline: Connect = Box::new(|_, _| Err(Error::Offline));
+    let mail = Mail::open_with(Some(&dir), Box::new(MemorySecrets::default()), Box::new(|_| {}), offline).unwrap();
+    mail.store().unwrap().put_account(&account(1, Some(space(1)))).unwrap();
+    inbox(mail.store().unwrap(), AccountId(1));
+    let id = deliver(&mail, "1", raw);
+
+    let draft = mail.forward(id).unwrap();
+    let forwards = dir.join("forwards");
+    let folder = draft.attachments[0].parent().unwrap().to_owned();
+    assert_eq!(folder.parent(), Some(forwards.as_path()));
+    assert_eq!(draft.attachments, [folder.join("report.pdf"), folder.join("report (2).pdf")]);
+    assert_eq!(std::fs::read(&draft.attachments[1]).unwrap(), b"more");
+    assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o700);
+
+    let (bytes, _, _) = compose::outgoing(mail.store().unwrap(), &Draft { to: parse_addresses("o@example.com"), ..draft.clone() }, SystemTime::now()).unwrap();
+    let sent = mail_parser::MessageParser::new().parse(&bytes).unwrap();
+    let names: Vec<_> = sent.attachments().map(|a| a.attachment_name().unwrap().to_owned()).collect();
+    assert_eq!(names, ["report.pdf", "report (2).pdf"]);
+
+    mail.save_draft(&draft).unwrap();
+    let unsaved = mail.forward(id).unwrap().attachments[0].parent().unwrap().to_owned();
+    assert_ne!(unsaved, folder);
+    drop(mail);
+    let again = Mail::open_with(Some(&dir), Box::new(MemorySecrets::default()), Box::new(|_| {}), Box::new(|_, _| Err(Error::Offline))).unwrap();
+    assert!(folder.exists(), "a saved draft attaches it");
+    assert!(!unsaved.exists(), "no draft attaches it");
+    drop(again);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn hostile_attachment_names_come_out_as_their_last_component() {
     for (sender, saved) in [
         ("../../.ssh/authorized_keys", "authorized_keys"),

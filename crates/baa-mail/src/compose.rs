@@ -260,8 +260,6 @@ fn display_name(a: &Address) -> &str {
     if a.name.is_empty() { &a.email } else { &a.name }
 }
 
-// ponytail: the original's attachments are not carried; the ceiling is copying them to temp
-// files for Draft::attachments.
 pub(crate) fn forward(original: &Original, account: AccountId) -> Draft {
     let subject = with_prefix(&original.subject, "Fwd:", &["fwd:", "fw:", "wg:"]);
     let mut draft = empty_draft(account, subject);
