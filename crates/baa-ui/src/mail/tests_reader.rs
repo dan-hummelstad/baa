@@ -1,9 +1,10 @@
 //! The reading pane and the command row (WP-I), on MockHost and an in-memory Mail.
 
-use baa_mail::{testing::message, Action, Filter, Flags, FolderId, Mail, MessageId, ThreadId, View};
+use baa_mail::{testing::message, Action, DraftId, Filter, Flags, FolderId, Mail, MessageId, ThreadId, View};
 use baa_web::{DocumentKind, PageEvent, WebHost};
 use gpui::{Entity, VisualTestContext};
 
+use super::Field;
 use crate::{mock::MockPage, tests_mail::*};
 
 const HTML: &str = "Content-Type: text/html; charset=utf-8\r\n";
@@ -191,6 +192,58 @@ fn reply_and_forward_open_a_draft_of_the_shown_message(cx: &mut gpui::TestAppCon
     });
     b.update_in(cx, |b, window, cx| b.forward_selected(window, cx));
     b.read_with(cx, |b, _| assert_eq!(b.mail.as_ref().unwrap().drafts.len(), 2));
+}
+
+fn quick_reply(b: &B, cx: &mut VisualTestContext) -> String {
+    b.read_with(cx, |b, _| b.mail.as_ref().unwrap().reader.as_ref().unwrap().reply.text.clone())
+}
+
+#[gpui::test]
+fn the_quick_reply_types_with_backspace_ignores_enter_and_sends_on_cmd_enter(cx: &mut gpui::TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    let id = deliver(&mail, folders[0], "1", "Ola <ola@example.com>", "<p>one</p>", true);
+    let thread = thread_of(&mail, &b, cx);
+    select(&b, cx, thread);
+    assert!(drawn(cx, "mail-quick-reply"));
+    b.update_in(cx, |b, window, cx| b.focus_mail_field(Field::Reply, window, cx));
+
+    cx.simulate_input("Yes <b>x");
+    cx.simulate_keystrokes("backspace enter");
+    assert_eq!(quick_reply(&b, cx), "Yes <b>");
+    let view = b.read_with(cx, |b, _| b.mail.as_ref().unwrap().view().unwrap());
+    assert_eq!(mail.count(&view), 1, "⌫ in the field deleted no mail");
+    assert!(mail.draft(DraftId(1)).is_none(), "Enter sends nothing");
+
+    cx.simulate_keystrokes("cmd-enter");
+    let sent = mail.draft(DraftId(1)).expect("saved, then sent");
+    assert_eq!(sent.in_reply_to, Some(id));
+    assert_eq!(sent.to.iter().map(|a| a.email.as_str()).collect::<Vec<_>>(), ["ola@example.com"]);
+    assert!(sent.text.starts_with("Yes <b>"), "{}", sent.text);
+    assert!(sent.html.starts_with("<div>Yes &lt;b&gt;</div>"), "{}", sent.html);
+    assert_eq!(quick_reply(&b, cx), "");
+    b.read_with(cx, |b, _| assert!(b.mail.as_ref().unwrap().drafts.is_empty(), "no composer"));
+}
+
+#[gpui::test]
+fn expanding_the_quick_reply_opens_the_composer_with_the_text(cx: &mut gpui::TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    deliver(&mail, folders[0], "1", "Ola <ola@example.com>", "<p>one</p>", true);
+    let thread = thread_of(&mail, &b, cx);
+    select(&b, cx, thread);
+    b.update_in(cx, |b, window, cx| b.focus_mail_field(Field::Reply, window, cx));
+    cx.simulate_input("Sounds good");
+
+    cx.simulate_keystrokes("cmd-r");
+    cx.run_until_parked();
+    b.read_with(cx, |b, cx| {
+        let ui = b.mail.as_ref().unwrap();
+        let c = ui.front_draft().expect("the reply is in front");
+        assert_eq!(c.subject.text, "Re: Plans");
+        let set = c.page.as_ref().unwrap().read(cx).set_documents.borrow();
+        assert!(set[0].starts_with("<div>Sounds good</div>"), "{}", set[0]);
+        assert_eq!(ui.reader.as_ref().unwrap().reply.text, "");
+    });
+    assert!(drawn(cx, "mail-composer"));
 }
 
 #[gpui::test]

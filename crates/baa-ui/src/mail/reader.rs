@@ -3,14 +3,16 @@
 //! message document (PLAN-mail.md §6), made afresh for each message and again when the user
 //! allows its remote images: a document's policy is fixed when it is made.
 
-use baa_mail::{Action, Address, Attachment, Body, Message, MessageId, Tab, ThreadId};
+use baa_mail::{Action, Address, Attachment, Body, Draft, Message, MessageId, Tab, ThreadId};
 use baa_model::{now, DownloadRecord, RemoteImages};
 use baa_web::{DocumentKind, PageEvent, PageHandle, WebHost};
 use gpui::{div, prelude::*, px, AnyElement, Context, Entity, SharedString, Subscription, Window};
 
+use super::Field;
 use crate::{
     browser::Browser,
     icons::icon,
+    input::TextField,
     theme::{ascii, r, surface, Theme},
 };
 
@@ -31,6 +33,8 @@ pub(crate) struct Reader<H: WebHost> {
     pub(crate) earlier_open: bool,
     /// A dangerous attachment's Save was pressed once: the next press saves it.
     pub(crate) save_anyway: Option<usize>,
+    /// The quick reply under the conversation: plain text, sent as a reply to the shown message.
+    pub(crate) reply: TextField,
     _page: Option<Subscription>,
 }
 
@@ -42,6 +46,10 @@ impl<H: WebHost> Reader<H> {
 
 fn sender(a: &Address) -> String {
     if a.name.is_empty() { a.email.clone() } else { a.name.clone() }
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn people(list: &[Address]) -> String {
@@ -84,6 +92,7 @@ impl<H: WebHost> Browser<H> {
             target: String::new(),
             earlier_open: false,
             save_anyway: None,
+            reply: TextField::default(),
             _page: None,
         });
         self.show_message(newest, false, window, cx);
@@ -197,10 +206,52 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
+    /// Reply, Reply all, ⌘R and the quick reply's expand: the composer, with what the quick
+    /// reply held.
     pub(crate) fn reply_to_selected(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mail) = &self.mail else { return };
-        let Some(draft) = mail.reader.as_ref().and_then(|r| mail.mail.reply(r.shown, all)) else { return };
+        let Some(draft) = self.quick_reply_draft(all) else { return };
+        // The hidden strip would keep the keyboard otherwise.
+        if self.mail.as_ref().is_some_and(|m| m.field == Field::Reply && m.field_focus.is_focused(window)) {
+            self.leave_mail_field(window, cx);
+        }
         self.open_draft(draft, window, cx);
+        self.clear_quick_reply();
+    }
+
+    /// A reply to the shown message that starts with the quick reply's text.
+    fn quick_reply_draft(&self, all: bool) -> Option<Draft> {
+        let mail = self.mail.as_ref()?;
+        let reader = mail.reader.as_ref()?;
+        let mut draft = mail.mail.reply(reader.shown, all)?;
+        let typed = &reader.reply.text;
+        if !typed.trim().is_empty() {
+            draft.html = format!("<div>{}</div>{}", escape_html(typed), draft.html);
+            draft.text = format!("{typed}{}", draft.text);
+        }
+        Some(draft)
+    }
+
+    fn clear_quick_reply(&mut self) {
+        if let Some(reader) = self.mail.as_mut().and_then(|m| m.reader.as_mut()) {
+            reader.reply = TextField::default();
+        }
+    }
+
+    /// The quick reply's Send and ⌘↩: saved as a draft and sent as the composer sends one.
+    pub(crate) fn send_quick_reply(&mut self, cx: &mut Context<Self>) {
+        if self.mail.as_ref().and_then(|m| m.reader.as_ref()).is_none_or(|r| r.reply.text.trim().is_empty()) {
+            return;
+        }
+        let (Some(draft), Some(mail)) = (self.quick_reply_draft(false), self.mail.as_ref().map(|m| m.mail.clone())) else { return };
+        match mail.save_draft(&draft) {
+            Ok(id) => {
+                mail.send(id);
+                self.clear_quick_reply();
+                self.show_toast("Sending…", cx);
+            }
+            Err(_) => self.show_toast("Could not save the reply.", cx),
+        }
+        cx.notify();
     }
 
     pub(crate) fn forward_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -338,8 +389,41 @@ impl<H: WebHost> Browser<H> {
             .children(target)
             .children(attachments)
             .children(earlier)
+            .child(self.render_quick_reply(window, cx))
             .child(div().h(px(12.)))
             .into_any_element()
+    }
+
+    fn render_quick_reply(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (ink, dim): (gpui::Hsla, gpui::Hsla) = (surface::ink().into(), surface::muted().into());
+        div()
+            .debug_selector(|| "mail-quick-reply".into())
+            .mx(px(20.))
+            .mt(px(10.))
+            .pl(px(12.))
+            .pr(px(4.))
+            .py(px(4.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(13.))
+            .border_1()
+            .border_color(surface::border())
+            .when(!ascii(), |d| d.rounded(r(10.)))
+            .child(self.render_mail_field(Field::Reply, if ascii() { "reply…" } else { "Reply…" }, ink, dim, window, cx))
+            .child(
+                self.mail_button("mail-quick-expand", 0, false, cx)
+                    .debug_selector(|| "mail-quick-expand".into())
+                    .on_click(cx.listener(|this, _, window, cx| this.reply_to_selected(false, window, cx)))
+                    .child(if ascii() { "⤢".into_any_element() } else { icon("maximize-2", 12., surface::icon().into()).into_any_element() }),
+            )
+            .child(
+                self.mail_button("mail-quick-send", 0, true, cx)
+                    .debug_selector(|| "mail-quick-send".into())
+                    .on_click(cx.listener(|this, _, _, cx| this.send_quick_reply(cx)))
+                    .child("Send")
+                    .child(div().text_color(dim).child("⌘↩")),
+            )
     }
 
     fn render_attachment(&self, a: &Attachment, armed: bool, cx: &mut Context<Self>) -> impl IntoElement {

@@ -95,6 +95,8 @@ pub(crate) enum Field {
     Cc,
     Bcc,
     Subject,
+    /// The reading pane's quick reply.
+    Reply,
 }
 
 /// The narrowest mail view that shows the list (380 px) beside a readable message; a narrower
@@ -191,6 +193,7 @@ impl<H: WebHost> MailUi<H> {
     fn field_mut(&mut self) -> Option<&mut TextField> {
         match self.field {
             Field::Search => Some(&mut self.search),
+            Field::Reply => self.reader.as_mut().map(|r| &mut r.reply),
             field => self.front_draft_mut().and_then(|d| d.field_mut(field)),
         }
     }
@@ -432,6 +435,8 @@ impl<H: WebHost> Browser<H> {
         let key = text.handle(&event.keystroke, cx);
         match field {
             Field::Search => self.on_search_key(key, &before, window, cx),
+            Field::Reply if key == input::Key::Cancel => self.leave_mail_field(window, cx),
+            Field::Reply => {}
             field => self.on_compose_key(field, key, &event.keystroke.key, &before, window, cx),
         }
         key.stop_unless_typed(cx);
@@ -450,6 +455,7 @@ impl<H: WebHost> Browser<H> {
         let Some(mail) = &self.mail else { return div().into_any_element() };
         let text = match field {
             Field::Search => Some(&mail.search),
+            Field::Reply => mail.reader.as_ref().map(|r| &r.reply),
             field => mail.front_draft().and_then(|d| d.field(field)),
         };
         let Some(text) = text else { return div().into_any_element() };

@@ -78,7 +78,7 @@ impl<H: WebHost> Composer<H> {
             Field::Cc => Some(&self.cc),
             Field::Bcc => Some(&self.bcc),
             Field::Subject => Some(&self.subject),
-            Field::Search => None,
+            Field::Search | Field::Reply => None,
         }
     }
 
@@ -88,7 +88,7 @@ impl<H: WebHost> Composer<H> {
             Field::Cc => Some(&mut self.cc),
             Field::Bcc => Some(&mut self.bcc),
             Field::Subject => Some(&mut self.subject),
-            Field::Search => None,
+            Field::Search | Field::Reply => None,
         }
     }
 
@@ -374,7 +374,10 @@ impl<H: WebHost> Browser<H> {
         .detach();
     }
 
-    pub(crate) fn send_front_draft(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn send_front_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mail.as_ref().is_some_and(|m| m.field == Field::Reply && m.field_focus.is_focused(window)) {
+            return self.send_quick_reply(cx);
+        }
         if let Some(id) = self.mail.as_ref().and_then(|m| m.state.front) {
             self.send_draft(id, cx);
         }
