@@ -26,6 +26,7 @@ const WINDOW: Duration = Duration::from_secs(120);
 const BEFORE: Duration = Duration::from_secs(60);
 /// At most one check of a Space's mail this often, whatever a page does.
 const CHECK_EVERY: Duration = Duration::from_secs(10);
+const OFFER_W: Pixels = px(300.);
 
 /// No `Debug`: it holds a code.
 pub(crate) struct Offer {
@@ -115,11 +116,6 @@ impl<H: WebHost> Browser<H> {
         if !self.settings.mail.codes || self.session.active_space() != Some(space) || self.front() != Some(Pane::Tab(tab)) {
             return None;
         }
-        // ponytail: drawn over the page area as a whole, so not in a split or beside docked
-        // DevTools, where the page has only part of it.
-        if self.panes_on_screen().len() != 1 || self.devtools.contains_key(&tab) {
-            return None;
-        }
         let (mail, mail_space) = self.mail_of(space)?;
         if !mail.accounts(mail_space).iter().any(|a| a.codes) {
             return None;
@@ -159,7 +155,7 @@ impl<H: WebHost> Browser<H> {
     pub(crate) fn drop_hidden_offers(&mut self, cx: &mut Context<Self>) {
         let Some(offer) = self.mail.as_ref().and_then(|m| m.offers.offer.as_ref()) else { return };
         let (tab, space) = (offer.tab, offer.space);
-        if self.session.active_space() != Some(space) || self.front() != Some(Pane::Tab(tab)) || self.panes_on_screen().len() != 1 {
+        if self.session.active_space() != Some(space) || self.front() != Some(Pane::Tab(tab)) {
             self.drop_offer(cx);
         }
     }
@@ -186,14 +182,16 @@ impl<H: WebHost> Browser<H> {
         self.drop_offer(cx);
     }
 
-    /// Under the field, in window coordinates.
+    /// Under the field, in window coordinates, and across no other pane: the offer is the
+    /// front tab's, which is the focused pane's page.
     pub(crate) fn render_code_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let offer = self.mail.as_ref()?.offers.offer.as_ref()?;
         let (code, _) = offer.code.as_ref()?;
         let (mail, space) = self.mail_of(offer.space)?;
         let account = mail.accounts(space).into_iter().find(|a| a.id == code.account)?.address;
-        let area = self.page_area.get();
-        let at = area.origin + offer.at.origin + point(px(0.), offer.at.size.height + px(4.));
+        let area = self.tab_area.get();
+        let mut at = area.origin + offer.at.origin + point(px(0.), offer.at.size.height + px(4.));
+        at.x = at.x.min(area.right() - OFFER_W).max(area.left());
         let field = offer.field;
         let ink = surface::ink();
         let line = |text: String| cut_left(div().min_w_0().text_size(px(11.)).text_color(surface::muted()).child(plain_text(&text)));
@@ -204,7 +202,7 @@ impl<H: WebHost> Browser<H> {
                 .absolute()
                 .left(at.x)
                 .top(at.y)
-                .w(px(300.))
+                .w(OFFER_W)
                 .occlude()
                 .p(px(10.))
                 .flex()

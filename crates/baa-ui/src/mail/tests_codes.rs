@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use baa_mail::{testing::message, Flags, FolderId, Mail};
-use baa_model::TabId;
+use baa_model::{DevToolsDock, Pane, TabId};
 use baa_web::{PageEvent, WebHost};
-use gpui::{Bounds, VisualTestContext};
+use gpui::{px, Bounds, VisualTestContext};
 
 use crate::tests_mail::*;
 
@@ -107,6 +107,52 @@ fn nothing_is_offered_in_an_incognito_space_a_background_tab_or_for_a_cross_site
     field(&b, cx, private, 6, BANK, BANK);
     assert!(!offered(&b, cx), "an incognito Space");
     assert!(!drawn(cx, "code-offer-6"));
+}
+
+#[gpui::test]
+fn in_a_split_the_offer_is_under_the_field_of_the_tabs_pane_and_moves_with_docked_devtools(cx: &mut gpui::TestAppContext) {
+    let (b, cx, mail, folders) = with_account(cx);
+    code_mail(&mail, folders[0], "1", "no-reply@bank.example");
+    let other = bank_tab(&b, cx, "https://other.example/");
+    let tab = open(&b, cx, "https://login.bank.example/");
+    b.update_in(cx, |b, window, cx| {
+        let space = b.session.active_space().unwrap();
+        b.session.add_to_split(space, other, 0, baa_model::now());
+        b.activate_tab(tab, window, cx);
+        assert_eq!(b.panes_on_screen(), [Pane::Tab(other), Pane::Tab(tab)]);
+    });
+    // Frames only draw when asked under test, and the panes grow in on springs.
+    let settle = |cx: &mut VisualTestContext| {
+        for _ in 0..40 {
+            cx.executor().advance_clock(Duration::from_millis(33));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+    };
+    settle(cx);
+    field(&b, cx, tab, 7, BANK, BANK);
+    assert!(drawn(cx, "code-offer-7"), "offered in a split");
+
+    let placed = |b: &B, cx: &mut VisualTestContext| {
+        settle(cx);
+        let offer = cx.debug_bounds("code-offer-7").expect("drawn");
+        let (pane, width) = b.update_in(cx, |b, window, _| (b.tab_area.get(), window.viewport_size().width));
+        assert!(offer.left() >= pane.left() && offer.right() <= pane.right(), "within the tab's pane: {offer:?} in {pane:?}");
+        assert_eq!(offer.top(), pane.top() + px(232.), "under the field");
+        (offer, pane, width)
+    };
+    let (offer, pane, width) = placed(&b, cx);
+    assert!(pane.left() > width / 2. - px(20.), "the right pane: {pane:?}");
+    assert_eq!(offer.left(), pane.left() + px(40.));
+
+    b.update_in(cx, |b, window, cx| {
+        b.set_devtools_dock(DevToolsDock::Left, window, cx);
+        b.toggle_devtools(None, window, cx);
+    });
+    cx.run_until_parked();
+    assert!(offered(&b, cx), "DevTools docking keeps the offer");
+    let (_, docked, _) = placed(&b, cx);
+    assert!(docked.left() > pane.left(), "DevTools takes the pane's left: {docked:?}");
 }
 
 #[gpui::test]

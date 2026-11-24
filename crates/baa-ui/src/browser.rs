@@ -150,6 +150,9 @@ pub struct Browser<H: WebHost> {
     devtools_drag: bool,
     /// The page area's bounds, last frame: the seam drag measures against it.
     pub(crate) page_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
+    /// The focused pane's page alone, last frame: in a split and beside docked DevTools it is
+    /// only part of the page area.
+    pub(crate) tab_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
     /// Split view: each shown pane's width (owned springs, in pane order), the seam
     /// being dragged, and the panes' row last frame.
     split_w: Vec<(Pane, Spring)>,
@@ -443,6 +446,7 @@ impl<H: WebHost> Browser<H> {
             devtools_share: 0.4,
             devtools_drag: false,
             page_area: Default::default(),
+            tab_area: Default::default(),
             split_w: Vec::new(),
             split_drag: None,
             split_area: Default::default(),

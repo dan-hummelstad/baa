@@ -89,7 +89,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     /// The page with the swipe around it: what it slides over or under.
-    pub(super) fn render_swipe(&mut self, content: AnyElement, window: &mut Window) -> impl IntoElement {
+    pub(super) fn render_swipe(&mut self, content: AnyElement, window: &mut Window) -> Div {
         for picture in self.stale_pictures.drain(..) {
             window.drop_image(picture).ok();
         }

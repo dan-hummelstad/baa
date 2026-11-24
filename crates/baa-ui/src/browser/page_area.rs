@@ -112,6 +112,8 @@ impl<H: WebHost> Browser<H> {
         });
         let area = self.page_area.clone();
         let measure = gpui::canvas(move |bounds, _, _| area.set(bounds), |_, _, _, _| {}).absolute().size_full();
+        let tab_area = self.tab_area.clone();
+        let measure_tab = gpui::canvas(move |bounds, _, _| tab_area.set(bounds), |_, _, _, _| {}).absolute().size_full();
         // While dragging, the whole area follows the pointer (pages are native
         // views and would take the moves for themselves).
         let drag = self.devtools_drag.then(|| {
@@ -147,7 +149,7 @@ impl<H: WebHost> Browser<H> {
             .when(across, |d| d.flex_col())
             .when(dock == DevToolsDock::Left, |d| d.flex_row_reverse())
             .child(measure)
-            .child(self.render_swipe(content, window))
+            .child(self.render_swipe(content, window).child(measure_tab))
             .children(seam)
             .children(tools);
         let body = if panes.len() < 2 {

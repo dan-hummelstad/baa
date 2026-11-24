@@ -827,9 +827,11 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - The reading pane has a quick-reply strip: plain text under the conversation; Send or ⌘↩ sends
   a reply to the shown message, Enter does nothing, and the expand button or ⌘R opens the
   composer with the text.
+- A code offer shows in a split and beside docked DevTools, placed against the focused pane's
+  page and kept inside it.
 
 **Not built in stage 1**
-- A code offer in a split or beside docked DevTools, and a code field inside a shadow root.
+- A code field inside a shadow root.
 - The other shortcuts are marked `ponytail:` in `crates/baa-mail` and `crates/baa-ui/src/mail`.
 
 **For the user to look at on a bundled build** (no test can show these)
@@ -840,7 +842,8 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
 - ⌫ types in every mail text field and deletes only in the list; ⌘N, ⌘R and ⌘F inside mail.
 - A link in a message opens a tab; a cmd-click opens one in the background.
 - The code offer: its place under a real field, and that a click on it still fills (the engine
-  fills only while the field has focus in its page).
+  fills only while the field has focus in its page); the same in either pane of a split and
+  with DevTools docked left, right and below.
 - Formatting, attachments, autosave and send in the composer, with a real account.
 - The quick-reply strip against the mock (`R2fgxx`, not read when it was built: pen.dev was not
   running), in both skins and in the preview tab; a reply sent from it, and its expand.
