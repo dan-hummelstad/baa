@@ -80,7 +80,7 @@ baa.app/Contents/
 | ObjC data classes | `#[repr(C)]` structs + borrowed UTF-8 strings | — |
 
 **Threading:** every call and callback runs on the main thread (Chromium's UI thread on macOS).
-**Start-up (revised 2026-11-06, see `PLAN-chromium-phase2.md`):** Chromium owns `[NSApp run]`, as in
+**Start-up (revised 2026-11-06):** Chromium owns `[NSApp run]`, as in
 Arc (`-[ArcBrowserApplication run]` returns the exit code) and in Chrome. NSApp is `BaaApplication :
 BrowserCrApplication` from `//baa`, created before gpui. gpui's `[NSApp run]` lands in its `-run`
 override, which calls `ChromeMain`. Chromium's `RunLoop::Run` then calls `[NSApp run]` again, which goes
@@ -226,15 +226,15 @@ edits above, and validate: `helium/devutils/validate_patches.py -l
 |---|---|---|
 | 0 | **Measure** | `chromium.yml` release run timed on free runners; dev tree downloaded and an incremental build confirmed locally. Runner decision. |
 | 1 | **Tree tooling** | `chromium/patches` + `//baa` applied by `chromium.yml` and by a local script on the unpacked tree. |
-| 2 | **Spike (shape check)** | `BaaCore.framework` with a minimal `//baa`; Rust `main` (GPUI, `CrAppProtocol` NSApp) starts it; one `WebContents` NSView in a GPUI hole; 120 Hz scroll, typing, IME, ⌘ keys to GPUI. Plan: `PLAN-chromium-phase2.md`. |
+| 2 | **Spike (shape check)** | `BaaCore.framework` with a minimal `//baa`; Rust `main` (GPUI, `CrAppProtocol` NSApp) starts it; one `WebContents` NSView in a GPUI hole; 120 Hz scroll, typing, IME, ⌘ keys to GPUI. |
 | 3 | **ADK core** | `baa::BrowserApplication/Profile/Browser/WebContents` + `baa::ui::Window`; C ABI + Rust wrapper; Spaces as profiles; tabs in a real `TabStripModel`; 1Password signs in and sees tabs with no shim; Chrome-made tabs and `window.open` arrive via `didCreateNewWebContents`. |
-| 4 | **Delegate surface** | The Arc delegate list above, drawn in GPUI; extension toolbar actions + popups; `chrome.tabGroups` ↔ folders; command bar on `AutocompleteController`. M3 done 2026-11-06 (`PLAN-m3.md`, ABI 6); deferred to M4: `chrome.commands`, `chrome.action.openPopup`, badges/dynamic icons, screen-share picker, dangerous-download keep/discard. |
-| 5 | **Parity + delete CEF** | Done 2026-11-06 (`PLAN-chromium-phase5.md`): `baa-web` backend on BaaCore behind `WebHost`; `vendor/gpui-cef`, the tabs shim, `ChromeTabClient`, hidden tab windows, Origin-null fix, hidden chrome://extensions page and ⌘C routing are deleted. The §5.0 parity checklist runs in CI later. |
-| 6 | **Ship** | Done 2026-11-06 as workflows (`PLAN-chromium-phase5.md` §6): `release.yml`, `helium-bump.yml`, the `privacy` job. The first release chain, tag and notarised DMG are still to run. |
+| 4 | **Delegate surface** | The Arc delegate list above, drawn in GPUI; extension toolbar actions + popups; `chrome.tabGroups` ↔ folders; command bar on `AutocompleteController`. M3 done 2026-11-06 (ABI 6); deferred to M4: `chrome.commands`, `chrome.action.openPopup`, badges/dynamic icons, screen-share picker, dangerous-download keep/discard. |
+| 5 | **Parity + delete CEF** | Done 2026-11-06: `baa-web` backend on BaaCore behind `WebHost`; `vendor/gpui-cef`, the tabs shim, `ChromeTabClient`, hidden tab windows, Origin-null fix, hidden chrome://extensions page and ⌘C routing are deleted. The §5.0 parity checklist runs in CI later. |
+| 6 | **Ship** | Done 2026-11-06 as workflows: `release.yml`, `helium-bump.yml`, the `privacy` job. The first release chain, tag and notarised DMG are still to run. |
 | — | Windows | WebView2 was removed in phase 5 (tag `cef-final`); Windows returns with the `//baa` HWND port. |
 
 ## Open questions
 
 1. Release builds: free chained runners, paid runners, or this Mac self-hosted? Answered by the first measured release chain (record the hours here).
-2. Proprietary codecs (H.264/AAC) in our build? Kept, as Helium ships them (`PLAN-chromium-phase5.md` open question 2).
+2. Proprietary codecs (H.264/AAC) in our build? Kept, as Helium ships them.
 3. Widevine needs Google's VMP signing agreement (Arc has one). Out of scope unless pursued.

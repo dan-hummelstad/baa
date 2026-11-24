@@ -296,7 +296,7 @@ The pasted brief was reviewed against baa. What it asks is kept; how it gets the
 |---|---|
 | Step 0: choose Chromium, Gecko or a shell; write `docs/DECISION.md` | Settled: baa is its own Chromium with `//baa`. No decision file. |
 | Link mailboxes in settings, read-only scopes (`gmail.readonly`, `Mail.Read`) | A mail account of the Space is the link; it has full mail access already. Each account has a "Offer verification codes" switch. No second, read-only way to link. |
-| The suggestion appears in the standard Autofill dropdown | Helium removes Chrome's autofill UI (`PLAN-settings.md` row 11), and baa draws Chrome's prompts itself. baa draws the offer, anchored under the field, and it follows the security-prompt rules. |
+| The suggestion appears in the standard Autofill dropdown | Helium removes Chrome's autofill UI, and baa draws Chrome's prompts itself. baa draws the offer, anchored under the field, and it follows the security-prompt rules. |
 | Poll only while a code field is focused; never sweep in the background | Mail syncs anyway. A code field asks the Space's accounts for one immediate INBOX check; IDLE brings the rest. No extra polling exists to limit, and a page can cause at most one check every 10 seconds an account. |
 | Gmail and Microsoft first, IMAP second | The extractor reads parsed messages, so it serves every backend. Stage 1 has IMAP and Gmail; Microsoft arrives with Graph in stage 2. |
 | Do not store codes | The message is in `mail.db` like any mail. The code path stores nothing of its own: no table, no log line with a code, a sender or an address. |

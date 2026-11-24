@@ -413,4 +413,4 @@ bulk, a few thousand lines of C++ and Objective-C++, most of it `view.mm` and `b
 - Ladybird issues 4341 (embedding), 7327 and 976 (extensions), pull requests 14109 (Hub split) and
   12267 (AppKit removal); read through a summarising fetch, so check the wording before quoting.
 - baa: `crates/baa-web/src/lib.rs`, `core_host/*`, `chromium/baa/baa.h` (ABI 17),
-  `crates/baa-chromium`, `PLAN-chromium.md`, `PLAN-adk-refactor.md`, `CLAUDE.md`.
+  `crates/baa-chromium`, `PLAN-chromium.md`, `CLAUDE.md`.

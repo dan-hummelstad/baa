@@ -7,6 +7,16 @@ Researched 2026-10-22. Versions quoted are the ones live that day.
 
 The engine is specified in `PLAN-chromium.md`. Sections marked *superseded* are kept for history.
 Mail (being built, off by default behind Settings › Mail) is specified in `PLAN-mail.md`.
+A second engine (Ladybird, nothing built) is planned in `PLAN-engines.md`; the CI pipeline and what is open in it, in `PLAN-ci-testing.md`.
+
+Plans that are built were deleted on 2026-11-24: `PLAN-chromium-phase2.md` to `-phase5.md`, `PLAN-m3.md`,
+`PLAN-m4-features.md`, `PLAN-settings.md`, `PLAN-security-fixes.md` and `PLAN-adk-refactor.md`. Comments in the
+code still name them (a `PLAN-m3 §2.4`, say); read one with `git show 4b3b8f56:PLAN-m3.md`. What they left
+open:
+- When Windows starts: the portable `//baa` files become `.cc` with `platform_mac.mm` and `platform_win.cc`, the
+  context-menu hook gets a twin in the views delegate, and the hook headers merge (ADK refactor, step 13).
+- Adoption of a tab Chrome made matches by URL; a token replaces it if such tabs become common (step 14).
+- Claude's activity log is recorded and tested, and no panel shows it (M4, D; `baa-ui/src/agent.rs`).
 
 ---
 
@@ -44,7 +54,7 @@ bot takes Chromium builds of the current milestone (Helium's patches are frozen,
 | Frame path | Native: Chromium presents its own layer; nothing is copied. | — | See `PLAN-chromium.md`. |
 | De-Googling | Helium's patch set in the build, plus baa's switches | Runtime stripping of stock CEF | See `PLAN-chromium.md`. |
 | Storage isolation | One Chrome `Profile` per Space (`space-<id>`) | — | See `PLAN-chromium.md` and §6. |
-| Updates | Daily Chromium bump inside the milestone (Helium frozen), release chain builds the engine, `release.yml` ships a signed DMG; Sparkle updates in the app from the appcast on GitHub Releases | Sparkle / own update server | See `PLAN-chromium.md`, `PLAN-chromium-phase5.md`. |
+| Updates | Daily Chromium bump inside the milestone (Helium frozen), release chain builds the engine, `release.yml` ships a signed DMG; Sparkle updates in the app from the appcast on GitHub Releases | Sparkle / own update server | See `PLAN-chromium.md`. |
 | Extensions | Chrome Web Store extensions on real Chrome profiles; baa draws the toolbar and popups | — | See `PLAN-chromium.md`. Per Space by default; "Add to All Spaces" (Settings → Extensions, or the install prompt's Space picker) installs one into every Space's profile through `baa_profile_copy_extension` (ABI 8, no second prompt). Each Space keeps its own copy's data and on/off; removing a shared one removes it everywhere. Deleting a Space names the extensions that go with it. |
 
 ---
@@ -200,7 +210,7 @@ The OSR phases below are history: pages are native views (§1). Input still desc
 - Find in page, zoom, print, DevTools (docked beside the page or in a window) and downloads (a GPUI tray) go through `PageHandle` / `WebHost`.
 
 **Process model**
-- mac: `baa.app/Contents/MacOS/baa` (the Rust binary) + `Contents/Frameworks/BaaCore.framework` (`BaaCore`, `Helpers/` renderer, GPU and plain helper apps, `Libraries/*.dylib`). Chromium's own signer (`sign_chrome.py`) signs inside-out with the entitlements in `PLAN-chromium-phase5.md`; the DMG is notarised with `notarytool`.
+- mac: `baa.app/Contents/MacOS/baa` (the Rust binary) + `Contents/Frameworks/BaaCore.framework` (`BaaCore`, `Helpers/` renderer, GPU and plain helper apps, `Libraries/*.dylib`). Chromium's own signer (`sign_chrome.py`) signs inside-out with the entitlements in `chromium/packaging`; the DMG is notarised with `notarytool`.
 - Windows: later, with the `//baa` HWND port.
 
 ---
@@ -268,7 +278,7 @@ Each milestone ends with something runnable. Estimates are solo-dev, full-time.
 | 2 | **Spaces + isolation** | Spaces CRUD, theme tint, per-space request context, incognito space, switcher + keybinds, single-instance + open-URL. Login to two Google accounts in two Spaces proves isolation. | 2 |
 | 3 | **Privacy + extensions** | `baa-privacy` switches/blocklist; CI proxy test green; default search Google with suggestions on (user, 2026-11-16: kept, disclosed); settings UI; Web Store installs via the Chrome-style window; extension icons + popups in the sidebar. | 2 |
 | 4 | **Arc feel** | Spring/FLIP motion, sidebar collapse + hover reveal, space swipe, page back/forward swipe, Peek, Little baa, command bar with fuzzy search over tabs/history, auto-archive. | 4 |
-| 5 | **Ship** | Engine move and release: see `PLAN-chromium.md` phases 5–6 (`PLAN-chromium-phase5.md`). Then split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
+| 5 | **Ship** | Engine move and release: see `PLAN-chromium.md` phases 5–6. Then split view; crash-free 1-week dogfood. v0.1 on baa.me. | 2 |
 | 6 | **Zero-copy** | IOSurface path on mac, D3D11 shared-texture path on win, GPUI BGRA patch upstreamed. | 2 |
 
 Total ≈ 15 weeks to a shippable v0.1 with zero-copy. Milestones 0–3 are the de-risking spine; if 0 fails on Windows OSR (unlikely, cef-rs supports it) the fallback is windowed CEF child HWNDs on Windows only, accepting that overlays/clip break there, as gpui-cef does with WebView2.
@@ -286,7 +296,7 @@ You said "macOS & Android" for later; I read that as **iOS & Android**, since ma
 
 ## 13. GitHub Actions
 
-Details: `PLAN-chromium-phase5.md` §6. The shape, its rules and what is still open: `PLAN-ci-testing.md`.
+The shape, its rules and what is still open: `PLAN-ci-testing.md`.
 - `ci.yml` (push/PR, manual, and run by `release.yml`): the checks, three jobs side by side, about 5 minutes. `lint` (ubuntu: the scripts' own tests, `security-lint.sh`, actionlint and zizmor on the workflow files), `test` (`macos-15`: `cargo clippy ... -D warnings` and `cargo test --workspace`), `privacy` (the privacy test (§5.3) on the release engine for this commit's `chromium/` tree, if one exists, else a notice). No Chromium tree is needed: `baa-web` loads BaaCore at run time.
 - `harness.yml` (manual, started by `chromium.yml` for a finished engine, and on a push that changes `chromium/`, `crates/baa-chromium` or the harness's own workflow files): the `//baa` harness tests on the release engine. Nothing waits for it.
 - `chromium.yml` (manual; `mode=dev` component build, `mode=release` official build): chained phases (`chromium-phase.yml`), each compiling up to about 4.75 h and uploading its tree under its own name (7 days; the finished tree 30), so a run that stopped is gone on from with `base_run=<its id>`. A chain builds on the newest finished tree of its mode and Chromium milestone unless `base_run=none`. A release run uploads `baa-engine-<key>` (the key is `.github/engine-key.sh`: a hash of the five `chromium/` directories the build takes; `baa.app`, `baa Packaging`, `engine.json`, 90 days) and runs the `privacy` job on it.

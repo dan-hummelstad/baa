@@ -160,12 +160,12 @@ From the C++ implementer's reports and the reviews:
 - ⌘Q with the print panel open: hung for 30 s in M1.
 - ⌘Q with a beforeunload dialog in a background tab. Rust auto-answers OK while quitting.
 - HTTP auth, external-protocol, extension install and `getDisplayMedia` dialogs. Chrome draws these
-  as loose windows (PLAN-chromium-phase4.md, M3 candidates).
+  as loose windows.
 - Memory-saver discard and the page view swap.
 - Keys inside docked DevTools.
 - Geolocation after "allow" gave `geo-err:1`, probably the helper's macOS location permission.
 - 1Password sign-in and seeing tabs (manual, with the native messaging host copied).
-- The privacy proxy test on BaaCore. Its fallback is a URL-loader patch (PLAN-chromium-phase4.md).
+- The privacy proxy test on BaaCore. Its fallback is a URL-loader patch.
 - Integration flows in the real app: Space switch = profile switch, deleting a Space, Peek, lil-baa,
   the settings sheet, extension popups from the toolbar, the downloads tray. `crates/baa/ui-check.sh`
   drives these with System Events. That needs Accessibility, which CI runners lack, so these need an
