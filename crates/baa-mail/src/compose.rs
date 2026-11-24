@@ -87,8 +87,6 @@ pub(crate) fn outgoing(store: &Store, draft: &Draft, now: SystemTime) -> Result<
 /// Multipart/alternative of the draft's text and HTML (one part when the other is empty), its
 /// files attached under their last path component, a fresh Message-ID on the sender's domain,
 /// and the thread headers of `answered`. Bcc is never written into the bytes.
-// ponytail: every attachment is application/octet-stream; the ceiling is a type table, which
-// a recipient's client mostly does not need since it goes by the file name.
 pub(crate) fn rfc822(
     draft: &Draft,
     from: &Address,
@@ -129,10 +127,50 @@ pub(crate) fn rfc822(
             .map_or_else(|| "attachment".into(), |n| n.to_string_lossy().into_owned());
         let bytes = std::fs::read(path)
             .map_err(|e| Error::Other(format!("The attachment {name} cannot be read: {e}")))?;
-        msg = msg.attachment("application/octet-stream", name, bytes);
+        msg = msg.attachment(content_type(&name), name, bytes);
     }
     msg.write_to_vec()
         .map_err(|e| Error::Other(format!("The message cannot be written: {e}")))
+}
+
+// ponytail: the common types only; a recipient's client goes by the file name for the rest.
+fn content_type(name: &str) -> &'static str {
+    let extension = name.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_ascii_lowercase());
+    match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "tif" | "tiff" => "image/tiff",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "ics" => "text/calendar",
+        "vcf" => "text/vcard",
+        "eml" => "message/rfc822",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "rtf" => "application/rtf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "key" => "application/vnd.apple.keynote",
+        "pages" => "application/vnd.apple.pages",
+        "numbers" => "application/vnd.apple.numbers",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }
 }
 
 fn display(a: &Address) -> String {
@@ -368,6 +406,35 @@ mod tests {
         let m = MessageParser::default().parse(&bytes).unwrap();
         assert_eq!(m.attachments().next().unwrap().attachment_name(), Some("report.pdf"));
         assert!(!String::from_utf8_lossy(&bytes).contains(dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn an_attachment_s_type_comes_from_its_extension() {
+        let dir = std::env::temp_dir().join(format!("baa-compose-types-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut d = draft();
+        for name in ["a.PDF", "b.jpeg", "c.docx", "d.unknown", "noextension"] {
+            let path = dir.join(name);
+            std::fs::write(&path, b"x").unwrap();
+            d.attachments.push(path);
+        }
+        let bytes = rfc822(&d, &addr("", "me@here.org"), None, now()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let m = MessageParser::default().parse(&bytes).unwrap();
+        let types: Vec<String> = m
+            .attachments()
+            .map(|a| a.content_type().map(|t| format!("{}/{}", t.ctype(), t.subtype().unwrap_or_default())).unwrap_or_default())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "application/pdf",
+                "image/jpeg",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/octet-stream",
+                "application/octet-stream",
+            ]
+        );
     }
 
     #[test]
