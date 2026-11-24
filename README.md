@@ -319,64 +319,153 @@ When it stops:
 
 | Path | Owns |
 |---|---|
-| `crates/baa` | app entry, window, single-instance lock, open-URL forwarding |
-| `crates/baa-ui` | GPUI views: sidebar, command bar, theme, motion, keymap actions |
-| `crates/baa-web` | the `WebHost` contract and its BaaCore implementation (C ABI in `chromium/baa/baa.h`) |
-| `crates/baa-model` | Spaces, tabs, settings, SQLite persistence |
+| `crates/baa` | app entry: single-instance lock and URL forwarding (`ipc.sock`), engine load and command line, app menus, Sparkle, the `baa mcp` bridge |
+| `crates/baa-ui` | GPUI views, generic over `WebHost`: sidebar, Spaces, command bar, Peek, lil-baa, prompts, the settings window, theme, motion, keymap actions. `src/mail` holds the mail views, `agent.rs` Claude's tool server |
+| `crates/baa-web` | the `WebHost` contract (`lib.rs`) and its BaaCore implementation (`core_host`, C ABI in `chromium/baa/baa.h`) |
+| `crates/baa-model` | Spaces, tabs, folders, settings, history, imports, live folders; `baa.db` (SQLite). No gpui |
+| `crates/baa-mail` | mail without its views: accounts, sync, `mail.db`, MIME, sending, verification codes; secrets in the Keychain. No gpui. Spec: `PLAN-mail.md` |
 | `crates/baa-privacy` | Chromium switches and prefs, the CI proxy allowlist |
+| `crates/baa-chromium` | the test harness for `//baa`: a small gpui shell (`spike`) and `tests/*.expect`, run by `ci.sh` against an engine |
 | `vendor/gpui_apple` | gpui's macOS backend with the punch-hole surface |
-| `chromium` | vendored Helium + helium-macos, baa's patches, `//baa`, `local-build.sh` |
+| `chromium/baa` | `//baa`: the C ABI (`baa.h`) and its implementation inside the Chromium tree |
+| `chromium/patches` | baa's patches to Chromium |
+| `chromium/helium*`, `chromium/vendor` | vendored Helium + helium-macos (frozen at `chromium/HELIUM_RELEASE`); archives the engine build takes from the repository |
 | `xtask` | `cargo bundle`, sign the DMG, notarise |
+| `.github/workflows` | checks, engine tests, the engine build chain, release (see CI) |
+
+Crates depend downwards only: `baa` → `baa-ui` → `baa-web`, `baa-mail` → `baa-model`; `baa-web` also
+uses `baa-privacy`. `baa-model`, `baa-mail` and `baa-privacy` have no gpui and no engine, so their
+tests run anywhere.
+
+`crates/baa-web/src/core_host`, by file:
+
+| File | Does |
+|---|---|
+| `ffi.rs` | `baa.h` in Rust: `dlopen`, every `baa_*` symbol, the constants. A test reads `baa.h` and checks the version and enum values |
+| `dispatch.rs` | the callback side: what BaaCore reports, queued onto gpui's executor and routed to the page of its tab |
+| `host.rs` | `CoreWebHost`, the `WebHost`: profiles, pages, extensions, downloads |
+| `page.rs`, `slot.rs` | `CorePage`, the `PageHandle`: one Chrome tab as a gpui entity; the element it renders as and the mouse it forwards |
+| `native.rs` | AppKit: the clipping container below gpui's view, the hole, first responder |
+| `settings.rs`, `profiles.rs` | baa's settings as Chrome prefs; where Spaces live on disk |
+| `cdp.rs` | the one gate to a tab's DevTools protocol: an allowlist of methods behind typed `PageHandle` calls |
+| `skin.rs` | Chrome's own pages as `baa://…` in baa's colours |
+| `document.rs` | the pages baa writes itself: mail in a sandboxed frame under a content security policy |
+| `webkit.rs` | a tab shown by a `WKWebView` instead of Chrome, for streaming sites the user allowed |
 
 ## Architecture
 
 ```mermaid
 flowchart TB
+    subgraph outside["Outside the process"]
+        launch["a second launch,<br/>links from other apps"]
+        claude["Claude Code<br/>baa mcp over stdio"]
+        servers["mail servers<br/>IMAP, POP3, SMTP over TLS"]
+        feed["GitHub Releases<br/>Sparkle appcast"]
+    end
+
     subgraph app["baa process: Rust"]
-        main["crates/baa<br/>entry: dlopen BaaCore, lock, migrate"]
-        ui["crates/baa-ui<br/>GPUI views: sidebar, command bar,<br/>settings window, dialogs, motion"]
-        model[("crates/baa-model<br/>Spaces, tabs, folders, settings<br/>SQLite")]
-        privacy["crates/baa-privacy<br/>switches, prefs"]
+        main["crates/baa<br/>lock, dlopen BaaCore, Chrome's argv,<br/>menus, Sparkle, ipc.sock, agent.sock"]
+        subgraph ui["crates/baa-ui: GPUI views, generic over WebHost"]
+            browser["browser<br/>sidebar, Spaces, tabs, command bar,<br/>Peek, lil-baa, Library, settings"]
+            prompts["prompts<br/>permission, dialog, auth,<br/>install, code offer"]
+            mailui["mail views<br/>list, reader, compose"]
+            agent["agent<br/>MCP tools, approvals per origin"]
+        end
+        model[("crates/baa-model<br/>Session, Settings, history<br/>baa.db")]
+        mail[("crates/baa-mail<br/>accounts, sync threads, MIME,<br/>send, codes: mail.db")]
+        keychain[("Keychain<br/>mail secrets")]
+        privacy["crates/baa-privacy<br/>switches, prefs, allowlist"]
         subgraph web["crates/baa-web"]
-            host["WebHost trait<br/>PageHandle / PageEvent"]
-            core["core_host<br/>ffi.rs, dispatch"]
+            host["WebHost trait<br/>PageHandle, PageEvent"]
+            core["core_host<br/>ffi, dispatch, host, page"]
+            docs["document.rs<br/>sandboxed mail pages"]
+            wk["webkit.rs<br/>WKWebView tab"]
         end
         gpui["GPUI + vendor/gpui_apple<br/>Metal layer with punch holes"]
     end
 
     subgraph engine["BaaCore.framework: baa's Chromium build"]
-        abi{{"C ABI: chromium/baa/baa.h<br/>versioned: BAA_ABI_VERSION,<br/>functions + callbacks"}}
-        layer["//baa: chromium/baa<br/>one Browser per Space profile,<br/>baa::Window, TabStripModel,<br/>request registry, autocomplete,<br/>groups, dialog hooks"]
-        chrome["Chrome browser code<br/>Helium patches + chromium/patches/baa<br/>profiles, extensions, downloads"]
-        procs["renderer, GPU, utility processes"]
+        abi{{"C ABI: chromium/baa/baa.h<br/>BAA_ABI_VERSION,<br/>functions + callbacks"}}
+        layer["//baa: chromium/baa<br/>one Browser per Space profile,<br/>tabs, request registry, downloads,<br/>extensions, autocomplete, CDP gate"]
+        chrome["Chrome browser code<br/>Helium patches + chromium/patches<br/>profiles, extensions, network"]
+        procs["renderer, GPU,<br/>utility processes"]
     end
 
-    main --> ui
+    launch -- "ipc.sock" --> main
+    claude -- "agent.sock" --> agent
+    feed --> main
+    main --> browser
     main -- "dlopen, baa_install_app" --> abi
-    ui --> model
-    ui -- "codes against" --> host
+    browser --> model
+    browser --> prompts
+    mailui --> mail
+    mail --> keychain
+    mail <--> servers
+    mail --> model
+    browser -- "codes against" --> host
+    prompts --> host
+    agent -- "typed calls: eval, click,<br/>screenshot" --> host
+    mailui -- "create_document" --> host
     host --- core
-    core -- "baa_* calls" --> abi
-    abi -- "callbacks: tab state, dialogs,<br/>downloads, autocomplete" --> core
+    core --- docs
+    core --- wk
     core --> privacy
+    core -- "baa_* calls" --> abi
+    abi -- "callbacks: tab state, dialogs,<br/>permissions, downloads" --> core
     abi --- layer
     layer --> chrome
     chrome --> procs
     ui --> gpui
     procs -. "page NSViews below GPUI's layer,<br/>shown through its holes" .-> gpui
+    wk -. "a WKWebView in the same place" .-> gpui
 ```
 
 Chromium owns the run loop (`[NSApp run]`): `crates/baa` loads `BaaCore.framework`, installs
-baa's `NSApplication`, and GPUI runs inside Chrome's loop. The UI only sees the `WebHost` trait.
-`core_host` turns each `PageHandle` call into a `baa_*` C call, and each engine callback into a
-`PageEvent`. A Space is a Chrome profile (`space-<id>`; an incognito Space is an off-the-record
-profile), so its cookies, storage and extensions are kept apart.
+baa's `NSApplication`, and GPUI runs inside Chrome's loop. The UI only sees the `WebHost` trait
+(its tests run on `MockHost`, with no engine). `core_host` turns each `PageHandle` call into a
+`baa_*` C call, and each engine callback into a `PageEvent`. A Space is a Chrome profile
+(`space-<id>`; an incognito Space is an off-the-record profile), so its cookies, storage and
+extensions are kept apart.
 
 Every tab is a real Chrome tab in a `TabStripModel`, so extensions see normal tabs. Its page is a
 native view in a container below GPUI's view. GPUI leaves a transparent hole where the page
 shows and draws the sidebar, popovers, dialogs and command bar over it. Chrome's own prompts
 (permissions, HTTP auth, external links, extension installs) come back through the ABI and are
 drawn by GPUI.
+
+One round trip, from a typed address to a permission prompt:
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant UI as baa-ui
+    participant M as baa-model
+    participant W as baa-web core_host
+    participant E as BaaCore
+    U->>UI: types an address in the command bar
+    UI->>M: Session: a new tab in the Space
+    UI->>W: WebHost::create_page(profile, url, user_initiated)
+    W->>E: baa_tab_create(profile, url)
+    E-->>W: tab_state: view, url, title, loading
+    W-->>UI: PageEvent::UrlChanged, TitleChanged, LoadingChanged
+    UI->>M: title, url, favicon and the visit into baa.db
+    Note over UI,E: every frame the page element punches its hole<br/>and core_host moves the tab's NSView to that rect
+    E-->>W: permission: id, origin, kinds
+    W-->>UI: PageEvent::PermissionRequested
+    UI->>U: the prompt, with the engine's origin
+    U->>UI: Allow
+    UI->>W: PageHandle::answer_permission(id, true)
+    W->>E: baa_answer(id)
+```
+
+What lives where on disk (`~/Library/Application Support/baa`, or `BAA_DATA_DIR`): `baa.db`
+(Spaces, tabs, settings, history, favicons), `mail.db`, `chromium/space-<id>` (one Chrome profile a
+Space), `keymap.json`, `instance.lock`, `ipc.sock` and `agent.sock`.
+
+Mail (`PLAN-mail.md`) never touches the engine directly: `baa-mail` syncs on its own threads and
+keeps messages in `mail.db`; the mail views ask `WebHost::create_document` for a page with no URL,
+where a message's HTML sits in a sandboxed frame. Claude's tools go the same way as the UI: through
+typed `PageHandle` calls, never raw DevTools protocol.
 
 ## Keys
 
