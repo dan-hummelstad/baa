@@ -99,9 +99,7 @@ impl Imap {
         let session = Session::connect(&account.servers.imap, &account.servers.login, &credential)?;
         Ok(Imap { session, smtp: account.servers.smtp.clone(), user: account.servers.login.clone(), credential, dir: dir.into() })
     }
-}
 
-impl Imap {
     fn login(&self) -> Login<'_> {
         match &self.credential {
             Credential::Password(password) => Login::Password { user: &self.user, password },

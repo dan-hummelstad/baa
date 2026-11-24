@@ -764,7 +764,6 @@ fn due<K: Eq + std::hash::Hash>(checked: &Mutex<HashMap<K, Instant>>, key: K) ->
     true
 }
 
-/// Where a forward's copies of attachments go, in the mail directory.
 const FORWARDS: &str = "forwards";
 
 /// Removes the forward folders that no saved draft attaches a file from. A draft that cannot

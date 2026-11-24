@@ -63,7 +63,6 @@ impl Fake {
         self.change(|server, now| server.hold(folder, raw.to_vec(), flags, None, now))
     }
 
-    /// Its SMTP side refuses the sign-in with `error` from now on.
     pub fn refuse_send(&self, error: Error) {
         self.server.0.lock().unwrap().send_refusal = Some(error);
     }

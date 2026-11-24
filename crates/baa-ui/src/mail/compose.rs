@@ -375,7 +375,7 @@ impl<H: WebHost> Browser<H> {
     }
 
     pub(crate) fn send_front_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mail.as_ref().is_some_and(|m| m.field == Field::Reply && m.field_focus.is_focused(window)) {
+        if self.quick_reply_has_keyboard(window) {
             return self.send_quick_reply(cx);
         }
         if let Some(id) = self.mail.as_ref().and_then(|m| m.state.front) {

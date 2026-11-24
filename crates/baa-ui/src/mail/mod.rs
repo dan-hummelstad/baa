@@ -95,7 +95,6 @@ pub(crate) enum Field {
     Cc,
     Bcc,
     Subject,
-    /// The reading pane's quick reply.
     Reply,
 }
 

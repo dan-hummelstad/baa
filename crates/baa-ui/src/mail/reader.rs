@@ -33,7 +33,6 @@ pub(crate) struct Reader<H: WebHost> {
     pub(crate) earlier_open: bool,
     /// A dangerous attachment's Save was pressed once: the next press saves it.
     pub(crate) save_anyway: Option<usize>,
-    /// The quick reply under the conversation: plain text, sent as a reply to the shown message.
     pub(crate) reply: TextField,
     _page: Option<Subscription>,
 }
@@ -206,19 +205,20 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// Reply, Reply all, ⌘R and the quick reply's expand: the composer, with what the quick
-    /// reply held.
     pub(crate) fn reply_to_selected(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.quick_reply_draft(all) else { return };
         // The hidden strip would keep the keyboard otherwise.
-        if self.mail.as_ref().is_some_and(|m| m.field == Field::Reply && m.field_focus.is_focused(window)) {
+        if self.quick_reply_has_keyboard(window) {
             self.leave_mail_field(window, cx);
         }
         self.open_draft(draft, window, cx);
         self.clear_quick_reply();
     }
 
-    /// A reply to the shown message that starts with the quick reply's text.
+    pub(crate) fn quick_reply_has_keyboard(&self, window: &Window) -> bool {
+        self.mail.as_ref().is_some_and(|m| m.field == Field::Reply && m.field_focus.is_focused(window))
+    }
+
     fn quick_reply_draft(&self, all: bool) -> Option<Draft> {
         let mail = self.mail.as_ref()?;
         let reader = mail.reader.as_ref()?;
@@ -237,7 +237,6 @@ impl<H: WebHost> Browser<H> {
         }
     }
 
-    /// The quick reply's Send and ⌘↩: saved as a draft and sent as the composer sends one.
     pub(crate) fn send_quick_reply(&mut self, cx: &mut Context<Self>) {
         if self.mail.as_ref().and_then(|m| m.reader.as_ref()).is_none_or(|r| r.reply.text.trim().is_empty()) {
             return;

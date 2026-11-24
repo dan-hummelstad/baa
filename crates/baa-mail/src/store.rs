@@ -555,7 +555,6 @@ impl Store {
         Ok(row.and_then(|row| serde_json::from_str(&row).ok()))
     }
 
-    /// The files every saved draft attaches.
     pub(crate) fn draft_attachments(&self) -> Result<Vec<std::path::PathBuf>> {
         let conn = self.conn();
         let mut stmt = conn.prepare("SELECT json FROM draft")?;
