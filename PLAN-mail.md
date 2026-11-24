@@ -829,9 +829,9 @@ them. No test connects to a mail server or touches the Keychain, and nobody has 
   composer with the text.
 - A code offer shows in a split and beside docked DevTools, placed against the focused pane's
   page and kept inside it.
+- A code field inside an open shadow root is found and filled; a closed one hides its field.
 
 **Not built in stage 1**
-- A code field inside a shadow root.
 - The other shortcuts are marked `ponytail:` in `crates/baa-mail` and `crates/baa-ui/src/mail`.
 
 **For the user to look at on a bundled build** (no test can show these)

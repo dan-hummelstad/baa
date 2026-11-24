@@ -38,8 +38,11 @@ namespace {
 constexpr int32_t kWorld = ISOLATED_WORLD_ID_CHROME_INTERNAL;
 
 // Keeps the focused element in this world's global when it is a code field, and says whether it is.
+// document.activeElement is the shadow host when focus is inside an open shadow root; a closed
+// one hides its field.
 constexpr char16_t kProbe[] =
-    u"(()=>{const e=document.activeElement;"
+    u"(()=>{let e=document.activeElement;"
+    u"while(e&&e.shadowRoot&&e.shadowRoot.activeElement)e=e.shadowRoot.activeElement;"
     u"const ok=e instanceof HTMLInputElement&&!e.disabled&&!e.readOnly&&"
     u"e.autocomplete.split(' ').includes('one-time-code');"
     u"window.__baaCodeField=ok?e:null;return ok})()";
@@ -48,7 +51,7 @@ constexpr char16_t kProbe[] =
 // typing does (input events, undo, maxlength); the fallback is for fields that refuse execCommand.
 std::u16string FillScript(const std::string& code) {
   return base::UTF8ToUTF16(
-      "(()=>{const e=window.__baaCodeField;if(!e||document.activeElement!==e)return;e.select();"
+      "(()=>{const e=window.__baaCodeField;if(!e||e.getRootNode().activeElement!==e)return;e.select();"
       "if(!document.execCommand('insertText',false,'" + code + "')){e.value='" + code +
       "';e.dispatchEvent(new Event('input',{bubbles:true}));"
       "e.dispatchEvent(new Event('change',{bubbles:true}))}})()");

@@ -1,5 +1,5 @@
 # ABI 17 code fields (codes.expect): baa_site_of, a one-time-code field reported on focus and on blur,
-# filled by id, a stale id refused, and the same field in a cross-site frame
+# filled by id, a stale id refused, the same field in an open shadow root and in a cross-site frame
 siteof mail.google.com
 siteof a.github.io
 siteof 127.0.0.1
@@ -22,6 +22,15 @@ sleep 500
 eval document.title='v2:'+document.getElementById('c').value
 sleep 500
 state
+click 100 130
+sleep 1000
+fillcode 654321
+sleep 500
+eval document.title='s:'+document.getElementById('h').shadowRoot.getElementById('s').value
+sleep 500
+state
+click 100 230
+sleep 1000
 eval document.body.innerHTML='<iframe src="https://example.org/otp" style="position:fixed;left:0;top:300px;width:400px;height:100px;border:0"></iframe>'
 sleep 2500
 click 100 330
